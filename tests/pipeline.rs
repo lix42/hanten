@@ -12067,15 +12067,20 @@ fn a_roll_names_each_frame_from_its_destination() {
   "output": { "display": { "transfer": "pq" } }
 }"#,
     );
+    // A third frame under its own stem, switched to the film master.
+    let master = tmp.path("master.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &master).unwrap();
     let frames = write_file(
         &tmp.path("frames.json"),
         &format!(
             r#"{{"frames": [
   {{"input": "{}"}},
-  {{"input": "{}", "params": {{"output": {{"display": {{"range": "hdr", "transfer": "native", "gamut": "display-p3", "container": "jpeg"}}}}}}}}
+  {{"input": "{}", "params": {{"output": {{"display": {{"range": "hdr", "transfer": "native", "gamut": "display-p3", "container": "jpeg"}}}}}}}},
+  {{"input": "{}", "params": {{"output": "film-master"}}}}
 ]}}"#,
             fixture("hdr-48bit.tif").display(),
-            fixture("hdri-64bit.tif").display()
+            fixture("hdri-64bit.tif").display(),
+            master.display()
         ),
     );
     let out_dir = tmp.path("out");
@@ -12094,23 +12099,31 @@ fn a_roll_names_each_frame_from_its_destination() {
         sniff_container(&out_dir.join("hdri-64bit_positive.jpg")),
         "jpeg"
     );
+    assert_eq!(read_tiff_bits(&out_dir.join("master_positive.tiff")), 32);
     let report = json(&stdout);
     assert_eq!(
         report["frames"][1]["chain"]["destination"]["display"]["container"], "jpeg",
         "{stdout}"
     );
+    assert_eq!(report["frames"][2]["chain"]["destination"], "film-master");
     // A roll frame carries its encoder's block, as `convert` does; the gain map's is in
-    // its chain.
+    // its chain, and the film master has none.
     assert_eq!(
         report["frames"][0]["hdr_coded_tiff"]["bits_per_sample"], 16,
         "{stdout}"
     );
+    for i in [1, 2] {
+        assert!(
+            report["frames"][i].get("hdr_coded_tiff").is_none(),
+            "{stdout}"
+        );
+    }
     assert!(
-        report["frames"][1].get("hdr_coded_tiff").is_none(),
+        report["frames"][1]["chain"]["gain_map"].is_object(),
         "{stdout}"
     );
     assert!(
-        report["frames"][1]["chain"]["gain_map"].is_object(),
+        report["frames"][2]["chain"].get("gain_map").is_none(),
         "{stdout}"
     );
     // A frame switching the roll's destination is warned about, naming the frame.
@@ -12121,8 +12134,9 @@ fn a_roll_names_each_frame_from_its_destination() {
         .filter_map(|w| w.as_str())
         .filter(|w| w.contains("resolves `output`"))
         .collect();
-    assert_eq!(warned.len(), 1, "{report}");
+    assert_eq!(warned.len(), 2, "{report}");
     assert!(warned[0].contains("hdri-64bit.tif"), "{}", warned[0]);
+    assert!(warned[1].contains("master.tif"), "{}", warned[1]);
     // `--strict` promotes it; the same roll with no per-frame `output` is the control.
     // (`hdr-48bit.tif` is IR-free; the control proves the other frame raises nothing.)
     let strict_roll = |frames: &Path, out: &str| {

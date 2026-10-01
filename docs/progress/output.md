@@ -1790,3 +1790,9 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   48 B/px staging fit (kept in the design doc), the report's `avif` block.
 - Kept: `"avif"` in the upload contract's `conversion.encoding` for older clients, and
   `nctool`'s AVIF handling, since it drives older builds and reads their reports.
+- 2026-10-01 (review follow-up): the bullet above no longer holds for the recipe.
+  `Axis::REMOVED` is now read in three places: the flag through `destination::parse`
+  (flag wording only), a recipe or per-frame override in `recipe::check_body` before
+  serde, via `destination::removed_in_recipe` (worded by key, since no flag can rescue
+  a recipe refused before merge), and an output suffix through
+  `Container::removed_suffix`. Restoring AVIF means removing all three.
