@@ -15,14 +15,6 @@ clap = { version = "4.6.1", features = ["derive"] }
 # The telemetry event's random `event_id` (`telemetry::EventId`).
 getrandom = "0.3.4"
 jpeg-encoder = "0.7.1"
-# AV1 encoder for `io::avif`. The crate vendors libaom's source and links it
-# statically with no network access, so the exact codec is pinned by
-# `Cargo.lock`, and nc carries no in-repo libaom snapshot. nc writes the AVIF
-# container itself (see `io::avif`), so no libavif dependency exists; the decoder
-# half is a dev-dependency, since the product only ever encodes.
-libaom-sys = { version = "0.17.2", default-features = false, features = [
-    "av1_encoder",
-] }
 lcms2 = "6.1.1"
 lcms2-sys = "4.0.7"
 libc = "0.2"
@@ -43,14 +35,6 @@ boon = "0.6.1"
 # The "ordinary reader" that opens a gain-map JPEG in `io::iso_gain_map`'s tests and
 # the e2e gain-map test. JPEG only: the default formats build an AVIF encoder.
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
-# Enables libaom's decoder for `io::avif`'s round-trip tests only. Resolver v3
-# keeps dev-dependency features out of a plain `cargo build`, so the shipped
-# binary stays encoder-only. Note this decoder shares an implementation with the
-# encoder, so it verifies self-consistency, not conformance — the independent
-# dav1d/`avifdec` decode the task requires belongs to the codec-bounds work.
-libaom-sys = { version = "0.17.2", default-features = false, features = [
-    "av1_decoder",
-] }
 # Reused by the e2e tests (same version as the runtime dep, so `Cargo.lock` is
 # unchanged) to synthesize TIFF fixtures on the fly and to decode what the binary
 # wrote.

@@ -14,7 +14,6 @@ const _: () = assert!(
     "a band that is not a multiple of 3 misaligns every per-channel sum folded per band"
 );
 
-pub mod avif;
 pub mod decode;
 pub mod encode;
 pub mod iso_gain_map;

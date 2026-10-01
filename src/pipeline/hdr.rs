@@ -4,7 +4,7 @@
 //!
 //! This module owns the 203-nit reference-white / 1000-nit peak contract every HDR
 //! destination states. The tone and the gamut map are the chain's (fit range, fit
-//! gamut); AVIF quantization, coding, and container metadata remain downstream.
+//! gamut); quantization and container metadata remain downstream.
 
 use serde::Serialize;
 
@@ -41,8 +41,7 @@ pub enum HdrTransfer {
 
 /// Measured content-light levels for one rendered frame, in cd/m².
 ///
-/// **Measured, not policy.** CTA-861.3 — and therefore AVIF's `clli` box —
-/// defines these as properties of *this content*: MaxCLL is the brightest pixel
+/// **Measured, not policy.** CTA-861.3 defines these as properties of *this content*: MaxCLL is the brightest pixel
 /// and MaxFALL the frame average. Displays tone-map from them, so a dark frame
 /// has to report a low peak; nothing here may be derived from the renderer's
 /// 1000-nit mastering ceiling or its 203-nit reference white.
@@ -109,7 +108,7 @@ pub struct HdrRenderMetadata {
     pub transfer: HdrTransfer,
     pub linear: LinearHdrMetadata,
     /// What this frame's pixels actually measured, for container metadata that
-    /// describes content rather than policy (AVIF `clli`).
+    /// describes content rather than policy (CTA-861.3 MaxCLL / MaxFALL).
     pub content_light: ContentLightLevel,
     pub encoded_domain: &'static str,
     pub cicp_color_primaries: u8,
@@ -250,7 +249,7 @@ impl RenderedHdr {
         &self.metadata
     }
 
-    /// Consume the typed pair at the AVIF-encoding boundary.
+    /// Consume the typed pair at the encoding boundary.
     pub(crate) fn into_parts(self) -> (EncodedHdrImage, HdrRenderMetadata) {
         (self.image, self.metadata)
     }

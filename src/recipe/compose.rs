@@ -87,7 +87,7 @@ fn merge_at<'a>(base: &mut Value, overlay: &'a Value, path: &mut Vec<&'a str>) {
 ///
 /// **Not a struct of optional fields that happens to state one key.** The recipe's
 /// `output.display` serializes only its stated axes, so a shared `{"transfer": "pq"}`
-/// and a per-frame `{"container": "avif"}` have the same shape; two keys that are both
+/// and a per-frame `{"container": "tiff"}` have the same shape; two keys that are both
 /// destination axes ([`crate::destination::AXIS_KEYS`]) are therefore merged field by
 /// field. No externally tagged enum in the recipe has a variant of those names.
 pub(crate) fn is_variant_switch(base: &Value, overlay: &Value) -> bool {
@@ -138,11 +138,11 @@ mod tests {
         // One stated axis each, different keys: the shape of a variant switch, but a
         // struct of optional fields — the frame's container joins the roll's transfer.
         let mut base = json!({"output": {"display": {"transfer": "pq"}}});
-        let overlay = json!({"output": {"display": {"container": "avif"}}});
+        let overlay = json!({"output": {"display": {"container": "tiff"}}});
         merge_json(&mut base, &overlay);
         assert_eq!(
             base,
-            json!({"output": {"display": {"transfer": "pq", "container": "avif"}}})
+            json!({"output": {"display": {"transfer": "pq", "container": "tiff"}}})
         );
         // The genuine enum level still switches: the film master replaces the display
         // arm, and a display arm replaces the film master.

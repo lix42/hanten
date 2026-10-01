@@ -28,7 +28,7 @@ use crate::destination::{
 };
 
 use crate::io::decode::{DecodeInfo, decode_within, probe};
-use crate::io::{avif, encode, iso_gain_map, staged};
+use crate::io::{encode, iso_gain_map, staged};
 use crate::pipeline::chain;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range;
@@ -531,24 +531,24 @@ pub struct RollArgs {
 pub struct DestinationOverrides {
     /// The dynamic range to render for: `sdr` (the default) or `hdr` (a 1000 cd/m²
     /// peak over 203 cd/m² reference white). Recipe key `output.display.range`.
-    #[arg(long, value_enum, ignore_case = true, value_name = "RANGE")]
+    #[arg(long, value_name = "RANGE")]
     pub range: Option<Range>,
     /// How samples are stored: `native` (the gamut's own display curve — the
     /// default), `linear` (no transfer; a 32-bit float TIFF), `pq` or `hlg` (Rec.2100
     /// signals). Recipe key `output.display.transfer`.
-    #[arg(long, value_enum, ignore_case = true, value_name = "TRANSFER")]
+    #[arg(long, value_name = "TRANSFER")]
     pub transfer: Option<Transfer>,
     /// The primaries to render into: `display-p3` (the default), `adobe-rgb`, `srgb`
     /// or `bt2020` (HDR only). Recipe key `output.display.gamut`.
-    #[arg(long, value_enum, ignore_case = true, value_name = "GAMUT")]
+    #[arg(long, value_name = "GAMUT")]
     pub gamut: Option<Gamut>,
-    /// The file container: `tiff` (the default), `jpeg` (HDR with a gain map) or
-    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3, Adobe RGB or
-    /// sRGB; HDR as a `linear` float TIFF in any gamut (stated with `--gamut`),
-    /// or BT.2020 `pq`/`hlg` in a 16-bit TIFF or a 10-bit AVIF; HDR as a JPEG with an ISO
-    /// 21496-1 gain map on a Display P3 (`--range hdr` alone) or sRGB base. An SDR JPEG
-    /// is not written yet. Recipe key `output.display.container`.
-    #[arg(long, value_enum, ignore_case = true, value_name = "CONTAINER")]
+    /// The file container: `tiff` (the default) or `jpeg` (HDR with a gain map).
+    /// Destinations: SDR `native` TIFF in Display P3, Adobe RGB or sRGB; HDR as a
+    /// `linear` float TIFF in any gamut (stated with `--gamut`), or BT.2020 `pq`/`hlg` in
+    /// a 16-bit TIFF; HDR as a JPEG with an ISO 21496-1 gain map on a Display P3
+    /// (`--range hdr` alone) or sRGB base. An SDR JPEG is not written yet. Recipe key
+    /// `output.display.container`.
+    #[arg(long, value_name = "CONTAINER")]
     pub container: Option<Container>,
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
@@ -1006,87 +1006,6 @@ pub struct ReuseReady {
     pub source: FilmBaseSource,
 }
 
-/// What the AVIF encoder coded, for the resolved report. Serialize-only.
-///
-/// Every field **except `rendering`** is read back out of the produced file rather
-/// than restated from the request, so the report is evidence about the artifact and
-/// not an echo of the configuration. In particular `profile` records whether the file
-/// may claim the AVIF v1.2 Advanced Profile, and `profile_reason` says why not when
-/// it may not — a general-brand-only file is a legitimate output, but never a silent
-/// one.
-///
-/// `rendering` is the deliberate exception, and it is nested rather than flattened so
-/// the distinction survives: those are the luminance semantics **no** AVIF box can
-/// state, so they can only come from the renderer. Keeping them in their own object
-/// means a reader can tell at a glance which half of this block is evidence about
-/// bytes and which half is declared policy.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct AvifResult {
-    /// `"advanced"` when the `MA1A` brand was written, else `"general-brand-only"`.
-    pub profile: &'static str,
-    /// Which published limit put the file outside the Advanced Profile. Absent when
-    /// `profile` is `"advanced"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile_reason: Option<String>,
-    /// Coded bit depth (always 10 in this build).
-    pub bit_depth: u8,
-    /// AV1 `seq_profile` parsed from the codestream (1 = High, required for 4:4:4).
-    pub seq_profile: u8,
-    /// AV1 `seq_level_idx` parsed from the codestream. 16 is level 6.0, the
-    /// Advanced Profile ceiling.
-    pub seq_level_idx: u8,
-    /// Human-readable level, e.g. `"2.0"`, derived from `seq_level_idx`.
-    pub level: String,
-    /// CICP colour primaries / transfer / matrix coefficients as coded.
-    pub cicp: [u8; 3],
-    /// Whether full-range coding was signalled.
-    pub full_range: bool,
-    /// Size of the AV1 codestream in bytes, excluding container boxes.
-    pub codestream_bytes: usize,
-    /// The rendering policy behind the pixels — see the type's own note.
-    pub rendering: AvifRenderingResult,
-}
-
-/// The luminance and tone semantics of an AVIF rendition, which the container cannot
-/// express. Serialize-only.
-///
-/// CICP names the transfer function but not what diffuse white *is*: PQ's curve is
-/// absolute, yet nothing in the file says nc anchors reference white at 203 cd/m² and
-/// masters to a 1000 cd/m² peak, and for HLG — display-referred — no box could. So a
-/// consumer deciding how to tone-map these files has the same problem the coded and
-/// linear TIFF blocks already solve by stating it, and this states it the same way.
-///
-/// `tone_curve` is the renderer's **pinned identifier**, straight from its metadata —
-/// the same pairing the coded- and linear-TIFF blocks carry: two AVIFs with
-/// byte-identical `cicp`, `profile` and `level` can hold materially different
-/// renditions, and the artifact block should be self-sufficient about which.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct AvifRenderingResult {
-    /// Reference white in cd/m² (the binding 203).
-    pub reference_white_nits: f32,
-    /// Mastering target peak in cd/m² (the binding 1000).
-    pub target_peak_nits: f32,
-    /// The display-linear value that represents `target_peak_nits` (≈4.926108) — the
-    /// largest the renderer produces, before the transfer function encodes it.
-    pub linear_headroom: f32,
-    /// Which display tone curve produced these pixels, straight from the renderer's
-    /// metadata.
-    pub tone_curve: &'static str,
-    /// Pinned gamut-mapping and linear-domain identifiers, from the renderer.
-    pub gamut_mapping: &'static str,
-    pub linear_domain: &'static str,
-    /// HLG's reference-display assumptions, absent for PQ. Mirrors the coded-TIFF
-    /// block; unlike that one, the measured content-light values are omitted here
-    /// because for AVIF they are in the file's own `clli` box for PQ, and omitted by
-    /// design for HLG.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hlg_system_gamma: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hlg_reference_display_peak_nits: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hlg_reference_display_black_nits: Option<f32>,
-}
-
 /// What the `hdr-linear-tiff` encoder wrote, and the luminance semantics the file
 /// cannot state for itself. Serialize-only.
 ///
@@ -1150,11 +1069,7 @@ pub struct HdrCodedTiffResult {
     pub icc_bytes: usize,
     /// The CICP triple the embedded profile's `cicp` tag declares, as
     /// `[ColourPrimaries, TransferCharacteristics, MatrixCoefficients]`.
-    ///
-    /// **MatrixCoefficients is 0 here and 9 in the `avif` block for the same
-    /// rendition**, and that is required rather than inconsistent:
-    /// ICC.1:2022 §10.3 mandates 0 for an RGB data space, while AVIF stores
-    /// Y'CbCr.
+    /// MatrixCoefficients is 0: ICC.1:2022 §10.3 mandates it for an RGB data space.
     pub cicp: [u8; 3],
     /// Whether full-range coding is signalled (always `true`).
     pub full_range: bool,
@@ -1171,12 +1086,10 @@ pub struct HdrCodedTiffResult {
     pub tone_curve: &'static str,
     /// This frame's **measured** peak and average light levels in cd/m², for PQ.
     ///
-    /// Present only for PQ, mirroring the `clli` box `io::avif` writes for the same
-    /// rendition: the values are absolute luminance, which HLG — being
-    /// display-referred — cannot state. TIFF has no `clli` equivalent, so without
-    /// these fields the measurement `pipeline::hdr::render_linear` took would be lost
-    /// from both the file and the report, leaving a consumer tone-mapping this image
-    /// with no way to learn its actual peak.
+    /// Present only for PQ: the values are absolute luminance, which HLG — being
+    /// display-referred — cannot state. TIFF has no CTA-861.3 (`clli`) equivalent, so
+    /// these fields are the only place a consumer tone-mapping this image learns its
+    /// actual peak.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cll_nits: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1306,13 +1219,6 @@ pub struct Report {
     /// reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
-    /// What the AVIF encoder actually coded (a PQ or HLG AVIF destination): the
-    /// profile the file may claim and why, the AV1 profile/level read back out of the
-    /// codestream, the CICP triple, and the coded size. Absent for every other
-    /// destination. Provenance for the conformance claim — an agent can check the
-    /// brand decision without re-parsing the container.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avif: Option<AvifResult>,
     /// What the linear HDR TIFF encoder wrote (`--transfer linear`), and the
     /// reference-white / peak / headroom semantics the embedded ICC cannot carry.
     /// Absent for every other destination. **Authoritative** for this output's
@@ -1880,6 +1786,13 @@ fn resolve_output_path(
     context: SuffixContext<'_>,
 ) -> Result<PathBuf> {
     let container = target.container();
+    if let Some(why) = given.extension().and_then(Container::removed_suffix) {
+        return Err(NcError::Usage(format!(
+            "{}: {why}. Name it `.{}`, or leave the suffix off and Hanten supplies it",
+            given.display(),
+            container.canonical()
+        )));
+    }
     match given.extension() {
         // A spelling some container claims is a container request, so it is judged.
         Some(ext) if given_container(given).is_some() => {
@@ -2754,8 +2667,10 @@ const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
     ("hdr-linear-tiff", "--transfer linear --gamut bt2020"),
     ("hdr-pq-tiff", "--transfer pq"),
     ("hdr-hlg-tiff", "--transfer hlg"),
-    ("hdr-pq", "--transfer pq --container avif"),
-    ("hdr-hlg", "--transfer hlg --container avif"),
+    // The AVIF container went later (`docs/design/avif-removal.md`): the same signal
+    // as a TIFF.
+    ("hdr-pq", "--transfer pq"),
+    ("hdr-hlg", "--transfer hlg"),
     // Neither is the same file: the map is per-channel and ISO-only, so a reader that
     // knows only the Ultra HDR v1 XMP shows the SDR base.
     (
@@ -2778,6 +2693,10 @@ fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> S
         "gain-map-hdr" | "ultra-hdr-v1" => format!(
             "For `{name}`, the nearest is {flags}: its gain map is per-channel and carries \
              ISO 21496-1 metadata only, without the Ultra HDR v1 XMP."
+        ),
+        "hdr-pq" | "hdr-hlg" => format!(
+            "For `{name}`, the nearest is {flags}: the same Rec.2100 signal as a 16-bit \
+             TIFF, since Hanten no longer writes AVIF (`docs/design/avif-removal.md`)."
         ),
         // `direct` is refused beside the film master: name the way back when it may be in
         // play (typed, or from a recipe this refusal runs too early to read).
@@ -3368,58 +3287,6 @@ fn report_encode_outcome(
     }
 }
 
-/// The AVIF report block, and the brand-downgrade warning. It reads only what
-/// the AVIF encoder resolved.
-fn report_avif(
-    report: &mut Report,
-    summary: &avif::AvifSummary,
-    log: &Log,
-    warnings: &mut Vec<String>,
-) {
-    // A general-brand-only file is valid but is never advertised as Advanced
-    // Profile, and the downgrade is surfaced (and `--strict`-promotable) rather
-    // than left for someone to discover by inspecting brands.
-    let profile_reason = match &summary.profile {
-        avif::AvifProfile::Advanced => None,
-        avif::AvifProfile::GeneralOnly { reason } => {
-            push_warning_buf(
-                warnings,
-                log,
-                format!(
-                    "AVIF written without the MA1A brand (not AVIF v1.2 Advanced \
-                     Profile): {reason}"
-                ),
-            );
-            Some(reason.clone())
-        }
-    };
-    report.avif = Some(AvifResult {
-        profile: match summary.profile {
-            avif::AvifProfile::Advanced => "advanced",
-            avif::AvifProfile::GeneralOnly { .. } => "general-brand-only",
-        },
-        profile_reason,
-        bit_depth: summary.bit_depth,
-        seq_profile: summary.seq_profile,
-        seq_level_idx: summary.seq_level_idx,
-        level: avif::level_name(summary.seq_level_idx),
-        cicp: [summary.cicp.0, summary.cicp.1, summary.cicp.2],
-        full_range: summary.full_range,
-        codestream_bytes: summary.codestream_bytes,
-        rendering: AvifRenderingResult {
-            reference_white_nits: summary.metadata.linear.reference_white_nits,
-            target_peak_nits: summary.metadata.linear.target_peak_nits,
-            linear_headroom: summary.metadata.linear.linear_headroom,
-            tone_curve: summary.metadata.linear.tone_curve,
-            gamut_mapping: summary.metadata.linear.gamut_mapping,
-            linear_domain: summary.metadata.linear.linear_domain,
-            hlg_system_gamma: summary.metadata.hlg_system_gamma,
-            hlg_reference_display_peak_nits: summary.metadata.hlg_reference_display_peak_nits,
-            hlg_reference_display_black_nits: summary.metadata.hlg_reference_display_black_nits,
-        },
-    });
-}
-
 /// The coded-HDR TIFF report block, and the BigTIFF note. It reads only what the
 /// encoder resolved.
 fn report_hdr_coded_tiff(
@@ -3445,10 +3312,8 @@ fn report_hdr_coded_tiff(
         sample_format: summary.sample_format,
         bigtiff: summary.bigtiff,
         icc_bytes: summary.icc_bytes,
-        // Deliberately **not** `metadata.cicp_matrix_coefficients`: that is the
-        // AVIF value (9, Y'CbCr). An RGB ICC profile requires 0, and the profile
-        // this file embeds writes 0 — so the report states what the artifact
-        // carries, not what the renderer declared for a different container.
+        // Deliberately **not** `metadata.cicp_matrix_coefficients` (9, Y'CbCr): an
+        // RGB ICC profile requires 0, and the profile this file embeds writes 0.
         cicp: [metadata.cicp_color_primaries, metadata.cicp_transfer, 0],
         full_range: metadata.full_range,
         max_quantization_error_codes: summary.max_quantization_error_codes,
@@ -3456,9 +3321,8 @@ fn report_hdr_coded_tiff(
         reference_white_nits: metadata.linear.reference_white_nits,
         target_peak_nits: metadata.linear.target_peak_nits,
         tone_curve: metadata.linear.tone_curve,
-        // PQ only, for the same reason `io::avif` omits `clli` on HLG: HLG is
-        // display-referred, so absolute content-light values would be a false
-        // claim rather than a missing one.
+        // PQ only: HLG is display-referred, so absolute content-light values would
+        // be a false claim rather than a missing one.
         max_cll_nits: match metadata.transfer {
             hdr::HdrTransfer::Pq => Some(metadata.content_light.max_cll_nits),
             hdr::HdrTransfer::Hlg => None,
@@ -3478,7 +3342,7 @@ fn report_hdr_coded_tiff(
              lives in the embedded ICC profile's `cicp` tag, which only a \
              CICP-aware colour-managed reader honours; treat this as \
              limited-interoperability interchange rather than a display-ready \
-             deliverable, and see the AVIF or gain-map destinations for delivery",
+             deliverable, and see the gain-map destination for delivery",
     });
 }
 
@@ -3548,7 +3412,6 @@ fn run_profile(destination: recipe::Destination, export_ir: bool) -> RunProfile 
         recipe::Destination::Display(d) => match d.encoding {
             Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => RunProfile::U16Tiff { export_ir },
             Encoding::HdrLinearTiff => RunProfile::F32Tiff { export_ir },
-            Encoding::HdrAvif(_) => RunProfile::Avif { export_ir },
             Encoding::GainMapJpeg => RunProfile::GainMapJpeg { export_ir },
         },
     }
@@ -3584,8 +3447,6 @@ enum DestinationPixels {
     HdrLinear(hdr::LinearHdr, hdr::PeakClamp),
     /// A Rec.2100 signal for the 16-bit TIFF.
     HdrCoded(hdr::RenderedHdr, hdr::PeakClamp),
-    /// A Rec.2100 signal for the AVIF.
-    HdrAvif(hdr::RenderedHdr, hdr::PeakClamp),
     /// The SDR base with the display curve applied and its ICC profile, and the gain
     /// map to the HDR rendition clamped to `headroom`.
     GainMap {
@@ -3606,7 +3467,6 @@ impl DestinationRender {
                 pixels:
                     DestinationPixels::HdrLinear(_, clamp)
                     | DestinationPixels::HdrCoded(_, clamp)
-                    | DestinationPixels::HdrAvif(_, clamp)
                     | DestinationPixels::GainMap { clamp, .. },
                 ..
             } => Some(*clamp),
@@ -3624,9 +3484,7 @@ impl DestinationRender {
         match self {
             Self::Rendered { pixels, .. } => match pixels {
                 DestinationPixels::HdrLinear(h, _) => Some(h.content_light()),
-                DestinationPixels::HdrCoded(r, _) | DestinationPixels::HdrAvif(r, _) => {
-                    Some(r.metadata().content_light)
-                }
+                DestinationPixels::HdrCoded(r, _) => Some(r.metadata().content_light),
                 // A gain map's deliverable is an SDR base plus a map, so an HDR
                 // rendition near reference white makes a flat map, not a mislabelled
                 // container: `gain_map.flat` states it (a flat map is no mislabelled container).
@@ -3717,13 +3575,6 @@ fn render_destination(
         Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.hdr()?;
             Ok(DestinationPixels::HdrCoded(
-                hdr::encode_transfer(hdr, transfer)?,
-                clamp,
-            ))
-        }),
-        Encoding::HdrAvif(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
-            let (hdr, clamp) = r.hdr()?;
-            Ok(DestinationPixels::HdrAvif(
                 hdr::encode_transfer(hdr, transfer)?,
                 clamp,
             ))
@@ -3895,11 +3746,6 @@ fn encode_render(
             };
             let (staged, outcome, summary) = encode::encode_hdr_coded(rendered, &icc, output)?;
             report_hdr_coded_tiff(report, &summary, log, warnings);
-            (staged, outcome)
-        }
-        DestinationPixels::HdrAvif(rendered, _) => {
-            let (staged, outcome, summary) = avif::encode(rendered, output)?;
-            report_avif(report, &summary, log, warnings);
             (staged, outcome)
         }
         DestinationPixels::GainMap {
@@ -4603,8 +4449,6 @@ enum FrameStatus {
         /// What the encoder wrote, for an HDR destination — mirrors the single-frame
         /// `Report` fields. Boxed (`clippy::large_enum_variant`).
         #[serde(skip_serializing_if = "Option::is_none")]
-        avif: Option<Box<AvifResult>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         hdr_linear_tiff: Option<Box<HdrLinearTiffResult>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         hdr_coded_tiff: Option<Box<HdrCodedTiffResult>>,
@@ -5168,7 +5012,6 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             film_type: report.film_type,
             identity: report.identity.map(Box::new),
             chain: report.chain.map(Box::new),
-            avif: report.avif.map(Box::new),
             hdr_linear_tiff: report.hdr_linear_tiff.map(Box::new),
             hdr_coded_tiff: report.hdr_coded_tiff.map(Box::new),
         },
@@ -7084,7 +6927,6 @@ fn primary_depth(destination: recipe::Destination) -> &'static str {
         recipe::Destination::Display(d) => match d.encoding {
             Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => "u16",
             Encoding::HdrLinearTiff => "f32",
-            Encoding::HdrAvif(_) => "u10",
             Encoding::GainMapJpeg => "u8",
         },
     }
@@ -7699,15 +7541,12 @@ mod tests {
     #[test]
     fn a_missing_extension_is_completed_from_the_resolved_container() {
         // An extensionless path is completed from whatever container the destination
-        // resolved — the default's TIFF, the gain map's JPEG, the AVIF's own.
+        // resolved — the default's TIFF, the gain map's JPEG.
         for (extra, want) in [
             (&[][..], "positive.tiff"),
             (&["--film-master"][..], "positive.tiff"),
             (&["--range", "hdr"][..], "positive.jpg"),
-            (
-                &["--transfer", "pq", "--container", "avif"][..],
-                "positive.avif",
-            ),
+            (&["--transfer", "pq"][..], "positive.tiff"),
         ] {
             let mut args = parse_convert(extra);
             args.output = PathBuf::from("positive");
@@ -7747,6 +7586,22 @@ mod tests {
         // Control: the matching suffix is accepted.
         hdr.output = PathBuf::from("positive.jpg");
         validate_convert(&merged(base_recipe(), &hdr), &hdr).unwrap();
+    }
+
+    #[test]
+    fn a_removed_containers_suffix_is_refused_not_completed() {
+        // `out.avif` is neither a stem (it would write `out.avif.tiff`) nor a mismatch
+        // offering a destination: AVIF is gone, so the remedy is the TIFF.
+        for given in ["positive.avif", "positive.AVIF"] {
+            let mut args = parse_convert(&["--transfer", "pq"]);
+            args.output = PathBuf::from(given);
+            let err = validate_convert(&merged(base_recipe(), &args), &args)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("no longer writes AVIF"), "{err}");
+            assert!(err.contains("Name it `.tiff`"), "{err}");
+            assert!(!err.contains("drop .avif"), "{err}");
+        }
     }
 
     #[test]
@@ -7881,7 +7736,6 @@ mod tests {
         // `tif`, `jpg` over `jpeg` — the names roll has always derived.
         assert_eq!(Container::Tiff.canonical(), "tiff");
         assert_eq!(Container::Jpeg.canonical(), "jpg");
-        assert_eq!(Container::Avif.canonical(), "avif");
     }
 
     #[test]
@@ -8933,10 +8787,6 @@ mod tests {
         for (extra, want) in [
             (&["--film-master"][..], "f_positive.tiff"),
             (&["--range", "hdr"][..], "f_positive.jpg"),
-            (
-                &["--transfer", "pq", "--container", "avif"][..],
-                "f_positive.avif",
-            ),
             (&[][..], "f_positive.tiff"),
         ] {
             let target = target_of(extra);
@@ -9139,7 +8989,6 @@ mod tests {
                     film_type: Some(FilmType::Silver),
                     identity: Some(Box::new(Identity::new())),
                     chain: None,
-                    avif: None,
                     hdr_linear_tiff: None,
                     hdr_coded_tiff: None,
                 },

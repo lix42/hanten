@@ -35,7 +35,7 @@ For representative colour and HDR frames:
    TIFF.
 2. **Every ready row of `destination::ROWS`** under `default`: SDR TIFF (Display P3,
    Adobe RGB, sRGB); HDR linear float TIFF (Display P3, Adobe RGB, sRGB, BT.2020);
-   PQ and HLG BT.2020 TIFF; PQ and HLG AVIF; the gain-map JPEG (Display P3, sRGB). The
+   PQ and HLG BT.2020 TIFF; the gain-map JPEG (Display P3, sRGB). The
    SDR JPEG rows join when `output/sdr-jpeg-preset` lands.
 3. **`direct`** — its unset destination (HDR linear Adobe RGB float TIFF) and its SDR
    form.
@@ -75,12 +75,6 @@ independent of nc:
   canonical encoded base using pinned max/RMS error, structural, neutral-ramp and
   saturated-patch bounds. A universal one-code bound is not valid for JPEG. Record the
   codec version, quality, chroma mode and every threshold in the manifest.
-- PQ/HLG AVIF: independently apply the pinned transfer to the canonical
-  absolute-linear BT.2020 buffer in binary64, quantize to the 10-bit 4:4:4 reference,
-  then compare an independent AVIF decode with pinned max/RMS code error plus ramp,
-  neutral and saturated-patch thresholds. PQ uses Rec.2100/ST 2084 with a 203 cd/m²
-  reference white and a 1000 cd/m² peak; HLG pins its OETF/OOTF, system gamma and
-  reference display in its manifest row.
 - Gain-map reconstruction: an independent ISO 21496-1 implementation reconstructs the
   canonical HDR rendition and declared headroom within max(0.02 nit, 0.5 % relative)
   per channel, with the three channels read separately. The oracle converts both

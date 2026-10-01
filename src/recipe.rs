@@ -2312,6 +2312,19 @@ mod tests {
     }
 
     #[test]
+    fn a_replayed_avif_container_is_refused_with_its_remedy() {
+        // A report or sidecar written while AVIF existed replays `"container": "avif"`.
+        let err = parse(
+            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("no longer writes AVIF"), "{err}");
+        assert!(err.contains("container `tiff`, the default"), "{err}");
+        assert!(!err.contains("unknown"), "{err}");
+    }
+
+    #[test]
     fn every_section_rejects_an_unknown_key() {
         for section in [
             "input",
@@ -3574,7 +3587,7 @@ mod tests {
     #[test]
     fn the_film_master_flag_replaces_a_recipes_axes() {
         let r = merged(
-            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "tiff"}}}"#,
             &["--film-master"],
         );
         assert_eq!(r.output, OutputSection::FilmMaster);
@@ -3881,8 +3894,8 @@ mod tests {
             ("--gamut", &["--gamut", "adobe-rgb"], |r| {
                 r.output == display(|a| a.gamut = Some(Gamut::AdobeRgb))
             }),
-            ("--container", &["--container", "avif"], |r| {
-                r.output == display(|a| a.container = Some(Container::Avif))
+            ("--container", &["--container", "jpeg"], |r| {
+                r.output == display(|a| a.container = Some(Container::Jpeg))
             }),
             ("--film-master", &["--film-master"], |r| {
                 r.output == OutputSection::FilmMaster

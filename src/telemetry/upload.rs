@@ -268,7 +268,6 @@ fn encoding(destination: &OutputSection) -> Result<&'static str, NotUploadable> 
         Encoding::SdrTiff => "sdr_tiff",
         Encoding::HdrLinearTiff => "hdr_linear_tiff",
         Encoding::HdrCodedTiff(_) => "hdr_coded_tiff",
-        Encoding::HdrAvif(_) => "avif",
         Encoding::GainMapJpeg => "gain_map_jpeg",
     })
 }

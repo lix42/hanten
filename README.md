@@ -8,8 +8,9 @@ It reads high-bit-depth scanner files (SilverFast HDR/HDRi first), runs a
 deterministic negative→positive pipeline in a 32-bit float linear working space —
 a fixed decode, then scene correction, the look, fit range and fit gamut — and
 writes a 16-bit Display P3 TIFF by default. Destination flags select the rest: SDR
-TIFF in Adobe RGB, an HDR gain-map JPEG (ISO 21496-1), a 10-bit HDR AVIF (PQ or HLG),
-an HDR TIFF (PQ, HLG or linear float), or the unrendered linear ACEScg film master.
+TIFF in Adobe RGB, an HDR gain-map JPEG (ISO 21496-1), an HDR TIFF (PQ, HLG or
+linear float), or the unrendered linear ACEScg film master. AVIF output was removed
+([`docs/design/avif-removal.md`](docs/design/avif-removal.md)).
 
 ## Design goal: built for agents
 
@@ -36,8 +37,8 @@ and hardening work tracked in the task roadmap.
 - [`docs/negative-convertor-research-report.md`](docs/negative-convertor-research-report.md)
   — background research.
 - [`docs/spike/gpu-rendering-spike.md`](docs/spike/gpu-rendering-spike.md) — where `hanten` spends
-  its time, and why it multithreads every per-pixel stage and the AV1 encoder on the
-  CPU rather than rendering on a GPU; revisit for an interactive or browser app.
+  its time, and why it multithreads every per-pixel stage on the CPU rather than
+  rendering on a GPU; revisit for an interactive or browser app.
 
 ## Usage (current CLI)
 
@@ -61,9 +62,9 @@ hanten convert in.tiff -o out.tiff --film-base 0.92,0.55,0.42
 hanten convert in.tiff -o out.tiff --film-base 0.92,0.55,0.42 \
   --exposure 0.5 --contrast 1.3
 
-# HDR: a gain-map JPEG (the suffix is completed from the destination), or PQ AVIF.
+# HDR: a gain-map JPEG (the suffix is completed from the destination), or a PQ TIFF.
 hanten convert in.tiff -o out --film-base 0.92,0.55,0.42 --range hdr
-hanten convert in.tiff -o out --film-base 0.92,0.55,0.42 --transfer pq --container avif
+hanten convert in.tiff -o out --film-base 0.92,0.55,0.42 --transfer pq
 
 # Inspect a scan and emit machine-readable JSON.
 hanten inspect in.tiff --report json
@@ -73,23 +74,21 @@ See the design spec for the complete command and parameter reference.
 
 ## Building
 
-The Rust build also compiles libaom (the AV1 encoder behind the PQ / HLG AVIF
-destinations) statically from the `libaom-sys` crate's vendored source. A fresh
-build machine needs CMake, C and C++ compilers, and NASM (for libaom SIMD on
-supported targets). No network access is needed for the native build. For example:
+A fresh build machine needs a C compiler and nothing else native — no CMake or NASM:
+`ring` builds from C, and `lcms2-sys` links a system Little CMS that `pkg-config`
+finds, else compiles its bundled copy. No network access is needed for the native
+build. For example:
 
 ```sh
 # Debian/Ubuntu
-sudo apt-get install build-essential cmake nasm
+sudo apt-get install build-essential
 
-# macOS with Homebrew (Xcode Command Line Tools are also required)
-brew install cmake nasm
+# macOS: the Xcode Command Line Tools
+xcode-select --install
 ```
 
-Runtime deployment does not require a separate libjpeg, libaom or libavif
-installation — Hanten writes the JPEG, gain-map and AVIF containers itself and
-statically links every codec. The Adobe Gain Map notice and the libaom / Alliance for
-Open Media patent-license summary are in
+Runtime deployment does not require a separate libjpeg installation — Hanten writes
+the JPEG and gain-map containers itself. The Adobe Gain Map notice is in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which also lists the license
 files a binary release must include.
 

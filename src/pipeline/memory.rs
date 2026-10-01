@@ -30,9 +30,7 @@
 //! The chain's buffer is `decoded`-shaped: the fixed decode clones the IR plane beside
 //! its output, and every stage moves that buffer and works in place. A 32-bit float
 //! TIFF ([`RunProfile::F32Tiff`]) writes it verbatim, so its encode row has no
-//! quantize term and its peak is the render row. The AVIF destination
-//! ([`RunProfile::Avif`]) adds the codec's staging at encode
-//! ([`AVIF_STAGING_BYTES_PER_PX`], calibrated at 48), and the gain-map JPEG
+//! quantize term and its peak is the render row. The gain-map JPEG
 //! ([`RunProfile::GainMapJpeg`]) holds two renditions and the full-resolution gains
 //! at render (`chain::render_pair`). Which phase peaks is **per profile**, not a
 //! property of any category: `which_phase_peaks_is_per_profile_and_measured_not_assumed`
@@ -118,8 +116,7 @@
 //! **Most rows measured the chain `nf-core/default-flip` removed** (`convert` u16 and
 //! f32, the gain-map, AVIF and HDR TIFF presets). Their profiles are gone, so their
 //! model column is history: the rows stay as the evidence behind the constants they
-//! fitted — [`ALLOWANCE_PERCENT`], [`AVIF_STAGING_BYTES_PER_PX`] and the retention
-//! rule — and because the current profiles count the same buffers they did (the
+//! fitted — [`ALLOWANCE_PERCENT`] and the retention rule — and because the current profiles count the same buffers they did (the
 //! `--new-flow` rows below matched a u16 `convert` of the same frames to 0.1 MB).
 //!
 //! | run | model | measured | margin |
@@ -179,10 +176,9 @@
 //! peak at the **render** phase, which is identical across them (they share
 //! `hdr::render_linear`); the u16 quantize buffer that distinguishes `hdr-*-tiff`
 //! lands in the cheaper encode phase and never sets the peak. Their margin is wider
-//! than `hdr-pq`'s at the same size because the AVIF profile's calibrated codec
-//! staging pushes *its* peak to encode, where the model was fitted; here the peak is
-//! a phase built only from enumerated buffers, so the residual is unmodelled
-//! allocator and writer overhead. Every one of these estimates stays **above**
+//! than `hdr-pq`'s at the same size because that AVIF preset's peak was at encode,
+//! where its codec staging was fitted; here the peak is a phase built only from
+//! enumerated buffers, so the residual is unmodelled allocator and writer overhead. Every one of these estimates stays **above**
 //! measured, which is the direction the gate requires.
 //!
 //! The two SDR rows are that same render peak — which is why the 74.65 MP estimate
@@ -211,15 +207,9 @@
 //! the sRGB SDR TIFF and the sRGB-based gain map each peaked within 1 MB of the row
 //! sharing their profile.
 //!
-//! The two `hdr-pq` rows are the *pair* that solved
-//! [`AVIF_STAGING_BYTES_PER_PX`] — they are a fit, not two independent
-//! confirmations, and their 78.47 B/px slope is what a future re-calibration
-//! should re-measure. The `hdr-hlg` row is an independent check of the shared
-//! profile: HLG differs from PQ only in a transfer applied in place to an
-//! already-allocated buffer, and it measured 1.503 GB against the same 1.765 GB
-//! estimate, so one profile covers both. (It does emit a substantially larger
-//! codestream — 621 KB against PQ's 72 KB on that frame — which costs allocation
-//! only inside the lumped staging term.)
+//! The `hdr-pq` and `hdr-hlg` rows are the removed AVIF destination's: the `hdr-pq`
+//! pair fitted its codec staging, and `docs/design/avif-removal.md` keeps that fit
+//! for anyone restoring it.
 //!
 //! Peak RSS varies by a few tens of KB between identical runs; the frozen literals
 //! in the tests are single observations, which is why the assertions are
@@ -262,44 +252,6 @@ const F32_BYTES: u64 = 4;
 /// (enforced by its constructor) and `io::encode` writes RGB unconditionally. Only
 /// the source-depth read buffer is sized from the file's own channel count.
 const WORKING_CHANNELS: u64 = 3;
-
-/// Bytes per pixel charged to the AVIF encode phase beyond the retained f32
-/// rendition (`RunProfile::Avif`).
-///
-/// Covers, in one figure: nc's three 10-bit Y'/Cb/Cr `u16` planes (6 B/px),
-/// libaom's own `aom_img_alloc` frame in `AOM_IMG_FMT_I44416` including its
-/// alignment border (~6 B/px), libaom's internal all-intra working set for 10-bit
-/// 4:4:4, the emitted codestream, and the assembled container held in memory
-/// before it is staged.
-///
-/// **Calibrated, not derived** — it is one lumped constant because libaom's
-/// internal allocation is not something nc can enumerate per buffer, and splitting
-/// it into named terms would imply a precision the model does not have.
-///
-/// Measured on two real HDRi scans with the removed chain's `hdr-pq` preset
-/// (macOS/aarch64, release, `--film-base` explicit so nothing is sampled), solving
-/// `measured = px·(28 + X) + fixed` across the pair:
-///
-/// | Scan | Pixels | Measured peak RSS |
-/// |---|---|---|
-/// | Phoenix frame | 18.66 MP | 1,472,397,312 B |
-/// | `samples/largest` | 74.65 MP | 5,865,947,136 B |
-///
-/// The two points give **78.47 B/px** total with only ~7.9 MB fixed — clean linear
-/// scaling — so the actual staging above the 28 B/px retained term is 50.47 B/px.
-/// Pinning 48 leaves `accounted` 3.4–3.8% *under* measured, which
-/// [`ALLOWANCE_PERCENT`] then covers with room to spare (its own justification is a
-/// 12.9% worst case). That is the same convention every profile uses:
-/// `accounted` enumerates buffers, the allowance covers allocator overhead. Do not
-/// "fix" the 3.8% gap by raising this — double-counting it pushed the 18.66 MP
-/// estimate to 1.43x measured, which rejects runs the machine could serve.
-/// **Measured before `output/avif-row-multithreading` (2026-09-16)**, i.e. with one
-/// libaom worker and row-mt off. Turning row-mt on with 8 pinned workers adds only
-/// per-worker buffers — about 10 MB measured at 16.4 MP — which stays inside the
-/// model's 15% allowance, so the fit was not redone. Anyone re-fitting this slope
-/// must encode with the *current* thread pinning, or they will be comparing against
-/// a configuration nc no longer runs.
-const AVIF_STAGING_BYTES_PER_PX: u64 = 48;
 
 /// Default memory budget when `--max-memory` is not given: 6 GiB.
 ///
@@ -383,13 +335,6 @@ pub enum RunProfile {
     F32Tiff {
         /// Carried for the uniform shape; an f32 IR plane is written verbatim from
         /// the decoded image, so it stages nothing.
-        export_ir: bool,
-    },
-    /// Into a **10-bit AVIF** (PQ/HLG): the decoded image and the chain's buffer, then
-    /// the AVIF encoder's own staging on top at encode. **Provisional**: counted, not
-    /// measured (`nf-destinations/memory-profiles`).
-    Avif {
-        /// Whether a u16 IR TIFF is staged before the primary.
         export_ir: bool,
     },
     /// Into the **gain-map JPEG**: the decoded image, then `chain::render_pair` — the
@@ -760,23 +705,6 @@ pub fn estimate_peak(
         RunProfile::MeasureRoll => (sum(mul(image, 2)?, sampled)?, 0),
         RunProfile::U16Tiff { export_ir } => tiff_phases(OutDepth::U16, export_ir)?,
         RunProfile::F32Tiff { export_ir } => tiff_phases(OutDepth::F32, export_ir)?,
-        RunProfile::Avif { export_ir } => {
-            // Render: the decoded image and the chain's one buffer (image-shaped: it
-            // carries the decode's cloned IR plane until the HDR hand-off drops it).
-            let render = mul(image, 2)?;
-            // Encode: both, plus the AVIF encoder's staging and the optional u16 IR
-            // plane.
-            let avif_staging = mul(pixels, AVIF_STAGING_BYTES_PER_PX)?;
-            let ir_export = if export_ir && shape.ir_present {
-                mul(pixels, 2)?
-            } else {
-                0
-            };
-            (
-                sum(render, sampled)?,
-                sum(sum(sum(render, avif_staging)?, ir_export)?, sampled)?,
-            )
-        }
         RunProfile::GainMapJpeg { export_ir } => {
             // Render: decoded + the chain's image-shaped buffer + the RGB-only split
             // copy + the f32 gains.
@@ -1089,7 +1017,6 @@ mod tests {
             (RunProfile::U16Tiff { export_ir: false }, "encode"),
             // f32 is written verbatim, so encode adds nothing and render is the peak.
             (RunProfile::F32Tiff { export_ir: false }, "render"),
-            (RunProfile::Avif { export_ir: false }, "encode"),
             // Encode retains every render buffer and adds the byte staging.
             (RunProfile::GainMapJpeg { export_ir: false }, "encode"),
             (RunProfile::MeasureRoll, "render"),
@@ -1294,14 +1221,12 @@ mod tests {
         // corresponding no-sampling plan alongside each frozen case.
         //
         // The conversions were measured on the removed chain (see the module doc):
-        // its u16 and f32 `convert` held the buffers the TIFF profiles count, and its
-        // `hdr-pq` render held one more rendition than the AVIF profile's but encoded
-        // over the same staging, so each measured peak still bounds its profile.
+        // its u16 and f32 `convert` held the buffers the TIFF profiles count, so each
+        // measured peak still bounds its profile.
         let standard = shape(5184, 3599, true); // a roll frame, 18.66 MP HDRi
-        let avif_scan = shape(5184, 3600, true); // the AVIF staging calibration scan
         let export_ir_u16 = RunProfile::U16Tiff { export_ir: true };
         let hdr_out = RunProfile::F32Tiff { export_ir: false };
-        let cases: [(ImageShape, RunProfile, SamplePlan, u64); 8] = [
+        let cases: [(ImageShape, RunProfile, SamplePlan, u64); 6] = [
             (
                 big(),
                 RunProfile::DecodeOnly,
@@ -1317,21 +1242,6 @@ mod tests {
                 RunProfile::DecodeOnly,
                 SamplePlan::none(),
                 328_286_208,
-            ),
-            // The two `hdr-pq` calibration runs behind
-            // `AVIF_STAGING_BYTES_PER_PX`. Both used an explicit `--film-base`, and
-            // both predate row multithreading (see that constant's note).
-            (
-                avif_scan,
-                RunProfile::Avif { export_ir: false },
-                SamplePlan::none(),
-                1_472_397_312,
-            ),
-            (
-                shape(10368, 7200, true),
-                RunProfile::Avif { export_ir: false },
-                SamplePlan::none(),
-                5_865_947_136,
             ),
         ];
         for (shape, profile, sampling, measured) in cases {

@@ -50,7 +50,7 @@ sequential-reduce split is worth its buffer here.
   byte-identical, or a documented non-issue. If a knob is the answer, it is an
   operational one (`RAYON_NUM_THREADS` as-is, or a `--threads` flag on the arg struct
   like `--max-memory`), never a recipe key, and the doc must say it cannot change
-  bytes — libaom's `AV1_THREADS` is separate and stays pinned.
+  bytes.
 
 ## Dependencies
 

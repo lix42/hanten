@@ -149,10 +149,9 @@ const SAMPLE_FORMAT_IEEE_FLOAT: u16 = 3;
 /// What [`encode_hdr_linear`] resolved, for the JSON report.
 ///
 /// The four storage fields are the contract this function *writes*, fixed by its
-/// `RGB32Float` colour type rather than measured back out of the file — unlike
-/// `io::avif`'s summary, which has to parse the codestream because libaom chooses
-/// the level. Nothing here is negotiable at run time, so there is no encoder
-/// decision to distrust; the round-trip tests are what prove the bytes match.
+/// `RGB32Float` colour type rather than measured back out of the file. Nothing here
+/// is negotiable at run time, so there is no encoder decision to distrust; the
+/// round-trip tests are what prove the bytes match.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HdrLinearTiffSummary {
     /// The primaries the samples are in.

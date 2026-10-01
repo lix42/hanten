@@ -118,7 +118,7 @@ decode → film-base → algo::fixed decode → NC film RGB v1 → linear ACEScg
   └ scene_correction → look → fit_range → fit_gamut → destination encode
       ├ SDR (default)  → Display P3, Adobe RGB or sRGB → 16-bit TIFF
       ├ HDR linear     → Display P3, Adobe RGB, sRGB or BT.2020, no transfer → 32-bit float TIFF
-      ├ HDR PQ / HLG   → Rec.2100 → full-range 16-bit TIFF, or 10-bit 4:4:4 AVIF
+      ├ HDR PQ / HLG   → Rec.2100 → full-range 16-bit TIFF
       └ HDR gain map   → Display P3 or sRGB base + HDR rendition → ISO 21496-1 gain-map JPEG
 ```
 
@@ -164,7 +164,7 @@ Read the module docs before changing these; they hold the traps.
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
 | rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |
-| AVIF / libaom | `io/avif.rs`, `Cargo.toml` comments |
+| AVIF (removed) and how to restore it | `docs/design/avif-removal.md` |
 | colorimetry | `pipeline/colorimetry/`, `docs/colorimetry-maintenance.md` |
 | memory preflight | `pipeline/memory.rs` |
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |

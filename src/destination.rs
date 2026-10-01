@@ -63,6 +63,9 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     fn set(axes: &mut DisplayAxes, value: Self);
     /// This axis's default in `d` over the rows still consistent, if it has one there.
     fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self>;
+    /// Spellings of removed values, each with why it went: [`parse`] refuses them by
+    /// name, so a replayed recipe or an old command never reads as a typo.
+    const REMOVED: &'static [(&'static str, &'static str)] = &[];
 }
 
 /// The rendering's defaults for unset axes, and their derivation order
@@ -104,6 +107,13 @@ pub const AXIS_KEYS: [&str; 4] = [Range::KEY, Transfer::KEY, Gamut::KEY, Contain
 /// generated from [`Axis::ALL`], so a new value cannot be missing from it.
 pub fn parse<A: Axis>(s: &str) -> std::result::Result<A, String> {
     let wanted = s.trim().to_ascii_lowercase();
+    if let Some((name, why)) = A::REMOVED.iter().find(|(name, _)| *name == wanted) {
+        return Err(format!(
+            "{} {name} (recipe `output.display.{}`: \"{name}\") was removed: {why}",
+            A::FLAG,
+            A::KEY
+        ));
+    }
     A::ALL
         .iter()
         .copied()
@@ -127,8 +137,48 @@ pub fn accepted<A: Axis>() -> String {
         .join(", ")
 }
 
-/// Serde and clap through [`Axis::ALL`] and [`Axis::name`], so the recipe and the flag
-/// accept exactly the same spellings, and neither keeps a list of its own.
+/// Clap's parser for an axis: [`parse`], so the flag refuses a removed value with the
+/// recipe's message, and lists [`Axis::ALL`] in `--help`.
+#[derive(Clone)]
+pub struct AxisParser<A>(std::marker::PhantomData<A>);
+
+impl<A: Axis + Send + Sync> clap::builder::TypedValueParser for AxisParser<A> {
+    type Value = A;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        _: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> std::result::Result<A, clap::Error> {
+        let fail = |kind, message: String| {
+            let mut cmd = cmd.clone();
+            Err(cmd.error(kind, message))
+        };
+        match value.to_str() {
+            Some(s) => {
+                parse::<A>(s).or_else(|message| fail(clap::error::ErrorKind::InvalidValue, message))
+            }
+            None => fail(
+                clap::error::ErrorKind::InvalidUtf8,
+                format!("{} takes one of: {}", A::FLAG, accepted::<A>()),
+            ),
+        }
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(
+            A::ALL
+                .iter()
+                .map(|v| clap::builder::PossibleValue::new(v.name())),
+        ))
+    }
+}
+
+/// Serde and clap through [`parse`] and [`Axis::name`], so the recipe and the flag
+/// accept, and refuse, exactly the same spellings, and neither keeps a list of its own.
 macro_rules! axis_serde {
     ($ty:ty) => {
         impl Serialize for $ty {
@@ -142,13 +192,10 @@ macro_rules! axis_serde {
                 parse::<$ty>(&s).map_err(serde::de::Error::custom)
             }
         }
-        // The flag's accepted values and its `--help` list come from `Axis::ALL` too.
-        impl clap::ValueEnum for $ty {
-            fn value_variants<'a>() -> &'a [Self] {
-                <$ty as Axis>::ALL
-            }
-            fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
-                Some(clap::builder::PossibleValue::new(self.name()))
+        impl clap::builder::ValueParserFactory for $ty {
+            type Parser = AxisParser<$ty>;
+            fn value_parser() -> Self::Parser {
+                AxisParser(std::marker::PhantomData)
             }
         }
     };
@@ -312,7 +359,6 @@ axis_serde!(Gamut);
 pub enum Container {
     Tiff,
     Jpeg,
-    Avif,
 }
 
 impl Container {
@@ -321,7 +367,6 @@ impl Container {
         match self {
             Self::Tiff => &["tif", "tiff"],
             Self::Jpeg => &["jpg", "jpeg"],
-            Self::Avif => &["avif"],
         }
     }
 
@@ -334,13 +379,12 @@ impl Container {
         match self {
             Self::Tiff => "tiff",
             Self::Jpeg => "jpg",
-            Self::Avif => "avif",
         }
     }
 }
 
 impl Axis for Container {
-    const ALL: &'static [Self] = &[Container::Tiff, Container::Jpeg, Container::Avif];
+    const ALL: &'static [Self] = &[Container::Tiff, Container::Jpeg];
     const DEFAULT: Self = Container::Tiff;
     const FLAG: &'static str = "--container";
     const KEY: &'static str = "container";
@@ -348,7 +392,6 @@ impl Axis for Container {
         match self {
             Container::Tiff => "tiff",
             Container::Jpeg => "jpeg",
-            Container::Avif => "avif",
         }
     }
     fn of(row: &Row) -> Self {
@@ -363,8 +406,26 @@ impl Axis for Container {
     fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
         Some(d.container)
     }
+    const REMOVED: &'static [(&'static str, &'static str)] = &[("avif", AVIF_REMOVED)];
 }
 axis_serde!(Container);
+
+/// Why `avif` is refused, as a flag value, a recipe value or an output suffix.
+pub const AVIF_REMOVED: &str = "Hanten no longer writes AVIF (`docs/design/avif-removal.md`). \
+    The same Rec.2100 PQ or HLG signal is written as a full-range 16-bit TIFF — container \
+    `tiff`, the default — and the compact HDR file is the gain-map JPEG: range `hdr`, \
+    transfer `native`, container `jpeg`. There is no alias";
+
+impl Container {
+    /// Why a path's suffix names a removed container, if it does — so `out.avif` is
+    /// refused rather than read as the stem of `out.avif.tiff`.
+    pub fn removed_suffix(ext: &std::ffi::OsStr) -> Option<&'static str> {
+        <Self as Axis>::REMOVED
+            .iter()
+            .find(|(name, _)| ext.eq_ignore_ascii_case(name))
+            .map(|(_, why)| *why)
+    }
+}
 
 /// What a ready row's encoder writes. The render dispatch matches on this, exhaustively,
 /// so a new row cannot reach an encoder it was not written for.
@@ -376,8 +437,6 @@ pub enum Encoding {
     HdrLinearTiff,
     /// One HDR rendition, a Rec.2100 signal as full-range 16-bit TIFF codes.
     HdrCodedTiff(HdrTransfer),
-    /// One HDR rendition, a Rec.2100 signal as 10-bit 4:4:4 AVIF.
-    HdrAvif(HdrTransfer),
     /// An SDR and an HDR rendition in the gamut's own curve: the SDR as an 8-bit
     /// JPEG base, the HDR as a per-channel ISO 21496-1 gain map against it.
     GainMapJpeg,
@@ -421,8 +480,7 @@ const fn row(
 
 /// **The destination set.** Every combination not listed is refused.
 ///
-/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; AVIF is written only
-/// for a Rec.2100 signal; a linear float TIFF is the lossless HDR master, in the gamut
+/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; a linear float TIFF is the lossless HDR master, in the gamut
 /// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, on a base
 /// verified with a decoder (Display P3, sRGB).
 pub const ROWS: &[Row] = &[
@@ -488,20 +546,6 @@ pub const ROWS: &[Row] = &[
         Gamut::Bt2020,
         Container::Tiff,
         Status::Ready(Encoding::HdrCodedTiff(HdrTransfer::Hlg)),
-    ),
-    row(
-        Range::Hdr,
-        Transfer::Pq,
-        Gamut::Bt2020,
-        Container::Avif,
-        Status::Ready(Encoding::HdrAvif(HdrTransfer::Pq)),
-    ),
-    row(
-        Range::Hdr,
-        Transfer::Hlg,
-        Gamut::Bt2020,
-        Container::Avif,
-        Status::Ready(Encoding::HdrAvif(HdrTransfer::Hlg)),
     ),
     row(
         Range::Hdr,
@@ -1223,17 +1267,12 @@ mod tests {
                 choices: vec!["linear", "pq", "hlg"],
             }
         );
-        let err = resolve(&axes(None, None, None, Some(Container::Avif)), &STD).unwrap_err();
-        assert!(
-            matches!(err, Fault::Ambiguous { flag: "--transfer", ref choices, .. }
-            if choices == &vec!["pq", "hlg"])
-        );
     }
 
     #[test]
     fn hdr_alone_resolves_to_the_gain_map_jpeg() {
         // Transfer's default (`native`) is on the gain map's row, so it wins over the
-        // HDR TIFFs and AVIFs, which need a transfer stated.
+        // HDR TIFFs, which need a transfer stated.
         let r = resolve(&axes(Some(Range::Hdr), None, None, None), &STD).unwrap();
         assert_eq!(
             (r.transfer, r.gamut, r.container, r.encoding),
@@ -1401,20 +1440,21 @@ mod tests {
                 }
             }
         }
-        // A PQ AVIF asked for as a TIFF: only the container changes.
-        let pq_avif = axes(None, Some(Transfer::Pq), None, Some(Container::Avif));
-        assert_eq!(
-            writing(Container::Tiff, &pq_avif, &STD),
-            [axes(None, None, None, Some(Container::Tiff))]
-        );
-        // A stated Adobe RGB gamut cannot reach an AVIF unless the offer restates it.
+        // A stated Adobe RGB gamut cannot reach a gain-map JPEG unless the offer
+        // restates it.
         let adobe = axes(None, None, Some(Gamut::AdobeRgb), None);
-        for offer in writing(Container::Avif, &adobe, &STD) {
-            assert_eq!(offer.gamut, Some(Gamut::Bt2020), "{offer:?}");
+        let offers = writing(Container::Jpeg, &adobe, &STD);
+        assert!(!offers.is_empty());
+        for offer in offers {
+            assert!(
+                offer.gamut.is_some_and(|g| g != Gamut::AdobeRgb),
+                "{offer:?}"
+            );
         }
         // The one ready JPEG is the gain map: the offer restates the transfer it
         // needs (`native`), since the stated `pq` cannot reach it.
-        let offers = writing(Container::Jpeg, &pq_avif, &STD);
+        let pq = axes(None, Some(Transfer::Pq), None, Some(Container::Tiff));
+        let offers = writing(Container::Jpeg, &pq, &STD);
         assert!(
             !offers.is_empty() && offers.iter().all(|o| o.transfer == Some(Transfer::Native)),
             "{offers:?}"
@@ -1440,6 +1480,24 @@ mod tests {
         for v in Gamut::ALL {
             assert!(err.contains(v.name()), "{err}");
         }
+    }
+
+    #[test]
+    fn a_removed_value_is_refused_by_name_not_as_a_typo() {
+        let err = parse::<Container>(" AVIF ").unwrap_err();
+        assert!(err.contains("--container avif"), "{err}");
+        assert!(err.contains("`output.display.container`"), "{err}");
+        assert!(err.contains("docs/design/avif-removal.md"), "{err}");
+        assert!(!err.contains("unknown"), "{err}");
+        // The suffix check reads the same table, in any case.
+        assert_eq!(
+            Container::removed_suffix(std::ffi::OsStr::new("AvIf")),
+            Some(AVIF_REMOVED)
+        );
+        assert_eq!(
+            Container::removed_suffix(std::ffi::OsStr::new("tiff")),
+            None
+        );
     }
 
     #[test]
