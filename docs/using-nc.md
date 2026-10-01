@@ -141,6 +141,13 @@ flags at all and just prints the default recipe. Logs and warnings go to
 > aggregates per-frame failures into its report and still emits it. So a script
 > must check the exit code, not just parse stdout.
 
+> **A reader that stops early is not a failure.** Under `hanten … | head` (or
+> `2>&1 | head`) the run finishes: the image, its sidecar and a `--out` recipe are
+> still written, and the exit code is the run's own — `--strict` and a failed `roll`
+> frame still exit 1. Only `-v` says so (`hanten: stdout's reader closed; the report
+> was not read`). Any other failure to write stdout, such as a full disk behind `>`,
+> exits 5.
+
 ---
 
 ## 4. The core workflow
@@ -1648,7 +1655,7 @@ else.
 | 2 | Invalid CLI usage or parameters (bad flag value, a destination not written, wrong suffix, bad recipe, a removed flag) |
 | 3 | Input read/decode error |
 | 4 | Unsupported variant (e.g. a channel layout not handled yet) |
-| 5 | Output write error |
+| 5 | Output write error — stdout included, except a reader that closed it early |
 | 6 | Resource limit — estimated peak memory exceeds the budget |
 
 ---

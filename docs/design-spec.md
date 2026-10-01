@@ -1971,6 +1971,13 @@ artifacts leaves *no* primary output rather than an orphaned one (§9 Output/enc
 A run that fails through an ordinary error path also leaves no `*.nctmp` staging files;
 a run killed by a signal may leave one, since destructors do not run then.
 
+**A reader that goes away is not a failure.** When stdout's or stderr's reader
+closes the pipe (`hanten … | head`), the write is dropped and the run carries on —
+the `--out` recipe, the `--strict` and failed-frame gates and telemetry all come
+after the report — so the exit code is the run's own. `SIGPIPE` stays ignored for the
+same reason: restoring it would kill the run at the report. Any other stdout write
+failure is exit 5 (`stdio`).
+
 **Memory preflight** (§9 Global, `--max-memory`) maps to exit **6**: before any
 input is decoded, every command that reads a scan estimates the run's peak
 allocation from a metadata-only header probe and compares it against the budget.
@@ -2092,11 +2099,8 @@ shipped or retired item keeps its number and shrinks to one line.
     area (§6.1, §9 `measure`).
 16. **Conversion versioning & baseline comparison** — *shipped*: `identity` (§8), and
     `nctool compare` over `scripts/analysis/benchmark.json`.
-17. **Stdout broken-pipe safety.** Every stdout JSON write uses `println!`, which
-    panics on a closed pipe (`hanten … | head`), printing a backtrace and returning
-    failure though the conversion succeeded. Route all stdout writes through a
-    broken-pipe-tolerant helper, reusing the fail-soft `writeln!(stdout)` pattern the
-    `--telemetry-file -` sink already uses. Tracked: `core/stdout-broken-pipe-safety`.
+17. **Stdout broken-pipe safety** — *shipped* (§11): a reader that closes stdout or
+    stderr early ends neither the run nor its exit code.
 18. **Input data semantics** — *shipped* (§4, §9 Input / decode).
 19. **Conventional scanner ICC before density — deferred experiment.** Compare
     `scanner RGB → Dmin/log density` against applying the same scanner ICC to image

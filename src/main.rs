@@ -16,6 +16,7 @@ mod pipeline;
 mod recipe;
 mod rendering;
 mod stage;
+mod stdio;
 mod telemetry;
 mod types;
 mod version;
@@ -26,7 +27,7 @@ fn main() -> ExitCode {
     match cli::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("{err}");
+            stdio::stderr_line(format_args!("{err}"));
             ExitCode::from(err.exit_code() as u8)
         }
     }
