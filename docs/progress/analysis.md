@@ -649,7 +649,7 @@ What other epics need to know about `analysis`:
 ## display-output-acceptance (continued)
 
 **Status:** not started
-**Updated:** 2026-07-30
+**Updated:** 2026-10-01
 
 - 2026-07-30: Added a quantitative master/display tonal-delta gate. The
   reference-anchored reconstruction sigmoid owns the toe; normalized display
@@ -658,6 +658,16 @@ What other epics need to know about `analysis`:
   midtone re-grade. Numeric bounds must be established from the frozen real-scan
   baseline before default activation rather than replaced by a visual-only
   judgment.
+- 2026-10-01: **Re-scoped and split.** The matrix named the retired presets, the
+  Ultra HDR v1 / dual-dialect oracle, the sigmoid / exponential / `simple` rows and the
+  `print.*` keys. It is now every ready `destination::ROWS` row under `default`, plus
+  `direct` and the film master; row 9 shrinks to mid-grey agreement. This task keeps
+  the gate's specification (the oracles, and the reference-white normalization
+  `nctool metrics` cites) and the real-scan run. Split out:
+  `analysis/display-acceptance-harness` (the harness and oracles on fixtures, after
+  `nf-verification/benchmark-set`, whose case list it reuses) and
+  `analysis/viewer-interoperability` (the manual rubric, which absorbs
+  `output/gain-map-dialect-activation`).
 
 
 ## comparison-review-tooling
@@ -1120,3 +1130,24 @@ What other epics need to know about `analysis`:
 - 2026-10-01: filed from `manifest-seed-roles`. `2026-09-11-Portra400`'s `calibration.tif`
   is counted as `real` by `manifest roles` (with a warning) and by `shadow_metrics`
   (silently), and `nctool roll` refuses the roll; only `branch_probe` filters it out.
+
+
+## display-acceptance-harness
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: Split out of `display-output-acceptance`: build the manifest-driven
+  harness and the independent decode-back oracles that task specifies, proven on
+  fixtures, so the real-scan run needs only the assets. Waits on
+  `nf-verification/benchmark-set` for the case list.
+
+
+## viewer-interoperability
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: Split out of `display-output-acceptance`: the manual viewer rubric. It
+  absorbs `output/gain-map-dialect-activation`, whose remaining question is whether
+  Android 15+ displays nc's ISO-only, three-channel gain-map JPEG as HDR.

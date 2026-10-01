@@ -1,5 +1,15 @@
 # MP Container Conformance (CIPA DC-007)
 
+> **Closed — narrowed claim recorded (2026-10-01).** nc's own writer,
+> `io::iso_gain_map` (`nf-destinations/gain-map-destination`), types the gain map
+> `050000` and writes `APP0 JFIF` first in both images, so items 1 and 3 are done, and
+> libultrahdr is gone. Item 2 is settled as a **narrowed claim**: the file carries no
+> Exif, so it is not a strict DC-007 Baseline MP File (§4.2.1, §5.1); no reader
+> tested needs Exif, and nothing claims strict conformance. Recorded in
+> `io::iso_gain_map`'s module doc and design-spec §9. Adding Exif later needs the
+> constraints below and the macOS decoder oracle. What follows is the plan as it
+> stood, kept as decision history.
+
 ## Goal
 
 Make nc's gain-map JPEG a conformant **Baseline MP File** per CIPA

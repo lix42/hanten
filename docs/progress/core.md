@@ -120,10 +120,10 @@ What other epics need to know about `core`:
   become a recipe key (`deny_unknown_fields` would reject every new sidecar), and
   identity / `output_stats` / `compare` are **operational** like `--report` and
   telemetry: no recipe keys, no `merge` arms, no effect on output bytes.
-- **`pipeline_version` covers the default path only.** A recipe opting into a
-  non-default curve can replay under a new build with the same label and
-  different pixels; the stopgap is `cli::curve_default_warning` (via
-  `unpinned_curve`), and the policy is `core/recipe-replay-fidelity`.
+- **No document hanten writes carries `pipeline_version`** since sidecars went
+  (`pipeline_version` 8): `pipeline_version_warning` reads only an envelope's `meta`,
+  so a replayed `--dump-params` or `roll.json` gets no skew check. Owned by
+  `core/recipe-replay-fidelity` (re-scoped 2026-10-01).
 
 
 ## product-naming
@@ -751,7 +751,7 @@ tables (a policy decision, which the new task owns).
 ## recipe-replay-fidelity
 
 **Status:** not started
-**Updated:** — (section added 2026-09-13 to hold the relocated cross-reference)
+**Updated:** 2026-10-01
 
 - Goal: decide and implement what `nc` owes a frozen recipe whose render
   changed because a non-default path's defaults moved. Filed 2026-08-04 out of
@@ -759,6 +759,17 @@ tables (a policy decision, which the new task owns).
   instance, the stopgap, and the two rejected remedies); the second instance
   (`density.scale`, `pipeline_version` 4, 2026-09-09) is recorded in the task
   file.
+- 2026-10-01: **Re-scoped for the new chain.** The sigmoid and `density.scale`
+  instances are moot (recipes before `pipeline_version` 8 are refused whole) and the
+  stopgap `unpinned_curve` is deleted. The live gap, checked on the binary:
+  `pipeline_version_warning` reads only an envelope's `meta.pipeline_version`, and since
+  8 nothing hanten writes is an envelope — `--dump-params`, `measure-roll --out` and
+  `hanten params` all write bare recipes — so the check never fires on today's
+  documents (a hand-made envelope stamped 8 does warn under 9). `roll.json` also omits
+  the decode it measured under unless the input stated it. Agreed direction: stamp
+  provenance into every written document and always write the decode into
+  `roll.json`; open questions in the task file. Dependency
+  `algo/reference-anchored-sigmoid` replaced by `nf-core/default-flip`.
 
 
 ## dependency-hygiene

@@ -66,9 +66,9 @@ What other epics need to know about `output`:
   measured, not inferred (2026-08-06, re-confirmed on the CLI's own output
   2026-08-09).** Apple ignores Google's legacy Ultra HDR v1 XMP entirely, so that
   preset's file opens as an ordinary SDR JPEG on macOS/iOS. Only the ISO dialect is
-  read there, which is why the default is dual-dialect. What remains of
-  `output/gain-map-dialect-activation` is Android 15+ verification only; its CLI
-  half was consumed by `output/presets`.
+  read there, which is why the default is dual-dialect. The Android check
+  that `output/gain-map-dialect-activation` held is now
+  `analysis/viewer-interoperability`'s (2026-10-01).
 - **Verify gain-map output with `scripts/iso-decoder-oracle/`** (Apple ImageIO,
   macOS-only, not in CI). exiftool and libultrahdr both accept a file no decoder
   parses — that is exactly how a placement defect shipped. Two traps when using
@@ -854,8 +854,8 @@ enough to blow highlights when borrowed.
 
 ## mp-container-conformance
 
-**Status:** not started
-**Updated:** 2026-08-06
+**Status:** closed—narrowed claim
+**Updated:** 2026-10-01
 
 - Goal: make the gain-map JPEG a conformant CIPA DC-007 Baseline MP File — type
   the gain map `050000` instead of `Undefined`, and settle the Exif-baseline
@@ -923,11 +923,17 @@ enough to blow highlights when borrowed.
   `ultrahdr-dependency-externalization`. The dead RGB encoder in
   `pipeline::gain_map::iso` (`encode_iso_gain_map`) was removed with it; the ISO field
   set is now built from plain values (`iso::fields`), which `project` feeds.
+- 2026-10-01: **Closed — narrowed claim.** Items 1 and 3 were already done by
+  `io::iso_gain_map` (MP Type `050000`, `APP0 JFIF` first in both images), and
+  libultrahdr is gone. Item 2 settled without Exif: the file is not a strict DC-007
+  Baseline MP File (§4.2.1, §5.1), no reader tested needs Exif, and nothing claimed
+  strict conformance. Recorded in `io::iso_gain_map`'s module doc and design-spec §9.
+
 
 ## gain-map-dialect-activation
 
-**Status:** not started
-**Updated:** 2026-08-07
+**Status:** closed: merged into `analysis/viewer-interoperability`
+**Updated:** 2026-10-01
 
 - Goal: verify the dual-dialect file on Android 15+, and give the ISO dialect a
   CLI path so a user can produce one.
@@ -938,6 +944,12 @@ enough to blow highlights when borrowed.
   map is inert and the test discriminates nothing; and whichever of this task and
   `output/presets` ships a CLI surface first owns the `gain-map-hdr` name — the
   shipped `ultra-hdr-v1` is contractually ISO-free and must not be re-pointed.
+- 2026-10-01: **Closed — merged into `analysis/viewer-interoperability`.** No
+  dual-dialect, legacy-only or conflicting file can be written since
+  `nf-core/default-flip`, so the precedence question is moot. The remaining check —
+  Android 15+ displaying the ISO-only, three-channel gain map as HDR — is that task's
+  non-Apple reader.
+
 
 ## sdr-preset-followups
 

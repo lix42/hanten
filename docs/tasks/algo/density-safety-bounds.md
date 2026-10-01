@@ -1,163 +1,88 @@
 # Density Safety Bounds
 
+> **Re-scoped 2026-10-01** for the new chain (`nf-core/default-flip`). The original
+> file described the removed chain (`algo/density.rs`, `render_print`,
+> `print_exposure`, the sigmoid bounds); that version is in git. The gap it named
+> survives the flip, measured below.
+
 ## Goal
 
-Close the gap where a validation-passing density recipe can silently produce a
-degenerate (e.g. finite all-black) image. Two complementary mechanisms:
+No validation-passing recipe may produce a degenerate image silently, and no user
+value may reach an internal-invariant error. Three parts:
 
-1. **Bounded parameter ranges** for `density_scale` / `density_offset` /
-   `density_gamma` — physically-meaningful upper/magnitude bounds enforced at the
-   CLI `validate` boundary, the direct analogue of the sigmoid degenerate-value
-   bounds that density currently lacks. *(committed core)*
-2. **Degenerate-output warning** — a post-render histogram / dynamic-range-collapse
-   check that raises a report warning (`--strict` promotes) when the output has
-   collapsed, catching degeneracy from *any* cause including the finite-black
-   underflow the loss counters miss. *(higher value, needs a false-positive guard)*
+1. **Every reachable degenerate value is a named usage error** (exit 2), never an
+   internal error. *(doable without real scans)*
+2. **A threshold-free collapse warning**: an output channel that quantizes entirely to
+   `0` raises a report warning (`--strict` promotes). *(doable without real scans)*
+3. **A tuned near-black collapse warning** with a real-scan false-positive guard.
+   *(needs `../nc-assets`)*
 
-> **Context — the confirmed gap.** From the density-safety review (see
-> `docs/progress/_unassigned.md`). `validate` checks only finiteness/positivity
-> for density params (`cli.rs:781-783`): `density_gamma`/`density_scale` are
-> `positive` (no upper bound) and `density_offset` is `finite` only (no range).
-> Sigmoid, by contrast, enforces `SIGMOID_CONTRAST_MAX` / `SIGMOID_KNEE_MAX` with documented
-> photographic rationale (`cli.rs:837-855`). The render maps density through
-> `10^(γ·(d−anchor))` (the stage-3 tone map at `density.rs:408`): a hugely
-> *positive* density → `±inf` (caught by the encoder's non-finite counter), but a
-> hugely *negative* one underflows to a finite `+0.0` — a quietly black pixel
-> **no counter flags**. That tone map has no finiteness/collapse guard. (The
-> regional balance's `pixel_tone` non-finite skip, a different defense, retired with
-> the balance in `nf-retire/regional-balance`.)
+## What the new chain already refuses
 
-> **Context — a second confirmed underflow site, with a reproduction.** Found while
-> reviewing `color/film-master-render-pipeline` (2026-07-27) and deliberately **not**
-> fixed there, because the real-scan-validated false-positive guard this task owns is
-> what makes a fix safe. The gap is in the **stage-4 print render**, not the stage-3
-> tone map above: `render_print` computes
-> `exposure_gain = 2f32.powf(print.print_exposure)` (`algo/density.rs:478`) and then
-> `px[c] * wb[c] * exposure_gain` (`density.rs:486`), while `validate` checks only
-> `finite()` on `print_exposure` and `positive()` on explicit WB gains — no upper or
-> lower magnitude bound on either. So a *finite, validation-passing* recipe silently
-> renders black.
->
-> Measured on the committed IR-free fixture (chosen so no unrelated IR warning muddies
-> the signal): `hanten convert tests/fixtures/hdr-48bit.tif -o out.tiff --film-base
-> 0.9,0.55,0.42 <extra>`
->
-> | extra | rc | `loss` counters | report `warnings` | zero samples |
-> |---|---|---|---|---|
-> | *(none — baseline)* | 0 | all 0 | none | 0 % |
-> | `--print-exposure=-200` | 0 | **all 0** | **none** | **100 %** |
-> | `--white-balance=1e-45,1,1` | 0 | **all 0** | **none** | ~33 % (exactly one channel killed) |
-> | `--print-exposure 300` | 0 | `clipped_low: 695772` | 1 (the loss warning) | 100 % |
->
-> `--strict` also exits **0** on the `-200` case — there is no warning for it to
-> promote. So **only the underflow direction is silent**; the overflow direction is
-> already loud through the existing clip/non-finite counters. That asymmetry is exactly
-> what the cause-agnostic degenerate-output check in part 2 exists to close, and the
-> `--white-balance` row shows why a whole-image test is not enough: a single-channel
-> collapse must trip it too.
->
-> Two notes for whoever implements this. **(a)** A naive `is_normal()` on the
-> user-supplied gains would reject legitimate extreme-push recipes, which is why this
-> belongs behind the real-scan-validated collapse check rather than a bound guessed
-> from first principles. **(b)** `pipeline::render_split::ResolvedPrintControls::new`
-> already guards the same arithmetic — `is_normal()` on the gain **and** on each
-> `wb[c] · exposure_gain` product, since individually-valid factors can multiply to
-> `0.0` — but that is the **shared display stage**, now reached by the explicit
-> `ultra-hdr-v1` preset; the legacy print path above still does not route through
-> it. Treat it as a reference implementation of the numeric predicate and Ultra
-> HDR coverage, not as coverage for the legacy defect described here.
+`recipe::validate` refuses an anchor whose exponent overflows f32
+(`DecodeFault::Anchor`), an exposure whose gain `2^EV` is not a normal f32
+(`exposure_fault`), and a whole slope (`linearization × slope`) that is not a normal
+f32 (`validate_whole_slope`). Those are the model for part 1.
 
-## Design
+## The gap, measured 2026-10-01
 
-### 1. Parameter bounds (committed core)
+On `tests/fixtures/hdr-48bit.tif --film-base 0.9,0.55,0.42`, with the roll stated
+(`--roll-white 2.5 --roll-white-balance 1,1,1 --roll-exposure 0`) so no unrelated
+warning is present:
 
-Add upper/magnitude bounds in `validate` (`cli.rs`), mirroring the sigmoid
-pattern. Define each as a named constant with a documented, generous, physically-
-grounded rationale so it rejects **only** degenerate values, never legitimate
-photographic ones:
+| Extra | rc | Output | Warnings | `--strict` |
+|---|---|---|---|---|
+| *(none)* | 0 | normal | none | 0 |
+| `--density-offset=-5,-5,-5` | 0 | 100 % zero samples | none | 0 |
+| `--exposure=-100` | 0 | 100 % zero | none | 0 |
+| `--roll-exposure=-100` | 0 | 100 % zero | none | 0 |
+| `--white-balance=1e-30,1,1` | 0 | red channel 100 % zero | none | 0 |
+| `--exposure=-20` | 0 | 31–59 % zero per channel, max code 3 | none | — |
 
-- `density_gamma` — currently `> 0`; add an upper bound (a near-vertical curve
-  beyond real film/print gammas is degenerate). Cite the realistic range like the
-  sigmoid constants do.
-- `density_scale` — per-channel density multiplier; add an upper bound (and keep
-  `> 0`). A scale far beyond realistic pushes corrected density into the
-  underflow/overflow regime.
-- `density_offset` (field `cli.rs:239`, validated finite-only at `cli.rs:783`) —
-  **must stay able to go negative**: a below-zero offset is legal (`cli.rs:253`
-  notes densities can shift below zero) and is how orange-mask compensation works.
-  Bound it as a **generous magnitude cap** (|offset| ≤ some multiple of a scan's
-  full density range), not a positivity rule.
+The report's `output_stats.mean` reads `[0, 0, 0]` on the all-black rows, and every
+`loss` counter is 0: a `0.0` is a legal in-range sample.
 
-Bounds are physical constants, not conversion knobs — they are fixed validation
-limits, not new recipe keys, so no four-spot knob wiring is needed. Failure is a
-loud usage error (exit 2) naming the parameter, its value, and the bound — exactly
-like the sigmoid checks.
+**Internal errors reachable from user values** (exit 1, `NcError::Other`):
 
-> Consider whether the sigmoid path (which reuses `density_scale`/`density_offset`)
-> should share the same bounds — keep them consistent so a value legal for one
-> algorithm isn't degenerate in the other.
+| Extra | Error |
+|---|---|
+| `--density-offset=1e6,1e6,1e6`, `--density-offset=-1e6,…`, `--density-gamma=1000`, `--roll-white 0.001` | `fit range was handed a film base that graded to luminance inf/0; the decoded base is positive and finite by construction` (`pipeline/fit_range.rs`) |
+| `--density-scale=1e6,1e6,1e6` | `fit range received a non-finite sample at pixel 0` |
 
-### 2. Degenerate-output warning (higher value; build with a false-positive guard)
+## Design notes
 
-After the render, before encode, inspect the output for **collapse** and, if
-detected, push a report warning (`push_warning`, so `--strict` promotes it and the
-JSON report records it). This is **cause-agnostic** — it catches degeneracy from
-param interactions (scale × offset × gamma × film-base × dmax can collapse output
-while each param is individually in range), bad film base, or bad dmax, not just
-out-of-bound params — and specifically covers the finite-all-black underflow the
-encoder's clamp/non-finite counters cannot see (a `0.0` is a legal in-range
-sample).
+- **Part 1.** Validate the resolved value, not a proxy: the film base graded through
+  decode → scene correction → look must be a finite, positive, normal luminance, and
+  the message names the knobs that can move it (the `validate_whole_slope` pattern).
+  Then decide whether generous magnitude bounds on `reconstruction.offset`, `scale`
+  and `linearization` are still needed once that rule exists. A negative offset is
+  legal.
+- **Part 2.** A whole channel at exactly 0 cannot come from a real scene. One
+  legitimate trigger: converting the unexposed frame itself, which display black maps
+  to 0. Warning, not error. It catches the single-channel case
+  (`--white-balance=1e-30,1,1`) a whole-image test would miss.
+- **Part 3.** The tuned form (dynamic-range collapse, near-black fraction) catches the
+  `--exposure=-20` row. Its threshold must keep every real frame, the darkest
+  included, silent. It may split off as its own task when parts 1–2 land.
 
-Detection candidates (pick and justify against real data):
-- near-zero **dynamic range** / spread of the output histogram, and/or
-- an implausible fraction of samples pinned at pure black `0.0` (or pure white).
+## Open questions
 
-**The hard part is the false-positive guard.** A legitimately very dark (low-key)
-or very bright (high-key) scan must **not** trip this. Tune the threshold against
-the real `../nc-assets` scans (which include legitimately dark frames) so normal
-conversions stay silent. This is a **warning, never a hard failure** on its own
-(a user may genuinely want a dark result) — `--strict` is the opt-in that
-promotes it. Document the threshold and its rationale in
-`docs/progress/algo.md`.
-
-This fills a documented hole; it does **not** duplicate the encoder's clip /
-non-finite counters (those count out-of-range and NaN/inf; this catches
-*in-range finite collapse*).
-
-## Constraints (must hold)
-
-- **Determinism.** Bounds and the collapse check depend only on params / output
-  values, not on wall-clock or ordering — same input + recipe ⇒ same decision.
-- **Fail loudly, right severity.** Out-of-bound params ⇒ usage error (exit 2);
-  degenerate output ⇒ report *warning* (not a hard error), `--strict` promotes.
-  Never a silently-wrong (quietly black) image with no signal.
-- **No legitimate use rejected.** Param bounds generous and cited; the output
-  warning validated against real scans for zero false positives on normal frames.
-- **Keep existing counters intact.** The clip / non-finite `EncodeReport` counting
-  stays; this adds the finite-collapse case they miss.
+- Does part 1 make the magnitude bounds unnecessary, or are they still wanted for
+  their messages?
+- Does the warning apply to the film master, whose output is unclamped float?
 
 ## How to Verify
 
-- A recipe with an out-of-bound `density_gamma` / `density_scale` / `density_offset`
-  is rejected at `validate` with exit 2 and a message naming value + bound; a
-  realistic in-range recipe passes unchanged.
-- The specific review scenario — a pathological (previously validation-passing)
-  `density_offset`/`density_scale` that renders a finite all-black image — is now
-  either rejected by the bound **or** flagged by the degenerate-output warning
-  (ideally both): construct it as a test and assert the signal fires.
-- **False-positive guard:** every real `../nc-assets` scan (including the darkest)
-  converts with default params and raises **no** degenerate-output warning
-  (throwaway `#[ignore]` test; derived numbers only, never read sample pixels into
-  context).
-- The warning is present in the JSON report and promoted by `--strict`.
-- Regression: normal conversions produce byte-identical output (this adds
-  validation/warnings, not output changes).
+- Each row of both tables above becomes either a usage error (exit 2) naming the
+  knob, or a report warning that `--strict` promotes; no internal error remains
+  reachable from a recipe value. Tests go through `merge` or the binary.
+- A realistic recipe renders byte-identically (validation and warnings only).
+- Part 3: every real `../nc-assets` frame converts at defaults with no collapse
+  warning (`#[ignore]` probe printing derived numbers only).
 
 ## Dependencies
 
-- [Density-domain algorithm](density.md) — owns `DensityParams` and the
-  acknowledged underflow gap (`algo/density.rs`); the bounds and collapse check
-  attach to its parameters and output.
-- [Pipeline orchestration](../core/pipeline-orchestration.md) — owns `validate`, the
-  render→report path, and `push_warning` where the degenerate-output warning is
-  raised.
+- [Density-domain algorithm](density.md) — historical owner of the parameters; the
+  decode is now `algo::fixed`.
+- [Pipeline orchestration](../core/pipeline-orchestration.md) — `validate`, the
+  report and `push_warning`.

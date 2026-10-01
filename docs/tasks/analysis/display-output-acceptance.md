@@ -1,185 +1,125 @@
 # Display-Output Acceptance
 
+> **Re-scoped 2026-10-01** for the new chain and **split in three**. The matrix named
+> the removed output presets (`gain-map-hdr`, `display-p3`, `compatibility`,
+> `hdr-pq`), the Ultra HDR v1 / dual-dialect oracle, the sigmoid / exponential /
+> `simple` rows and the `print.*` keys; that version is in git. This task keeps the
+> **specification of the gate** and the **run on real scans**:
+>
+> - [`analysis/display-acceptance-harness`](display-acceptance-harness.md) builds the
+>   harness and the decode-back oracles below, on fixtures;
+> - [`analysis/viewer-interoperability`](viewer-interoperability.md) owns the manual
+>   viewer rubric, Android included.
+
 ## Goal
 
-Verify the shipped display-output policies against the user's full-size real
-scans after the gain-map encoder and output presets land. This is the final
-product-quality and interoperability gate; it does not block earlier core
-pipeline resource measurements.
+Verify every shipped destination against the user's full-size real scans: the final
+product-quality and interoperability gate. `core/release-readiness` sequences
+packaging after it.
 
 ## Design
 
-Reuse the asset classes and resolved Dmin/Dmax inputs established by
-`real-scan-verification`. Check in a small `display-acceptance-manifest.json`
-that pins, for every case, the source asset ID/hash (never the large asset),
-resolved recipe/hash, pipeline and working-mapping versions, preset, expected
-container/signaling, canonical pre-encode float-buffer hash, golden metadata
-dump, independent decoder/version, and applicable numeric tolerances. Golden
-buffers live as compact deterministic fixtures or content-addressed harness
-artifacts; changing one requires an explicit reviewed golden update with the old
-and new metrics recorded.
+Reuse the asset classes and frozen recipes of `real-scan-verification`
+(`scripts/real-scan-verify/recipes/`). A small checked-in manifest pins, for every
+case: the source asset ID and hash (never the asset), the resolved recipe and its
+hash, `pipeline_version`, `working_mapping`, the destination (four axes or
+`--film-master`), the rendering, the expected container and signalling, a canonical
+pre-encode buffer hash, a golden metadata dump, the independent decoder and its
+version, and the numeric tolerances. A changed golden needs an explicit reviewed
+update recording old and new metrics. The case list should be
+`nf-verification/benchmark-set`'s, extended rather than duplicated.
 
-For representative color and HDR frames, execute this matrix:
+For representative colour and HDR frames:
 
-1. **The default preset, as shipped** — decided to become `display-p3`
-   (`output/display-p3-default`), so this row is the SDR TIFF's decode-back oracle;
-   `gain-map-hdr` is covered below as an explicit preset. Both default moves
-   (`output/display-p3-default` and `algo/split-default-migration`) are
-   dependencies so this row tests what users actually get. Rows 2–9 do not need
-   them and could be run earlier if acceptance is ever split.
-2. **Explicit presets** — `display-p3` and `compatibility` render correctly;
-   `film-master` preserves unclamped linear ACEScg film rendering and cross-frame
-   exposure under fixed/roll-calibrated Dmax; `hdr-pq` and `hdr-hlg` carry
-   their declared color signaling and metadata.
-3. **Container/profile metadata** — independent inspection confirms the resolved
-   container, ICC/CICP signaling, gain-map metadata, reference white, and
-   headroom. Output suffixes agree with their containers.
-4. **Interoperability** — run the named manual viewer rubric below on target
-   macOS/iPhone software, at least one non-Apple gain-map-aware reader, and one
-   SDR-only fallback reader.
-5. **Determinism** — repeated runs meet each encoder's documented contract:
-   byte-identical where promised, otherwise decoded pixels within the applicable
-   pinned codec bounds and identical semantic metadata.
-6. **Film-rendering fidelity** — representative stocks, lenses, development
-   processes, reference-anchored sigmoid recipes, and scanners retain their
-   intended differences through NC film RGB v1 and across named encodings.
-   Exponential/simple are diagnostic comparisons, not required product modes.
-   Acceptance compares those encodings with the same NC rendering, not with a
-   physically neutral scene. Optional correction profiles are outside the
-   required matrix.
-7. **Cross-encoding consistency** — matched SDR, HDR, gain-map, and film-master
-   outputs preserve hue and relative exposure within each renderer's declared
-   tone/gamut policy; clipping and gamut compression are measured and reported.
-8. **Simple boundary and migration** — simple reconstruction maps raw
-   unclamped `1 - scan/Dmin`; named display output applies resolved
-   `print.white_balance`/`print.linear_range` afterward, while film master
-   rejects non-default values. (The old `--output-hdr`/`--output-sdr` aliases are
-   hard-rejected, not warned; there is no migration contract to test.)
-9. **Master/display tonal delta** — using shared, non-gamut-limited patches,
-   compare normalized film-master values with the SDR/HDR render inputs and
-   decoded outputs. **Re-evaluate this row against the split verdict
-   (`algo/reconstruction-render-curve-split`, 2026-09-02):** the display operator now
-   carries the tonal character by design, so "a second shadow-floor lift or broad
-   midtone re-grade fails acceptance" describes the pre-split contract. What still
-   holds is that the master and the display render must agree on mid-grey
-   (`extended-reinhard-mid-preserving-v2` pins `f(0.18) = 0.18`).
+1. **The default as shipped** — `rendering: default`, SDR, `native`, Display P3, 16-bit
+   TIFF.
+2. **Every ready row of `destination::ROWS`** under `default`: SDR TIFF (Display P3,
+   Adobe RGB, sRGB); HDR linear float TIFF (Display P3, Adobe RGB, sRGB, BT.2020);
+   PQ and HLG BT.2020 TIFF; PQ and HLG AVIF; the gain-map JPEG (Display P3, sRGB). The
+   SDR JPEG rows join when `output/sdr-jpeg-preset` lands.
+3. **`direct`** — its unset destination (HDR linear Adobe RGB float TIFF) and its SDR
+   form.
+4. **Film master** — unclamped linear ACEScg, cross-frame exposure preserved under a
+   roll recipe.
+5. **Container and profile metadata** — independent inspection confirms the container,
+   ICC/CICP signalling, gain-map metadata (three channel entries), reference white and
+   headroom; suffixes agree with containers.
+6. **Determinism** — repeated runs meet each encoder's documented contract:
+   byte-identical where promised, else decoded pixels within the pinned codec bounds
+   and identical semantic metadata.
+7. **Cross-encoding consistency** — matched SDR, HDR, gain-map and film-master outputs
+   preserve hue and relative exposure within each destination's declared tone and
+   gamut policy; clipping and gamut compression are measured and reported.
+8. **Master/display agreement on mid-grey** — fit range holds `f(0.18) = 0.18`; the
+   display operator carries the tonal character by design, so no wider tonal match is
+   required.
+9. **Interoperability** — `analysis/viewer-interoperability`'s rubric passes.
 
 ### Automated oracles
 
-All automated comparisons start from the manifest's canonical buffers and use a
-decoder independent of nc:
+All comparisons start from the manifest's canonical buffers and use a decoder
+independent of nc:
 
-- `film-master`: decoded float ACEScg must match the canonical ACEScg buffer with
-  per-sample maximum absolute error ≤ 2×10⁻⁶ and RMS error ≤ 5×10⁻⁷; metadata
-  matches the golden semantic dump exactly.
-- 16-bit standalone SDR (`display-p3`/`compatibility`): after
-  independent ICC/transfer decode to the renderer's canonical linear destination
-  RGB, each channel differs by at most 1 code value when re-quantized to 16-bit.
-- Lossy 8-bit JPEG gain-map base: compare the independent decode with the
-  canonical encoded-Display-P3 base using encoder-task-pinned max/RMS error,
-  structural/perceptual, neutral-ramp, and saturated-patch bounds. A universal
-  one-code-value bound is not valid for JPEG. Record the codec version, quality,
-  chroma mode, and every measured threshold in the manifest.
+- `film-master`: decoded float ACEScg matches the canonical buffer with per-sample
+  maximum absolute error ≤ 2×10⁻⁶ and RMS ≤ 5×10⁻⁷; metadata matches the golden dump
+  exactly.
+- 16-bit SDR TIFF: after independent ICC/transfer decode to linear destination RGB,
+  each channel differs by at most 1 code value when re-quantized to 16 bits.
+- HDR float TIFF and PQ/HLG TIFF: bounds pinned by the harness task from each
+  encoder's contract.
+- Lossy 8-bit JPEG (the gain-map base): compare the independent decode with the
+  canonical encoded base using pinned max/RMS error, structural, neutral-ramp and
+  saturated-patch bounds. A universal one-code bound is not valid for JPEG. Record the
+  codec version, quality, chroma mode and every threshold in the manifest.
 - PQ/HLG AVIF: independently apply the pinned transfer to the canonical
-  absolute-linear BT.2020 buffer in binary64, quantize to the 10-bit 4:4:4
-  reference, then compare an independent AVIF decode using encoder-task-pinned
-  max/RMS code error plus ramp, neutral, and saturated-patch thresholds. A
-  universal one-code codec allowance is not valid for lossy AV1. PQ uses
-  Rec.2100/ST 2084 with 203 cd/m² reference white and 1000 cd/m² target peak;
-  the HLG preset must pin its OETF/OOTF/system gamma/reference display in its
-  manifest row.
-- Gain-map reconstruction: independent ISO 21496-1 and Ultra HDR v1
-  implementations must each reconstruct the canonical HDR rendition and declared
-  headroom within max(0.02 nit, 0.5% relative) per channel. Their independently
-  decoded SDR base must also pass the manifest row's lossy 8-bit JPEG gain-map
-  base bounds. A semantic metadata oracle must prove their
-  scale/offset/gamma/capacity meanings agree after dialect-specific unit
-  conversion. A deliberately conflicting dual-metadata fixture records which dialect
-  each dual-aware decoder selects as **observed behaviour** (ISO 21496-1 is silent on
-  coexistence, so precedence is never a conformance claim; Apple selects ISO). The oracle independently
-  converts both linear Display P3 renderings to reference-white-relative units:
-  SDR/reference white is `1.0`, and HDR absolute luminance is divided by the
-  pinned 203 cd/m² reference white. It then derives each canonical gain as
-  `(HDR_c + offset_hdr,c) / (SDR_c + offset_sdr,c)` using the manifest-pinned
-  positive finite offsets expressed in that same domain. Equal reference-white
-  samples with equal offsets must yield gain 1. A peak row feeds 1000 nits into
-  the formula as `4.926108...`, but computes expected gain from the actual
-  independently tone-mapped SDR sample and offsets rather than equating gain
-  with display headroom. Black, near-black, and zero-channel rows must remain
-  finite without arbitrary epsilon or `0/0` behavior; negative/nonfinite samples
-  and any nonpositive/nonfinite adjusted denominator or gain must fail loudly.
-  Mixing absolute-nit HDR with normalized SDR must produce the pinned unit/domain
-  diagnostic.
-- Deterministic encoders must produce byte-identical files. If the format task
-  documents unavoidable container variability, decoded pixels must meet the
-  applicable bound and a normalized semantic metadata dump must match exactly;
-  only a manifest-listed set of volatile fields may differ.
-- Cross-encoding color comparisons operate only on manifest-listed,
-  non-tone-mapped/shared-gamut patches: independent decodes to XYZ D65 must have
-  ΔE2000 ≤ 0.5 and neutral Δu'v' ≤ 0.0001. Tone- or gamut-mapped patches instead
-  compare against each renderer's own canonical buffer and report hue-angle,
-  clipping, and compression deltas; no unbounded “looks consistent” pass is
-  allowed.
-- Master/display tone comparisons pin monotone neutral-ramp samples from below
-  the sigmoid toe through the midtones. Normalize only by each rendition's
-  declared reference white—never by fitted black/white points or per-image
-  exposure—and record shadow-floor, local-slope, and midtone-lightness deltas.
-  The initial task must establish reviewed numeric bounds from the frozen
-  real-scan baseline before product-default activation; “looks close” is not a
-  pass criterion.
+  absolute-linear BT.2020 buffer in binary64, quantize to the 10-bit 4:4:4 reference,
+  then compare an independent AVIF decode with pinned max/RMS code error plus ramp,
+  neutral and saturated-patch thresholds. PQ uses Rec.2100/ST 2084 with a 203 cd/m²
+  reference white and a 1000 cd/m² peak; HLG pins its OETF/OOTF, system gamma and
+  reference display in its manifest row.
+- Gain-map reconstruction: an independent ISO 21496-1 implementation reconstructs the
+  canonical HDR rendition and declared headroom within max(0.02 nit, 0.5 % relative)
+  per channel, with the three channels read separately. The oracle converts both
+  linear renditions to reference-white-relative units (SDR white `1.0`; HDR absolute
+  luminance divided by the pinned 203 cd/m²) and derives each canonical gain as
+  `(HDR_c + offset_hdr,c) / (SDR_c + offset_sdr,c)` with the manifest-pinned positive
+  offsets. Equal reference-white samples with equal offsets yield gain 1. Black,
+  near-black and zero-channel rows stay finite without an arbitrary epsilon;
+  negative or non-finite samples and a non-positive adjusted denominator fail loudly.
+- Deterministic encoders produce byte-identical files; where an encoder documents
+  container variability, decoded pixels meet the bound and a normalized metadata dump
+  matches, with only manifest-listed volatile fields allowed to differ.
+- Cross-encoding colour comparisons use only manifest-listed patches that are neither
+  tone- nor gamut-mapped: independent decodes to XYZ D65 must have ΔE2000 ≤ 0.5 and
+  neutral Δu'v' ≤ 0.0001. Mapped patches compare against their own canonical buffer
+  and report hue-angle, clipping and compression deltas.
 
-For that cross-encoding oracle, the manifest pins each rendition's declared
-reference-white luminance in nits and the shared source exposure. Decode every
-patch to absolute XYZ D65, then divide X, Y, and Z by that rendition's declared
-reference-white luminance; this makes reference white `Y = 1` without any
-per-image or per-patch exposure fit. HDR and SDR are compared only after this
-explicit normalization. Convert normalized XYZ to CIELAB using the D65
-2° reference white `(Xn, Yn, Zn) = (0.95047, 1.00000, 1.08883)`, the standard
-CIE 1976 piecewise `f(t)` with `δ = 6/29`, and CIEDE2000 as specified by
-Sharma–Wu–Dalal (2005) with `kL = kC = kH = 1`. Compute neutral chromaticity as
-CIE 1976 `u' = 4X/(X+15Y+3Z)` and `v' = 9Y/(X+15Y+3Z)` on the same normalized
-XYZ; `Δu'v'` is Euclidean distance. Zero-denominator samples are invalid
-fixtures, not automatic passes.
+For the cross-encoding oracle, the manifest pins each rendition's declared
+reference-white luminance in nits and the shared source exposure. Decode every patch
+to absolute XYZ D65, then divide X, Y and Z by that rendition's reference-white
+luminance, so reference white is `Y = 1` with no per-image or per-patch exposure fit.
+Convert to CIELAB with the D65 2° tabulated white `(Xn, Yn, Zn) = (0.95047, 1.00000,
+1.08883)`, the CIE 1976 piecewise `f(t)` with `δ = 6/29`, and CIEDE2000 per
+Sharma–Wu–Dalal (2005) with `kL = kC = kH = 1`. Neutral chromaticity is CIE 1976
+`u' = 4X/(X+15Y+3Z)`, `v' = 9Y/(X+15Y+3Z)` on the same normalized XYZ; `Δu'v'` is
+Euclidean distance. A zero-denominator sample is an invalid fixture, not a pass.
 
-Any metric outside its bound fails the automated row. The harness writes a
-machine-readable result containing measured maxima, RMS/percentile summaries,
-metadata diffs, decoder identity, and pass/fail.
-
-### Manual viewer rubric
-
-Manual viewing is an interoperability check, not the numeric color oracle. For
-each pinned viewer/OS version, record these binary observations:
-
-1. file opens without repair/error;
-2. the viewer reports or demonstrably selects the intended SDR/HDR rendition;
-3. HDR enable/disable or SDR fallback changes rendition as the preset specifies;
-4. orientation, dimensions, crop, and alpha/extra-channel handling are correct;
-5. no gross channel swap, inversion, all-black/all-white render, or frame-edge
-   artifact is visible.
-
-Record the exact viewer/OS/display-HDR setting and evidence for every item in
-`docs/progress/analysis.md`. “Plausible,” “looks good,” and agreement with a
-remembered physical scene are not pass criteria. File a follow-up task for every
-failure instead of fixing it ad hoc inside acceptance.
-
-## Implementation Suggestion
-
-- Extend the reusable harness from `real-scan-verification`; do not duplicate or
-  re-read large assets into agent context.
-- Preserve small metadata dumps and derived measurements, not large generated
-  image outputs.
-- Pin viewer/OS versions because HDR and gain-map behavior can change outside nc.
+Any metric outside its bound fails the row. The harness writes a machine-readable
+result with measured maxima, RMS and percentile summaries, metadata diffs, decoder
+identity, and pass/fail.
 
 ## How to Verify
 
-The manifest-driven harness passes every applicable numeric and metadata bound,
-repeat runs satisfy the declared determinism class, and every named manual
-viewer-rubric item passes. Results are recorded with tool/viewer versions, and
-every failure has a tracked follow-up (or the log explicitly records none).
+On real scans, the harness passes every applicable numeric and metadata bound,
+repeat runs meet each determinism class, and the viewer rubric passes. Results are
+recorded with tool and viewer versions in `docs/progress/analysis.md`, and every
+failure has a follow-up task (or the log records none).
 
 ## Dependencies
 
-- [Output presets and guidance](../output/presets.md)
+- [Output presets and guidance](../output/presets.md) — historical; the presets it
+  shipped retired with the flip.
 - [Real-scan core verification](real-scan-verification.md)
-- [Flip the default to the new flow](../nf-core/default-flip.md) — the default this
-  task accepts is the one that move ships
+- [Flip the default to the new flow](../nf-core/default-flip.md)
+- [Display-acceptance harness](display-acceptance-harness.md)
+- [Viewer interoperability](viewer-interoperability.md)

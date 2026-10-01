@@ -2,7 +2,7 @@
 
 The external decoder oracle for
 [`iso-gain-map-metadata`](../../docs/tasks/output/iso-gain-map-metadata.md) and
-[`mp-container-conformance`](../../docs/tasks/output/mp-container-conformance.md):
+[`gain-map-destination`](../../docs/tasks/nf-destinations/gain-map-destination.md):
 a small Swift program that reads nc's gain-map JPEG with **Apple ImageIO**, an
 independent implementation of ISO 21496-1.
 What it reports about nc's bytes is evidence nc's own reader can never supply —

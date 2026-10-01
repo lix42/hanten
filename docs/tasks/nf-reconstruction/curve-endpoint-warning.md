@@ -40,8 +40,9 @@ not displayed black, since later stages still move where black lands.
   the answer may be a short rule, or none at all.
 - **Where the threshold comes from.** The superseded file's calibration fixtures are
   sigmoid configurations and do not transfer.
-- **Does it overlap `algo/density-safety-bounds`?** That bounds each parameter; this
-  is about their joint effect. If both land, coordinate the wording.
+- **Does it overlap `algo/density-safety-bounds`?** That refuses values whose decoded
+  base is unusable and warns on a collapsed output; this is about the curve's
+  endpoint. If both land, coordinate the wording.
 
 ## How to Verify
 
