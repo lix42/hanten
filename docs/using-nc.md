@@ -1540,22 +1540,19 @@ leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2
 from every command, before the file is read.
 
 Two fields on `holder` say the measurement is not what it looks like. **Both emit a
-warning, which `--strict` promotes to a failure** — the fields alone are not the
-channel, because a silent field is exactly what let a tenfold over-cut through at
-exit 0 while it was being built.
+warning, which `--strict` promotes to a failure.**
 
 - `capped` — one flag per edge. A capped edge marched as deep as `hanten` looks (25% of
-  the shorter edge) without finding film, so its depth is a **floor**, not a
-  measurement. The consequence does not stop at that edge: each edge is measured
-  over what the *perpendicular* edges' cuts leave, so a truncated depth truncates
-  that cut too, and the perpendicular edges then cap as well — at depths that are
-  **artifacts of the cap, not floors on their own holder**. A 400×400 frame with a
-  120 px top holder and 10 px sides reports `top: 100` (a floor, correctly) and
-  `left`/`right` as 100 as well, a tenfold over-cut. So the reading that matters is
-  whether a capped edge has a capped *perpendicular* neighbour: with one, treat no
-  depth on the frame as measured; without one (a single edge exactly at the cap) the
-  other three stand. The warning says which case you are in. No real scan has capped
-  — 31 measured IR frames, zero caps, a 6–10× margin.
+  the shorter edge) without finding film. No film holder is that deep (real scans
+  measure 2.5–4%, and none of 31 measured IR frames has capped), so a cap means the
+  IR read something else — IR-dark film or debris — and the depth reported there is
+  the cap, not a measurement. Each edge is measured over what the *perpendicular*
+  edges' cuts leave, so the edges perpendicular to a capped one can cap with it: a
+  400×400 frame with a 120 px IR-dark band at the top and 10 px sides reports
+  `top`, `left` and `right` all as 100. The error runs one way only: the region is
+  **over-cut**, losing area but holding no holder. If a frame's holder really is
+  deeper than the cap, raise the inset to cover the rest — it is added on top of
+  the cap.
 - `converged: false` — the per-edge march did not settle (the iteration above). Hanten
   then reports the deeper of the last two rounds, which over-cuts rather than leaving
   holder inside the region for a two-round oscillation or a run still settling
@@ -1565,9 +1562,8 @@ exit 0 while it was being built.
   otherwise. No real scan has produced this.
 
 `converged` and `capped` are **not** independent, and `converged: true` is not a
-quality verdict on its own: a cap *creates* a stable fixed point, so the worst
-answer the march can produce — the tenfold over-cut above — settles and reports
-`converged: true`. Read the two together.
+quality verdict on its own: a cap *creates* a stable fixed point, so a capped frame
+settles and reports `converged: true`. Read the two together.
 
 Two things this does *not* do:
 
