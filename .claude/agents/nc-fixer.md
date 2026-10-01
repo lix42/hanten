@@ -70,6 +70,7 @@ Finish with **every CI gate green, in order** — CI's flags, not shorter ones
 
 ```
 cargo fmt --all --check
+cargo machete
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --all-targets --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features

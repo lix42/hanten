@@ -797,6 +797,21 @@ tables (a policy decision, which the new task owns).
 - Follow-up left open: a `cargo-machete`/`cargo-udeps` CI step, since cargo never
   warns on an unused dependency.
 
+### 2026-10-01 — `cargo machete` in CI, review fixes
+
+- **The follow-up above is done here.** CI runs `cargo machete` (0.9.2, prebuilt via
+  `taiki-e/install-action`) after the format check, Linux only. On `origin/main` it
+  flags exactly `kamadak-exif` and `palette` and exits 1; on this branch it is clean.
+  It reads source, so it could not have flagged `image` (a runtime dependency used
+  only by tests). Added to CLAUDE.md's gate list and `nc-fixer`'s copy.
+- **`getrandom` correction:** `jobserver` depends on it only under `cfg(windows)`, so
+  on macOS and Linux nc is now its only user (`rand_core` 0.9, gone with `image`'s
+  codecs, was the other). The comment now states only what the crate is for.
+- The `_unassigned.md` triage row is restored as written; its closure is a new dated
+  entry there instead.
+- `design-spec` §10's crate table is by concern, not a full manifest (`getrandom` and
+  `libc` were never listed); left as is. `Cargo.toml` is the list.
+
 
 ## release-readiness
 
