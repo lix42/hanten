@@ -119,7 +119,8 @@ BENCHMARK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 # "malformed", which hides why.
 #
 # v3: `not_run`, the cases the build's interface has no block for, so `diff` can tell
-# a case that does not apply to one build from a frame that went missing.
+# a case that does not apply to one build from a frame that went missing. The diff
+# report shares this version, and gained the `not-run` row status with it.
 RECORD_SCHEMA = 3
 
 # The benchmark manifest schema `run` reads. v2 moved a case's interface-specific

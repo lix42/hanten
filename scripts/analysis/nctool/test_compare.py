@@ -1094,9 +1094,10 @@ class TestShippedBenchmark(unittest.TestCase):
                         self.assertEqual(args[args.index("--preset") + 1],
                                          "sigmoid-knees")
 
-    def test_a_roll_case_gives_the_reference_its_recipes_film_base(self):
-        # The reference cannot read the frozen recipe, so its block restates the
-        # roll's Dmin; the two must stay the same numbers.
+    def test_a_roll_case_gives_the_reference_what_its_recipe_states(self):
+        # The reference cannot read the frozen recipe, so its block restates it: the
+        # roll's Dmin and the SDR Display P3 TIFF. A recipe that gains any other knob
+        # would reach only the destination arm.
         bench, _ = compare.load_json(compare.BENCHMARK)
         for case in bench["sets"]["rolls"]["cases"]:
             with self.subTest(case=case["name"]):
@@ -1104,8 +1105,13 @@ class TestShippedBenchmark(unittest.TestCase):
                     compare.repo_root(), case["destination"]["recipe"]))
                 self.assertIsNone(err)
                 args = case["preset"]["args"]
+                self.assertEqual(args[args.index("--output-preset") + 1], "display-p3")
                 stated = [float(v) for v in args[args.index("--film-base") + 1].split(",")]
-                self.assertEqual(stated, recipe["calibration"]["film_base"]["explicit"])
+                self.assertEqual(recipe, {
+                    "recipe_version": 2,
+                    "calibration": {"film_base": {"explicit": stated}},
+                    "output": {"display": {"range": "sdr", "transfer": "native",
+                                           "gamut": "display-p3", "container": "tiff"}}})
 
     def test_a_malformed_container_is_a_message_not_an_attributeerror(self):
         # The recurring shape both review rounds surfaced: the guard lands on the

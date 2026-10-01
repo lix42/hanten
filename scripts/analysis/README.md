@@ -517,7 +517,9 @@ case with no block for the build's interface is not run, and the record lists it
 P3/sRGB/Adobe RGB TIFFs, the sRGB gain map, `direct`) stays out of a reference run
 instead of being rendered as some other preset under its name. `diff` reports it as
 `not-run`, not `missing`. A preset block that renders a display image states the
-reference config, `--preset sigmoid-knees`.
+reference config, `--preset sigmoid-knees`, so the preset blocks run on the reference
+build alone: a build at `pipeline_version` 6 or 7 refuses that preset, and its own
+checkout's nctool and set are the ones to benchmark it with.
 
 The pre-migration pipeline is compared by re-running the reference build over this
 set; records made before 2026-10-01 are superseded.
@@ -526,7 +528,7 @@ The `params_hash` is read from the report's `identity`; a destination build from
 before `nf-core/report-contract` reports it only in telemetry, so there a missing
 telemetry record fails the case instead of merely losing its timings.
 Run records include build identity, pipeline version, input digest, parameter
-hash, output depth, means, clipping counts, and telemetry timings. Timing changes
+hash, output depth, means, clipping counts, telemetry timings, and the cases not run. Timing changes
 are informational and never decide the deterministic-statistics verdict; a stage
 only one record times (a schema-8 `algorithm` beside schema-9 stages) diffs as `null`.
 

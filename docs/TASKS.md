@@ -2064,10 +2064,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
   curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
-- [~] [A benchmark set for the new
-  flow](tasks/nf-verification/benchmark-set.md) — one fixtures case per ready
-  destination, run only on the interfaces it has a block for; comparability comes from
-  re-running the reference build
+- [x] [A benchmark set for the new
+  flow](tasks/nf-verification/benchmark-set.md) — **done 2026-10-01.** One fixtures
+  case per ready destination, run only on the interfaces it has a block for;
+  comparability comes from re-running the reference build
 - [x] [Export the pre-matrix film
   RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
   `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32

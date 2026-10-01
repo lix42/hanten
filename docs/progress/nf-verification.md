@@ -36,6 +36,12 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   `nctool metrics --space film-rgb` measures per channel. It is the point for per-layer
   (`scale`) measurements; `film-master` mixes the layers. `roll` refuses it for now
   (`roll-side-exports`).
+- **`nctool compare`'s set runs on the new chain** (`benchmark-set`, 2026-10-01): one
+  fixtures case per ready destination row (a Rust test enforces it), plus the film
+  master, `direct` and the default, on both input formats. A case has a `destination`
+  and/or `preset` block and runs only on builds of that interface; the record lists the
+  rest as `not_run`. The reference build is compared by running it over the same set
+  (its blocks state `--preset sigmoid-knees`); pre-migration records are superseded.
 - **A review matrix states `destination` for builds at `pipeline_version` 8 and later,
   and `output_preset` for older ones** (the reference build); a matrix mixing both
   states both, and each build takes the flags its banner's `pipeline_version` says it
@@ -299,7 +305,7 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## benchmark-set
 
-**Status:** in progress
+**Status:** done (2026-10-01)
 **Updated:** 2026-10-01
 
 - 2026-09-19: created with the new-flow plan. Goal: a benchmark set for the new flow.
@@ -345,6 +351,39 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
     The P3 gain map's delta matches the P3 TIFF's, so the reference's gain-map base is
     Display P3 too.
   - Not verified here: the `rolls` set, which needs `../nc-assets`.
+
+### 2026-10-01 — review fixes
+
+- **The coverage test names its failures:** a case naming a row twice, or stating
+  an axis as `--gamut=srgb` or not at all, panics with the case's name rather than
+  being dropped from the set.
+- **`the_benchmark_default_cases_pair_with_the_default_destination`:** the `default`
+  cases pair the unset destination with the reference's `display-p3`. A default that
+  moved within the 16-bit TIFF (to Adobe RGB, say) would keep the depth and read as a
+  pipeline change, so the test pins the pairing.
+- **The roll recipe test compares the whole recipe** with what the preset block
+  restates (Dmin and SDR P3 TIFF), so a knob added to a frozen recipe cannot reach
+  only one arm.
+- **Documented:** the preset blocks run on the reference alone (a v6/v7 build
+  refuses `sigmoid-knees`), and the diff report shares the record's schema 3 and its
+  `not-run` status.
+- **Not done:** rewording the task file's "holding set" design bullet. A task file
+  records the work as planned.
+
+### 2026-10-01 — done
+
+- **Landed:** `benchmark.json` schema 2 (per-interface blocks), run records schema 3
+  (`not_run`). The fixtures set covers every ready destination, the film master,
+  `direct` and the default on both input formats. The two gates are a Rust coverage
+  test and an nctool test that runs the set twice on the debug binary, expecting a
+  zero diff.
+- Gates green locally (rustc 1.99.0, x86_64 Linux): fmt, machete, clippy, build, doc,
+  nctool (474), test (651 + 233). The `nc-reviewer` pass found only Lows, fixed above.
+  Codex is not installed in this environment.
+- **For dependents:** `analysis/display-acceptance-harness` reuses the fixtures case
+  list. One case per ready row is enforced by
+  `destination::tests::every_ready_row_has_a_benchmark_case`, so a row turning ready
+  (the SDR JPEG) needs a case, and a preset block if the reference wrote it.
 
 ## film-rgb-export
 

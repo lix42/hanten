@@ -1472,24 +1472,26 @@ mod tests {
     fn every_ready_row_has_a_benchmark_case() {
         let bench: serde_json::Value =
             serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
-        let stated = |args: &[serde_json::Value], flag: &str| {
-            let i = args.iter().position(|a| a == flag)?;
-            Some(args.get(i + 1)?.as_str()?.to_owned())
-        };
-        let cases: BTreeSet<[String; 4]> = bench["sets"]["fixtures"]["cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|case| case["destination"]["args"].as_array())
-            .filter_map(|args| {
-                Some([
-                    stated(args, Range::FLAG)?,
-                    stated(args, Transfer::FLAG)?,
-                    stated(args, Gamut::FLAG)?,
-                    stated(args, Container::FLAG)?,
-                ])
-            })
-            .collect();
+        let flags = [Range::FLAG, Transfer::FLAG, Gamut::FLAG, Container::FLAG];
+        let mut cases = std::collections::BTreeMap::new();
+        for case in bench["sets"]["fixtures"]["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let Some(args) = case["destination"]["args"].as_array() else {
+                continue;
+            };
+            let args: Vec<&str> = args.iter().map(|a| a.as_str().unwrap()).collect();
+            if !args.iter().any(|a| flags.iter().any(|f| a.starts_with(f))) {
+                continue; // `default`, `direct`, the film master
+            }
+            let axes = flags.map(|flag| {
+                let i = args.iter().position(|a| *a == flag);
+                let value = i.and_then(|i| args.get(i + 1));
+                value.unwrap_or_else(|| panic!("{name}: states no `{flag} <value>`"))
+            });
+            if let Some(other) = cases.insert(axes.map(|a| a.to_string()), name) {
+                panic!("{name} and {other} benchmark the same row");
+            }
+        }
         let ready: BTreeSet<[String; 4]> = ROWS
             .iter()
             .filter(|r| is_ready(r))
@@ -1502,6 +1504,23 @@ mod tests {
                 ]
             })
             .collect();
-        assert_eq!(cases, ready);
+        assert_eq!(cases.into_keys().collect::<BTreeSet<_>>(), ready);
+    }
+
+    /// The `default` cases pair the unset destination with the reference's
+    /// `display-p3` preset; a default that moves within the 16-bit TIFF would keep the
+    /// depth and read as a pipeline change. Move this with their preset block.
+    #[test]
+    fn the_benchmark_default_cases_pair_with_the_default_destination() {
+        let r = resolve(&DisplayAxes::default(), &STD).unwrap();
+        assert_eq!(
+            (r.range, r.transfer, r.gamut, r.container),
+            (
+                Range::Sdr,
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Tiff
+            )
+        );
     }
 }
