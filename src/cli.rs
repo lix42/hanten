@@ -1761,6 +1761,16 @@ enum SuffixContext<'a> {
     RollFrame(&'a Path),
 }
 
+impl SuffixContext<'_> {
+    /// The prefix naming the frame a roll message is about; empty for `convert`.
+    fn frame(self) -> String {
+        match self {
+            SuffixContext::RollFrame(input) => format!("frame {}: ", input.display()),
+            SuffixContext::Convert => String::new(),
+        }
+    }
+}
+
 /// The path nc will actually write: the path as given when it states a suffix the
 /// resolved container accepts, or that path with the container's canonical suffix
 /// appended when it states none.
@@ -1788,7 +1798,9 @@ fn resolve_output_path(
     let container = target.container();
     if let Some(why) = given.extension().and_then(Container::removed_suffix) {
         return Err(NcError::Usage(format!(
-            "{}: {why}. Name it `.{}`, or leave the suffix off and Hanten supplies it",
+            "{}the output path {}: {why}. Name it `.{}`, or leave the suffix off and \
+             Hanten supplies it",
+            context.frame(),
             given.display(),
             container.canonical()
         )));
@@ -1957,11 +1969,10 @@ fn suffix_mismatch_error(
     } = target;
     // A frame's path comes from its manifest entry, whose `params` win over every
     // flag, so the remedy names the recipe keys it can state there.
-    let (frame, names) = match context {
-        SuffixContext::RollFrame(input) => {
-            (format!("frame {}: ", input.display()), KnobNames::KeyOnly)
-        }
-        SuffixContext::Convert => (String::new(), KnobNames::FlagAndKey),
+    let frame = context.frame();
+    let names = match context {
+        SuffixContext::RollFrame(_) => KnobNames::KeyOnly,
+        SuffixContext::Convert => KnobNames::FlagAndKey,
     };
     // A destination that writes the stated suffix is offered only when a ready one
     // does, derived from the table (`destination::writing`) — never a container nothing

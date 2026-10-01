@@ -116,8 +116,9 @@
 //! **Most rows measured the chain `nf-core/default-flip` removed** (`convert` u16 and
 //! f32, the gain-map, AVIF and HDR TIFF presets). Their profiles are gone, so their
 //! model column is history: the rows stay as the evidence behind the constants they
-//! fitted — [`ALLOWANCE_PERCENT`] and the retention rule — and because the current profiles count the same buffers they did (the
-//! `--new-flow` rows below matched a u16 `convert` of the same frames to 0.1 MB).
+//! fitted — [`ALLOWANCE_PERCENT`] and the retention rule — and because the current
+//! profiles count the same buffers they did (the `--new-flow` rows below matched a
+//! u16 `convert` of the same frames to 0.1 MB).
 //!
 //! | run | model | measured | margin |
 //! |---|---|---|---|
@@ -170,7 +171,7 @@
 //! No Ultra HDR run with `--export-ir` has been measured. Its optional export
 //! therefore retains the TIFF model's conservative 2 B/px u16 staging term;
 //! tests pin that structural increment without claiming it as a calibrated RSS
-//! observation. The same holds for `hdr-pq`/`hdr-hlg` with `--export-ir`.
+//! observation.
 //!
 //! The five TIFF-HDR rows share one number per frame size because all three presets
 //! peak at the **render** phase, which is identical across them (they share
@@ -178,8 +179,9 @@
 //! lands in the cheaper encode phase and never sets the peak. Their margin is wider
 //! than `hdr-pq`'s at the same size because that AVIF preset's peak was at encode,
 //! where its codec staging was fitted; here the peak is a phase built only from
-//! enumerated buffers, so the residual is unmodelled allocator and writer overhead. Every one of these estimates stays **above**
-//! measured, which is the direction the gate requires.
+//! enumerated buffers, so the residual is unmodelled allocator and writer overhead.
+//! Every one of these estimates stays **above** measured, which is the direction the
+//! gate requires.
 //!
 //! The two SDR rows are that same render peak — which is why the 74.65 MP estimate
 //! is again 3.911 GB — but they are **measured**, not inherited from the structural

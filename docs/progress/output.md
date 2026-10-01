@@ -124,20 +124,21 @@ What other epics need to know about `output`:
   `avif-serialize` cannot emit `MA1A`, so it is published `libaom-sys` for the
   codestream plus an nc-owned Rust MIAF/AVIF container writer. `av1C` is filled by
   **parsing the encoded sequence-header OBU**, never from the encoder config.
-  Windows static builds are deferred → `output/hdr-avif-windows-packaging`.
+  Windows static builds were deferred → `output/hdr-avif-windows-packaging`, closed
+  as superseded by the removal.
 - **`hdr-linear-tiff` is the display-linear HDR interchange master**: it is not
   `film-master` (linear ACEScg *before* display rendering), not `hdr-pq`/`hdr-hlg`
   (no transfer applied), and not `--out-depth f32` on `legacy` (print-rendered
   float in the selected output space). It writes `pipeline::hdr::render_linear`'s
   pre-transfer BT.2020/D65 samples verbatim as unclamped f32. The **report block and
   sidecar `meta`, not the ICC profile, are authoritative** for reference white /
-  peak / headroom. **`hdr-pq-tiff` / `hdr-hlg-tiff`** store the same rendition as
-  the AVIF presets as full-range 16-bit codes; they are **limited-interoperability
+  peak / headroom. **`hdr-pq-tiff` / `hdr-hlg-tiff`** store the same rendition the
+  removed AVIF presets coded, as full-range 16-bit codes; they are **limited-interoperability
   interchange, never display-ready** (only a CICP-aware reader honours the ICC
   `cicpTag`), and their profiles are conformant Display-class since 2026-08-09.
 - **Which memory phase peaks is per profile, and measured.** `HdrLinearTiff`,
   `HdrCodedTiff`, `SdrTiff`, `UltraHdrV1`/`GainMapHdr` all peak at **render**;
-  `HdrAvif` and `Convert` at encode. Read it off
+  `Convert` at encode, as did the removed `HdrAvif`. Read it off
   `pipeline::memory`'s `which_phase_peaks_is_per_profile_and_measured_not_assumed`,
   never off a category — prose about it has been wrong three times.
 - **`definitions::BT2020` is fed to Little CMS** by `color::hdr_linear_bt2020_icc`,
@@ -1789,4 +1790,3 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   48 B/px staging fit (kept in the design doc), the report's `avif` block.
 - Kept: `"avif"` in the upload contract's `conversion.encoding` for older clients, and
   `nctool`'s AVIF handling, since it drives older builds and reads their reports.
-

@@ -760,6 +760,22 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
              `roll.white_balance`: `[r, g, b]`"
         ));
     }
+    // A removed destination value (AVIF, `output/drop-avif`). Named by key here: serde
+    // would word it as the flag, which cannot rescue a recipe that fails before merge.
+    if let Some(r) = body
+        .get("output")
+        .and_then(|o| o.get("display"))
+        .and_then(crate::destination::removed_in_recipe)
+    {
+        return usage(format!(
+            "`output.display.{key}` \"{stated}\" was removed: {why}. State \
+             `\"{key}\": \"{default}\"` there instead, or drop the key",
+            key = r.key,
+            stated = r.stated,
+            why = r.why,
+            default = r.default,
+        ));
+    }
     // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
     // Refused at every value, the old default included: no single new key replays it.
     if let Some(v) = body.get("reconstruction").and_then(|r| r.get("contrast")) {
@@ -2312,16 +2328,24 @@ mod tests {
     }
 
     #[test]
-    fn a_replayed_avif_container_is_refused_with_its_remedy() {
-        // A report or sidecar written while AVIF existed replays `"container": "avif"`.
-        let err = parse(
-            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("no longer writes AVIF"), "{err}");
-        assert!(err.contains("container `tiff`, the default"), "{err}");
-        assert!(!err.contains("unknown"), "{err}");
+    fn a_replayed_avif_container_is_refused_by_key_with_its_remedy() {
+        // A report or sidecar written while AVIF existed replays `"container": "avif"`;
+        // a per-frame override may state it too. Refused before serde, by key: the flag
+        // cannot rescue a recipe that fails before merge.
+        for (json, whole) in [
+            (
+                r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+                true,
+            ),
+            (r#"{"output": {"display": {"container": "AVIF"}}}"#, false),
+        ] {
+            let err = check(json, whole).unwrap_err();
+            assert!(err.contains("`output.display.container` \""), "{err}");
+            assert!(err.contains("no longer writes AVIF"), "{err}");
+            assert!(err.contains(r#"State `"container": "tiff"`"#), "{err}");
+            assert!(!err.contains("--container"), "{err}");
+            assert!(!err.contains("unknown"), "{err}");
+        }
     }
 
     #[test]

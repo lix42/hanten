@@ -15,8 +15,8 @@ document records why, what is left, and how to bring AVIF back.
   refuses to configure without NASM (or yasm) for its SIMD. Nothing else in the
   tree needs CMake, C++ or NASM. Without AVIF the native build is one C compiler
   for lcms2 (and `ring`, which assembles with it).
-- **AVIF was never a default.** It was reached only by `--container avif` or an
-  `.avif` output path.
+- **AVIF was never a default.** It was reached only by stating the container
+  (`--container avif`, recipe `output.display.container`).
 - **No HDR signal is lost.** The PQ/HLG TIFFs carry the same rendition the AVIF
   coded: the same `hdr::encode_transfer` output, stored exactly as full-range 16-bit
   codes where the AVIF quantized to 10 bits and compressed it. The float TIFF and
@@ -49,7 +49,9 @@ directly. What remains:
   sidecar from an AVIF run replays into the refusal), an `.avif` output path (which
   would otherwise be read as the stem of `out.avif.tiff`), and `--output-preset
   hdr-pq|hdr-hlg`, whose counterpart is now the TIFF. One table holds it:
-  `destination::Container`'s `Axis::REMOVED` entry and `destination::AVIF_REMOVED`.
+  `destination::Container`'s `Axis::REMOVED` entry and `destination::AVIF_REMOVED`,
+  read by the flag's parser, by `recipe::check_body` (before serde, so the recipe's
+  refusal names its key) and by the output-path check.
   There is no alias, because a TIFF is not what an AVIF recipe asked for.
 - **No `pipeline_version` change.** AVIF was never the default render, and no
   remaining destination's pixels moved.
@@ -57,7 +59,7 @@ directly. What remains:
   `"avif"` in `conversion.encoding`, so uploads from older builds stay valid; this
   build never sends it. A spooled local event from
   an older build that names the `avif` container no longer parses, so the uploader
-  quarantines it like any other line it cannot project.
+  quarantines it as `malformed`.
 - **`nctool` keeps its AVIF knowledge.** It drives other builds (`--build`, the
   reference build) and reads their reports, and those builds can write AVIF.
 - **The colorimetry catalogue lost one entry**, `BT2020_NCL_RGB_TO_YCBCR` (and
@@ -96,7 +98,8 @@ removal touched:
 - `src/io/avif.rs` and `io/mod.rs` — the encoder and the MIAF container.
 - `src/destination.rs` — `Container::Avif`, `Encoding::HdrAvif`, the two rows. Drop
   the `Axis::REMOVED` entry, `AVIF_REMOVED` and `Container::removed_suffix` (with the
-  check in `cli::resolve_output_path`) once `avif` parses again.
+  check in `cli::resolve_output_path`) once `avif` parses again; with no removed
+  value left, `removed_in_recipe` and its arm in `recipe::check_body` may go too.
 - `src/cli.rs` — the report's `avif` block (`AvifResult`) and its roll-frame twin,
   the encode dispatch, `run_profile`, `primary_depth` (`u10`), and the
   `--output-preset hdr-pq|hdr-hlg` counterparts.

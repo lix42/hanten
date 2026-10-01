@@ -298,6 +298,11 @@ fn is_tiff(path: &Path) -> bool {
         && matches!(u16::from_le_bytes([bytes[2], bytes[3]]), 42 | 43)
 }
 
+/// An HDR container whose signal never rises above the 203-nit reference white is
+/// an HDR wrapper around an SDR picture: it costs bit depth and compatibility and
+/// buys nothing, while the report still advertises `target_peak_nits: 1000`. Every
+/// single-rendition HDR destination must say so, and must stop saying so as soon as the
+/// frame actually uses the headroom.
 #[test]
 fn single_rendition_hdr_destinations_warn_when_the_signal_stays_below_reference_white() {
     const MARKER: &str = "HDR output carries an SDR-range signal";
@@ -653,8 +658,10 @@ fn hdr_linear_tiff_rejects_a_non_tiff_path_and_conflicting_flags() {
 
 #[test]
 fn avif_is_refused_as_removed_wherever_it_is_stated() {
-    // A flag, an output suffix, a replayed recipe and a roll's shared recipe each name
-    // the removal and the TIFF, never "unknown value" or a completed `out.avif.tiff`.
+    // A flag, an output suffix, a replayed recipe, a roll's shared recipe, a manifest
+    // path and a per-frame override each name the removal and the TIFF, never "unknown
+    // value" or a completed `out.avif.tiff`. A recipe's is worded by its key: no flag
+    // can rescue a recipe refused before merge.
     let tmp = TempDir::new("avif-removed");
     let input = fixture("hdr-48bit.tif");
     let refused = |argv: &[&str], written: &Path| {
@@ -663,6 +670,16 @@ fn avif_is_refused_as_removed_wherever_it_is_stated() {
         assert!(err.contains("no longer writes AVIF"), "{argv:?}: {err}");
         assert!(!err.contains("unknown"), "{argv:?}: {err}");
         assert!(!written.exists(), "{argv:?}: nothing may be written");
+        err
+    };
+    let by_key = |err: &str| {
+        assert!(
+            err.contains(r#"`output.display.container` "avif" was removed"#),
+            "{err}"
+        );
+        assert!(err.contains(r#"State `"container": "tiff"`"#), "{err}");
+        assert!(!err.contains("--container avif"), "{err}");
+        assert!(!err.contains("at line"), "{err}");
     };
     let tiff = tmp.path("pq.tiff");
     let flag = [
@@ -677,7 +694,8 @@ fn avif_is_refused_as_removed_wherever_it_is_stated() {
         "--film-base",
         "1,1,1",
     ];
-    refused(&flag, &tiff);
+    let err = refused(&flag, &tiff);
+    assert!(err.contains("--container avif was removed"), "{err}");
     let avif = tmp.path("pq.avif");
     let suffix = [
         "convert",
@@ -694,6 +712,9 @@ fn avif_is_refused_as_removed_wherever_it_is_stated() {
         !tmp.path("pq.avif.tiff").exists(),
         "never completed as a stem"
     );
+    // The suffix is a property of this invocation: it outranks the missing base.
+    let err = refused(&suffix[..suffix.len() - 2], &avif);
+    assert!(!err.contains("no film base selected"), "{err}");
 
     let recipe = tmp.path("avif.json");
     std::fs::write(
@@ -709,8 +730,10 @@ fn avif_is_refused_as_removed_wherever_it_is_stated() {
         tiff.to_str().unwrap(),
         "--params",
         recipe.to_str().unwrap(),
+        "--container",
+        "tiff",
     ];
-    refused(&replayed, &tiff);
+    by_key(&refused(&replayed, &tiff));
     let out_dir = tmp.path("roll-out");
     std::fs::create_dir_all(&out_dir).unwrap();
     let roll = [
@@ -721,12 +744,62 @@ fn avif_is_refused_as_removed_wherever_it_is_stated() {
         "--params",
         recipe.to_str().unwrap(),
     ];
-    refused(&roll, &out_dir.join("hdr-48bit_positive.avif"));
+    by_key(&refused(&roll, &out_dir.join("hdr-48bit_positive.avif")));
     assert_eq!(
         std::fs::read_dir(&out_dir).unwrap().count(),
         0,
         "roll wrote nothing"
     );
+
+    // A roll manifest's entry: its path, and its per-frame override, name the frame.
+    let manifest = |entry: &str| {
+        let path = tmp.path("frames.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"frames": [{{"input": "{}", {entry}}}]}}"#,
+                input.display()
+            ),
+        )
+        .unwrap();
+        path
+    };
+    let frame = format!("frame {}: ", input.display());
+    for (entry, written) in [
+        (r#""output": "x.avif""#, out_dir.join("x.avif")),
+        (
+            r#""params": {"output": {"display": {"container": "avif"}}}"#,
+            out_dir.join("hdr-48bit_positive.tiff"),
+        ),
+    ] {
+        let frames = manifest(entry);
+        let err = refused(
+            &[
+                "roll",
+                "--frames",
+                frames.to_str().unwrap(),
+                "--out-dir",
+                out_dir.to_str().unwrap(),
+                "--film-base",
+                "1,1,1",
+                "--transfer",
+                "pq",
+            ],
+            &written,
+        );
+        assert!(err.contains(&frame), "{entry}: {err}");
+        if entry.contains("params") {
+            assert!(err.contains("per-frame `params` override"), "{err}");
+            by_key(&err);
+        } else {
+            assert!(err.contains("the output path"), "{err}");
+        }
+        assert_eq!(
+            std::fs::read_dir(&out_dir).unwrap().count(),
+            0,
+            "{entry}: roll wrote nothing"
+        );
+    }
 }
 
 /// Every `*.nctmp` staging file left in `dir` — the litter check that must come back
@@ -5918,7 +5991,10 @@ fn a_suffix_mismatch_outranks_the_missing_base() {
         "pq",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains(".tif"), "the suffix rule must win: {err}");
+    assert!(
+        err.contains("does not end in .tif or .tiff"),
+        "the suffix rule must win: {err}"
+    );
     assert!(
         !err.contains("no film base selected"),
         "the least-specific diagnosis must not pre-empt it: {err}"
@@ -11996,7 +12072,7 @@ fn a_roll_names_each_frame_from_its_destination() {
         &format!(
             r#"{{"frames": [
   {{"input": "{}"}},
-  {{"input": "{}", "params": {{"output": "film-master"}}}}
+  {{"input": "{}", "params": {{"output": {{"display": {{"range": "hdr", "transfer": "native", "gamut": "display-p3", "container": "jpeg"}}}}}}}}
 ]}}"#,
             fixture("hdr-48bit.tif").display(),
             fixture("hdri-64bit.tif").display()
@@ -12015,19 +12091,26 @@ fn a_roll_names_each_frame_from_its_destination() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(read_tiff_bits(&out_dir.join("hdr-48bit_positive.tiff")), 16);
     assert_eq!(
-        read_tiff_bits(&out_dir.join("hdri-64bit_positive.tiff")),
-        32
+        sniff_container(&out_dir.join("hdri-64bit_positive.jpg")),
+        "jpeg"
     );
     let report = json(&stdout);
-    assert_eq!(report["frames"][1]["chain"]["destination"], "film-master");
-    // A roll frame carries its encoder's block, as `convert` does; the film master has
-    // none.
+    assert_eq!(
+        report["frames"][1]["chain"]["destination"]["display"]["container"], "jpeg",
+        "{stdout}"
+    );
+    // A roll frame carries its encoder's block, as `convert` does; the gain map's is in
+    // its chain.
     assert_eq!(
         report["frames"][0]["hdr_coded_tiff"]["bits_per_sample"], 16,
         "{stdout}"
     );
     assert!(
         report["frames"][1].get("hdr_coded_tiff").is_none(),
+        "{stdout}"
+    );
+    assert!(
+        report["frames"][1]["chain"]["gain_map"].is_object(),
         "{stdout}"
     );
     // A frame switching the roll's destination is warned about, naming the frame.

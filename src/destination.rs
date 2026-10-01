@@ -64,7 +64,8 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     /// This axis's default in `d` over the rows still consistent, if it has one there.
     fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self>;
     /// Spellings of removed values, each with why it went: [`parse`] refuses them by
-    /// name, so a replayed recipe or an old command never reads as a typo.
+    /// flag and `recipe::check_body` by key ([`removed_in_recipe`]), so a replayed
+    /// recipe or an old command never reads as a typo.
     const REMOVED: &'static [(&'static str, &'static str)] = &[];
 }
 
@@ -107,12 +108,8 @@ pub const AXIS_KEYS: [&str; 4] = [Range::KEY, Transfer::KEY, Gamut::KEY, Contain
 /// generated from [`Axis::ALL`], so a new value cannot be missing from it.
 pub fn parse<A: Axis>(s: &str) -> std::result::Result<A, String> {
     let wanted = s.trim().to_ascii_lowercase();
-    if let Some((name, why)) = A::REMOVED.iter().find(|(name, _)| *name == wanted) {
-        return Err(format!(
-            "{} {name} (recipe `output.display.{}`: \"{name}\") was removed: {why}",
-            A::FLAG,
-            A::KEY
-        ));
+    if let Some((name, why)) = removed::<A>(&wanted) {
+        return Err(format!("{} {name} was removed: {why}", A::FLAG));
     }
     A::ALL
         .iter()
@@ -128,6 +125,45 @@ pub fn parse<A: Axis>(s: &str) -> std::result::Result<A, String> {
         })
 }
 
+/// A removed spelling of `A`, in any case, with why it went.
+fn removed<A: Axis>(s: &str) -> Option<(&'static str, &'static str)> {
+    A::REMOVED
+        .iter()
+        .copied()
+        .find(|(name, _)| s.trim().eq_ignore_ascii_case(name))
+}
+
+/// A removed value a recipe states under `output.display`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemovedValue<'v> {
+    /// The axis's recipe key.
+    pub key: &'static str,
+    /// The value as written.
+    pub stated: &'v str,
+    /// Why it went.
+    pub why: &'static str,
+    /// The axis's own default, the value a recipe states instead.
+    pub default: &'static str,
+}
+
+/// The first removed value a raw recipe `output.display` object states — for
+/// `recipe::check_body`, which refuses it by key before serde would word it as the flag.
+pub fn removed_in_recipe(display: &serde_json::Value) -> Option<RemovedValue<'_>> {
+    fn one<A: Axis>(display: &serde_json::Value) -> Option<RemovedValue<'_>> {
+        let stated = display.get(A::KEY)?.as_str()?;
+        removed::<A>(stated).map(|(_, why)| RemovedValue {
+            key: A::KEY,
+            stated,
+            why,
+            default: A::DEFAULT.name(),
+        })
+    }
+    one::<Range>(display)
+        .or_else(|| one::<Transfer>(display))
+        .or_else(|| one::<Gamut>(display))
+        .or_else(|| one::<Container>(display))
+}
+
 /// An axis's values, comma-separated in help order.
 pub fn accepted<A: Axis>() -> String {
     A::ALL
@@ -137,8 +173,8 @@ pub fn accepted<A: Axis>() -> String {
         .join(", ")
 }
 
-/// Clap's parser for an axis: [`parse`], so the flag refuses a removed value with the
-/// recipe's message, and lists [`Axis::ALL`] in `--help`.
+/// Clap's parser for an axis: [`parse`], so the flag refuses a removed value by name,
+/// and lists [`Axis::ALL`] in `--help`.
 #[derive(Clone)]
 pub struct AxisParser<A>(std::marker::PhantomData<A>);
 
@@ -411,10 +447,10 @@ impl Axis for Container {
 axis_serde!(Container);
 
 /// Why `avif` is refused, as a flag value, a recipe value or an output suffix.
-pub const AVIF_REMOVED: &str = "Hanten no longer writes AVIF (`docs/design/avif-removal.md`). \
-    The same Rec.2100 PQ or HLG signal is written as a full-range 16-bit TIFF — container \
-    `tiff`, the default — and the compact HDR file is the gain-map JPEG: range `hdr`, \
-    transfer `native`, container `jpeg`. There is no alias";
+pub const AVIF_REMOVED: &str = "Hanten no longer writes AVIF (`docs/design/avif-removal.md`), \
+    and there is no alias. The same Rec.2100 PQ or HLG signal is written as a full-range \
+    16-bit TIFF — container `tiff`, the default — and the compact HDR file is the gain-map \
+    JPEG: range `hdr`, transfer `native`, gamut `display-p3` or `srgb`, container `jpeg`";
 
 impl Container {
     /// Why a path's suffix names a removed container, if it does — so `out.avif` is
@@ -1486,7 +1522,6 @@ mod tests {
     fn a_removed_value_is_refused_by_name_not_as_a_typo() {
         let err = parse::<Container>(" AVIF ").unwrap_err();
         assert!(err.contains("--container avif"), "{err}");
-        assert!(err.contains("`output.display.container`"), "{err}");
         assert!(err.contains("docs/design/avif-removal.md"), "{err}");
         assert!(!err.contains("unknown"), "{err}");
         // The suffix check reads the same table, in any case.
@@ -1496,6 +1531,21 @@ mod tests {
         );
         assert_eq!(
             Container::removed_suffix(std::ffi::OsStr::new("tiff")),
+            None
+        );
+        // And so does the recipe's, keeping the value as written.
+        let display = serde_json::json!({"transfer": "pq", "container": "AVIF"});
+        assert_eq!(
+            removed_in_recipe(&display),
+            Some(RemovedValue {
+                key: "container",
+                stated: "AVIF",
+                why: AVIF_REMOVED,
+                default: "tiff",
+            })
+        );
+        assert_eq!(
+            removed_in_recipe(&serde_json::json!({"container": "tiff"})),
             None
         );
     }
