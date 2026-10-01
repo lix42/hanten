@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "note": "Acceptance manifest for `python -m nctool acceptance run` (scripts/analysis/README.md, 'Acceptance'): what each encoding must be when decoded without nc. The cases are benchmark.json's `benchmark_set` (destination blocks), re-targeted at each `inputs` entry; nothing here lists a case. Bounds are per encoding and in the units each oracle names. A JPEG bound is measured on these fixtures with about 25% headroom and is not a codec contract; a lossless one is the encoder's contract.",
+  "benchmark_set": "fixtures",
+  "inputs": {
+    "chart": {
+      "note": "The synthetic chart (nctool.chart): a neutral ramp, saturated and muted patches, so the patch and cross-encoding oracles have content. It is a generated file, so its input semantics are asserted.",
+      "input": "tests/fixtures/chart-48bit.tif",
+      "args": ["--film-base", "0.9,0.55,0.42", "--input-transfer", "linear", "--input-meaning", "scanner-device"],
+      "reuse_cases_of": "tests/fixtures/hdri-64bit.tif",
+      "rename": ["hdri-", "chart-"],
+      "patches": "chart"
+    }
+  },
+  "patch_inset": 8,
+  "hdr": {
+    "reference_white_nits": 203,
+    "peak_nits": 1000,
+    "hlg_system_gamma": 1.2
+  },
+  "gain_map": {
+    "offset": 0.015625,
+    "flat_tolerance_log2": 0.00196078431372549,
+    "negative_tolerance": 1e-6,
+    "mpf_types": [196608, 327680],
+    "rational_tolerance": 1e-6,
+    "window_tolerance": 1e-5,
+    "reconstruction_nits": 0.02,
+    "reconstruction_relative": 0.005
+  },
+  "lut_note": "The coded-HDR profiles' curves are 1024-entry tables, so near black their A2B0 departs from BT.2100 by up to ~0.07 cd/m²; the LUT bound's absolute term (in reference-white units) is 0.1 cd/m².",
+  "codec": {
+    "jpeg": {"encoder": "jpeg-encoder 0.7.1", "quality": 95, "chroma": "4:4:4"}
+  },
+  "encodings": {
+    "film-master": {
+      "oracle": "the file's f32 ACEScg against the canonical buffer; the encoder writes it verbatim, so the bound is tighter than the spec's 2e-6",
+      "bounds": {"max": 0, "rms": 0, "bit_identical": true},
+      "determinism": "byte-identical"
+    },
+    "sdr-tiff": {
+      "oracle": "the standard transfer of the canonical linear buffer, quantized to 16 bits, against the stored codes",
+      "bounds": {"max": 1, "rms": 1},
+      "determinism": "byte-identical"
+    },
+    "hdr-linear-tiff": {
+      "oracle": "the file's f32 against the canonical buffer; the encoder writes it verbatim",
+      "bounds": {"max": 0, "rms": 0, "bit_identical": true},
+      "determinism": "byte-identical"
+    },
+    "hdr-pq-tiff": {
+      "oracle": "BT.2100 PQ of the canonical buffer (1.0 = 203 cd/m²) in binary64, quantized to 16 bits, against the stored codes; the profile's A2B0 against BT.2100 on a grid of codes",
+      "bounds": {"max": 1, "rms": 1, "lut": {"relative": 0.002, "absolute": 0.0005}},
+      "determinism": "byte-identical"
+    },
+    "hdr-hlg-tiff": {
+      "oracle": "BT.2100 HLG of the canonical buffer for a 1000 cd/m², zero-black display (inverse OOTF, gamut pull, OETF) in binary64, quantized to 16 bits, against the stored codes; the scene-referred A2B0 against the inverse OETF on a grid of codes",
+      "bounds": {"max": 1, "rms": 1, "lut": {"relative": 0.002, "absolute": 0.0005}},
+      "determinism": "byte-identical"
+    },
+    "gain-map-jpeg": {
+      "oracle": "metadata against the renditions; the map's gains at its own grid against the renditions' gains; both JPEGs against their pre-JPEG codes; the end-to-end reconstruction reported",
+      "bounds": {
+        "map_grid_steps": 0.5,
+        "map_grid_log2_tolerance": 1e-5,
+        "base": {"max": 26, "rms": 3.5,
+                 "patches": {"neutral_mean": 1, "saturated_mean": 2, "neutral_chroma": 1}},
+        "map": {"max": 28, "rms": 2.5}
+      },
+      "determinism": "byte-identical"
+    }
+  },
+  "cross_encoding": {
+    "note": "Patch means decoded to XYZ D65 with reference white at Y = 1, against the reference case's. `untouched` patches are gated; every other patch is tone- or gamut-mapped somewhere and its hue and chroma deltas are reported. `bounds` is the spec's; an 8-bit encoding cannot reach it (8-bit quantization alone reaches ΔE00 0.52 on the chart), so `allowances` pins a measured bound per encoding.",
+    "reference": {"encoding": "hdr-linear-tiff", "gamut": "bt2020"},
+    "untouched": ["neutral-3", "neutral-2", "neutral-1", "neutral+0", "neutral+1",
+                  "muted-warm", "muted-cool", "muted-green", "muted-magenta", "muted-skin",
+                  "muted-dark", "muted-light"],
+    "bounds": {"delta_e_2000": 0.5, "neutral_delta_uv": 0.0001},
+    "allowances": {
+      "gain-map-jpeg": {"delta_e_2000": 2.0, "neutral_delta_uv": 0.004}
+    }
+  }
+}

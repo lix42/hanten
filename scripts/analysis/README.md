@@ -11,9 +11,9 @@ PYTHONPATH=scripts/analysis python3 -m nctool --help
 
 ### Dependencies
 
-Every command except `metrics` uses only the Python standard library, and stays
-that way. `metrics` reads output pixels, which needs `numpy`, `tifffile` and
-`Pillow` (the last for JPEG):
+Every command except `metrics` and `acceptance` uses only the Python standard
+library, and stays that way. Those two read output pixels, which needs `numpy`,
+`tifffile` and `Pillow` (the last for JPEG):
 
 ```sh
 uv venv --python 3.12
@@ -534,6 +534,57 @@ hash, output depth, means, clipping counts, telemetry timings, and the cases not
 are informational and never decide the deterministic-statistics verdict; a stage
 only one record times (a schema-8 `algorithm` beside schema-9 stages) diffs as `null`.
 
+## Decode-back acceptance — `acceptance run`
+
+Decodes every output encoding **without nc** and checks it against the buffers nc's
+encoder received — the gate `analysis/display-output-acceptance` runs on real scans.
+
+```sh
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool acceptance run \
+  --nc target/debug/hanten --out result.json
+```
+
+Each case is converted with `hanten convert --export-pre-encode`, which writes those
+buffers (the **canonical** ones: the linear rendition before any transfer, and a gain
+map's codes before its JPEG). The output is then decoded from the standards — its ICC
+profile parsed by `nctool.icc`, BT.2100 by `nctool.rec2100`, ISO 21496-1 and MPF by
+`nctool.gainmap`, JPEG by Pillow — and its encoding's oracle compares the two:
+
+| Encoding | Pixels | Bound |
+|---|---|---|
+| film master, HDR linear TIFF | the file's f32 against the canonical buffer | bit-identical (written verbatim) |
+| SDR TIFF | the standard transfer of the canonical buffer, quantized to 16 bits | 1 code |
+| PQ / HLG TIFF | BT.2100 of the canonical buffer in binary64, quantized to 16 bits; the profile's `A2B0` against BT.2100 | 1 code; 0.2 % or 0.1 cd/m² |
+| gain-map JPEG | the map's gains at its own grid; each JPEG against its pre-JPEG codes | ½ map step; measured JPEG max/RMS |
+
+Every case also gets a **metadata** check (the TIFF's layout; the profile's primaries,
+white, TRC and `cicp` against the standard; the gain map's MPF, ISO fields and window
+against the renditions) and a **determinism** check (two runs, byte-identical). A file
+that cannot be read at all is a failed `decode` check, not a crash. The gain map is
+gated at the map's resolution because the map is half resolution: no full-resolution
+reconstruction matches the HDR rendition pixel for pixel, so that error is reported
+(`reconstruction`), not gated.
+
+**The cases are the benchmark's** (`benchmark.json`'s `fixtures` set), re-targeted at
+`acceptance.json`'s `inputs` — today the synthetic chart `tests/fixtures/chart-48bit.tif`
+(`nctool.chart`: a neutral ramp, saturated and muted patches). The chart drives the
+patch bounds of the lossy encodings and the **cross-encoding** check: every rendition's
+patch means as XYZ (reference white at `Y = 1`) against the BT.2020 HDR linear TIFF's, at
+ΔE00 ≤ 0.5 and neutral Δu'v' ≤ 10⁻⁴. 8-bit quantization alone exceeds that, so the gain
+map has a measured allowance in the manifest. After editing `nctool.chart`, regenerate
+the chart with `acceptance chart` (a test fails until you do).
+
+Nothing compares against a committed checksum: decode pixels differ by target, so the
+run makes the canonical buffer and the file together. For a single-machine run (the
+real scans), `--write-golden PATH` records each case's buffer and file hashes, metadata
+and metric summary, keeping a changed entry's old values under `previous`, and
+`--golden PATH` fails a case that moved. Exit `0` passed, `1` a check failed or a case
+would not convert, `2` usage or an operational failure (including a build without
+`--export-pre-encode`). `--write-golden` keeps the cases a run did not cover and writes
+only when every oracle passed; a golden mismatch alone does not stop it, so `--golden G
+--write-golden G` re-baselines a deliberate change and keeps the old values under
+`previous`. Determinism reruns a byte-identical encoding for its digests only.
+
 ## Datasheet digitization — `digitize_datasheets.py`
 
 Not part of `nctool`, and not stdlib-only: it reads the vector characteristic curves in
@@ -563,6 +614,6 @@ The tests are hermetic: they use temporary asset manifests, committed tiny TIFF
 fixtures, and images synthesized in the test itself, rather than the Drive-hosted
 scans. `NCTOOL_REQUIRE_DEPS=1` makes a missing `numpy`/`tifffile` a failure
 instead of letting the metrics tests skip while the run still prints `ok`; leave
-it unset locally if you have not made the venv. The harness tests and `compare`'s
-end-to-end test (the `fixtures` set, run twice) additionally need `cargo build` to
-have produced `target/debug/hanten`.
+it unset locally if you have not made the venv. The harness tests, `compare`'s
+end-to-end test (the `fixtures` set, run twice) and the acceptance tests additionally
+need `cargo build` to have produced `target/debug/hanten`.

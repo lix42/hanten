@@ -1258,8 +1258,8 @@ def cmd_generate(args) -> int:
                   f"{why_not}", file=sys.stderr)
     measuring = any(readable.values()) and not args.no_metrics
     if measuring:
-        # Asked **once**, before anything renders. Measuring is the only part of
-        # this toolkit that is not stdlib-only, and a fresh checkout has no venv
+        # Asked **once**, before anything renders. Measuring is not stdlib-only, and
+        # a fresh checkout has no venv
         # (it is gitignored) — so without this the setup instructions would print
         # once per cell, seventy-odd lines of it, after every render had already
         # run. The page is still worth having without charts.

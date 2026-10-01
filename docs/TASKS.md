@@ -287,6 +287,7 @@ graph TD
     output/avif-row-multithreading
     output/drop-avif
     output/post-fanout-encode-slowdown
+    output/content-light-levels
   end
   subgraph telemetry
     telemetry/perf-instrumentation
@@ -573,6 +574,7 @@ graph TD
   output/hdr-avif-output --> output/drop-avif
   core/conversion-versioning --> output/avif-row-multithreading
   output/parallel-hdr-stages --> output/post-fanout-encode-slowdown
+  output/hdr-display-rendering --> output/content-light-levels
   output/lossless-hdr-tiff --> output/presets
   algo/reference-anchored-sigmoid --> output/presets
   core/roll-conversion --> output/presets
@@ -970,6 +972,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
 - `output/drop-avif` (post-MVP, **done** 2026-10-01): `output/hdr-avif-output` — remove the AVIF destinations and `libaom-sys`, so the build needs no CMake or NASM
 - `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
+- `output/content-light-levels` (post-MVP): `output/hdr-display-rendering` — measure MaxCLL/MaxFALL from each pixel's max(R, G, B) per CTA-861.3, not luminance; found by `analysis/display-acceptance-harness`
 - `telemetry/perf-instrumentation` (post-MVP, **parked**): `core/pipeline-orchestration`
   — LAB criterion benches; prototyped and parked on git branch
   prototype/perf-bench-instrumentation, superseded by telemetry/perf-telemetry as
@@ -1600,6 +1603,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Sequential encode slows after a wide rayon fan-out](tasks/output/post-fanout-encode-slowdown.md) —
   `film-master`'s f32 TIFF write measured 96 → 150–192 ms after the parallel stages landed,
   back to ~117 ms with `RAYON_NUM_THREADS=4`; cause unknown, not yet reproduced on Linux
+- [ ] [Content-light levels per CTA-861.3](tasks/output/content-light-levels.md) — the HDR
+  TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measure
+  luminance, not each pixel's max(R, G, B): 391 vs 578 cd/m² on the scan fixture. Found
+  by `analysis/display-acceptance-harness`; no pixel changes
 
 ### telemetry — [progress](progress/telemetry.md)
 > `src/telemetry.rs` and the opt-in upload stack (schema, ingestion service,
@@ -1666,7 +1673,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
 - [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
-- [ ] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans
+- [x] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
 - [ ] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS/iPhone, Android 15+ (from `output/gain-map-dialect-activation`), another non-Apple reader and an SDR-only reader
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array

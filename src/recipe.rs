@@ -4034,6 +4034,7 @@ mod tests {
         "--strict",
         "--seed",
         "--export-film-rgb",
+        "--export-pre-encode",
         "--telemetry",
         "--telemetry-file",
         "--max-memory",

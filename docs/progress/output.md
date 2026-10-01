@@ -1796,3 +1796,15 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   serde, via `destination::removed_in_recipe` (worded by key, since no flag can rescue
   a recipe refused before merge), and an output suffix through
   `Container::removed_suffix`. Restoring AVIF means removing all three.
+
+
+## content-light-levels
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: filed from `analysis/display-acceptance-harness`, whose AVIF `clli` oracle
+  (CTA-861.3: each pixel's max(R, G, B)) disagreed with nc's luminance-based
+  `hdr::measure_content_light` — MaxCLL 391 vs 578, MaxFALL 51 vs 68 cd/m² on the scan
+  fixture. The AVIF box went with `output/drop-avif`; the measure still feeds the HDR
+  TIFF reports and the SDR-range warning.

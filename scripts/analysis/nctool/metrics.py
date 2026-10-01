@@ -403,16 +403,16 @@ class MetricsError(Exception):
     """A refusal the caller should print and exit non-zero on."""
 
 
-def require_dependencies() -> None:
+def require_dependencies(command: str = "metrics") -> None:
     try:
         import numpy  # noqa: F401
         import PIL  # noqa: F401
         import tifffile  # noqa: F401
     except ImportError as error:
         raise MetricsError(
-            f"{error.name} is required by `nctool metrics` and is not importable. "
-            "The rest of the toolkit is stdlib-only; this command is not. Set it "
-            "up with:\n"
+            f"{error.name} is required by `nctool {command}` and is not importable. "
+            "`metrics` and `acceptance` read pixels; the rest of the toolkit is "
+            "stdlib-only. Set it up with:\n"
             "    uv venv --python 3.12\n"
             "    uv pip install -r scripts/analysis/requirements.txt\n"
             "and run the command with .venv/bin/python") from error
