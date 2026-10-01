@@ -103,8 +103,8 @@ fn full() -> TelemetryEvent {
         event: EventName::Conversion,
         command: CommandKind::Convert,
         timestamp_ms: 1_781_000_000_000,
-        nc_version: "0.1.0",
-        target: "aarch64-apple-darwin",
+        nc_version: "0.1.0".into(),
+        target: "aarch64-apple-darwin".into(),
         cpu_count: Some(11),
         stage: EventStage::Finalize,
         image: Some(ImageInfo {
@@ -135,7 +135,7 @@ fn full() -> TelemetryEvent {
             destination: sdr_p3_tiff(),
             params_hash: "a6bcbaf9b33f4480".into(),
             film_base_source: FilmBaseProvenance::Region([10, 20, 300, 200]),
-            output_depth: "u16",
+            output_depth: "u16".into(),
         }),
         outcome: OutcomeInfo {
             status: OutcomeStatus::Success,
@@ -154,7 +154,7 @@ fn minimal() -> TelemetryEvent {
     TelemetryEvent {
         event_id: EventId([0; 16]),
         timestamp_ms: 0,
-        target: "",
+        target: "".into(),
         cpu_count: None,
         stage: EventStage::Setup,
         image: None,
@@ -424,7 +424,7 @@ fn hostile_local_values_never_reach_the_upload() {
     let mut e = full();
     // No digits in the ID, so a leaked number cannot hide in it.
     e.event_id = EventId([0xaa; 16]);
-    e.target = "x86_64-/Users/alice/secret\nscan.tif";
+    e.target = "x86_64-/Users/alice/secret\nscan.tif".into();
     e.timestamp_ms = 1_700_000_012_345;
     e.cpu_count = Some(13);
     let image = e.image.as_mut().unwrap();
@@ -482,7 +482,7 @@ fn an_off_contract_event_has_no_upload_form() {
     assert_eq!(to_upload_event(&e), Err(NotUploadable::SchemaVersion));
 
     let mut e = full();
-    e.nc_version = "0.1.0+dirty";
+    e.nc_version = "0.1.0+dirty".into();
     assert_eq!(to_upload_event(&e), Err(NotUploadable::NcVersion));
 
     let mut e = full();

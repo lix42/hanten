@@ -17,7 +17,7 @@ entries — don't rewrite earlier ones.
 
 ## Epic summary
 
-What other epics need to know about `telemetry` (refreshed 2026-09-30):
+What other epics need to know about `telemetry` (refreshed 2026-10-01):
 
 - **Telemetry is operational, never a conversion knob.** `--telemetry`,
   `--telemetry-file`, and `NC_TELEMETRY_LOG` live on the CLI arg struct only —
@@ -50,9 +50,9 @@ What other epics need to know about `telemetry` (refreshed 2026-09-30):
   downstream: Cloudflare Worker + D1 ingestion, a separately versioned
   privacy-minimized upload projection with an exact field allowlist, persistent
   consent separate from local collection, the lease/spool/drain model, and
-  sanitized function/module-only panic frames. Read it before implementing any of
-  the four remaining tasks — it went through six review passes on race and
-  ownership edge cases, and the four task files restate its runtime rules in
+  sanitized function/module-only panic frames. Read it before implementing
+  `panic-hook` or touching the uploader — it went through six review passes on
+  race and ownership edge cases, and the task files restate its runtime rules in
   full.
 - **Explicitly rejected by the user:** persistent install identity, uploading
   `params_hash`, and (2026-09-27) uploading any legacy local record. Backend spend
@@ -66,6 +66,11 @@ What other epics need to know about `telemetry` (refreshed 2026-09-30):
   `allowed_releases` when it ships; until then its events are accepted but held in
   quarantine, and `queries/promote_release.sql` moves them once it is listed. It is
   live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` (recorded in the contract README).
+- **Upload is live in the client** (`telemetry/upload`): `hanten telemetry enable`
+  selects one queue, every `convert` appends there and a detached helper uploads.
+  Tests that run the binary must set `NC_TELEMETRY=0` (as `tests/pipeline.rs` does)
+  or give it its own `XDG_CONFIG_HOME`, or a developer's own consent collects their
+  test runs. The lock order is on `telemetry::maintenance`.
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
@@ -478,13 +483,59 @@ What shipped, and the parts the open tasks build on:
   Add each release to `allowed_releases` when it ships.
 
 ## upload
-**Status:** not started
-**Updated:** 2026-07-23
+**Status:** done
+**Updated:** 2026-10-01
 
 - Goal: implement generation-bound invocation collection and request leases for
   a selected active JSONL/private spool, durable rotation/recovery, detached
   draining, non-stranding retarget, lock-stable inactive purge, and
   retry/quarantine maintenance.
+
+### 2026-10-01 — implemented (cloud session)
+- **User decisions at start** (task file's Decisions): lines of another local schema
+  are **dropped** and counted (`dropped_other_schema`), not quarantined and not
+  mentioned by `enable`; the endpoint is a build-time `NC_TELEMETRY_ENDPOINT` (default
+  the live Worker, `none`, or `file:<path>`), overridable at run time; `ureq`; no
+  split. Follow-ups: `upload-live-check` (live endpoint + macOS: this container's
+  proxy answers 403 for the Worker's host) and `upload-windows` (low priority).
+- **Landed:** `telemetry::{durable, consent, spool, drain, net, managed,
+  maintenance}`, `hanten telemetry enable|disable|status|preview|flush|purge` and the
+  hidden `upload-once`. The local event now deserializes (`Cow` strings, `Deserialize`
+  on it and on `StageKind`, `SilverFastFormat`, `FilmBaseProvenance`); its wire shape
+  is unchanged, so `SCHEMA_VERSION` stays 11. `cli::run` uses `try_parse` so a refused
+  `convert` records a `parse` failure under consent, then exits exactly as clap would.
+- **Locks are `std`'s `File::lock`** (flock / `LockFileEx`, stable since 1.89): no new
+  crate, and Windows compiles the same code. Lock files are created once and never
+  unlinked; purge keeps their inodes.
+- **Every wait inside `convert` is bounded** (1 s lease, 1 s gate, 2 s queue lock) and
+  managed collection is silent: a busy lock skips the event. A user who never enabled
+  creates no file: `begin` checks the record exists before touching a lock.
+- **Batches are named from their raw file** (`batch-<raw id>-<n>.json`) and written
+  only if missing, so re-projecting after a crash rewrites nothing; temps of ours are
+  discarded at reconcile because their source still exists. Panic-ready files are
+  counted, capped, purged and block a retarget, but are not projected until
+  `telemetry/panic-hook`.
+- **`ureq` 3.4** (rustls + ring + webpki-roots, no gzip) added 27 locked crates and
+  moved none. It honours `HTTPS_PROXY`/`NO_PROXY`; a loopback endpoint bypasses the
+  proxy explicitly. Redirects are not followed.
+- **Retry:** 429/5xx/network/timeout/an incomplete reply keep the batch; back-off 1 min
+  doubling to 6 h (or `Retry-After`), which the background helper honours and `flush`
+  ignores. A 400 quarantines the whole batch; a rejected event is quarantined alone.
+- **Diagnostic `NC_TELEMETRY_HELPER=0`** starts no helper, so tests can inspect the
+  queue without a helper racing them.
+- **Verified:** unit tests (consent fail-closed cases, spool rotation/projection/
+  re-projection/reconcile/caps/expiry/purge inodes, chunking at 100 events and
+  256 KiB, endpoint parsing, response accounting); `tests/telemetry_upload.rs`, 15
+  binary tests against a loopback fake endpoint — enable uploads queued current
+  events and drops older ones, no consent creates no file, `NC_TELEMETRY=0`, parse
+  failures, 503 → bad reply → 429 → success resending the same immutable batch,
+  rejection and 400 quarantine, preview equals the sent bytes, a 30 s hanging
+  endpoint leaves the conversion's time and bytes unchanged, idempotent enable and
+  refused active retarget, corrupt consent fails closed, disable waits a request
+  lease but not a collection lease, purge and same-queue re-enable wait collection
+  leases, inactive retarget needs an empty queue, an explicit log on the selected
+  queue is written once. Stable over five runs. Not verified here: the live
+  endpoint, macOS (CI's job runs the same tests), Windows beyond a compile check.
 
 
 ## panic-hook

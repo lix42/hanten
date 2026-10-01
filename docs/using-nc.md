@@ -119,7 +119,7 @@ guaranteed byte-identical within one build and architecture.
 
 ---
 
-## 3. The six commands
+## 3. The commands
 
 | Command | Purpose | Writes an image? |
 |---|---|---|
@@ -129,10 +129,12 @@ guaranteed byte-identical within one build and architecture.
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`. | Yes |
 | `hanten measure-roll` | **"What does this roll share?"** — its white balance, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
+| `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` ([§11](#telemetry-upload)). | No |
 
-Every command except `params` emits a **JSON report on stdout** on success
-(`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
-flags at all and just prints the default recipe. Logs and warnings go to
+Every image command (`inspect`, `measure-base`, `measure-roll`, `convert`, `roll`)
+emits a **JSON report on stdout** on success (`--report none` to suppress,
+`--report-file PATH` to redirect); `params` takes no flags at all and just prints the
+default recipe, and `telemetry` has its own output (§11). Logs and warnings go to
 **stderr**, so stdout stays clean for piping into `jq`.
 
 > **A hard failure emits no report at all** — stdout is empty. A decode error, a
@@ -1683,6 +1685,47 @@ These are **`convert` only** — every other command exits 2 if given one:
 
 On `roll`, the gate runs **per frame**: a rejected frame is recorded in the report,
 its siblings are still written, and the roll exits **1**, not 6.
+
+### Telemetry upload
+
+`--telemetry` only ever writes locally. Uploading is a separate, persistent opt-in:
+
+```bash
+hanten telemetry enable            # shows what is sent, asks, then turns it on
+hanten telemetry enable --yes      # the same without a prompt (needed off a terminal)
+hanten telemetry enable --queue ~/nc-tel.jsonl --yes   # collect into another file
+```
+
+`enable` prints the field manifest — a random per-event ID, the day, version, OS,
+CPU architecture and core-count bucket, the outcome, per-stage timings, and coarse
+image and output facts; never a path, pixel, parameter value, error text or any
+identity — then selects one **queue**: `--queue PATH`, else the `--telemetry` log
+(`NC_TELEMETRY_LOG` or the default path). From then on every `convert` appends its
+event there — a command line clap refuses too, as a `parse` failure — and a
+short-lived background process uploads it once the run has finished: nothing waits
+on the network, and the run's output, report and exit code are unchanged. Events of
+the current schema already in the queue are uploaded too; older records are dropped.
+The queue and its hidden sibling spool (`.<name>.nc-telemetry-spool`) are capped at
+25 MiB, and records expire after 30 days.
+
+| Command | What it does |
+|---|---|
+| `hanten telemetry status` | JSON on stdout: consent (`never_enabled`, `active`, `inactive`, `unreadable`), the queue and spool paths, what is queued, and upload counters with the last success and last error. |
+| `hanten telemetry preview` | The request bodies that would be sent now, one per line on stdout, exactly as sent. Sends nothing. |
+| `hanten telemetry flush` | Upload now, in the foreground; prints a JSON summary and exits 1 if the upload failed (the queue is kept for a retry). |
+| `hanten telemetry disable` | Stops collecting and uploading. Waits for an upload already in flight (at most 10 s), but not for a running `convert`, which may still queue its event. Keeps the queue. |
+| `hanten telemetry purge [--yes]` | Only while disabled: deletes everything queued, waiting for consented `convert`s still running. |
+
+Consent is a file in the config directory (`$XDG_CONFIG_HOME/nc`, else
+`%APPDATA%\nc` on Windows, else `~/.config/nc`). Enabling again while enabled is a
+no-op; selecting another queue needs `disable` first, and is refused while the old
+queue still holds records (`flush` it after enabling it again, or `purge` it). Disabling
+or purging cannot delete events already uploaded: they carry no identity to find them
+by, and the service keeps them 180 days.
+
+`NC_TELEMETRY=0` turns automatic collection and upload off for one process. Where
+uploads go is fixed when the binary is built (`NC_TELEMETRY_ENDPOINT`); a build made
+with `none` has nothing to enable.
 
 `--new-flow`, which selected this chain while a second one was the default, was removed
 when it became the only one; passing it exits 2 on every command.

@@ -21,6 +21,26 @@ ID-assignment/persistence passages below reduce to "keep the event's ID". Record
 persistent consent, classify a clap error as `convert` without copying any argv
 text, and write a `stage: "parse"` failure event.
 
+## Decisions at start (user, 2026-10-01)
+
+- **Records of another local schema are dropped**, counted in `status`
+  (`dropped_other_schema`): records written before `SCHEMA_VERSION` 11, and any
+  queued by an older build after a schema bump. They are neither quarantined nor
+  kept aside, and `enable` does not mention them.
+- **The endpoint is fixed at build time** by `NC_TELEMETRY_ENDPOINT` (default: the
+  live Worker). `none` builds a binary that uploads nothing (`enable` refuses);
+  `file:<path>` appends each request body to a file instead of sending it. The
+  same variable at run time overrides it (diagnosis and tests); plain `http://` is
+  accepted for a loopback host only.
+- **HTTP client:** `ureq` 3 with rustls and bundled webpki roots — blocking, no
+  async runtime, no system TLS library.
+- **Not split.** The live endpoint and macOS are checked by
+  [`upload-live-check`](upload-live-check.md); Windows is compile-checked here, and
+  its tests are [`upload-windows`](upload-windows.md) (low priority).
+- **Panic-ready files** are recognized (counted, capped, purged, block a retarget)
+  but not projected: the panic projection arrives with `telemetry/panic-hook`, so
+  the verify bullet consuming the panic fixture moves there.
+
 ## Design
 
 Add a `hanten telemetry` maintenance surface:

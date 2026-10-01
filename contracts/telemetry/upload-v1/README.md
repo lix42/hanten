@@ -27,8 +27,8 @@ them by hand.
   upload form (`to_upload_event` for a conversion; the panic projection arrives with
   `telemetry/panic-hook`); `source_schema_version` is that number and nothing else.
   Legacy local records never upload. A later local schema bump widens the Worker's
-  accepted set rather than replacing 11; whether queued older lines are still
-  projected is `telemetry/upload`'s decision, since it reads them back. Whether
+  accepted set rather than replacing 11; queued lines of an older local version are
+  dropped by the uploader, never projected (`telemetry/upload`). Whether
   adding the panic event bumps the local schema is `telemetry/panic-hook`'s call (see
   `SCHEMA_VERSION`); the fixture records 11 until then.
 - **Absent is not `unknown`.** A block the run never reached is absent (`image` before

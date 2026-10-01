@@ -1784,7 +1784,18 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   stage it ended in and its error kind and exit code — never the error's text. A
   `--strict` promotion is a failure of kind `strict`. A run that fails before the
   write-target guard writes its event only if the sink is clear of the input and
-  every output it knew of. A command line clap rejects writes none.
+  every output it knew of. A command line clap rejects writes none, except under
+  upload consent (below).
+- **Upload (`hanten telemetry`, opt-in, persistent).** `hanten telemetry enable`
+  shows the upload field manifest and, once confirmed, selects one queue (the log
+  above, or `--queue PATH`). From then on every `convert` — a refused command line
+  too, as a `parse` failure — appends its event there, and a detached helper
+  uploads its privacy projection (`contracts/telemetry/upload-v1/`) after the run's
+  outcome is fixed. `disable`, `purge`, `status`, `preview` and `flush` manage it;
+  `NC_TELEMETRY=0` turns it off for one process. Records of an older local schema
+  are dropped, not uploaded. The endpoint is fixed at build time
+  (`NC_TELEMETRY_ENDPOINT`; `none` builds a binary that uploads nothing). Its
+  consent, locks and queue rules are `docs/telemetry-strategy.md`.
 - **Best-effort:** a telemetry failure is warned on stderr and never changes the
   exit code (`--strict` does not promote it) — the one deliberate deviation from
   the fail-loudly rule, since telemetry is non-critical observability. A
@@ -1794,8 +1805,8 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   usage error (a config mistake, caught up front — an odd log path must never
   silently append into the scan).
 
-**Telemetry event shape (`schema_version` 11, serialize-only JSON).** Designed for
-a future background uploader (§12, `telemetry/upload`) to drain and ship. A success:
+**Telemetry event shape (`schema_version` 11).** The uploader reads queued events
+back to project them (`telemetry::spool`). A success:
 ```json
 {
   "schema_version": 11,
@@ -1886,7 +1897,14 @@ src/
 ├── types.rs             # LinearImage, FilmBase, shared params and errors
 ├── version.rs           # build identity, pipeline_version, the drift gate, params hash
 ├── telemetry.rs         # opt-in JSONL record (never perturbs output)
-│   └── upload.rs        #   the privacy-minimized upload projection
+│   ├── upload.rs        #   the privacy-minimized upload projection
+│   ├── consent.rs       #   persistent upload consent and its locks
+│   ├── spool.rs         #   the upload queue: rotation, batches, quarantine, caps
+│   ├── drain.rs         #   one upload pass under the request lease
+│   ├── net.rs           #   the endpoint and one HTTPS request
+│   ├── managed.rs       #   per-`convert` collection and the detached helper
+│   ├── maintenance.rs   #   `hanten telemetry …` (and the lock order)
+│   └── durable.rs       #   crash-safe, no-follow files and cross-process locks
 ├── algo/
 │   ├── mod.rs           # FilmRgbImage, the typed reconstruction output
 │   └── fixed.rs         # the fixed decode
@@ -2053,6 +2071,8 @@ shipped or retired item keeps its number and shrinks to one line.
     `hanten convert` (outcome + image + per-stage timing + run context) written
     to a local JSONL log and/or one-off file (`--telemetry` / `--telemetry-file`,
     `NC_TELEMETRY_LOG`; see §9), best-effort and byte-identical-output-preserving.
+    **Upload has shipped** (`telemetry/upload`, `hanten telemetry`, §9); panic
+    reporting (`telemetry/panic-hook`) has not.
     The `telemetry/strategy` spike is **complete**; its approved
     [design note](telemetry-strategy.md) fixes the remaining shape. The client
     keeps custom JSON (no embedded OTel SDK/Collector) and sends a separately

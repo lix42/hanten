@@ -6,8 +6,8 @@ description: >-
   turning on / collecting perf logs from `hanten convert` (`--telemetry`,
   `--telemetry-file`, `NC_TELEMETRY_LOG`), reading or analyzing the telemetry JSONL
   log (jq over per-stage timing / megapixels / failures), bumping the event
-  `schema_version`, or reasoning about the determinism and fail-soft invariants the
-  telemetry code must preserve.
+  `schema_version`, working on the opt-in uploader (`hanten telemetry`), or reasoning
+  about the determinism and fail-soft invariants the telemetry code must preserve.
 ---
 
 # Hanten perf telemetry
@@ -53,8 +53,8 @@ TelemetryEvent` (`src/telemetry.rs`). To add a field:
 5. **The upload side moves with it.** `source_schema_version` is the local version,
    so a bump also changes `telemetry::upload` and the contract in
    `contracts/telemetry/upload-v1/` (schema, corpus, README) — and the Worker, whose
-   accepted set widens rather than moves. Whether older queued lines still project is
-   `telemetry/upload`'s decision. A new
+   accepted set widens rather than moves. Queued lines of an older version are then
+   dropped, not uploaded (`telemetry::spool::project`). A new
    field is not uploaded unless the contract README's manifest adds it, which needs a
    consent-version bump; a new stage or timing field needs its `timing_ms` key there.
 
@@ -208,3 +208,20 @@ jq -c 'select(.outcome.clipped > 0 or .outcome.non_finite > 0) \
 jq -s 'map(select(.outcome.status != "failure")) | group_by(.nc_version)[] | {version: .[0].nc_version, runs: length, \
         avg_total_ms: (map(.timing_ms.total) | add/length)}' "$LOG"
 ```
+
+## 4. The uploader
+
+`hanten telemetry enable` (persistent consent) makes every `convert` append its event
+to one selected queue and start a detached `upload-once` helper; `status`, `preview`,
+`flush`, `disable` and `purge` manage it (docs/using-nc.md §11). The rules — consent
+generations, the four leases and their order, the spool's crash-safe batches, caps —
+are `docs/telemetry-strategy.md`; the lock order is on `telemetry::maintenance`.
+
+- **Tests never touch the machine's own consent:** `tests/pipeline.rs` runs every
+  binary with `NC_TELEMETRY=0`; `tests/telemetry_upload.rs` gives each test its own
+  `XDG_CONFIG_HOME`/`XDG_DATA_HOME` and a loopback fake endpoint.
+- **Diagnostic environment:** `NC_TELEMETRY_ENDPOINT` (`https://…`,
+  `http://<loopback>…`, `file:<path>`, `none`) overrides the build's endpoint;
+  `NC_TELEMETRY_HELPER=0` starts no helper, so only `flush` uploads.
+- **Managed collection is silent** (no stderr) and every wait in a `convert` is
+  bounded: a busy lock skips the event rather than delay the run.
