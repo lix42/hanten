@@ -2,11 +2,11 @@
 
 The comparison half of `core/conversion-versioning`. Two commands:
 
-- `run`  — convert every case in a benchmark **set** with one `nc` binary and
-  write a **run record**: the build's identity (`nc_version`, git commit,
-  `pipeline_version`) plus, per frame, the `params_hash`, the per-channel mean of
-  the written samples, the clip fraction, the input's sha256, the output depth, and
-  the per-stage timings.
+- `run`  — convert every case in a benchmark **set** that applies to one `nc`
+  binary's output interface, and write a **run record**: the build's identity
+  (`nc_version`, git commit, `pipeline_version`) plus, per frame, the `params_hash`,
+  the per-channel mean of the written samples, the clip fraction, the input's sha256,
+  the output depth, and the per-stage timings.
 - `diff` — diff two run records into a **version-keyed** report: per-channel mean
   ΔRGB, clip-fraction delta, and timing delta per frame.
 
@@ -41,9 +41,12 @@ ignore.
 
 **Two output interfaces.** A build at or after `manifest.DESTINATION_PIPELINE`
 states its output as a destination, an earlier one (the reference build) as a preset.
-`run` reads which from the binary's `--version` banner, and a case adds
-`destination_args` or `preset_args` to its shared `args` accordingly — so one set,
-and one case name per frame, serves both builds of a comparison. `params_hash` is read
+`run` reads which from the binary's `--version` banner. A case carries one block per
+interface it applies to (`destination`, `preset`: that interface's `args` and
+`recipe`), and runs on a build only when it has that build's block; the record lists
+the rest as `not_run`. So one set, and one case name per frame, serves both builds of
+a comparison, and a destination the reference cannot write is never rendered as some
+other preset under its name. `params_hash` is read
 from the report's `identity`; a destination build from before `nf-core/report-contract`
 reports none, and it is read from the run's telemetry record instead.
 `identity.target` is likewise a real axis: transcendental
@@ -114,7 +117,25 @@ BENCHMARK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 # nor the meaning, so it must be rejected as an unsupported schema — leaving this at
 # 1 made an old record advertise the same version while failing later as merely
 # "malformed", which hides why.
-RECORD_SCHEMA = 2
+#
+# v3: `not_run`, the cases the build's interface has no block for, so `diff` can tell
+# a case that does not apply to one build from a frame that went missing. The diff
+# report shares this version, and gained the `not-run` row status with it.
+RECORD_SCHEMA = 3
+
+# The benchmark manifest schema `run` reads. v2 moved a case's interface-specific
+# args and its recipe into per-interface blocks; a v1 case's `destination_args` would
+# otherwise be an unknown key, silently ignored.
+BENCHMARK_SCHEMA = 2
+
+# The keys a benchmark case and its interface blocks may carry. Anything else is
+# refused: a misspelt block would make the case quietly not run on that interface.
+CASE_KEYS = ("name", "input", "roll", "frame", "args", "output_ext", "destination",
+             "preset")
+BLOCK_KEYS = ("args", "recipe")
+
+# The output interfaces a build can speak, which are also the names of a case's blocks.
+INTERFACES = _manifest.INTERFACES
 
 # Fields whose equality decides `identical` — see the module docstring on why
 # timings are excluded. Every one must be *present* on every frame: `None == None`
@@ -290,15 +311,45 @@ def _need(case: dict, key: str, set_name: str, name: str) -> tuple[str | None, s
     return value, None
 
 
+def _string_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _resolve_block(block, name: str, iface: str) -> tuple[dict | None, str | None]:
+    """One interface block of a case: its `args` and its absolute `recipe` path."""
+    where = f"case {name!r}: `{iface}`"
+    if not isinstance(block, dict):
+        return None, f"{where} must be an object with `args` and/or `recipe`"
+    unknown = sorted(set(block) - set(BLOCK_KEYS))
+    if unknown:
+        return None, (f"{where} has unknown key(s) {', '.join(unknown)}; "
+                      f"expected {', '.join(BLOCK_KEYS)}")
+    args = block.get("args", [])
+    if not _string_list(args):
+        return None, f"{where}.args must be a list of strings"
+    recipe = block.get("recipe")
+    if recipe is not None:
+        if not isinstance(recipe, str) or not recipe or os.path.isabs(recipe):
+            return None, f"{where}.recipe must be a repo-relative path"
+        recipe = os.path.join(repo_root(), recipe)
+        if not os.path.isfile(recipe):
+            return None, f"{where}: recipe not found: {recipe}"
+    return dict(args=list(args), recipe=recipe), None
+
+
 def resolve_cases(bench: dict, set_name: str, asset_root: str,
                   ) -> tuple[list[dict], str | None]:
-    """Resolve a benchmark set's cases into absolute inputs + recipes.
+    """Resolve a benchmark set's cases into absolute inputs, each with its blocks.
 
     A `repo`-rooted set (the committed `tests/fixtures/`) needs no assets, so
     `compare` is runnable — and testable — on any checkout. An `assets`-rooted set
     is resolved (and checksum-verified) through the asset manifest.
     """
-    sets = _dict(bench).get("sets")
+    bench = _dict(bench)
+    if bench.get("schema_version") != BENCHMARK_SCHEMA:
+        return [], (f"the benchmark manifest's schema_version is "
+                    f"{bench.get('schema_version')!r}, not {BENCHMARK_SCHEMA}")
+    sets = bench.get("sets")
     if not isinstance(sets, dict):
         return [], "the benchmark manifest has no `sets` object"
     spec = sets.get(set_name)
@@ -326,6 +377,10 @@ def resolve_cases(bench: dict, set_name: str, asset_root: str,
         name = case.get("name")
         if not name:
             return [], f"a case in set {set_name!r} has no `name`"
+        unknown = sorted(set(case) - set(CASE_KEYS))
+        if unknown:
+            return [], (f"case {name!r} in set {set_name!r} has unknown key(s) "
+                        f"{', '.join(unknown)}")
         if root_kind == "assets":
             roll, err = _need(case, "roll", set_name, name)
             if err:
@@ -349,28 +404,26 @@ def resolve_cases(bench: dict, set_name: str, asset_root: str,
             expect = None
         if not os.path.isfile(path):
             return [], f"case {name!r}: input not found: {path}"
-        recipe = case.get("recipe")
-        if recipe:
-            recipe = os.path.join(repo_root(), recipe)
-            if not os.path.isfile(recipe):
-                return [], f"case {name!r}: recipe not found: {recipe}"
-        # Defaults to `tiff` so every existing case is unchanged; a case selecting a
-        # JPEG/AVIF preset states its own. Validated here rather than at use, so a
-        # typo fails while resolving the set instead of mid-run.
+        # Validated here rather than at use, so a typo fails while resolving the set
+        # instead of mid-run.
         output_ext = case.get("output_ext", "tiff")
         if output_ext not in OUTPUT_EXTENSIONS:
             return [], (f"case {name!r}: output_ext {output_ext!r} is not one of "
                         f"{', '.join(sorted(OUTPUT_EXTENSIONS))}")
-        # `args` go to every build; `destination_args` / `preset_args` only to a
-        # build that takes that output interface (`manifest.output_interface`).
-        extra = {}
-        for key in ("args", "destination_args", "preset_args"):
-            value = case.get(key, [])
-            if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
-                return [], f"case {name!r}: `{key}` must be a list of strings"
-            extra[key] = list(value)
-        out.append(dict(name=name, input=path, recipe=recipe, output_ext=output_ext,
-                        expect_sha256=expect, **extra))
+        args = case.get("args", [])
+        if not _string_list(args):
+            return [], f"case {name!r}: `args` must be a list of strings"
+        blocks = {}
+        for iface in INTERFACES:
+            if iface in case:
+                blocks[iface], err = _resolve_block(case[iface], name, iface)
+                if err:
+                    return [], err
+        if not blocks:
+            return [], (f"case {name!r} in set {set_name!r} has no interface block "
+                        f"({' or '.join(INTERFACES)}), so it runs on no build")
+        out.append(dict(name=name, input=path, output_ext=output_ext,
+                        expect_sha256=expect, args=list(args), blocks=blocks))
     if not out:
         return [], f"benchmark set {set_name!r} has no cases"
     # A duplicate case name would produce two frames `diff` then matches by one name,
@@ -491,11 +544,11 @@ def convert_case(nc: str, case: dict, workdir: str,
     out_path = os.path.join(workdir, f"{case['name']}.{case.get('output_ext', 'tiff')}")
     tel = os.path.join(workdir, f"{case['name']}.telemetry.json")
     argv = [nc, "convert", case["input"], "-o", out_path, "--telemetry-file", tel]
-    if case["recipe"]:
+    # The recipe and `interface_args` come from the case's block for the binary's
+    # interface, chosen by `cmd_run`. A hand-built case may have neither.
+    if case.get("recipe"):
         argv += ["--params", case["recipe"]]
     argv += case["args"]
-    # The interface-specific half of the case (`destination_args` / `preset_args`),
-    # chosen by `cmd_run` from the binary's banner. A hand-built case has none.
     argv += case.get("interface_args", [])
     proc = subprocess.run(argv, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -636,8 +689,17 @@ def cmd_run(args) -> int:
     if interface is None:
         print(f"error: {why}", file=sys.stderr)
         return 2
+    # A case runs only on the interfaces it has a block for: a destination the
+    # reference cannot write is listed as not run, never rendered as something else.
+    not_run = sorted(c["name"] for c in cases if interface not in c["blocks"])
+    cases = [c for c in cases if interface in c["blocks"]]
+    if not cases:
+        print(f"error: no case in set {args.set_name!r} has a `{interface}` block, so "
+              f"there is nothing for this {interface} build to run", file=sys.stderr)
+        return 2
     for case in cases:
-        case["interface_args"] = case[f"{interface}_args"]
+        block = case["blocks"][interface]
+        case["recipe"], case["interface_args"] = block["recipe"], block["args"]
 
     if err := _verify_inputs(cases, args.skip_checksums):
         print(f"error: {err}", file=sys.stderr)
@@ -670,13 +732,14 @@ def cmd_run(args) -> int:
                   f"clip={entry['clip_fraction']:.6f}", file=sys.stderr)
 
     record = dict(schema_version=RECORD_SCHEMA, benchmark_set=args.set_name,
-                  identity=identity, frames=frames)
+                  identity=identity, frames=frames, not_run=not_run)
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     if args.out:
         if err := _write_out(args.out, text):
             print(f"error: {err}", file=sys.stderr)
             return 2
-        print(f"wrote {args.out} ({len(frames)} frames)", file=sys.stderr)
+        print(f"wrote {args.out} ({len(frames)} frames, {len(not_run)} not run)",
+              file=sys.stderr)
     else:
         sys.stdout.write(text)
     return 0
@@ -760,6 +823,12 @@ def validate_record(record: dict, label: str) -> str | None:
         return (f"{label}: duplicate frame name(s) {', '.join(map(repr, dupes))}. "
                 "Frames are matched by name, so a duplicate would be silently "
                 "dropped and its measurement never compared")
+    not_run = record.get("not_run")
+    if not (_string_list(not_run) and len(set(not_run)) == len(not_run)):
+        return (f"{label}: `not_run` must be a list of distinct case names — it is "
+                "what tells a case that does not apply to this build from a lost frame")
+    if both := sorted(set(not_run) & set(names)):
+        return f"{label}: {', '.join(map(repr, both))} both ran and are listed as not run"
     return None
 
 
@@ -767,7 +836,9 @@ def diff_frames(a: dict, b: dict) -> tuple[list[dict], bool]:
     """Diff two run records' frame lists by case name.
 
     A case present in only one record is reported as such and counts as a
-    difference — a silently dropped frame must not read as "no change".
+    difference — a silently dropped frame must not read as "no change". It is
+    `not-run` when the other record lists it in `not_run` (the case has no block for
+    that build's interface), else `missing`.
 
     Assumes both records passed [`validate_record`], which is what makes the
     index-by-name safe: it guarantees every frame carries every field read here, that
@@ -782,7 +853,9 @@ def diff_frames(a: dict, b: dict) -> tuple[list[dict], bool]:
     for name in sorted(set(by_name_a) | set(by_name_b)):
         fa, fb = by_name_a.get(name), by_name_b.get(name)
         if fa is None or fb is None:
-            rows.append(dict(name=name, status="missing",
+            absent = a if fa is None else b
+            status = "not-run" if name in absent.get("not_run", []) else "missing"
+            rows.append(dict(name=name, status=status,
                              present_in=("b" if fa is None else "a")))
             identical = False
             continue
@@ -954,6 +1027,9 @@ def cmd_diff(args) -> int:
         notes.append("output_depth_changed: `mean` is quantized to [0,1] for integer "
                      "output and verbatim/unclamped for f32, so the means are in "
                      "different units and mean_delta_rgb is withheld for those frames")
+    if not_run := [r["name"] for r in rows if r["status"] == "not-run"]:
+        notes.append(f"not_run: {', '.join(not_run)} ran on only one build, because the "
+                     "other build's interface has no block for it; nothing was compared")
     if skipped:
         notes.append("checksums_skipped: at least one frame's input bytes were never "
                      "verified (--skip-checksums), so an asset change could be "

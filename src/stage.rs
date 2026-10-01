@@ -61,10 +61,8 @@ pub trait StageClock {
 }
 
 /// A clock that records nothing.
-#[cfg(test)]
 pub struct Untimed;
 
-#[cfg(test)]
 impl StageClock for Untimed {
     fn time<T>(&mut self, _: StageKind, run: impl FnOnce() -> Result<T>) -> Result<T> {
         run()

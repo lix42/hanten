@@ -1,7 +1,8 @@
 """Stdlib unit tests for `nctool.compare` (run: `python3 -m unittest`).
 
-Hermetic: no real assets, no `nc` binary. `convert_case`'s subprocess call is faked
-so the report/telemetry contract is exercised without a conversion, and the diff
+Hermetic: no real assets. `convert_case`'s subprocess call is faked so the
+report/telemetry contract is exercised without a conversion, except in
+`TestFixturesSetEndToEnd`, which runs the committed set on `target/debug/hanten`. The diff
 logic is driven from hand-written run records. Focuses on the parts a wrong answer
 would be *silent* in: the zero-diff verdict for an identical build, timings being
 excluded from that verdict, a dropped frame not reading as "no change", the loud
@@ -15,6 +16,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -36,11 +38,11 @@ def frame(name, mean, clipped=0, total=300, timing=None, phash="aaaa",
 
 
 def record(frames, pipeline_version=1, commit="abc123", dirty=False,
-           target="aarch64-apple-darwin"):
+           target="aarch64-apple-darwin", not_run=()):
     return dict(schema_version=compare.RECORD_SCHEMA, benchmark_set="fixtures",
                 identity=dict(nc_version="0.1.0", git_commit=commit, git_dirty=dirty,
                               pipeline_version=pipeline_version, target=target),
-                frames=frames)
+                frames=frames, not_run=list(not_run))
 
 
 def nc_report(params_hash="feed", mean=(0.25, 0.5, 0.75), depth="u16",
@@ -145,6 +147,17 @@ class TestDiff(unittest.TestCase):
         missing = [r for r in rows if r["status"] == "missing"]
         self.assertEqual([r["name"] for r in missing], ["b"])
         self.assertEqual(missing[0]["present_in"], "a")
+
+    def test_a_case_one_build_did_not_run_is_not_run_not_missing(self):
+        # The reference build has no block for a destination it cannot write. That
+        # is not a lost frame, but nothing was compared either.
+        a = record([frame("a", [0.1, 0.2, 0.3]), frame("b", [0.1, 0.2, 0.3])])
+        b = record([frame("a", [0.1, 0.2, 0.3])], not_run=["b"])
+        rows, identical = compare.diff_frames(a, b)
+        self.assertFalse(identical)
+        self.assertEqual([(r["name"], r["status"]) for r in rows],
+                         [("a", "ok"), ("b", "not-run")])
+        self.assertEqual(rows[1]["present_in"], "a")
 
     def test_a_changed_params_hash_is_flagged(self):
         a = record([frame("a", [0.1, 0.2, 0.3], phash="1111")])
@@ -347,6 +360,25 @@ class TestDiffCommand(unittest.TestCase):
                 code, _, err = self.run_diff(a, b)
                 self.assertEqual(code, 2)
                 self.assertIn(field, err)
+
+    def test_a_record_without_a_readable_not_run_is_refused(self):
+        # Without it, a case one build did not run reads as a lost frame.
+        for not_run, expect in ((None, "`not_run` must be"), (["x", "x"], "`not_run` must be"),
+                                (["a"], "both ran and are listed as not run")):
+            a = record([frame("a", [0.1, 0.2, 0.3])])
+            b = record([frame("a", [0.1, 0.2, 0.3])])
+            b["not_run"] = not_run
+            with self.subTest(not_run=not_run):
+                code, _, err = self.run_diff(a, b)
+                self.assertEqual(code, 2)
+                self.assertIn(expect, err)
+
+    def test_a_case_run_on_one_build_only_is_noted(self):
+        a = record([frame("a", [0.1, 0.2, 0.3]), frame("b", [0.1, 0.2, 0.3])])
+        b = record([frame("a", [0.1, 0.2, 0.3])], pipeline_version=2, not_run=["b"])
+        code, out, _ = self.run_diff(a, b)
+        self.assertEqual(code, 0)
+        self.assertTrue(any(n.startswith("not_run: b ") for n in json.loads(out)["notes"]))
 
     def test_an_explicit_null_count_is_a_loud_refusal_not_a_traceback(self):
         # A `null` clipped used to raise TypeError and exit 1 — the same code as "not
@@ -769,23 +801,52 @@ class TestRunCommand(unittest.TestCase):
 
     # One benchmark set serves both interfaces, so a reference-build record and a
     # current one keep the same case names and `diff` can pair them.
-    def test_each_build_gets_the_args_for_the_interface_it_speaks(self):
+    def test_each_build_runs_the_cases_with_a_block_for_its_interface(self):
+        bench, _ = compare.load_json(compare.BENCHMARK)
+        cases = bench["sets"]["fixtures"]["cases"]
         with tempfile.TemporaryDirectory() as tmp:
             presets: list = []
-            code, _, err = self.call(self.args(tmp), report=nc_report(), version=5,
-                                     argvs=presets)
+            out = os.path.join(tmp, "ref.json")
+            code, _, err = self.call(self.args(tmp, out=out), report=nc_report(),
+                                     version=5, argvs=presets)
             self.assertEqual(code, 0, err)
+            with open(out, encoding="utf-8") as fh:
+                ref = json.load(fh)
             destinations: list = []
             code, _, err = self.call(
                 self.args(tmp), report=destination_report("film-master"), version=8,
-                telemetry={"conversion": {"params_hash": "cafe"}}, argvs=destinations)
+                argvs=destinations)
             self.assertEqual(code, 0, err)
+        # A case without a `preset` block never reaches the reference build; the
+        # record lists it as not run instead.
+        self.assertEqual(sorted(f["name"] for f in ref["frames"]),
+                         sorted(c["name"] for c in cases if "preset" in c))
+        self.assertEqual(ref["not_run"],
+                         sorted(c["name"] for c in cases if "preset" not in c))
+        self.assertEqual(len(destinations), len(cases))
         self.assertTrue(all("--output-preset" in argv for argv in presets), presets)
-        self.assertFalse(any("--film-master" in argv for argv in presets))
+        self.assertFalse(any("--film-master" in argv or "--range" in argv
+                             for argv in presets))
         self.assertFalse(any("--output-preset" in argv for argv in destinations))
-        self.assertEqual(sum("--film-master" in argv for argv in destinations), 1)
+        self.assertEqual(sum("--film-master" in argv for argv in destinations),
+                         sum("--film-master" in c["destination"]["args"] for c in cases))
         # The shared `args` reach both.
         self.assertTrue(all("--film-base" in argv for argv in presets + destinations))
+
+    def test_a_build_no_case_applies_to_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bench = os.path.join(tmp, "bench.json")
+            with open(bench, "w", encoding="utf-8") as fh:
+                json.dump({"schema_version": compare.BENCHMARK_SCHEMA, "sets": {"one": {
+                    "root": "repo", "cases": [{"name": "f1", "destination": {},
+                                               "input": "tests/fixtures/hdr-48bit.tif"}]}}},
+                          fh)
+            argvs: list = []
+            code, _, err = self.call(self.args(tmp, benchmark=bench, set_name="one"),
+                                     report=nc_report(), version=5, argvs=argvs)
+        self.assertEqual(code, 2)
+        self.assertIn("no case in set 'one' has a `preset` block", err)
+        self.assertEqual(argvs, [])
 
     def test_a_binary_that_states_no_pipeline_version_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -832,8 +893,9 @@ class TestRunCommand(unittest.TestCase):
                     {"file": "rolls/Ektar/f1.tif", "sha256": "deadbeef"}]}}}, fh)
             bench = os.path.join(tmp, "bench.json")
             with open(bench, "w", encoding="utf-8") as fh:
-                json.dump({"schema_version": 1, "sets": {"rolls": {"root": "assets", "cases": [
-                    {"name": "r1", "roll": "Ektar", "frame": "f1"}]}}}, fh)
+                json.dump({"schema_version": compare.BENCHMARK_SCHEMA, "sets": {"rolls": {
+                    "root": "assets", "cases": [{"name": "r1", "roll": "Ektar",
+                                                 "frame": "f1", "preset": {}}]}}}, fh)
             code, _, err = self.call(
                 self.args(tmp, benchmark=bench, set_name="rolls"), report=nc_report())
         self.assertEqual(code, 1)
@@ -842,12 +904,14 @@ class TestRunCommand(unittest.TestCase):
     def test_cases_disagreeing_about_the_build_abort_the_record(self):
         # A record must describe exactly ONE build, or the comparison axis is
         # meaningless. Two cases reporting different identities is that failure.
-        bench_cases = [{"name": "f1", "input": "tests/fixtures/hdri-64bit.tif"},
-                       {"name": "f2", "input": "tests/fixtures/hdr-48bit.tif"}]
+        bench_cases = [{"name": "f1", "input": "tests/fixtures/hdri-64bit.tif",
+                        "preset": {}},
+                       {"name": "f2", "input": "tests/fixtures/hdr-48bit.tif",
+                        "preset": {}}]
         with tempfile.TemporaryDirectory() as tmp:
             bench = os.path.join(tmp, "bench.json")
             with open(bench, "w", encoding="utf-8") as fh:
-                json.dump({"schema_version": 1,
+                json.dump({"schema_version": compare.BENCHMARK_SCHEMA,
                            "sets": {"two": {"root": "repo", "cases": bench_cases}}}, fh)
             second = nc_report()
             second["identity"]["git_commit"] = "different"
@@ -878,12 +942,14 @@ class TestRunCommand(unittest.TestCase):
 
 class TestResolveCases(unittest.TestCase):
     BENCH = {
+        "schema_version": compare.BENCHMARK_SCHEMA,
         "sets": {
             "fixtures": {"root": "repo",
-                         "cases": [{"name": "f1", "input": "tests/fixtures/x.tif"}]},
+                         "cases": [{"name": "f1", "input": "tests/fixtures/x.tif",
+                                    "destination": {}}]},
             "rolls": {"root": "assets",
                       "cases": [{"name": "r1", "roll": "Ektar",
-                                 "frame": "20260713-nikon-971"}]},
+                                 "frame": "20260713-nikon-971", "destination": {}}]},
         }
     }
 
@@ -926,18 +992,61 @@ class TestResolveCases(unittest.TestCase):
     def test_duplicate_case_names_are_refused_at_resolve_time(self):
         # Caught here, where the fix is a manifest edit, rather than converting twice
         # and writing a record `diff` will refuse.
-        bench = {"sets": {"dupe": {"root": "repo", "cases": [
-            {"name": "f1", "input": "tests/fixtures/hdri-64bit.tif"},
-            {"name": "f1", "input": "tests/fixtures/hdr-48bit.tif"},
-        ]}}}
+        bench = {"schema_version": compare.BENCHMARK_SCHEMA,
+                 "sets": {"dupe": {"root": "repo", "cases": [
+                     {"name": "f1", "input": "tests/fixtures/hdri-64bit.tif",
+                      "destination": {}},
+                     {"name": "f1", "input": "tests/fixtures/hdr-48bit.tif",
+                      "destination": {}},
+                 ]}}}
         cases, err = compare.resolve_cases(bench, "dupe", "/nonexistent")
         self.assertEqual(cases, [])
         self.assertIn("duplicate case name", err)
 
+    def test_a_benchmark_of_another_schema_is_refused(self):
+        # A v1 case's `destination_args` would otherwise be read as no args at all.
+        bench = dict(self.BENCH, schema_version=1)
+        cases, err = compare.resolve_cases(bench, "fixtures", "/nonexistent")
+        self.assertEqual(cases, [])
+        self.assertIn("schema_version is 1", err)
+
+    def test_a_malformed_case_or_block_is_refused(self):
+        fixture = "tests/fixtures/hdr-48bit.tif"
+        for case, expect in (
+                ({"destination_args": []}, "unknown key(s) destination_args"),
+                ({}, "has no interface block"),
+                ({"destination": {"argz": []}}, "unknown key(s) argz"),
+                ({"preset": []}, "`preset` must be an object"),
+                ({"preset": {"args": "--x"}}, "`preset`.args must be a list"),
+                ({"destination": {"recipe": "no/such.json"}}, "recipe not found"),
+                ({"destination": {"recipe": os.path.join(
+                    compare.repo_root(), "scripts/real-scan-verify/recipes/Ektar.json")}},
+                 "must be a repo-relative path")):
+            with self.subTest(case=case):
+                bench = {"schema_version": compare.BENCHMARK_SCHEMA, "sets": {"s": {
+                    "root": "repo", "cases": [dict(name="c", input=fixture, **case)]}}}
+                cases, err = compare.resolve_cases(bench, "s", "/nonexistent")
+                self.assertEqual(cases, [])
+                self.assertIn(expect, err or "")
+
+    def test_a_block_carries_its_own_recipe(self):
+        recipe = "scripts/real-scan-verify/recipes/Ektar.json"
+        bench = {"schema_version": compare.BENCHMARK_SCHEMA, "sets": {"s": {
+            "root": "repo", "cases": [{
+                "name": "c", "input": "tests/fixtures/hdr-48bit.tif", "args": ["-a"],
+                "destination": {"recipe": recipe}, "preset": {"args": ["-p"]}}]}}}
+        cases, err = compare.resolve_cases(bench, "s", "/nonexistent")
+        self.assertIsNone(err)
+        self.assertEqual(cases[0]["args"], ["-a"])
+        self.assertEqual(cases[0]["blocks"], {
+            "destination": {"args": [], "recipe": os.path.join(compare.repo_root(),
+                                                               recipe)},
+            "preset": {"args": ["-p"], "recipe": None}})
+
     def test_a_case_missing_its_key_fields_is_a_message_not_a_keyerror(self):
         # Every failure in this module is a message with an exit code; a bare
         # `case["roll"]` would traceback on the commonest kind of manifest typo.
-        bench = {"sets": {
+        bench = {"schema_version": compare.BENCHMARK_SCHEMA, "sets": {
             "repo-bad": {"root": "repo", "cases": [{"name": "f1"}]},
             "assets-bad": {"root": "assets", "cases": [{"name": "r1", "frame": "x"}]},
         }}
@@ -957,27 +1066,67 @@ class TestShippedBenchmark(unittest.TestCase):
         # not 40 seconds into a real-scan run.
         bench, err = compare.load_json(compare.BENCHMARK)
         self.assertIsNone(err)
-        self.assertEqual(bench["schema_version"], 1)
-        names: list[str] = []
         for set_name, spec in bench["sets"].items():
-            self.assertIn(spec["root"], ("repo", "assets"), set_name)
-            self.assertTrue(spec["cases"], f"set {set_name} has no cases")
-            for case in spec["cases"]:
-                names.append(f"{set_name}/{case['name']}")
+            with self.subTest(set_name=set_name):
+                cases, err = compare.resolve_cases(bench, set_name, "/nonexistent")
                 if spec["root"] == "repo":
-                    self.assertTrue(
-                        os.path.isfile(os.path.join(compare.repo_root(),
-                                                    case["input"])),
-                        f"{set_name}/{case['name']}: input is not committed")
+                    self.assertIsNone(err)
+                    self.assertTrue(all(os.path.isfile(c["input"]) for c in cases))
                 else:
-                    self.assertIn("roll", case)
-                    self.assertIn("frame", case)
-                if case.get("recipe"):
-                    self.assertTrue(
-                        os.path.isfile(os.path.join(compare.repo_root(),
-                                                    case["recipe"])),
-                        f"{set_name}/{case['name']}: recipe is not committed")
-        self.assertEqual(len(names), len(set(names)), "duplicate case name")
+                    # Resolved against a stand-in asset root holding every frame it
+                    # names, so its keys and blocks are validated without the scans.
+                    with tempfile.TemporaryDirectory() as root:
+                        rolls: dict = {}
+                        for case in spec["cases"]:
+                            rel = os.path.join("rolls", case["roll"], f"{case['frame']}.tif")
+                            os.makedirs(os.path.dirname(os.path.join(root, rel)),
+                                        exist_ok=True)
+                            open(os.path.join(root, rel), "wb").close()
+                            rolls.setdefault(case["roll"], {"frames": []})["frames"].append(
+                                {"file": rel})
+                        with open(os.path.join(root, "manifest.json"), "w",
+                                  encoding="utf-8") as fh:
+                            json.dump({"rolls": rolls}, fh)
+                        cases, err = compare.resolve_cases(bench, set_name, root)
+                    self.assertIsNone(err)
+                    self.assertEqual(len(cases), len(spec["cases"]))
+
+    def test_no_preset_block_renders_without_the_reference_config(self):
+        # The reference build is pinned to `--preset sigmoid-knees`; a preset block
+        # without it would compare against the reference's default curve instead.
+        # The film master runs no display stage, and refuses any `--preset`.
+        bench, _ = compare.load_json(compare.BENCHMARK)
+        for set_name, spec in bench["sets"].items():
+            for case in spec["cases"]:
+                args = case.get("preset", {}).get("args")
+                if args is None:
+                    continue
+                with self.subTest(case=f"{set_name}/{case['name']}"):
+                    preset = args[args.index("--output-preset") + 1]
+                    if preset == "film-master":
+                        self.assertNotIn("--preset", args)
+                    else:
+                        self.assertEqual(args[args.index("--preset") + 1],
+                                         "sigmoid-knees")
+
+    def test_a_roll_case_gives_the_reference_what_its_recipe_states(self):
+        # The reference cannot read the frozen recipe, so its block restates it: the
+        # roll's Dmin and the SDR Display P3 TIFF. A recipe that gains any other knob
+        # would reach only the destination arm.
+        bench, _ = compare.load_json(compare.BENCHMARK)
+        for case in bench["sets"]["rolls"]["cases"]:
+            with self.subTest(case=case["name"]):
+                recipe, err = compare.load_json(os.path.join(
+                    compare.repo_root(), case["destination"]["recipe"]))
+                self.assertIsNone(err)
+                args = case["preset"]["args"]
+                self.assertEqual(args[args.index("--output-preset") + 1], "display-p3")
+                stated = [float(v) for v in args[args.index("--film-base") + 1].split(",")]
+                self.assertEqual(recipe, {
+                    "recipe_version": 2,
+                    "calibration": {"film_base": {"explicit": stated}},
+                    "output": {"display": {"range": "sdr", "transfer": "native",
+                                           "gamut": "display-p3", "container": "tiff"}}})
 
     def test_a_malformed_container_is_a_message_not_an_attributeerror(self):
         # The recurring shape both review rounds surfaced: the guard lands on the
@@ -1031,6 +1180,39 @@ class TestShippedBenchmark(unittest.TestCase):
         # An explicit `null` must not raise out of the harness.
         self.assertEqual(
             compare.clip_fraction({"total_samples": 100, "clipped_high": None}), 0.0)
+
+
+class TestFixturesSetEndToEnd(unittest.TestCase):
+    """The committed `fixtures` set on the real debug binary: it runs with no assets,
+    and two runs of one build diff to zero."""
+
+    def test_two_runs_of_one_build_are_identical(self):
+        nc = os.path.join(compare.repo_root(), "target", "debug", "hanten")
+        self.assertTrue(os.access(nc, os.X_OK), f"{nc} is missing: run `cargo build`")
+        env = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        bench, _ = compare.load_json(compare.BENCHMARK)
+        cases = bench["sets"]["fixtures"]["cases"]
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, f"{n}.json") for n in ("a", "b")]
+            for path in paths:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "nctool", "compare", "run", "--nc", nc,
+                     "--out", path], env=env, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc = subprocess.run([sys.executable, "-m", "nctool", "compare", "diff",
+                                   *paths], env=env, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(paths[0], encoding="utf-8") as fh:
+                rec = json.load(fh)
+        diff = json.loads(proc.stdout)
+        self.assertTrue(diff["identical"], diff)
+        self.assertEqual(len(diff["frames"]), len(cases))
+        self.assertEqual(rec["not_run"], [])
+        # Every depth the record can carry is exercised by some case, but `u10`: the
+        # removed AVIF's, kept so records from builds that wrote it still validate.
+        self.assertEqual({f["output_depth"] for f in rec["frames"]},
+                         set(compare.OUTPUT_DEPTHS) - {"u10"})
 
 
 if __name__ == "__main__":

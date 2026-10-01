@@ -243,6 +243,7 @@ graph TD
     algo/exponential-anchor-placement
     algo/dmax-white-anchor
     algo/density-safety-bounds
+    algo/near-black-collapse-warning
     algo/auto-neutral-wb
     algo/regional-color-balance
     algo/bw-support
@@ -466,6 +467,7 @@ graph TD
   algo/density --> algo/regional-color-balance
   algo/density --> algo/density-safety-bounds
   core/pipeline-orchestration --> algo/density-safety-bounds
+  algo/density-safety-bounds --> algo/near-black-collapse-warning
   algo/density --> algo/bw-support
   core/pipeline-orchestration --> algo/bw-support
   algo/dmax-white-anchor --> algo/bw-support
@@ -795,14 +797,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   two bugs the measurement caught (a holder ring's corners collapsing every edge; a 6 px
   sliver segment dragging one edge to the cap, a 7x over-cut) are recorded in the progress log
 - `film-base/holder-cap-contamination` (post-MVP): `film-base/holder-depth-mask`
-  — a holder deeper than the march cap (25% of the shorter edge) leaves the **perpendicular**
-  edges' depths artifacts rather than floors, because the trim they are measured over is
-  truncated with it: 120 px top holder + 10 px sides reports left/right as 100, a 10x over-cut.
-  `holder-depth-mask` made it loud (per-edge `capped`, a `--strict` warning, corrected prose);
-  this makes the measurement right. Candidates: decline when an edge and a perpendicular edge
-  both cap (`CappedEdges::contaminated`), or trim from a source other than the capped report.
-  **Raising the cap is rejected** with reasons in the task file. Zero of 31 real IR frames cap,
-  so this is a robustness gap — but `half-frame-calibration`'s geometry can reach it
+  — a cap on one edge inflates the **perpendicular** edges to the cap too. **Done 2026-10-01,
+  re-scoped:** no film holder is deeper than 25% of the shorter edge (real ones measure
+  2.5-4%), so a cap is an IR misread and only over-cuts; a deeper holder is covered by raising
+  the inset. The premise is stated on `HOLDER_MARCH_MAX_FRAC`, `CappedEdges::contaminated` is
+  removed and the warning names the remedy. No march change; the decline remedy was rejected
+  (it leaves more holder in the region), as was raising the cap
 - `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
   — **area x method** and nothing else: the effective area of an unexposed frame at the
   **median** (`estimate FRAME`, measurement-only), or a stated region at p97. **Retires** the
@@ -889,6 +889,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   own tone and exposure.
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP; re-scoped 2026-10-01): `algo/density`, `core/pipeline-orchestration`
+- `algo/near-black-collapse-warning` (post-MVP; split from `algo/density-safety-bounds` 2026-10-01, **needs real scans**): `algo/density-safety-bounds`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/regional-color-balance` (post-MVP): `algo/density`
 - `algo/bw-support` (post-MVP): `algo/density`, `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `io/gray-primary-decode`
@@ -1157,8 +1158,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   — curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
 - `nf-verification/benchmark-set` (new flow): `nf-verification/reference-snapshot`, `nf-core/minimal-end-to-end`
-  — the cases are a holding set since `legacy` retired; comparability comes from
-  the tagged build
+  — one fixtures case per ready destination; comparability comes from re-running the
+  reference build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
   — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
 - `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
@@ -1403,12 +1404,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   rectangle + `measure.inset` knob + report + `auto_dmax` wired; default renders unchanged.
   Measured on 31 real IR frames: all measured, none capped, holder 2.5-4% of the shorter edge;
   `--auto-d-max` now resolves 0.76-1.18 against the 2.23-2.37 it used to
-- [ ] [Narrow the beyond-cap holder march](tasks/film-base/holder-cap-contamination.md) — a holder
-  deeper than the march cap inflates the **perpendicular** edges' depths into artifacts (120 px top
-  holder + 10 px sides reports left/right as 100, a 10x over-cut, `converged: true`).
-  `holder-depth-mask` made it loud; make it right. Decline on a capped perpendicular pair, or find a
-  trim that does not depend on the capped report. Raising the cap is rejected. Robustness gap —
-  zero of 31 real frames cap. No pixel change
+- [x] [The holder march cap is a premise](tasks/film-base/holder-cap-contamination.md) — closed
+  on a premise: no film holder is deeper than the 25% cap, so a cap (and the perpendicular edges it
+  inflates) is an IR misread that only over-cuts. Premise and the inset remedy are stated on
+  `HOLDER_MARCH_MAX_FRAC` and in the warning; `CappedEdges::contaminated` removed. No march or
+  pixel change
 - [x] [Rebuild Dmin and Dmax measurement on area x method](tasks/film-base/holder-masked-measurement.md) —
   `estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one
   population sits 0.01-0.085 density pale on 9 real frames); a stated region keeps p97. Retires
@@ -1496,12 +1496,14 @@ the design now in `docs/design-spec.md` (§6–§7):
   **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
 - [ ] [Black & white negative support (mono color model)](tasks/algo/bw-support.md)
-- [ ] [Density safety bounds](tasks/algo/density-safety-bounds.md) — *re-scoped
-  2026-10-01* for the new chain: `--density-offset=-5,…`, `--exposure=-100` and a tiny
-  white-balance gain still render all black with no warning, and extreme decode values
-  reach an internal error in fit range. Make every such value a named usage error, warn
-  when an output channel is entirely 0, then tune a near-black collapse warning on real
-  scans.
+- [x] [Density safety bounds](tasks/algo/density-safety-bounds.md) — **done 2026-10-01**:
+  a value no longer reaches fit range's internal errors — `recipe::validate_render` probes
+  the film base and the reachable scan range through the real decode and grade, and
+  refuses (exit 2) naming each knob whose default alone would render; a channel written
+  as 0 everywhere warns at the encode. Part 3 is the task below.
+- [ ] [Near-black collapse warning](tasks/algo/near-black-collapse-warning.md) — warn on a
+  render that collapses to near-black without a channel reaching exactly 0, with a
+  false-positive guard tuned on real scans
 
 ### color — [progress](progress/color.md)
 > `pipeline/color.rs`, `pipeline/working_space.rs`, and
@@ -2068,10 +2070,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
   curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
-- [ ] [A benchmark set for the new
-  flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
-  `film-master` holding set since `legacy` retired; comparability comes from the
-  reference build
+- [x] [A benchmark set for the new
+  flow](tasks/nf-verification/benchmark-set.md) — **done 2026-10-01.** One fixtures
+  case per ready destination, run only on the interfaces it has a block for;
+  comparability comes from re-running the reference build
 - [x] [Export the pre-matrix film
   RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
   `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32

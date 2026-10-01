@@ -36,6 +36,12 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   `nctool metrics --space film-rgb` measures per channel. It is the point for per-layer
   (`scale`) measurements; `film-master` mixes the layers. `roll` refuses it for now
   (`roll-side-exports`).
+- **`nctool compare`'s set runs on the new chain** (`benchmark-set`, 2026-10-01): one
+  fixtures case per ready destination row (a Rust test enforces it), plus the film
+  master, `direct` and the default, on both input formats. A case has a `destination`
+  and/or `preset` block and runs only on builds of that interface; the record lists the
+  rest as `not_run`. The reference build is compared by running it over the same set
+  (its blocks state `--preset sigmoid-knees`); pre-migration records are superseded.
 - **A review matrix states `destination` for builds at `pipeline_version` 8 and later,
   and `output_preset` for older ones** (the reference build); a matrix mixing both
   states both, and each build takes the flags its banner's `pipeline_version` says it
@@ -299,10 +305,104 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## benchmark-set
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done (2026-10-01)
+**Updated:** 2026-10-01
 
 - 2026-09-19: created with the new-flow plan. Goal: a benchmark set for the new flow.
+
+### 2026-10-01 — implemented
+
+- **The `fixtures` set:** one HDRi case per ready `destination::ROWS` row (13) with all
+  four axes stated, plus `film-master`, `--rendering direct` and `default` (no output
+  flag, so it tracks what a user gets). HDR 48-bit, the other input format, runs as
+  `default` and `film-master`. 18 cases, about 12 s for two runs on a debug build.
+  Every depth a record can carry (`u8`, `u10`, `u16`, `f32`) is exercised. Each one
+  already reported `output_stats.mean`, `loss` and a `chain.destination` that
+  `depth_for_destination` maps, so the diff logic did not change.
+- **User decisions:**
+  - **Per-interface blocks.** A case carries `destination` and/or `preset`, each
+    holding that interface's `args` and `recipe`, and runs on a build only when it has
+    that build's block. Before this, a missing `preset_args` meant "no flags", which
+    would render the reference's default preset under the case's name. Benchmark
+    manifest schema 2. Unknown case and block keys are refused, so a v1
+    `destination_args` cannot be silently ignored. The record lists skipped cases in
+    `not_run` (record schema 3), and `diff` reports them as `not-run`, not `missing`.
+  - **`rolls` runs on the reference too.** The destination block keeps the frozen
+    recipe. The preset block restates its Dmin as `--film-base`, and a test keeps the
+    two equal.
+  - **The coverage gate is a Rust test**
+    (`destination::tests::every_ready_row_has_a_benchmark_case`). It reads
+    `benchmark.json` and asserts that the fixtures cases' stated axes equal the ready
+    rows. Falsified by hand: dropping the HLG AVIF case reds it.
+- **The reference arm states `--preset sigmoid-knees`** (the README's pinned config);
+  the holding set had omitted it. The exception is `film-master`, which the reference
+  refuses with any `--preset`. Preset map: `display-p3`, `compatibility`,
+  `hdr-linear-tiff`, `hdr-pq-tiff`, `hdr-hlg-tiff`, `hdr-pq`, `hdr-hlg`,
+  `gain-map-hdr`, `film-master`. No reference equivalent: Adobe RGB SDR, linear
+  P3/sRGB/Adobe RGB, the sRGB gain map, `direct`.
+- **Verified** (x86_64 Linux, rustc 1.97.0; reference `reserve` @ `0da32d0` built by
+  `build.sh` here, release):
+  - HEAD vs HEAD: `identical: true` on 18 cases. A CI test
+    (`TestFixturesSetEndToEnd`) now runs exactly this on `target/debug/hanten`.
+  - Reference vs reference: `identical: true` on 12 cases, 6 `not_run`.
+  - Reference vs HEAD: all 12 paired cases differ at the same depth, so a pairing
+    compares the pipeline and not the container. The new chain's encoded means are
+    about 0.09–0.24 lower; the film master's are higher by 0.07–0.25.
+    The P3 gain map's delta matches the P3 TIFF's, so the reference's gain-map base is
+    Display P3 too.
+  - Not verified here: the `rolls` set, which needs `../nc-assets`.
+
+### 2026-10-01 — review fixes
+
+- **The coverage test names its failures:** a case naming a row twice, or stating
+  an axis as `--gamut=srgb` or not at all, panics with the case's name rather than
+  being dropped from the set.
+- **`the_benchmark_default_cases_pair_with_the_default_destination`:** the `default`
+  cases pair the unset destination with the reference's `display-p3`. A default that
+  moved within the 16-bit TIFF (to Adobe RGB, say) would keep the depth and read as a
+  pipeline change, so the test pins the pairing.
+- **The roll recipe test compares the whole recipe** with what the preset block
+  restates (Dmin and SDR P3 TIFF), so a knob added to a frozen recipe cannot reach
+  only one arm.
+- **Documented:** the preset blocks run on the reference alone (a v6/v7 build
+  refuses `sigmoid-knees`), and the diff report shares the record's schema 3 and its
+  `not-run` status.
+- **Not done:** rewording the task file's "holding set" design bullet. A task file
+  records the work as planned.
+
+### 2026-10-01 — done
+
+- **Landed:** `benchmark.json` schema 2 (per-interface blocks), run records schema 3
+  (`not_run`). The fixtures set covers every ready destination, the film master,
+  `direct` and the default on both input formats. The two gates are a Rust coverage
+  test and an nctool test that runs the set twice on the debug binary, expecting a
+  zero diff.
+- Gates green locally (rustc 1.99.0, x86_64 Linux): fmt, machete, clippy, build, doc,
+  nctool (474), test (651 + 233). The `nc-reviewer` pass found only Lows, fixed above.
+  Codex is not installed in this environment.
+- **For dependents:** `analysis/display-acceptance-harness` reuses the fixtures case
+  list. One case per ready row is enforced by
+  `destination::tests::every_ready_row_has_a_benchmark_case`, so a row turning ready
+  (the SDR JPEG) needs a case, and a preset block if the reference wrote it.
+
+### 2026-10-01 — code-review fixes
+
+- **The default-pairing test pinned nothing new.** It repeated
+  `nothing_stated_is_the_display_p3_sdr_tiff` and never read `benchmark.json`. It is
+  replaced by `every_benchmark_preset_block_writes_its_cases_destination`: each
+  fixtures preset block's `--output-preset` must write the destination its case's
+  `destination` block resolves to, from a table of the reference's (frozen) presets.
+  Falsified: `hdri-default` paired with `compatibility` reds it.
+- **The `rolls` set's keys and blocks were never validated in CI**: resolving stopped
+  at the missing asset manifest. The shipped-benchmark test now resolves it against a
+  stand-in asset root, so a misspelt block key reds it.
+- An absolute `recipe` path is refused, as its message already said.
+- `INTERFACES` now lives in `manifest`, beside `output_interface`, which returns it.
+- The README no longer claims every destination runs on both input formats.
+- **Kept: `default` beside `hdri-sdr-native-display-p3-tiff`.** They render the same
+  thing today, but `default` follows the product default when it moves; the preset
+  test then forces its reference pairing to move too. The cost is one 502×462 render
+  per run.
 
 ## film-rgb-export
 

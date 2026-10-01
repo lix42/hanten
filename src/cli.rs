@@ -3267,6 +3267,8 @@ fn convert_frame(
     )
 }
 
+const CHANNEL_NAMES: [&str; 3] = ["red", "green", "blue"];
+
 /// Fold an encode's loss and output statistics into the report, warning on any
 /// loss. Shared by both flows' encode sites so the loss is described one way.
 fn report_encode_outcome(
@@ -3291,6 +3293,22 @@ fn report_encode_outcome(
                 loss.non_finite,
                 loss.total_samples,
                 loss.loss_fraction() * 100.0,
+            ),
+        );
+    }
+    // A channel at 0 everywhere is in range, so no loss counter sees it.
+    let black = outcome.stats.black_channels();
+    if loss.total_samples > 0 && !black.is_empty() {
+        let channels = match black.as_slice() {
+            [c] => format!("{} channel", CHANNEL_NAMES[*c]),
+            [a, b] => format!("{} and {} channels", CHANNEL_NAMES[*a], CHANNEL_NAMES[*b]),
+            _ => "red, green and blue channels".into(),
+        };
+        push_warning_buf(
+            warnings,
+            log,
+            format!(
+                "no written sample is above 0 in the {channels}: the frame renders black there"
             ),
         );
     }
@@ -4115,6 +4133,15 @@ fn convert_attempt(
         )?;
     }
     validate_convert(&recipe, args)?;
+    // Last of the value rules: whether the values combine into a render. The frame's own
+    // entry is passed so a fault it causes is named as the entry.
+    let own = args
+        .input
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| stated_roll.frames.get_key_value(n))
+        .map(|(n, e)| (n.as_str(), e));
+    recipe::validate_render(&recipe, own, KnobNames::FlagAndKey)?;
 
     // The path nc actually writes: `-o out` under the default becomes `out.tiff`.
     // Resolved **here**, before anything derives from it — the write-target guard, the
@@ -4629,13 +4656,15 @@ fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
         Some(_) => KnobNames::KeyOnly,
         None => KnobNames::FlagAndKey,
     };
-    recipe::validate(r, names).map_err(|e| {
+    let in_context = |e: NcError| {
         NcError::Usage(match frame_context {
             Some(context) => format!("{context}: {}", e.message()),
             None => e.message().to_string(),
         })
-    })?;
-    validate_shared(r)
+    };
+    recipe::validate(r, names).map_err(in_context)?;
+    validate_shared(r)?;
+    recipe::validate_render(r, None, names).map_err(in_context)
 }
 
 /// A value every frame of a roll shares ([`ROLL_WIDE`]).
@@ -6464,9 +6493,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 e.message()
             ))
         })?;
-        // A capped or unsettled holder march leaves holder in the region, and the pool
-        // would take it as picture — the same warning `convert` gives, so `--strict`
-        // sees it.
+        // An unsettled march can leave holder in the region, which the pool would take
+        // as picture, and a capped one misread the IR — the same warnings `convert`
+        // gives, so `--strict` sees them.
         for w in film_base::effective_area_warnings(&area) {
             push_warning_buf(&mut warnings, &log, format!("{}: {w}", input.display()));
         }
@@ -9002,6 +9031,7 @@ mod tests {
                     loss: None,
                     output_stats: Some(OutputStats {
                         mean: [0.25, 0.5, 0.75],
+                        max: [1.0; 3],
                     }),
                     film_type: Some(FilmType::Silver),
                     identity: Some(Box::new(Identity::new())),

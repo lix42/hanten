@@ -7297,13 +7297,11 @@ fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
 /// (`film-base/holder-depth-mask` ship review, M4).
 ///
 /// `capped` and `converged` both mean "the reported rectangle is not a
-/// measurement", and as `Serialize`-only fields nothing on any command read them.
-/// That is the channel that let a tenfold over-cut through at exit 0 during
-/// implementation, caught only because someone was reading the numbers.
+/// measurement", which a `Serialize`-only field would leave unseen.
 #[test]
 fn a_capped_holder_march_warns_and_strict_promotes_it() {
     let dir = TempDir::new("capped-march-warns");
-    // 400x400 → march cap 100. A 120 px top holder is beyond it, which also
+    // 400x400 → march cap 100. A 120 px IR-dark top band is beyond it, which also
     // inflates left/right from their true 10 px to the cap.
     let path = dir.path("deep.tif");
     const W: u32 = 400;
@@ -7378,8 +7376,8 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
         })
         .unwrap_or_else(|| panic!("the cap must warn: {warnings:?}"));
     assert!(
-        capped.contains("top, left, right") && capped.contains("artifacts"),
-        "naming the edges and the consequence: {capped}"
+        capped.contains("top, left, right") && capped.contains("--measure-inset"),
+        "naming the edges and the remedy: {capped}"
     );
 
     // Falsifiability, and the `--strict` half: the same frame with a sub-cap holder
@@ -13141,4 +13139,147 @@ fn a_failing_stdout_is_a_write_error() {
         assert_eq!(out.status.code(), Some(5), "{args:?}: {err}");
         assert!(err.contains(message), "{args:?}: {err}");
     }
+}
+
+/// A value that would hand fit range an unusable film base or a non-finite sample is a
+/// usage error naming the knob, before anything is decoded — never fit range's
+/// internal-invariant error.
+#[test]
+fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
+    let tmp = TempDir::new("cannot-render");
+    let input = fixture("hdr-48bit.tif");
+    let out = tmp.path("out");
+    for (value, knob) in [
+        ("--contrast=100", "--contrast (recipe `look.contrast`)"),
+        (
+            "--density-offset=-30,-30,-30",
+            "--density-offset (recipe `reconstruction.offset`)",
+        ),
+        (
+            "--density-scale=100,100,100",
+            "--density-scale (recipe `reconstruction.scale`)",
+        ),
+    ] {
+        let (code, _, err) = run(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            value,
+        ]);
+        assert_eq!(code, 2, "{value}: {err}");
+        assert!(
+            err.contains(&format!("It renders with {knob} at its default")),
+            "{value}: {err}"
+        );
+        assert!(!err.contains("fit range"), "{value}: {err}");
+        assert!(!out.with_extension("tiff").exists(), "{value}");
+    }
+
+    // `roll` refuses a `roll.frames` entry by its own key, before any frame is written.
+    let recipe = tmp.path("roll.json");
+    std::fs::write(
+        &recipe,
+        r#"{"recipe_version": 3,
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.5, "frames": {"hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
+    )
+    .unwrap();
+    let out_dir = tmp.path("roll");
+    let (code, _, err) = run(&[
+        "roll",
+        input.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            r#"It renders with recipe `roll.frames."hdr-48bit.tif".white_stops` at its default"#
+        ),
+        "{err}"
+    );
+    assert!(!out_dir.exists() || std::fs::read_dir(&out_dir).unwrap().next().is_none());
+}
+
+/// A channel the encoder writes as 0 everywhere is in range, so no loss counter sees it;
+/// it warns, and `--strict` promotes the warning.
+#[test]
+fn a_channel_rendered_black_everywhere_warns() {
+    const MARKER: &str = "no written sample is above 0";
+    let tmp = TempDir::new("black-channel");
+    let input = fixture("hdr-48bit.tif");
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+        ];
+        argv.extend_from_slice(extra);
+        run(&argv)
+    };
+    let warnings = |stdout: &str| -> Vec<String> {
+        json(stdout)["warnings"]
+            .as_array()
+            .map(|a| a.iter().map(|w| w.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    };
+    // A measured roll white: under `MEASURED`'s contrast the exposure below would also
+    // drive the film base to 0, which is a usage error rather than a black render.
+    let mut measured = vec![
+        "--roll-white",
+        "2.5",
+        "--roll-white-balance",
+        "1,1,1",
+        "--roll-exposure",
+        "0",
+    ];
+    let roll = measured.clone();
+    let (code, stdout, err) = convert("normal", &measured);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !warnings(&stdout).iter().any(|w| w.contains(MARKER)),
+        "{stdout}"
+    );
+
+    measured.push("--exposure=-100");
+    let (code, stdout, err) = convert("black", &measured);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        warnings(&stdout)
+            .iter()
+            .any(|w| w.contains("above 0 in the red, green and blue channels")),
+        "{stdout}"
+    );
+    measured.push("--strict");
+    let (code, _, err) = convert("strict", &measured);
+    assert_ne!(code, 0, "--strict must refuse: {err}");
+
+    // One channel, through the white balance.
+    let mut one = roll;
+    one.push("--white-balance=1e-30,1,1");
+    let (code, stdout, err) = convert("red", &one);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        warnings(&stdout)
+            .iter()
+            .any(|w| w.contains("above 0 in the red channel:")),
+        "{stdout}"
+    );
+
+    // The film master, whose decode underflows to 0.
+    let (code, stdout, err) = convert("master", &["--film-master", "--density-offset=-30,-30,-30"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        warnings(&stdout).iter().any(|w| w.contains(MARKER)),
+        "{stdout}"
+    );
 }

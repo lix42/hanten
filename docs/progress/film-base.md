@@ -57,9 +57,12 @@ What other epics need to know about `film-base`:
   open. The effective area is `film_base::effective_area` (`holder-depth-mask`): the
   per-edge IR holder march plus a user-sizable static inset (`measure.inset` /
   `--measure-inset`), returned as a rectangle with `holder_applied` and per-edge
-  `capped`. Call it; do not re-derive it. **`converged` is not a quality signal on its
-  own** — a capped edge inflates its perpendicular edges at a stable fixed point, so
-  read it with per-edge `capped` (`film-base/holder-cap-contamination` narrows this).
+  `capped`. Call it; do not re-derive it. **The march cap (25% of the shorter edge)
+  rests on a premise: no film holder is that deep** (real ones measure 2.5-4%), so a
+  cap is an IR misread and only over-cuts; a deeper holder is the user's to cover
+  with the inset (`holder-cap-contamination`). **`converged` is not a quality signal
+  on its own** — a capped edge inflates its perpendicular edges at a stable fixed
+  point, so read it with per-edge `capped`.
 - **There is no `Dmax` here any more.** The leader `Dmax`, `reference_dmax` and
   `--d-max-region` retired with `nf-retire/dmax-machinery`; the anchor is placed from
   the film base. Sections below that describe them are history.
@@ -1700,3 +1703,54 @@ and "over-general claim" classes, both repeats); one was real behaviour.
   region. The user-facing copy now says both, and two further copies (the inline
   comment in `holder_depths`, a test's name and comment) were corrected with it.
   `docs/using-nc.md` already carried the honest version.
+
+## holder-cap-contamination
+
+**Status:** done (2026-10-01)
+**Updated:** 2026-10-01
+
+### 2026-10-01 — re-scoped and closed: the cap is a premise, not a defect
+
+Checked the task against the code first. The mechanism it describes is exact and
+still pinned by committed tests (a 120 px top band on 400x400 → `{100, 10, 100, 100}`;
+`[4, 4, 60, 4]` on 200x200 → `{50, 50, 50, 4}`), but three things around it were off:
+
+- **The consumers moved.** It was filed when the per-frame auto `Dmax` read the region.
+  Today `measure-base` reads the base median over it and `measure-roll` its frame white
+  (p97) and roll gains (p99); `convert` and `inspect` only report it.
+- **It aimed at the harmless symptom.** Inflated perpendicular edges are an over-cut —
+  lost area over clean film. The only way a cap could put holder *inside* the region is
+  the capped edge itself, if a real holder ran past the cap by more than the inset.
+- **Its decline remedy pointed the wrong way.** `None` degrades to the inset-only cut,
+  which leaves *more* holder in the region (about 100 px of rows in the 120 px example).
+- Its reachability note misread `film-base/half-frame-calibration`, which is about a
+  part-exposed calibration frame, not the 18x24 mm format. No planned geometry is known
+  to reach the cap.
+
+**Decision (user): no film holder is deeper than 25% of the shorter edge, and that is
+the premise the cap rests on.** Real holders measure 2.5-4%. A cap is therefore an IR
+misread (IR-dark film, debris), and every error it causes is an over-cut: the region
+shrinks but holds no holder. If the premise ever fails it is a special case the user
+covers by raising the inset, which `effective_area` adds on top of the cap.
+
+So nothing in the march changed. Done instead:
+
+- The premise and its remedy are stated once, in `HOLDER_MARCH_MAX_FRAC`'s doc, with
+  the reason the cap is not raised (kept from the task file: it widens the empty-region
+  refusal into ordinary insets and removes the only bound on an ambiguous IR read).
+- `CappedEdges::contaminated()` is removed. It separated "capped" from "capped and
+  inflating a neighbour", which only mattered while a cap could be a real deep holder.
+  It was a method, not a report field, so the report schema is unchanged.
+- The capped warning now says a cap is a misread, that the error only over-cuts, and
+  names the remedy (`--measure-inset` / `measure.inset`). `using-nc.md`, design-spec
+  and the Epic summary carry the same reading; the two cap tests and the integration
+  test assert the new wording, keeping the pinned depths.
+- A corner-attribution rule was simulated (drop the run of capped segments next to a
+  capped perpendicular edge; it fixes every fixture) and **not adopted**: under the
+  premise it only tidies the area loss on an already-misread frame.
+
+**Not this task's, though two notes point here:** `nf-reconstruction`'s and
+`docs/spike/white-placement.md`'s Gold200 aside — a holder the march reported as
+`0` on all four edges, so the 5% inset alone did not reach it. That is the march
+*missing* a holder (the unstated all-zero premise recorded on `EffectiveArea::holder`),
+not a cap, and it remains unowned.

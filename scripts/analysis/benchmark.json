@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
-  "note": "Benchmark manifest for `python -m nctool compare` (core/conversion-versioning): the FIXED set of scans + recipes two builds are compared over. Cases name frames; the asset inventory (paths + sha256) stays in <asset-root>/manifest.json, which `compare run` resolves them through -- there is deliberately only one asset inventory. Recipe paths are repo-relative and reuse the frozen real-scan recipes so a comparison runs the same parameters the verification harness does.",
+  "schema_version": 2,
+  "note": "Benchmark manifest for `python -m nctool compare`: the fixed set of scans and cases two builds are compared over (scripts/analysis/README.md, 'Compare two builds'). A case runs on a build only when it has a block for the output interface that build speaks -- `destination` (pipeline_version >= 8) or `preset` (the reference build, scripts/reference-snapshot/) -- each holding that interface's `args` and optional `recipe`; a case's top-level `args` go to every build it runs on. Every preset block that renders a display image states the reference config's `--preset sigmoid-knees`. Roll cases name frames; the asset inventory (paths + sha256) stays in <asset-root>/manifest.json. Records made before nf-verification/benchmark-set (2026-10-01) are superseded: the pre-migration pipeline is compared by re-running the reference build over this set, not by keeping its old cases.",
   "sets": {
     "fixtures": {
       "root": "repo",
-      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` is runnable and testable on any checkout. Covers both input formats (HDR 48-bit, HDRi 64-bit) and, across cases, a 16-bit TIFF and f32 output. This is the set to use for a determinism / zero-diff check. Each case's `args` go to every build; `destination_args` go only to a build that takes destinations (pipeline_version >= 8) and `preset_args` only to one that takes presets (the reference build, scripts/reference-snapshot/), chosen by `compare run` from the binary's --version banner. The two name the same TIFF output: the default destination (SDR Display P3 16-bit TIFF, no flag) against the `display-p3` preset, and `--film-master` against the `film-master` preset -- the same container, so a diff across the two differs in the pipeline, not the units. This is a holding set -- nf-verification/benchmark-set rebuilds it.",
+      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` runs on any checkout; two runs of one build over it are the determinism / zero-diff check. One HDRi (64-bit, with IR) case per ready destination::ROWS row with all four axes stated (a Rust test fails when a ready row has no case), plus the film master, `--rendering direct` and `default` (no output flag: what a user gets). The HDR 48-bit fixture covers the other input format, as `default` and the film master. A preset block names the reference preset writing the same container; a destination the reference could not write (Adobe RGB, linear P3/sRGB/Adobe RGB, the sRGB gain map, `direct`) has none and runs on destination builds only.",
       "cases": [
         {
           "name": "hdri-default",
@@ -13,10 +13,320 @@
             "--film-base",
             "0.9,0.55,0.42"
           ],
-          "preset_args": [
-            "--output-preset",
-            "display-p3"
-          ]
+          "destination": {
+            "args": []
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-display-p3-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "display-p3",
+              "--container",
+              "tiff"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-adobe-rgb-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "adobe-rgb",
+              "--container",
+              "tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-srgb-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "srgb",
+              "--container",
+              "tiff"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "compatibility"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-linear-display-p3-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "linear",
+              "--gamut",
+              "display-p3",
+              "--container",
+              "tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-linear-adobe-rgb-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "linear",
+              "--gamut",
+              "adobe-rgb",
+              "--container",
+              "tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-linear-srgb-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "linear",
+              "--gamut",
+              "srgb",
+              "--container",
+              "tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-linear-bt2020-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "linear",
+              "--gamut",
+              "bt2020",
+              "--container",
+              "tiff"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "hdr-linear-tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-pq-bt2020-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "pq",
+              "--gamut",
+              "bt2020",
+              "--container",
+              "tiff"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "hdr-pq-tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-hlg-bt2020-tiff",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "hlg",
+              "--gamut",
+              "bt2020",
+              "--container",
+              "tiff"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "hdr-hlg-tiff"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-native-display-p3-jpeg",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "output_ext": "jpg",
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "display-p3",
+              "--container",
+              "jpeg"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "gain-map-hdr"
+            ]
+          }
+        },
+        {
+          "name": "hdri-hdr-native-srgb-jpeg",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "output_ext": "jpg",
+          "destination": {
+            "args": [
+              "--range",
+              "hdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "srgb",
+              "--container",
+              "jpeg"
+            ]
+          }
+        },
+        {
+          "name": "hdri-film-master",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--film-master"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--output-preset",
+              "film-master"
+            ]
+          }
+        },
+        {
+          "name": "hdri-direct",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "destination": {
+            "args": [
+              "--rendering",
+              "direct"
+            ]
+          }
         },
         {
           "name": "hdr-default",
@@ -25,67 +335,150 @@
             "--film-base",
             "0.9,0.55,0.42"
           ],
-          "preset_args": [
-            "--output-preset",
-            "display-p3"
-          ]
+          "destination": {
+            "args": []
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3"
+            ]
+          }
         },
         {
-          "name": "hdri-f32",
-          "input": "tests/fixtures/hdri-64bit.tif",
+          "name": "hdr-film-master",
+          "input": "tests/fixtures/hdr-48bit.tif",
           "args": [
             "--film-base",
             "0.9,0.55,0.42"
           ],
-          "destination_args": [
-            "--film-master"
-          ],
-          "preset_args": [
-            "--output-preset",
-            "film-master"
-          ]
+          "destination": {
+            "args": [
+              "--film-master"
+            ]
+          },
+          "preset": {
+            "args": [
+              "--output-preset",
+              "film-master"
+            ]
+          }
         }
       ]
     },
     "rolls": {
       "root": "assets",
-      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on), each with its roll's frozen recipe from scripts/real-scan-verify/recipes/ -- so the roll-fixed Dmin comes from that roll's own calibration rather than a per-frame estimate. Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json. The frozen recipes are recipe_version 2 documents, so this set runs only on a build that takes destinations (pipeline_version >= 8); benchmark an older build with the nctool and recipes of its own checkout.",
+      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on). A destination build runs each roll's frozen recipe from scripts/real-scan-verify/recipes/, so the roll-fixed Dmin comes from that roll's own calibration; the reference build cannot read those recipes, so its block states the same Dmin as --film-base (a test keeps the two equal). Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json.",
       "cases": [
         {
           "name": "Ektar-971",
           "roll": "Ektar",
           "frame": "20260713-nikon-971",
-          "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.51679254,0.2768597,0.18973067"
+            ]
+          }
         },
         {
           "name": "Ektar-989",
           "roll": "Ektar",
           "frame": "20260714-nikon-989",
-          "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.51679254,0.2768597,0.18973067"
+            ]
+          }
         },
         {
           "name": "Ektar-991",
           "roll": "Ektar",
           "frame": "20260714-nikon-991",
-          "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/Ektar.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.51679254,0.2768597,0.18973067"
+            ]
+          }
         },
         {
           "name": "phoenix-936",
           "roll": "phoenix",
           "frame": "20260712-nikon-936",
-          "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.36330205,0.26269934,0.42475012"
+            ]
+          }
         },
         {
           "name": "phoenix-956",
           "roll": "phoenix",
           "frame": "20260713-nikon-956",
-          "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.36330205,0.26269934,0.42475012"
+            ]
+          }
         },
         {
           "name": "phoenix-958",
           "roll": "phoenix",
           "frame": "20260713-nikon-958",
-          "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          "destination": {
+            "recipe": "scripts/real-scan-verify/recipes/phoenix.json"
+          },
+          "preset": {
+            "args": [
+              "--preset",
+              "sigmoid-knees",
+              "--output-preset",
+              "display-p3",
+              "--film-base",
+              "0.36330205,0.26269934,0.42475012"
+            ]
+          }
         }
       ]
     }

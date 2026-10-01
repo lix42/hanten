@@ -14,8 +14,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > (`nf-calibration/no-roll-defaults`, the look's fallback slope) the sections that slope
 > reaches were re-run: §6's `reconstruction.contrast` refusal, §7's rendering table,
 > no-roll warning, look report and fit-range report. At `nf-calibration/frame-level-trim`
-> the roll section's examples (§5, §7) were re-run, and at `output/drop-avif` §2's build
-> prerequisites and §8's destination examples. The staleness signal is
+> the roll section's examples (§5, §7) were re-run. At `algo/density-safety-bounds`
+> (`pipeline_version` 9) §10's examples and §12's new entries were re-run, and at
+> `output/drop-avif` §2's build prerequisites and §8's destination examples. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -1546,22 +1547,19 @@ leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2
 from every command, before the file is read.
 
 Two fields on `holder` say the measurement is not what it looks like. **Both emit a
-warning, which `--strict` promotes to a failure** — the fields alone are not the
-channel, because a silent field is exactly what let a tenfold over-cut through at
-exit 0 while it was being built.
+warning, which `--strict` promotes to a failure.**
 
 - `capped` — one flag per edge. A capped edge marched as deep as `hanten` looks (25% of
-  the shorter edge) without finding film, so its depth is a **floor**, not a
-  measurement. The consequence does not stop at that edge: each edge is measured
-  over what the *perpendicular* edges' cuts leave, so a truncated depth truncates
-  that cut too, and the perpendicular edges then cap as well — at depths that are
-  **artifacts of the cap, not floors on their own holder**. A 400×400 frame with a
-  120 px top holder and 10 px sides reports `top: 100` (a floor, correctly) and
-  `left`/`right` as 100 as well, a tenfold over-cut. So the reading that matters is
-  whether a capped edge has a capped *perpendicular* neighbour: with one, treat no
-  depth on the frame as measured; without one (a single edge exactly at the cap) the
-  other three stand. The warning says which case you are in. No real scan has capped
-  — 31 measured IR frames, zero caps, a 6–10× margin.
+  the shorter edge) without finding film. No film holder is that deep (real scans
+  measure 2.5–4%, and none of 31 measured IR frames has capped), so a cap means the
+  IR read something else — IR-dark film or debris — and the depth reported there is
+  the cap, not a measurement. Each edge is measured over what the *perpendicular*
+  edges' cuts leave, so the edges perpendicular to a capped one can cap with it: a
+  400×400 frame with a 120 px IR-dark band at the top and 10 px sides reports
+  `top`, `left` and `right` all as 100. The error runs one way only: the region is
+  **over-cut**, losing area but holding no holder. If a frame's holder really is
+  deeper than the cap, raise the inset to cover the rest — it is added on top of
+  the cap.
 - `converged: false` — the per-edge march did not settle (the iteration above). Hanten
   then reports the deeper of the last two rounds, which over-cuts rather than leaving
   holder inside the region for a two-round oscillation or a run still settling
@@ -1571,9 +1569,8 @@ exit 0 while it was being built.
   otherwise. No real scan has produced this.
 
 `converged` and `capped` are **not** independent, and `converged: true` is not a
-quality verdict on its own: a cap *creates* a stable fixed point, so the worst
-answer the march can produce — the tenfold over-cut above — settles and reports
-`converged: true`. Read the two together.
+quality verdict on its own: a cap *creates* a stable fixed point, so a capped frame
+settles and reports `converged: true`. Read the two together.
 
 Two things this does *not* do:
 
@@ -1635,6 +1632,13 @@ Clipping is reported, never silent:
 
 Every encoder counts this, not just the TIFF ones — the gain-map JPEG builds the same
 report when it quantizes.
+
+A channel written as 0 everywhere is in range, so no loss counter sees it; it warns on
+its own (`--exposure=-100` on a fixture, with the roll stated):
+
+```json
+["no written sample is above 0 in the red, green and blue channels: the frame renders black there"]
+```
 
 Fit range compresses the scene against its headroom, so on both test fixtures **a
 default render does not clip**. A clip warning therefore means something pushed samples
@@ -1767,6 +1771,20 @@ roll has none, a region of unexposed film on another frame (`--base-region`).
 **"base-region … is not uniform (worst per-channel relative spread …)"**
 Your rectangle mixes unexposed film with image content. Check the coordinates, or run
 `measure-base` on a genuinely unexposed frame.
+
+**"the film base renders to luminance 0 after the decode, scene correction and the look …"**
+**"the densest sample a scan can hold … overflows f32 …"**
+The stated values do not combine into a render, though each is legal alone: the film
+base would grade to nothing display black can place black against, or the densest
+sample a scan can hold (a zero sample) would overflow. Checked before anything is
+decoded, on `convert` and `roll`, every `roll.frames` entry included. The message ends
+with each knob whose default alone would render:
+
+```text
+usage: the film base renders to luminance 0 after the decode, scene correction and the look, and display black needs a positive, finite one to place black against. It renders with --contrast (recipe `look.contrast`) at its default
+```
+
+A base read from a region is checked as if it were 1, and the message says so.
 
 **Heavy clipping in the report**
 Fit range does not clip ordinary content at its default headroom, so something pushed

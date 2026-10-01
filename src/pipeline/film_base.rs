@@ -131,24 +131,22 @@ const IR_HOLDER_PROBE_FRAC: f32 = 0.005;
 const IR_HOLDER_PROBE_MIN: u32 = 2;
 
 /// How deep [`holder_depths`] marches before giving up on an edge, as a fraction
-/// of the shorter dimension. Measured depths are 2.5-4% of the shorter edge (the
-/// IR march across 31 real frames), so this is generous headroom rather than a
-/// threshold anything is calibrated on; an edge that reaches it reports the cap and
-/// sets its flag in [`CappedEdges`], so the number is visible as a floor rather
-/// than mistaken for a measurement. Also clamped to half the perpendicular extent
-/// per edge, so two opposing capped edges still leave a region.
+/// of the shorter dimension. Also clamped to half the perpendicular extent per edge,
+/// so two opposing capped edges still leave a region.
 ///
-/// **A cap does not stay on its own edge.** The reported depth is what the
-/// *perpendicular* edges are trimmed by (see [`holder_depths`]), so truncating one
-/// edge's depth at the cap also truncates the trim protecting the two edges
-/// perpendicular to it: the residual strip between the cap and the real holder edge
-/// stays inside their along-edge extent, every segment there reads holder, and they
-/// cap too. Their depths are then **artifacts**, not floors — on a 400x400 frame
-/// with a 120 px top holder and 10 px sides, left and right report 100. So "visible
-/// as a floor" is true only of the edge that capped; the safety argument for the cap
-/// rests on the [`CappedEdges`] flags plus the warning
-/// [`effective_area_warnings`] emits, not on the cap alone. Narrowing that case is
-/// `film-base/holder-cap-contamination`.
+/// **Premise: no film holder is this deep.** Measured depths are 2.5-4% of the
+/// shorter edge (31 real IR frames, 7 rolls). So an edge that reaches the cap read
+/// something other than holder — IR-dark film or debris — and its flag in
+/// [`CappedEdges`] marks the frame's depths as not a measurement. The error then
+/// runs one way: a cap cuts film, never leaves holder, and the perpendicular edges
+/// it inflates (they are trimmed by the capped depth, see [`holder_depths`]) cut
+/// more film. The region shrinks but stays clean. A holder that really is deeper is
+/// an edge case the user covers with the inset (`measure.inset`), which is added
+/// on top of the cap.
+///
+/// Not raised, because the cap is also the only bound on an ambiguous IR read, and
+/// a larger one would bring `2 * (cap + inset) >= 1` — the empty region — within
+/// reach of ordinary inset values (`film-base/holder-cap-contamination`).
 const HOLDER_MARCH_MAX_FRAC: f32 = 0.25;
 
 /// How many times [`holder_depths`] re-measures with the previous pass's depths as
@@ -547,11 +545,9 @@ pub struct EffectiveArea {
 
 /// Which edges' marches reached [`HOLDER_MARCH_MAX_FRAC`] without finding film.
 ///
-/// Per edge rather than one frame-wide boolean, because a capped edge and an edge
-/// *inflated by* a perpendicular cap are different answers and a single flag cannot
-/// tell them apart: it says "somewhere, something capped" while every depth in the
-/// rectangle still reads like a measurement. See [`HOLDER_MARCH_MAX_FRAC`] for how
-/// a cap propagates to the perpendicular edges.
+/// Per edge, so the report and the warning say where the IR read went wrong. An
+/// edge can cap because a perpendicular edge capped (see [`HOLDER_MARCH_MAX_FRAC`]);
+/// either way its depth is the cap, not a measurement.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct CappedEdges {
     pub top: bool,
@@ -589,15 +585,6 @@ impl CappedEdges {
         .filter_map(|(hit, name)| hit.then_some(name))
         .collect()
     }
-
-    /// Whether a capped edge has a capped **perpendicular** neighbour — the exact
-    /// condition under which some edge's trim was truncated, so its depth may be an
-    /// artifact of another edge's cap rather than a floor on its own holder. Top and
-    /// bottom are trimmed by left/right and vice versa, so the predicate reduces to
-    /// "one of top/bottom capped *and* one of left/right capped".
-    pub fn contaminated(self) -> bool {
-        (self.top || self.bottom) && (self.left || self.right)
-    }
 }
 
 /// Per-edge holder depth in pixels, measured inward from each edge.
@@ -608,18 +595,17 @@ pub struct HolderDepths {
     pub left: u32,
     pub right: u32,
     /// Which edges' marches reached [`HOLDER_MARCH_MAX_FRAC`] without finding film.
-    /// A capped edge's depth is the cap, so it is a *floor* on the real holder
-    /// rather than a measurement of it — and it truncates the trim the
-    /// perpendicular edges are measured over, so read
-    /// [`CappedEdges::contaminated`] before trusting any depth on such a frame.
+    /// A capped edge reports the cap, not a measurement: no holder is that deep, so
+    /// the region is over-cut rather than holding holder (see
+    /// [`HOLDER_MARCH_MAX_FRAC`]).
     pub capped: CappedEdges,
     /// Whether the fixed-point march *settled* — a pass reproduced the previous
     /// pass's depths — rather than exhausting [`HOLDER_MARCH_PASSES`].
     ///
     /// **Read this together with `capped`, not as an independent quality signal.**
     /// A cap *creates* a stable fixed point — identical trims give an identical
-    /// measurement — so the worst answer the march can produce (a beyond-cap holder
-    /// inflating the perpendicular edges tenfold) comes back `converged: true`.
+    /// measurement — so a capped frame, its perpendicular edges inflated to the cap
+    /// with it, comes back `converged: true`.
     /// `converged` says the iteration settled; it says nothing about whether what it
     /// settled on is a measurement.
     ///
@@ -763,11 +749,9 @@ pub fn effective_area(image: &LinearImage, inset_frac: f32) -> Result<EffectiveA
 /// The warnings a resolved [`EffectiveArea`] carries out of the stage, in report
 /// order.
 ///
-/// Both of them mean "the reported rectangle is not a measurement", which is a
-/// warning and not merely a field: a `Serialize`-only flag is exactly what let a
-/// tenfold over-cut through at exit 0 during implementation, caught only because
-/// someone was reading the numbers. Every command that resolves the area pushes
-/// these, so `--strict` promotes them like any other report warning.
+/// Both of them mean "the reported rectangle is not a measurement", which a
+/// `Serialize`-only field would leave unseen. Every command that resolves the area
+/// pushes these, so `--strict` promotes them like any other report warning.
 ///
 /// A pure function rather than a field on [`EffectiveArea`], because that struct is
 /// serialized straight into the report and warnings ride the report's own
@@ -780,25 +764,16 @@ pub fn effective_area_warnings(area: &EffectiveArea) -> Vec<String> {
     if h.capped.any() {
         let edges = h.capped.names().join(", ");
         let depth_pct = (HOLDER_MARCH_MAX_FRAC * 100.0).round();
-        let tail = if h.capped.contaminated() {
-            // See `HOLDER_MARCH_MAX_FRAC`: a capped edge truncates the trim its
-            // perpendicular neighbours are measured over, and a capped
-            // perpendicular pair is exactly when that happened.
-            " A capped edge also truncates the cut its perpendicular edges are \
-             measured over, and here a capped edge has a capped perpendicular \
-             neighbour — so those depths may be artifacts of the cap rather than \
-             floors on their own holder, and no depth on this frame should be \
-             trusted. Every statistic read over `effective_area.region` inherits \
-             that."
-        } else {
-            " No capped edge has a capped perpendicular neighbour, so the other \
-             edges' depths are unaffected."
-        };
+        // The premise and its remedy are `HOLDER_MARCH_MAX_FRAC`'s.
         out.push(format!(
             "the film-holder depth march hit its cap ({depth_pct}% of the shorter \
-             edge) on the {edges} edge(s) without finding film: `effective_area.\
-             holder` reports the cap there, which is a floor on the real holder, not \
-             a measurement of it.{tail}"
+             edge) on the {edges} edge(s) without finding film. No film holder is \
+             that deep, so the IR read there is not holder (IR-dark film or debris) \
+             and `effective_area.holder` reports the cap, not a measurement; an edge \
+             perpendicular to a capped one can be inflated with it. The error only \
+             over-cuts: the region loses area but holds no holder. If this frame's \
+             holder really is that deep, raise the inset (--measure-inset, or \
+             `measure.inset`), which is added on top of the cap."
         ));
     }
     if !h.converged {
@@ -1786,29 +1761,19 @@ mod tests {
     }
 
     #[test]
-    fn a_holder_deeper_than_the_march_cap_reports_the_cap_and_says_so() {
-        // 200x200 → cap 50. A 60 px left holder cannot be measured, so the depth
-        // reported is a floor and the flag says the number is not a measurement.
-        //
-        // This fixture is *also* a contamination case, which the earlier
-        // frame-wide `capped` boolean hid: the 10 px residual beyond the cap keeps
-        // top and bottom reading holder at every depth, so their true 4 px reports
-        // as 50 as well. The per-edge flags are what surface it — the old
-        // assertions here (`d.left == 50` and `capped` alone) passed while two of
-        // the four numbers were 12x out. The case built to show this is
-        // `a_beyond_cap_edge_inflates_the_perpendicular_edges_and_says_so`.
+    fn a_band_deeper_than_the_march_cap_reports_the_cap_and_says_so() {
+        // 200x200 → cap 50. A 60 px IR-dark left band is deeper than any holder, so
+        // the march stops at the cap and the flag says the number is not a
+        // measurement. The 10 px beyond the cap keeps top and bottom reading dark
+        // at every depth, so they cap too: an over-cut, which is the only
+        // direction a cap can err in (`HOLDER_MARCH_MAX_FRAC`).
         let img = ir_holder_edges(200, 200, [4, 4, 60, 4]);
         let d = holder_depths(&img).unwrap();
-        assert_eq!(d.left, 50, "the cap, as a floor on the real depth");
+        assert_eq!((d.top, d.bottom, d.left, d.right), (50, 50, 50, 4));
         assert_eq!(
-            (d.top, d.bottom, d.right),
-            (50, 50, 4),
-            "top/bottom are 4 px holder inflated by the left edge's cap"
-        );
-        assert!(
-            d.capped.contaminated(),
-            "and the flags say which: {:?}",
-            d.capped
+            (d.capped.top, d.capped.bottom, d.capped.left, d.capped.right),
+            (true, true, true, false),
+            "every edge reporting the cap is flagged, the inflated ones included"
         );
         let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -1830,18 +1795,16 @@ mod tests {
     }
 
     #[test]
-    fn a_beyond_cap_edge_inflates_the_perpendicular_edges_and_says_so() {
-        // The failure the cap creates, and the only route to it: a *mid-edge* notch
-        // cannot contaminate a perpendicular edge (left/right sample only
-        // `x in [0, left)` and `[w-right, w)`), and a deep-but-uncapped edge
-        // produces a trim that exactly covers its own corner. So the cap truncating
-        // the trim is the whole failure surface.
+    fn a_capped_edge_over_cuts_its_perpendicular_edges_and_says_so() {
+        // The cap is the only route by which one edge moves another: a *mid-edge*
+        // notch cannot (left/right sample only `x in [0, left)` and `[w-right, w)`),
+        // and a deep-but-uncapped edge produces a trim that exactly covers its own
+        // corner.
         //
-        // 400x400 → cap 100. A 120 px top holder is beyond it: the top reports the
-        // cap, the residual 20 px strip stays inside the left/right edges'
-        // along-edge extent, and they cap too — at a *stable* fixed point, so this
-        // comes back `converged: true`. Their 10 px holder is reported as 100, a
-        // tenfold over-cut discarding 45% of the frame width.
+        // 400x400 → cap 100. A 120 px IR-dark top band is deeper than any holder:
+        // the top reports the cap, the 20 px beyond it stays inside the left/right
+        // edges' along-edge extent, and they cap too — at a *stable* fixed point,
+        // so this comes back `converged: true`. Their 10 px holder reports as 100.
         let img = ir_holder_edges(400, 400, [120, 10, 10, 10]);
         let d = holder_depths(&img).expect("IR separates on this frame");
         assert_eq!((d.top, d.bottom, d.left, d.right), (100, 10, 100, 100));
@@ -1853,31 +1816,27 @@ mod tests {
         assert_eq!(
             (d.capped.top, d.capped.bottom, d.capped.left, d.capped.right),
             (true, false, true, true),
-            "the inflated edges cap too, which is what makes them detectable"
-        );
-        assert!(
-            d.capped.contaminated(),
-            "a capped edge with a capped perpendicular neighbour: the depths may be \
-             artifacts rather than floors"
+            "the inflated edges cap too, which is what makes them visible"
         );
 
-        // And it is loud rather than a `Serialize`-only field, which is what a
-        // 10x over-cut at exit 0 needs.
         let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        for expect in ["top, left, right", "not a measurement", "artifacts"] {
+        for expect in [
+            "top, left, right",
+            "not a measurement",
+            "only over-cuts",
+            "--measure-inset",
+        ] {
             assert!(
                 warnings[0].contains(expect),
-                "the warning must name the edges and the consequence, missing \
-                 {expect:?}: {}",
+                "the warning must name the edges, the error's direction and the \
+                 remedy, missing {expect:?}: {}",
                 warnings[0]
             );
         }
 
-        // Falsifiability, and the case the contamination predicate must *not*
-        // over-trigger on: a holder exactly at the cap. The top caps correctly and
-        // the other three are measured, so declining here would throw away three
-        // good answers.
+        // Falsifiability: a band exactly at the cap flags the top alone and leaves
+        // the other three measured.
         let at_cap = holder_depths(&ir_holder_edges(400, 400, [100, 10, 10, 10])).unwrap();
         assert_eq!(
             (at_cap.top, at_cap.bottom, at_cap.left, at_cap.right),
@@ -1890,9 +1849,7 @@ mod tests {
                 at_cap.capped.left,
                 at_cap.capped.right
             ),
-            (true, false, false, false),
-            "the full tuple, not `top && !contaminated()` — that leaves `bottom` \
-             free, since `contaminated()` is false whenever left and right are"
+            (true, false, false, false)
         );
     }
 

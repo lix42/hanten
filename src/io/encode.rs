@@ -700,23 +700,25 @@ fn channel_means_u16(data: &[u16]) -> OutputStats {
     // Folded per band: `QUANTIZE_BAND_SAMPLES` is a multiple of 3, so every band
     // starts on channel 0 and an in-band `i % 3` is the true channel. The sums stay
     // `u64`, so combining bands is exact and order-free.
-    let (sums, counts) = data
+    let (sums, counts, max) = data
         .par_chunks(QUANTIZE_BAND_SAMPLES)
         .map(|band| {
-            let (mut sums, mut counts) = ([0u64; 3], [0u64; 3]);
+            let (mut sums, mut counts, mut max) = ([0u64; 3], [0u64; 3], [0u16; 3]);
             for (i, &v) in band.iter().enumerate() {
                 let c = i % 3;
                 sums[c] += u64::from(v);
                 counts[c] += 1;
+                max[c] = max[c].max(v);
             }
-            (sums, counts)
+            (sums, counts, max)
         })
         .reduce(
-            || ([0u64; 3], [0u64; 3]),
+            || ([0u64; 3], [0u64; 3], [0u16; 3]),
             |a, b| {
                 (
                     std::array::from_fn(|c| a.0[c] + b.0[c]),
                     std::array::from_fn(|c| a.1[c] + b.1[c]),
+                    std::array::from_fn(|c| a.2[c].max(b.2[c])),
                 )
             },
         );
@@ -728,6 +730,7 @@ fn channel_means_u16(data: &[u16]) -> OutputStats {
                 sums[c] as f64 / counts[c] as f64 / 65535.0
             }
         }),
+        max: max.map(|m| f64::from(m) / 65535.0),
     }
 }
 
@@ -741,11 +744,13 @@ fn channel_means_u16(data: &[u16]) -> OutputStats {
 fn channel_means_f32(data: &[f32]) -> OutputStats {
     let mut sums = [0f64; 3];
     let mut counts = [0u64; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
     for (i, &v) in data.iter().enumerate() {
         if v.is_finite() {
             let c = i % 3;
             sums[c] += v as f64;
             counts[c] += 1;
+            max[c] = max[c].max(f64::from(v));
         }
     }
     OutputStats {
@@ -756,6 +761,7 @@ fn channel_means_f32(data: &[f32]) -> OutputStats {
                 sums[c] / counts[c] as f64
             }
         }),
+        max: max.map(|m| if m.is_finite() { m } else { 0.0 }),
     }
 }
 
@@ -1012,6 +1018,24 @@ mod tests {
         // would then serialize as `null` in the report.
         assert_eq!(channel_means_u16(&[]).mean, [0.0, 0.0, 0.0]);
         assert_eq!(channel_means_f32(&[]).mean, [0.0, 0.0, 0.0]);
+        assert_eq!(channel_means_f32(&[]).max, [0.0, 0.0, 0.0]);
+    }
+
+    /// The black-channel warning's input: the largest written sample per channel, a
+    /// non-finite one excluded, across the u16 path's band boundaries.
+    #[test]
+    fn stats_carry_each_channels_largest_sample() {
+        let mut u16s = vec![0_u16; QUANTIZE_BAND_SAMPLES * 2 + 3];
+        let last = u16s.len() - 3;
+        u16s[last] = 65535;
+        u16s[1] = 100;
+        let stats = channel_means_u16(&u16s);
+        assert_eq!(stats.max, [1.0, 100.0 / 65535.0, 0.0]);
+        assert_eq!(stats.black_channels(), [2]);
+
+        let stats = channel_means_f32(&[-0.5, f32::INFINITY, 2.0, -0.25, 0.0, 1.5]);
+        assert_eq!(stats.max, [-0.25, 0.0, 2.0]);
+        assert_eq!(stats.black_channels(), [0, 1]);
     }
 
     #[test]

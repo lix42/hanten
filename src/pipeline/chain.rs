@@ -63,8 +63,8 @@ use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitR
 use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
-use crate::stage::{StageClock, StageKind};
-use crate::types::{NcError, Result};
+use crate::stage::{StageClock, StageKind, Untimed};
+use crate::types::{LinearImage, NcError, Result};
 
 /// Everything every rendition of a frame shares: the stages above the branch point,
 /// and fit range's headroom and display black.
@@ -233,6 +233,13 @@ fn graded_luminance(
         ));
     };
     Ok(dot([r, g, b], ACESCG_LUMA))
+}
+
+/// [`grade`] on a few pixels, for a value rule to read (`recipe::validate_render`): the
+/// stages a render runs, so the rule sees the values the render will.
+pub fn graded_pixels(image: AcesCgImage, shared: &SharedParams) -> Result<LinearImage> {
+    let (graded, _) = grade(image, shared, &mut Untimed)?;
+    Ok(graded.into_buffer().into_linear())
 }
 
 /// Above the branch point: scene correction, then the look. Nothing here may read the

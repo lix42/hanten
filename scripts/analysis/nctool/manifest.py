@@ -137,9 +137,15 @@ def banner_pipeline_version(banner: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+# The output interfaces `output_interface` returns; `compare` names a case's blocks
+# after them.
+INTERFACES = ("destination", "preset")
+
+
 def output_interface(pipeline_version: int) -> str:
     """`"destination"` or `"preset"`: the output flags a build of this version takes."""
-    return "destination" if pipeline_version >= DESTINATION_PIPELINE else "preset"
+    destination, preset = INTERFACES
+    return destination if pipeline_version >= DESTINATION_PIPELINE else preset
 
 
 def probe_interface(binary: str) -> tuple[str | None, str]:
