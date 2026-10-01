@@ -1279,8 +1279,10 @@ inset — for a `roll`, inside each frame's entry.
 the `measure.inset` recipe key (including a per-frame override) are observable rather
 than accepted-and-ignored. A `capped` edge or `converged: false` also emits a
 `--strict`-promotable warning: both mean the reported rectangle is not a
-measurement, and a capped edge truncates the cut its *perpendicular* edges are
-measured over, so their depths may be artifacts rather than floors.
+measurement. The march stops at 25% of the shorter edge on the premise that no film
+holder is that deep, so a cap is an IR misread and errs only toward an over-cut (the
+edges perpendicular to it can cap with it); a holder that really is deeper is
+covered by raising the inset, which is added on top of the cap.
 
 **Nothing in `convert` measures over the area today** — its one consumer there, the
 per-frame reference density, retired with `nf-retire/dmax-machinery` — so an *empty*

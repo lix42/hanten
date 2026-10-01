@@ -6633,9 +6633,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 e.message()
             ))
         })?;
-        // A capped or unsettled holder march leaves holder in the region, and the pool
-        // would take it as picture — the same warning `convert` gives, so `--strict`
-        // sees it.
+        // An unsettled march can leave holder in the region, which the pool would take
+        // as picture, and a capped one misread the IR — the same warnings `convert`
+        // gives, so `--strict` sees them.
         for w in film_base::effective_area_warnings(&area) {
             push_warning_buf(&mut warnings, &log, format!("{}: {w}", input.display()));
         }
