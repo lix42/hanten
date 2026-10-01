@@ -38,6 +38,10 @@ def fake_inspect(nc, path):
                 format="silverfast-hdri", ir_present=True)
 
 
+PATCH = {"label": "cloud", "rect": [0.1, 0.2, 0.05, 0.04], "kind": "white",
+         "source": "test 2026-09-30"}
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -59,9 +63,24 @@ class Base(unittest.TestCase):
         with open(os.path.join(self.A, "manifest.json"), "w") as f:
             json.dump(m, f)
 
-    def build(self, prev=None, reuse_hash=False):
+    def build(self, prev=None, reuse_hash=False, carry=None):
         with mock.patch.object(manifest, "inspect", fake_inspect):
-            return manifest.build_manifest(self.A, "fake-nc", reuse_hash, prev or {})
+            return manifest.build_manifest(self.A, "fake-nc", reuse_hash, prev or {}, carry)
+
+    def generate(self, **kw):
+        """`cmd_generate` with inspection stubbed; returns (rc, manifest-on-disk, stderr)."""
+        args = argparse.Namespace(asset_root=self.A, nc="fake-nc", reuse_hash=False,
+                                  dry_run=False, allow_exiftool_fallback=False,
+                                  drop_patches=False, carry_from=None)
+        for k, v in kw.items():
+            setattr(args, k, v)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(manifest, "inspect", fake_inspect), \
+                mock.patch.object(manifest, "resolve_nc", return_value=("fake-nc", None)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = manifest.cmd_generate(args)
+        with open(os.path.join(self.A, "manifest.json")) as f:
+            return rc, json.load(f), err.getvalue()
 
     def validate(self):
         args = argparse.Namespace(asset_root=self.A)
@@ -257,12 +276,19 @@ class TestLoadManifest(Base):
             self.assertIsNotNone(err, payload)
             self.assertIn("not a JSON object", err)
 
-    def test_schema_v2_rejected(self):
+    def test_schema_v3_rejected(self):
+        p = os.path.join(self.A, "manifest.json")
+        self.write_manifest({"schema_version": 3, "rolls": {}})
+        data, err = manifest.load_manifest(p)
+        self.assertEqual(data, {})
+        self.assertIn("unsupported schema_version 3", err)
+
+    def test_schema_v2_read(self):
         p = os.path.join(self.A, "manifest.json")
         self.write_manifest({"schema_version": 2, "rolls": {}})
         data, err = manifest.load_manifest(p)
-        self.assertEqual(data, {})
-        self.assertIn("unsupported schema_version 2", err)
+        self.assertIsNone(err)
+        self.assertEqual(data["schema_version"], 2)
 
     def test_schema_v1_and_missing_ok(self):
         p = os.path.join(self.A, "manifest.json")
@@ -336,6 +362,62 @@ class TestBuild(Base):
         fr = m["rolls"]["RollA"]["frames"][0]
         self.assertEqual(fr["file"], "rolls/RollA/renamed.tif")
         self.assertEqual(fr["role"], "leader")
+
+    def test_patches_preserved_by_path_and_written_as_v2(self):
+        self.put("rolls/RollA/r1.tif")
+        pts = [dict(PATCH)]
+        prev = {"schema_version": 1, "rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/r1.tif", "role": "real", "patches": pts}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["schema_version"], 2)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], pts)
+        self.assertEqual(diag["dropped_patches"], [])
+
+    def test_patches_preserved_across_rename_by_checksum(self):
+        new = self.put("rolls/RollA/renamed.tif", data=b"framebytes")
+        prev = {"rolls": {"RollA": {"frames": [{
+            "file": "rolls/RollA/old.tif", "role": "real", "patches": [dict(PATCH)],
+            "sha256": new["sha256"], "bytes": new["bytes"]}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], [PATCH])
+        self.assertEqual(diag["dropped_patches"], [])
+
+    def test_patches_of_a_frame_gone_from_disk_are_reported_dropped(self):
+        self.put("rolls/RollA/kept.tif")
+        prev = {"rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/kept.tif", "role": "real"},
+            {"file": "rolls/RollA/gone.tif", "role": "real",
+             "patches": [dict(PATCH), dict(PATCH)]}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(diag["dropped_patches"], [("rolls/RollA/gone.tif", 2)])
+        self.assertNotIn("patches", m["rolls"]["RollA"]["frames"][0])
+
+    def test_rescanned_frame_keeps_its_patches_and_is_reported(self):
+        self.put("rolls/RollA/r1.tif", data=b"new scan")
+        prev = {"rolls": {"RollA": {"frames": [{
+            "file": "rolls/RollA/r1.tif", "role": "real", "patches": [dict(PATCH)],
+            "sha256": "0" * 64, "bytes": 3}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], [PATCH])
+        self.assertEqual(diag["rescanned"], ["rolls/RollA/r1.tif"])
+
+    def test_carry_from_restores_role_patches_and_roll_fields_by_checksum(self):
+        back = self.put("rolls/RollA/c.tif", data=b"calibration")
+        self.put("rolls/RollA/other.tif", data=b"edited since")
+        archive = {"rolls": {"RollA": {"stock": "Kodak X", "note": "n", "frames": [
+            dict(back, role="calibration", patches=[dict(PATCH)]),
+            {"file": "rolls/RollA/other.tif", "role": "leader", "sha256": "0" * 64,
+             "patches": [dict(PATCH)]}]}}}
+        m, diag = self.build(prev={}, carry=archive)
+        frames = {f["file"]: f for f in m["rolls"]["RollA"]["frames"]}
+        self.assertEqual(frames["rolls/RollA/c.tif"]["role"], "calibration")
+        self.assertEqual(frames["rolls/RollA/c.tif"]["patches"], [PATCH])
+        # Different bytes: the archive entry describes another file.
+        self.assertEqual(frames["rolls/RollA/other.tif"]["role"], "real")
+        self.assertNotIn("patches", frames["rolls/RollA/other.tif"])
+        self.assertEqual(m["rolls"]["RollA"]["stock"], "Kodak X")
+        self.assertEqual(diag["restored"], ["rolls/RollA/c.tif"])
+        self.assertEqual(diag["dropped_patches"], [])
 
     def test_role_not_cloned_to_copy_when_old_path_present(self):
         # A copy (old path still on disk) must NOT inherit the calibration role.
@@ -562,6 +644,31 @@ class TestValidate(Base):
         self.assertIn("ERRORS", out)
         self.assertIn("samples/broken.tif", out)
 
+    def test_a_patch_outside_the_frame_is_a_problem(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["frames"][1]["patches"] = [
+            dict(PATCH), dict(PATCH, rect=[0.9, 0.1, 0.2, 0.1])]
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("BAD PATCHES (break the patch schema — see nctool.patches) (1)", out)
+        self.assertIn("rolls/RollA/r1.tif patch 1", out)
+
+    def test_patches_that_are_not_a_list_are_a_problem_not_a_crash(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["frames"][1]["patches"] = None
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("rolls/RollA/r1.tif patches is not a list (NoneType)", out)
+
+    def test_well_formed_patches_validate_clean(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["frames"][1]["patches"] = [dict(PATCH, light="sun")]
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 0, out)
+
     def test_non_regenerable_missing_sha_is_problem(self):
         # Item 2b: a non-regenerable entry lacking sha256 → problem/exit 1,
         # NOT silently 'unchecked'.
@@ -582,7 +689,7 @@ class TestValidate(Base):
         self.assertIn("no manifest.json", err)
 
     def test_bad_schema_is_exit2(self):
-        self.write_manifest({"schema_version": 2, "rolls": {}})
+        self.write_manifest({"schema_version": 3, "rolls": {}})
         rc, _, err = self.validate()
         self.assertEqual(rc, 2)
         self.assertIn("unsupported schema_version", err)
@@ -629,3 +736,40 @@ class TestChainBlock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------------ generate (patches)
+
+class TestGeneratePatches(Base):
+    def setUp(self):
+        super().setUp()
+        kept = self.put("rolls/RollA/kept.tif")
+        self.prior = {"schema_version": 2, "rolls": {"RollA": {"frames": [
+            dict(kept, role="real"),
+            {"file": "rolls/RollA/gone.tif", "role": "real", "patches": [dict(PATCH)]}]}}}
+        self.write_manifest(self.prior)
+
+    def test_dropping_patches_is_refused_and_writes_nothing(self):
+        rc, on_disk, err = self.generate()
+        self.assertEqual(rc, 2)
+        self.assertIn("rolls/RollA/gone.tif (1)", err)
+        self.assertIn("--drop-patches", err)
+        self.assertEqual(on_disk, self.prior)
+
+    def test_a_dry_run_that_would_drop_patches_exits_2(self):
+        rc, on_disk, _ = self.generate(dry_run=True)
+        self.assertEqual(rc, 2)
+        self.assertEqual(on_disk, self.prior)
+
+    def test_drop_patches_writes_and_warns(self):
+        rc, on_disk, err = self.generate(drop_patches=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("WARNING: 1 frame(s)", err)
+        self.assertEqual([f["file"] for f in on_disk["rolls"]["RollA"]["frames"]],
+                         ["rolls/RollA/kept.tif"])
+
+    def test_carry_from_must_load(self):
+        rc, on_disk, err = self.generate(carry_from=os.path.join(self.A, "nope.json"))
+        self.assertEqual(rc, 2)
+        self.assertIn("--carry-from", err)
+        self.assertEqual(on_disk, self.prior)

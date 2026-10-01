@@ -53,15 +53,22 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest validate \
   --asset-root ../nc-assets
 PYTHONPATH=scripts/analysis python3 -m nctool manifest roles \
   --asset-root ../nc-assets
+PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
+  --review ../temp/<set>/review.json --roll <roll> --source '<set> <date>' --kind white
 ```
 
 - `generate` inventories source rolls, samples, and converted outputs; obtains
   derived metadata from `hanten inspect`; and streams files through SHA-256. Existing
-  human fields such as roles, stock names, and notes are preserved.
+  human fields such as roles, stock names, notes and patches are preserved. It
+  refuses to drop a missing frame's patches without `--drop-patches`, and
+  `--carry-from <manifest>` takes a restored frame's fields from another manifest.
 - `validate` reports checksum drift, missing files, misplaced/orphaned TIFFs, and
   integrity gaps. It never deletes or moves anything.
 - `roles` emits the unexposed/leader/real-frame grouping consumed by the legacy
   real-scan harness.
+- `patches import` folds the review app's **Copy all** text into frames' `patches`
+  (schema in `nctool/patches.py`), replacing each listed frame's patches from the
+  same `--source`.
 
 `generate_manifest.py` is a compatibility wrapper for older callers. New code
 should use `python -m nctool manifest generate`. `manifest.sample.json` is a
@@ -182,7 +189,7 @@ footing:
 
 ```sh
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image \
-  ../nc-assets/converted/nlp/2026-08-04/20260803-film-1235-positive.tif \
+  /Volumes/blackbox/full-assets/converted/nlp/2026-07-23-Portra160/1102.tif \
   --space linear-srgb --inset 0.05
 ```
 

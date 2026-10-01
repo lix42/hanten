@@ -124,3 +124,14 @@ rerunnable harness + frozen recipes under `scripts/real-scan-verify/` (see its `
 (Kept verbatim: `progress/analysis.md` points here by heading for
 `real-scan-verification`'s execution record. It belongs in that file; moving it is
 a rename with a link fix, deferred.)
+
+## Patch rectangles moved into the asset manifest (2026-09-30)
+
+Patch rectangles marked in `../temp` review sets — `neutral-patches/`, `band-fit/`,
+`gamut-map-share/`, `desat-spike/` and `portra0928-dark-patches/` — now live in the
+asset manifest's per-frame `patches` (schema 2; `nctool manifest patches import`,
+the `asset-manifest` skill). Progress entries that cite those files are left as
+written: when a cited `../temp` record is gone, read the frame's `patches` instead.
+`../nc-assets` was trimmed the same day to at most 8 picture frames per roll, so its
+manifest holds only those frames' patches; the complete manifest, with every
+frame and patch, is in the archive at `/Volumes/blackbox/full-assets`.

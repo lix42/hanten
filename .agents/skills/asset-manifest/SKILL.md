@@ -65,7 +65,8 @@ is a thin backward-compat shim that forwards to the same code (needs no
   `manifest.json` in place. `--dry-run` prints the summary without writing.
 
 The generator is **idempotent and update-aware**: it loads any existing
-`manifest.json` and preserves human-maintained fields — roll frame `role`, roll
+`manifest.json` and preserves human-maintained fields — roll frame `role` and
+`patches`, roll
 `stock`/`note`, sample `kind`/`note`, per-output `note`, and each converted
 bucket's `regenerable`/`nc_version`/`recipe_dir`/`note`. Preserved fields survive
 an asset **rename** by matching sha256 identity — but only when the old path is
@@ -104,6 +105,49 @@ warm updates, but a same-size edit would go undetected).
   `.tif`/`.tiff` images (so a misplaced or deeply-nested scan is still flagged),
   but only images — non-image companions (`.json`/`.jpg`) and `manifest.json`
   itself are excluded and never reported as orphans.
+
+## Patches
+
+A roll frame may carry `patches` (schema 2): labelled rectangles an analysis
+measures, `{"label", "rect": [x, y, w, h], "kind", "light"?, "source"}`. `rect` is
+fractions of the source scan; `kind` is `white` / `grey` / `colour` / `unknown` — a
+`colour` patch is a saturated region, never a neutral; `source` says where and when
+it was marked. The rules are `nctool/patches.py`'s `check_patch`, and `validate`
+reports a patch that breaks them.
+
+Mark them in `tools/review-app` (`p`), then **Copy all** and import:
+
+```bash
+PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
+  --review ../temp/<set>/review.json --roll <roll> --source '<set> <date>' --kind white
+```
+
+`--review` maps Copy all's headings (image labels) to image ids, and an id to a
+frame by its serial — in `--roll`, or across every roll when it is left out. A
+label prefixed `W:` / `G:` / `C:` sets that patch's kind; `--kind` covers the rest.
+Each listed frame's patches from the same `--source` are replaced; others stay.
+Hand edits are kept like roles.
+
+**`generate` refuses to drop patches**: when a frame that carries them is gone from
+disk it writes nothing (exit 2) until `--drop-patches` says to. A frame whose bytes
+changed at the same path keeps its patches with a warning — check they still sit on
+their subject.
+
+## Trimmed assets and the archive
+
+Since 2026-09-30 `../nc-assets` holds at most 8 picture frames per roll (plus its
+base, leader and calibration frames) and no `converted/` outputs. The full set —
+every frame, every outside conversion, and the manifest with every frame's patches
+— is the archive at `/Volumes/blackbox/full-assets` (machine-local external drive,
+same layout). Restore a frame by copying it back to the same path, then
+`generate --carry-from /Volumes/blackbox/full-assets/manifest.json`, which takes
+its role and patches from the archive's manifest (matched by checksum). Without
+it the restored frame comes back as `real` with no patches.
+
+**The archive drive is slow: work from `../nc-assets` by default** — every
+calculation, probe and experiment runs on the frames kept there. Reach for the
+archive only for a **whole-roll** comparison or one against **another tool's
+conversion** (`converted/`), which `../nc-assets` no longer holds.
 
 ## Metadata source & fallback
 

@@ -16,6 +16,10 @@ Commands (dispatched from `python -m nctool manifest …`):
   deletes.
 - `roles` — emit the per-roll `roll|unexposed|leader|real…` rows the real-scan
   harness needs, sourced from the manifest instead of a hard-coded array.
+- `patches import` — fold the review app's Copy all text into frames' `patches`
+  (`nctool.patches`).
+
+Schema 2 added per-frame `patches`; a v1 manifest is read and rewritten as v2.
 """
 from __future__ import annotations
 
@@ -28,6 +32,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+
+from . import patches as _patches
+
+SCHEMA = 2
 
 # Seeds applied ONLY when neither the existing manifest nor a prior run supplies
 # the value (i.e. first-ever generation). Human edits in manifest.json always win.
@@ -412,9 +420,9 @@ def load_manifest(mpath: str) -> tuple[dict, str | None]:
         return {}, (f"{mpath} is not a JSON object "
                     f"(top-level {type(data).__name__})")
     ver = data.get("schema_version")
-    if ver is not None and ver != 1:
+    if ver not in (None, 1, SCHEMA):
         return {}, (f"{mpath} has unsupported schema_version {ver} "
-                    "(this tool writes v1)")
+                    f"(this tool reads v1 and v{SCHEMA})")
     # The top-level object can still carry malformed nested collections (e.g.
     # `"rolls": []`); consumers iterate `rolls`/`converted` as dicts and `samples`
     # as a list, so a wrong-typed collection would raise mid-iteration (AttributeError
@@ -429,16 +437,22 @@ def load_manifest(mpath: str) -> tuple[dict, str | None]:
     return data, None
 
 
-# ------------------------------------------------------------------ build (v1)
+# ------------------------------------------------------------------ build
 
 def build_manifest(A: str, nc: str | None, reuse_hash: bool,
-                   prev_data: dict) -> tuple[dict, dict]:
-    """Assemble the v1 manifest dict from the asset tree. Returns (manifest,
+                   prev_data: dict, carry_data: dict | None = None) -> tuple[dict, dict]:
+    """Assemble the manifest dict from the asset tree. Returns (manifest,
     diagnostics), where diagnostics carries the derived counts / warnings the CLI
     prints (`carried`, `unresolved`, `exiftool`, `errors`). Pure w.r.t. the
     filesystem apart from reading files (hanten inspect + streamed hashes)."""
     prev = Prev(prev_data)
+    # A second manifest (the archive's) supplies a frame's human fields when the
+    # prior one has no entry for it — a frame restored from the archive.
+    carry = Prev(carry_data or {})
     carried: list[str] = []  # files whose authoritative nc metadata was preserved
+    patched_from: set[str] = set()  # prior frame paths whose patches were carried
+    restored: list[str] = []  # frames whose fields came from `carry`
+    rescanned: list[str] = []  # patched frames whose bytes changed at the same path
 
     def hashed(relpath: str, size: int, regenerable: bool) -> str | None:
         if regenerable:
@@ -498,7 +512,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
         return None
 
     m: dict = {
-        "schema_version": 1,
+        "schema_version": SCHEMA,
         # Explicit env wins; otherwise keep the prior manifest's date so a plain
         # update stays byte-identical; "auto" only on first generation.
         "generated": os.environ.get("NC_MANIFEST_DATE") or prev_data.get("generated") or "auto",
@@ -523,12 +537,26 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                 prevf = renamed_prev(prev.frame_by_sha, fm.get("sha256"))
                 if prevf is not None:
                     rename_map[prevf["file"]] = r  # remember rename for source_frame retarget
+            if prevf is None:
+                # Only the same bytes: an archive entry describes the file it hashed.
+                cf = carry.file.get(r)
+                if cf and cf.get("sha256") and cf["sha256"] == fm.get("sha256"):
+                    prevf = cf
+                    restored.append(r)
             prevf = prevf or {}
             role = prevf.get("role") or SEED_ROLES.get(roll, {}).get(stem) or "real"
-            frames.append({"file": r, "role": role, **fm})
-        entry = {"stock": prev.roll.get(roll, {}).get("stock")
+            frame = {"file": r, "role": role, **fm}
+            if prevf.get("patches"):
+                frame["patches"] = prevf["patches"]
+                if prevf is not carry.file.get(r):
+                    patched_from.add(prevf["file"])
+                if prevf.get("sha256") and prevf["sha256"] != fm.get("sha256"):
+                    rescanned.append(r)
+            frames.append(frame)
+        roll_prev = prev.roll.get(roll) or carry.roll.get(roll, {})
+        entry = {"stock": roll_prev.get("stock")
                  or SEED_STOCK.get(roll, "unknown"), "frames": frames}
-        note = prev.roll.get(roll, {}).get("note") or SEED_ROLL_NOTE.get(roll)
+        note = roll_prev.get("note") or SEED_ROLL_NOTE.get(roll)
         if note:
             entry["note"] = note
         m["rolls"][roll] = entry
@@ -624,8 +652,12 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                   if "source_frame" in o and o["source_frame"] is None]
     n_ex = sum(1 for e in iter_meta(m) if e.get("metadata_source") == "exiftool")
     errs = [e for e in iter_meta(m) if "error" in e]
+    # A frame gone from disk takes its patches with it — said, never silent.
+    dropped = sorted((f, len(e["patches"])) for f, e in prev.file.items()
+                     if e.get("patches") and f not in patched_from)
     return m, {"carried": carried, "unresolved": unresolved,
-               "exiftool": n_ex, "errors": errs}
+               "exiftool": n_ex, "errors": errs, "dropped_patches": dropped,
+               "restored": restored, "rescanned": rescanned}
 
 
 def iter_meta(m: dict):
@@ -711,7 +743,15 @@ def cmd_generate(args) -> int:
         print(f"error: existing {err}; fix it or delete it and re-run", file=sys.stderr)
         return 2
 
-    m, diag = build_manifest(A, nc, args.reuse_hash, prev_data)
+    carry_data = None
+    if getattr(args, "carry_from", None):
+        carry_data, err = load_manifest(args.carry_from)
+        if err or not carry_data:
+            print(f"error: --carry-from: {err or f'no manifest at {args.carry_from}'}",
+                  file=sys.stderr)
+            return 2
+
+    m, diag = build_manifest(A, nc, args.reuse_hash, prev_data, carry_data)
 
     print(f"asset root: {A}")
     print("rolls:", {k: len(v["frames"]) for k, v in m["rolls"].items()})
@@ -731,6 +771,23 @@ def cmd_generate(args) -> int:
     if diag["exiftool"]:
         print(f"note: {diag['exiftool']} entr(ies) used the exiftool fallback; their "
               "format/ir_present are best-effort, not authoritative", file=sys.stderr)
+    if diag["restored"]:
+        print(f"note: took role and patches for {len(diag['restored'])} frame(s) from "
+              f"--carry-from: " + ", ".join(diag["restored"]), file=sys.stderr)
+    if diag["rescanned"]:
+        print(f"WARNING: {len(diag['rescanned'])} frame(s) with patches changed bytes at "
+              "the same path; their patches were kept but may no longer sit on their "
+              "subject — check them: " + ", ".join(diag["rescanned"]), file=sys.stderr)
+    dropping = diag["dropped_patches"] and not getattr(args, "drop_patches", False)
+    if diag["dropped_patches"]:
+        print(f"{'error' if dropping else 'WARNING'}: {len(diag['dropped_patches'])} "
+              "frame(s) no longer on disk carry patches this manifest would drop: "
+              + ", ".join(f"{f} ({n})" for f, n in diag["dropped_patches"]),
+              file=sys.stderr)
+    if dropping:
+        print("       manifest.json was NOT written. Restore the frames, or copy the "
+              "manifest somewhere safe and re-run with --drop-patches.", file=sys.stderr)
+        return 2
     if diag["errors"]:
         print(f"WARNING: {len(diag['errors'])} file(s) failed all metadata inspection: "
               + ", ".join(os.path.basename(e.get("file", "?")) for e in diag["errors"]),
@@ -769,9 +826,11 @@ def cmd_validate(args) -> int:
     # without a sha256 is a real integrity gap (see below).
     recorded: dict[str, dict] = {}
     regenerable_files: set[str] = set()
+    bad_patches: list[str] = []
     for r in data.get("rolls", {}).values():
         for fr in r.get("frames", []):
             recorded[fr["file"]] = fr
+            bad_patches += [f"{fr['file']} {e}" for e in _patches.check_frame_patches(fr)]
     for s in data.get("samples", []):
         recorded[s["file"]] = s
     for b in data.get("converted", {}).values():
@@ -839,11 +898,13 @@ def cmd_validate(args) -> int:
     report("NO CHECKSUM (non-regenerable entry lacks sha256 — integrity unverifiable)",
            no_checksum)
     report("UNREADABLE (could not hash)", read_errors)
+    report("BAD PATCHES (break the patch schema — see nctool.patches)", bad_patches)
     if unchecked:
         print(f"\nunchecked: {len(unchecked)} regenerable output(s) without a recorded "
               "sha256 (drift not verifiable — regenerate to confirm)")
 
-    problems = (drift or missing or orphans or errored or no_checksum or read_errors)
+    problems = (drift or missing or orphans or errored or no_checksum or read_errors
+                or bad_patches)
     if not problems:
         print("\nOK — no drift, orphans, or missing files.")
         print("(This tool only REPORTS. It never deletes; act on the above yourself.)")

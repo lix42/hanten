@@ -24,7 +24,7 @@ wrong one costs a full re-render:
 |---|---|---|
 | **Image set** | which frames | `../nc-assets/manifest.json` (`role: "real"`), a named subset, or arbitrary files |
 | **Config set** | what to compare | one matrix entry per configuration |
-| **References** | another tool's output | `../nc-assets/converted/<producer>/`, converted to sRGB JPEG |
+| **References** | another tool's output | `converted/<producer>/` in the asset archive (no longer in `../nc-assets`; see the `asset-manifest` skill), converted to sRGB JPEG |
 | **Destination** | where it lands | a fresh folder under `../temp/`, never inside the repo |
 
 ## Before you start
@@ -178,7 +178,7 @@ would make this first-class; until then it is manual. Three things to get right:
 
 1. **Convert to a common SDR sRGB JPEG.** The app streams bytes and does no colour
    conversion, and these exports are not browser-displayable as shipped. Encodings differ per
-   batch — under `../nc-assets/converted/nlp/` both 32-bit float **linear sRGB** and 16-bit
+   batch — under the archive's `converted/nlp/` both 32-bit float **linear sRGB** and 16-bit
    **Adobe RGB (1998)** exist. Read each file's own ICC profile rather than assuming; apply
    the right decode, a primaries-derived matrix to sRGB where needed, then the sRGB OETF.
    **Verify one file per encoding** against an independent decode (`sips -m` with the

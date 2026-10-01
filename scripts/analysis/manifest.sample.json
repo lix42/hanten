@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated": "2026-07-24",
   "note": "SAMPLE / trimmed illustration of nc-assets/manifest.json (the live file lives at the assets root). Shows every schema shape; not exhaustive. Generate the real one with scripts/analysis/generate_manifest.py.",
   "rolls": {
@@ -30,7 +30,32 @@
           "ir_present": true,
           "bytes": 158474544,
           "sha256": "5d7ab00ad02251ace6ddbac81f754ff72dc0422792dd19e639d583dcaaa0a5fd",
-          "megapixels": 18.66
+          "megapixels": 18.66,
+          "patches": [
+            {
+              "label": "cloud",
+              "rect": [
+                0.3073,
+                0.1395,
+                0.0299,
+                0.0403
+              ],
+              "kind": "white",
+              "light": "shade",
+              "source": "neutral-patches 2026-09-14"
+            },
+            {
+              "label": "red flag",
+              "rect": [
+                0.512,
+                0.42,
+                0.018,
+                0.031
+              ],
+              "kind": "colour",
+              "source": "band-fit 2026-09-23"
+            }
+          ]
         },
         {
           "file": "rolls/Ektar/20260714-nikon-989.tif",

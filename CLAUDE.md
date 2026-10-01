@@ -301,7 +301,8 @@ committed.
 
 - **Real scans live in `../nc-assets`** (a machine-local symlink to the
   [nc-assets Drive folder](https://drive.google.com/drive/folders/1qXE2jF3MuVnQ2sW0pGTp3URwBJuf_LV6);
-  inventory and roles via the `asset-manifest` skill). **Never read a scan or an
+  inventory, roles and patches via the `asset-manifest` skill, which also says where the
+  full, untrimmed archive is). **Never read a scan or an
   output image into context**: use `exiftool`, `hanten inspect`,
   `scripts/real-scan-verify/`, an `#[ignore]` probe printing derived numbers, or
   `nctool metrics` for output pixels. Decoder fixtures are in `tests/fixtures/`.
