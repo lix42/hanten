@@ -1975,8 +1975,8 @@ a run killed by a signal may leave one, since destructors do not run then.
 closes the pipe (`hanten … | head`), the write is dropped and the run carries on —
 the `--out` recipe, the `--strict` and failed-frame gates and telemetry all come
 after the report — so the exit code is the run's own. `SIGPIPE` stays ignored for the
-same reason: restoring it would kill the run at the report. Any other stdout write
-failure is exit 5 (`stdio`).
+same reason: restoring it would kill the run at the report. Any other failure to
+write the report or `params` to stdout is exit 5 (`cli::print_stdout`).
 
 **Memory preflight** (§9 Global, `--max-memory`) maps to exit **6**: before any
 input is decoded, every command that reads a scan estimates the run's peak

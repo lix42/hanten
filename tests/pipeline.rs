@@ -13133,13 +13133,19 @@ fn a_closed_stdout_is_not_a_failure_and_the_run_finishes() {
     let fix = fix.to_str().unwrap();
     let out = tmp.path("out.tiff");
     let recipe = tmp.path("base.json");
+    let roll_recipe = tmp.path("roll.json");
     let roll_dir = tmp.path("roll");
-    let runs: [Vec<&str>; 5] = [
+    let runs: [Vec<&str>; 6] = [
         vec!["params"],
         vec!["inspect", fix],
         [&["convert", fix, "-o", out.to_str().unwrap()][..], &BASE].concat(),
         // `--out` is written after the report.
         vec!["measure-base", fix, "--out", recipe.to_str().unwrap()],
+        [
+            &["measure-roll", fix, "--out", roll_recipe.to_str().unwrap()][..],
+            &BASE,
+        ]
+        .concat(),
         [
             &["roll", fix, "--out-dir", roll_dir.to_str().unwrap()][..],
             &BASE,
@@ -13157,6 +13163,7 @@ fn a_closed_stdout_is_not_a_failure_and_the_run_finishes() {
     }
     assert!(is_tiff(&out));
     assert!(recipe.exists(), "measure-base's recipe is written");
+    assert!(roll_recipe.exists(), "measure-roll's recipe is written");
     assert!(is_tiff(&roll_dir.join("hdr-48bit_positive.tiff")));
 }
 
@@ -13256,16 +13263,26 @@ fn a_closed_stderr_is_not_a_failure() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_failing_stdout_is_a_write_error() {
-    let full = std::fs::File::options()
-        .write(true)
-        .open("/dev/full")
-        .unwrap();
-    let out = Command::new(NC)
-        .arg("params")
-        .stdout(full)
-        .output()
-        .expect("failed to spawn nc binary");
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert_eq!(out.status.code(), Some(5), "{err}");
-    assert!(err.contains("writing params to stdout"), "{err}");
+    let fix = fixture("hdr-48bit.tif");
+    let runs = [
+        (vec!["params"], "writing params to stdout"),
+        (
+            vec!["inspect", fix.to_str().unwrap()],
+            "writing the report to stdout",
+        ),
+    ];
+    for (args, message) in &runs {
+        let full = std::fs::File::options()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let out = Command::new(NC)
+            .args(args)
+            .stdout(full)
+            .output()
+            .expect("failed to spawn nc binary");
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(out.status.code(), Some(5), "{args:?}: {err}");
+        assert!(err.contains(message), "{args:?}: {err}");
+    }
 }

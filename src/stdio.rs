@@ -26,6 +26,10 @@ pub fn stdout_line(text: &str) -> io::Result<Delivery> {
 /// Write a line to stderr, ignoring every failure: stderr is the channel a failure
 /// would be reported on. Never panics, so it is safe in the lcms2 C callback.
 pub fn stderr_line(args: fmt::Arguments<'_>) {
+    // libtest captures only the print macros, so tests keep their stderr attached.
+    #[cfg(test)]
+    eprintln!("{args}");
+    #[cfg(not(test))]
     let _ = writeln!(io::stderr().lock(), "{args}");
 }
 
