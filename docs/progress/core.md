@@ -884,6 +884,11 @@ upload, 477 `nctool`. `tests/telemetry_upload.rs`'s
 stamped (its open question 5). Any new command that writes a recipe goes through
 `RecipeEnvelope`, and any reader of one unwraps `params`.
 
+### 2026-10-01 — cross-reference
+
+The `a_refused_convert_is_a_parse_failure_event` timeouts were a drain hand-off race in
+the uploader, fixed by `telemetry/upload-live-check` (see `progress/telemetry.md`).
+
 
 ## dependency-hygiene
 
