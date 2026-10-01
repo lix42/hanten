@@ -500,17 +500,36 @@ PYTHONPATH=scripts/analysis python3 -m nctool compare run \
 PYTHONPATH=scripts/analysis python3 -m nctool compare diff before.json after.json
 ```
 
-Cases come from `benchmark.json`. The default `fixtures` set is self-contained;
-the `rolls` set resolves real scans and checksums through the asset manifest.
-A case's `args` go to every build, and its `destination_args` or `preset_args`
-only to a build that takes that interface — read off the binary's `--version`
-banner, as `review generate` does — so a reference-build record and a current one
-share case names and `diff` pairs them. The `params_hash` is read from the report's
-`identity`; a destination build from before `nf-core/report-contract` reports it only in
-telemetry, so there a missing telemetry record fails the case instead of merely losing
-its timings.
+Cases come from `benchmark.json`. The default `fixtures` set is self-contained: the
+HDRi fixture through every ready destination (all four axes stated), the film master,
+`--rendering direct` and the product default, and the HDR 48-bit fixture (the other
+input format) through the default and the film master.
+Two runs of one build over it diff to zero, and CI checks exactly that. The `rolls`
+set resolves real scans and checksums through the asset manifest.
+
+A case carries one block per output interface it applies to: `destination` for a build
+at `pipeline_version` 8 or later, `preset` for the reference build
+(`scripts/reference-snapshot/`). Each block holds that interface's `args` and an
+optional `recipe`; the case's own `args` go to every build it runs on. Which interface
+a build speaks is read off its `--version` banner, as `review generate` does, so a
+reference-build record and a current one share case names and `diff` pairs them. A
+case with no block for the build's interface is not run, and the record lists it in
+`not_run`. This is how a destination the reference cannot write (Adobe RGB, the linear
+P3/sRGB/Adobe RGB TIFFs, the sRGB gain map, `direct`) stays out of a reference run
+instead of being rendered as some other preset under its name. `diff` reports it as
+`not-run`, not `missing`. A preset block that renders a display image states the
+reference config, `--preset sigmoid-knees`, so the preset blocks run on the reference
+build alone: a build at `pipeline_version` 6 or 7 refuses that preset, and its own
+checkout's nctool and set are the ones to benchmark it with.
+
+The pre-migration pipeline is compared by re-running the reference build over this
+set; records made before 2026-10-01 are superseded.
+
+The `params_hash` is read from the report's `identity`; a destination build from
+before `nf-core/report-contract` reports it only in telemetry, so there a missing
+telemetry record fails the case instead of merely losing its timings.
 Run records include build identity, pipeline version, input digest, parameter
-hash, output depth, means, clipping counts, and telemetry timings. Timing changes
+hash, output depth, means, clipping counts, telemetry timings, and the cases not run. Timing changes
 are informational and never decide the deterministic-statistics verdict; a stage
 only one record times (a schema-8 `algorithm` beside schema-9 stages) diffs as `null`.
 
@@ -543,5 +562,6 @@ The tests are hermetic: they use temporary asset manifests, committed tiny TIFF
 fixtures, and images synthesized in the test itself, rather than the Drive-hosted
 scans. `NCTOOL_REQUIRE_DEPS=1` makes a missing `numpy`/`tifffile` a failure
 instead of letting the metrics tests skip while the run still prints `ok`; leave
-it unset locally if you have not made the venv. The harness tests additionally
-need `cargo build` to have produced `target/debug/hanten`.
+it unset locally if you have not made the venv. The harness tests and `compare`'s
+end-to-end test (the `fixtures` set, run twice) additionally need `cargo build` to
+have produced `target/debug/hanten`.

@@ -1465,4 +1465,116 @@ mod tests {
             "{err}"
         );
     }
+
+    /// `nctool compare`'s `fixtures` set states one case per ready row, all four axes
+    /// stated, so a new destination is benchmarked (`scripts/analysis/benchmark.json`).
+    #[test]
+    fn every_ready_row_has_a_benchmark_case() {
+        let bench: serde_json::Value =
+            serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
+        let flags = [Range::FLAG, Transfer::FLAG, Gamut::FLAG, Container::FLAG];
+        let mut cases = std::collections::BTreeMap::new();
+        for case in bench["sets"]["fixtures"]["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let Some(args) = case["destination"]["args"].as_array() else {
+                continue;
+            };
+            let args: Vec<&str> = args.iter().map(|a| a.as_str().unwrap()).collect();
+            if !args.iter().any(|a| flags.iter().any(|f| a.starts_with(f))) {
+                continue; // `default`, `direct`, the film master
+            }
+            let axes = flags.map(|flag| {
+                let i = args.iter().position(|a| *a == flag);
+                let value = i.and_then(|i| args.get(i + 1));
+                value.unwrap_or_else(|| panic!("{name}: states no `{flag} <value>`"))
+            });
+            if let Some(other) = cases.insert(axes.map(|a| a.to_string()), name) {
+                panic!("{name} and {other} benchmark the same row");
+            }
+        }
+        let ready: BTreeSet<[String; 4]> = ROWS
+            .iter()
+            .filter(|r| is_ready(r))
+            .map(|r| {
+                [
+                    r.range.name().to_owned(),
+                    r.transfer.name().to_owned(),
+                    r.gamut.name().to_owned(),
+                    r.container.name().to_owned(),
+                ]
+            })
+            .collect();
+        assert_eq!(cases.into_keys().collect::<BTreeSet<_>>(), ready);
+    }
+
+    /// Every fixtures case's `preset` block names the reference preset that writes the
+    /// destination its `destination` block resolves to, so a reference-vs-HEAD diff
+    /// compares pipelines, not destinations. The reference's presets are frozen.
+    #[test]
+    fn every_benchmark_preset_block_writes_its_cases_destination() {
+        const REFERENCE: [(&str, Option<[&str; 4]>); 9] = [
+            ("display-p3", Some(["sdr", "native", "display-p3", "tiff"])),
+            ("compatibility", Some(["sdr", "native", "srgb", "tiff"])),
+            ("hdr-linear-tiff", Some(["hdr", "linear", "bt2020", "tiff"])),
+            ("hdr-pq-tiff", Some(["hdr", "pq", "bt2020", "tiff"])),
+            ("hdr-hlg-tiff", Some(["hdr", "hlg", "bt2020", "tiff"])),
+            ("hdr-pq", Some(["hdr", "pq", "bt2020", "avif"])),
+            ("hdr-hlg", Some(["hdr", "hlg", "bt2020", "avif"])),
+            (
+                "gain-map-hdr",
+                Some(["hdr", "native", "display-p3", "jpeg"]),
+            ),
+            ("film-master", None),
+        ];
+        fn stated<A: Axis>(args: &[&str]) -> Option<A> {
+            let i = args.iter().position(|a| *a == A::FLAG)?;
+            A::ALL
+                .iter()
+                .copied()
+                .find(|v| Some(&v.name()) == args.get(i + 1))
+        }
+        let bench: serde_json::Value =
+            serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
+        let mut checked = 0;
+        for case in bench["sets"]["fixtures"]["cases"].as_array().unwrap() {
+            let Some(preset) = case["preset"]["args"].as_array() else {
+                continue;
+            };
+            let name = case["name"].as_str().unwrap();
+            let preset: Vec<&str> = preset.iter().map(|a| a.as_str().unwrap()).collect();
+            let i = preset.iter().position(|a| *a == "--output-preset").unwrap();
+            let (_, writes) = REFERENCE
+                .iter()
+                .find(|(p, _)| *p == preset[i + 1])
+                .unwrap_or_else(|| panic!("{name}: no reference preset {}", preset[i + 1]));
+            let args: Vec<&str> = case["destination"]["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap())
+                .collect();
+            assert!(
+                !args.contains(&"--rendering"),
+                "{name}: the reference has no rendering"
+            );
+            let resolves = (!args.contains(&"--film-master")).then(|| {
+                let axes = DisplayAxes {
+                    range: stated(&args),
+                    transfer: stated(&args),
+                    gamut: stated(&args),
+                    container: stated(&args),
+                };
+                let r = resolve(&axes, &STD).unwrap();
+                [
+                    r.range.name(),
+                    r.transfer.name(),
+                    r.gamut.name(),
+                    r.container.name(),
+                ]
+            });
+            assert_eq!(resolves, *writes, "{name}");
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
 }
