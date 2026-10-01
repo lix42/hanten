@@ -366,8 +366,8 @@ pub struct ResolvedBlack {
 /// well. The shift is spread between the base and mid-grey, so a base closer than this
 /// packs the whole shift into a narrow band — at 2 stops under and the default target,
 /// a 4-stop shift over 2 stops steepens the band's middle 4× — and at mid-grey or
-/// above black cannot run at all. A normal exposure renders the base 3.8–5.8 stops
-/// under; at the default contrast it takes about `--exposure 1.75` to get here.
+/// above black cannot run at all. Only a strong exposure gets a base here (the numbers
+/// for the default contrast: `docs/using-nc.md`, "Display black").
 pub const MIN_FILM_BASE_STOPS: f32 = 2.0;
 
 impl ResolvedBlack {

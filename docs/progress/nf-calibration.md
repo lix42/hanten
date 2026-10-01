@@ -59,6 +59,13 @@ lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.
 +1.74 EV on ten rolls. A per-frame trim and exposure groups within a roll are
 `frame-level-trim` and `exposure-buckets`.
 
+**`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
+look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
+slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
+floor. **`direct`'s pinned slope moved to the same value**, so `--rendering direct --range
+sdr` rounds before 2026-09-30 were judged flatter. White balance and exposure fall back to
+neutral and 0.
+
 **`scale-gamma-loop` is done (2026-09-27): nothing moved.** One review round on blue
 under `--rendering direct --range sdr` could not tell 0.68 / 0.73 / 0.78 apart;
 `[1, 0.84, 0.73]` and the linearization 1.8 (the datasheets' `1/0.55`, not reviewable by
@@ -441,12 +448,76 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## no-roll-defaults
 
-**Status:** not started
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: the values a
   render uses without a roll measurement, first the default whole contrast (2.0 today,
   kept for continuity; the user suggests about 2.5; the rolls measure 2.23–2.97).
+- 2026-09-30: **started. Scope and form decided (user).**
+  - **The fallback is a white, not a whole contrast**: `roll_white::FALLBACK_WHITE_STOPS`,
+    and the slope is `slope_for` of it — the rule's units and band, and a slope that
+    holds if the linearization moves. Whole contrast 2.0 placed a white at **+2.23**,
+    above the rule's cap, so the old fallback was a render no measured roll can get.
+  - **White balance stays neutral, exposure stays 0** (`roll.exposure` landed after this
+    task was filed): without a measurement nothing says a roll is cast or thin.
+  - **`direct`'s pinned slope moves with it** (user), logged below.
+- 2026-09-30: **round 1 — +1.75 chosen** (user). Set `../temp/no-roll-defaults/`
+  (`review.json`; `scripts/round1.py`, binary `bec1075`): 19 frames on all ten rolls (each
+  roll's median-luma and brightest-white frame), every arm without a roll measurement
+  (neutral WB, exposure 0, SDR Display P3), the slope as `--contrast` over 2.0/1.8. Arms:
+  1 = whole 2.0 (today), 2 = 2.54 (white +1.75, `anchor-comparison` round 4's fixed white),
+  3 = 2.97 (+1.5, the floor).
+  - **2 over 1**: 11 frames, 1 over 2 on 4 (1637, 1709, 1868, 2011), 4 even (991, 1121,
+    1151, 1658). 1151: 1 has the better highlight, 2 the better shadow; 991: "a value
+    between 1 and 2 maybe best".
+  - **2 over 3** on 14; 3 won on 5 (1648, 1684, 1798, 1886, 2006), every one a low-key
+    frame on a thin or dark roll — `roll-exposure` round 2's per-frame split again, so
+    `frame-level-trim`'s, not the fallback's.
+  - Clipping at white rises with contrast where no cap clamps a frame: 1121 8.6 → 12.5 →
+    14.8%, 1151 0.0 → 3.0 → 5.6%, 1868 0.0 → 2.1 → 4.8%; every other frame under 1%.
+- 2026-09-30: **implemented.** `FALLBACK_WHITE_STOPS` 1.75; `look::DEFAULT_SLOPE` =
+  `slope_for(1.75)` = 1.413675 (whole 2.54). `slope_for` is now `const` over a written-out
+  `log2(1/0.18)` — bit-identical to the libm value on aarch64, checked in f64, so no
+  measured roll's slope moved. `BUNDLED_CONTRAST` is test-only. `pipeline_version` 9.
+  **The drift gate could not see this**: `recipe` hashed the default document, and the
+  fallback lives in the `default` rendering's base, not in it. `recipe` now also hashes
+  `Rendering::Default.base()` (from the v9 row; v8's is history under the old definition),
+  verified by moving the fallback to 1.8 and watching the gate fail. Tests that used
+  `DEFAULT_SLOPE` as "the bundled split" now state `2.0/1.8`; the look-contrast golden was
+  recaptured at the new default; two synthetic-grid chain tests and a holder fixture were
+  adjusted for the steeper slope (the grid's loose-rule pixels rise with contrast).
+- 2026-09-30: **`direct` moved**: its pinned slope 2.0/1.8 → 1.413675, the same value
+  (user). Rounds judged under `--rendering direct --range sdr` before this date
+  (`scale-gamma-loop`'s blue round) were at the old contrast; they and later rounds do not
+  compare like for like.
+- 2026-09-30: **the asset probes re-run** at the new default (`cargo test --release --
+  --ignored`): all pass; `branch_probe` reports no below-white pixel bound on both cubes
+  and no violation on any real frame in the trimmed `nc-assets`.
+- 2026-09-30: `/code-review high`, 10 findings. Fixed: the branch-contract tests'
+  `shared_acting` and the look-contrast golden now pin the slope `2.0/1.8`, so retuning the
+  fallback moves neither (the golden's original capture and the contract's original bound
+  are restored); `recipe` hashes the default rendering's base field by field as bit
+  patterns rather than through `Debug`, and the gate test now perturbs the fallback slope;
+  the design spec's report example, a test comment, the task file and the guide's
+  verification header. Not real: an old recipe replaying at the new slope —
+  `pipeline_version_warning` already says the output will not match.
+- 2026-09-30: ship review (`ship:diff-reviewer`; Codex skipped, out of credits): the
+  guide's display-black paragraph and `fit_range::MIN_FILM_BASE_STOPS` still quoted the
+  2.0 numbers. Re-run on the fixture: base 4.96 stops under at exposure 0, the near-mid
+  warning from about `--exposure 2.15`, mid-grey at about 3.7.
+- 2026-09-30: **done.** Landed: `roll_white::FALLBACK_WHITE_STOPS` 1.75 and a `const`
+  `slope_for`, so `look::DEFAULT_SLOPE` = 1.413675 (whole 2.54); `rendering::DIRECT`'s slope
+  pinned to the same literal; `pipeline_version` 9, its `recipe` fingerprint now covering
+  the `default` rendering's base. White balance and exposure keep their neutral fallbacks.
+  Verified: review round 1 (19 frames, ten rolls), the drift gate perturbed by hand and by
+  test, every gate, the asset probes. **For dependents:**
+  - A render without `measure-roll` now looks like a roll whose white sat at +1.75: inside
+    the rule's band, so it is no longer flatter than every measured roll. Bright frames
+    clip more than at 2.0 (no cap clamps them without a roll).
+  - `direct --range sdr`, the held rendering, is steeper than every round judged before
+    2026-09-30.
+  - The 5 frames that wanted 2.97 are low-key frames on thin rolls: `frame-level-trim`'s.
 
 ## roll-section
 
@@ -864,6 +935,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
   one, and `--gamut display-p3` under `direct` the Display P3 float TIFF, where it wrote the
   SDR TIFF. The held form, `--rendering direct --range sdr`, is unchanged (the Adobe RGB
   16-bit TIFF), so no round above is affected.
+- 2026-09-30: **`direct`'s pinned slope moved** 2.0/1.8 → 1.413675 (`no-roll-defaults`), so
+  round S1 above was judged at a flatter held rendering than any later round.
 
 ## offset-question
 

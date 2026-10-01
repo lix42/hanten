@@ -1965,10 +1965,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   shoot's +3/+4 frames. Measured 2026-09-29: the leader is no stock constant (it varies
   by up to 1.8 stops within a stock), and a frame's absolute white separates the verdicts
   the leader distance does not, so the bracket tests both references
-- [ ] [The default rendering without a roll
-  measurement](tasks/nf-calibration/no-roll-defaults.md) — the fallbacks a frame
-  gets without `measure-roll`, first the whole contrast (2.0 today; the rolls measure
-  2.23–2.97)
+- [x] [The default rendering without a roll
+  measurement](tasks/nf-calibration/no-roll-defaults.md) — **done 2026-09-30.** The
+  fallback slope is placed as if the roll's white were +1.75 stops (whole contrast
+  2.54, where it was 2.0), chosen by review; `direct`'s pinned slope moved with it;
+  white balance stays neutral and exposure 0; `pipeline_version` 9
 - [x] [The roll's measurements as their own recipe
   section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
   `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply

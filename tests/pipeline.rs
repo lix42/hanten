@@ -7443,17 +7443,16 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
     let path = dir.path("deep.tif");
     const W: u32 = 400;
     const H: u32 = 400;
+    // Dense, yet under the white point at `MEASURED`'s contrast (×1.11 on the
+    // fallback slope), so a sub-cap run reports no clipping.
+    const HOLDER: [u16; 3] = [2000, 2000, 2000];
     let mut rgb = vec![0u16; (W * H * 3) as usize];
     let mut ir = vec![41_000u16; (W * H) as usize];
     for y in 0..H {
         for x in 0..W {
             let i = ((y * W + x) * 3) as usize;
             let holder = y < 120 || !(10..W - 10).contains(&x) || y >= H - 10;
-            rgb[i..i + 3].copy_from_slice(&if holder {
-                [655, 655, 655]
-            } else {
-                [12000, 7000, 4000]
-            });
+            rgb[i..i + 3].copy_from_slice(&if holder { HOLDER } else { [12000, 7000, 4000] });
             if holder {
                 ir[(y * W + x) as usize] = 1_300;
             }
@@ -7529,11 +7528,7 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
         for x in 0..W {
             let i = ((y * W + x) * 3) as usize;
             let holder = y < 10 || !(10..W - 10).contains(&x);
-            rgb[i..i + 3].copy_from_slice(&if holder {
-                [655, 655, 655]
-            } else {
-                [12000, 7000, 4000]
-            });
+            rgb[i..i + 3].copy_from_slice(&if holder { HOLDER } else { [12000, 7000, 4000] });
             ir[(y * W + x) as usize] = if holder { 1_300 } else { 41_000 };
         }
     }
@@ -7859,14 +7854,14 @@ fn the_default_destination_renders_a_display_p3_tiff() {
         assert_eq!(fr["headroom_stops"], 6.0);
         assert_eq!(fr["white_point"], 64.0);
         assert_eq!(fr["display_peak"], 1.0);
-        // At the default whole contrast 2.0 the base renders ≈ 3.8 stops under
-        // mid-grey, so display black shifts it to the default 6.
+        // At the fallback slope (a white 1.75 stops up) the base renders ≈ 5.0 stops
+        // under mid-grey, so display black shifts it to the default 6.
         let black = &fr["display_black"];
         assert_eq!(black["setting"], 6.0, "{stdout}");
         assert_eq!(black["curve"], "log-shift-to-mid-grey-v1");
         let base = black["film_base_stops"].as_f64().unwrap();
         let shift = black["shift_stops"].as_f64().unwrap();
-        assert!((base - 3.84).abs() < 0.05, "{black}");
+        assert!((base - 4.96).abs() < 0.05, "{black}");
         assert!((base - shift - 6.0).abs() < 1e-3, "{black}");
         // No section of the removed chain's report survives to claim an operation this
         // run did not perform.
@@ -10962,7 +10957,8 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
             l["slope"].as_f64().unwrap(),
         )
     };
-    let fallback = 2.0 / 1.8;
+    // Placed as if the roll's white were 1.75 stops above mid-grey.
+    let fallback = (1.0_f64 / 0.18).log2() / 1.75;
 
     let (default, report) = convert("default.tiff", &[]);
     assert_eq!(applied(&report), "contrast", "{report}");

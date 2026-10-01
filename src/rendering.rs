@@ -62,8 +62,9 @@ const DEFAULT: Base = Base {
 /// `direct`: every value written out, so a moved default leaves it alone.
 pub const DIRECT: Base = Base {
     applies_roll: false,
-    // The slope, not the whole slope, so a moved linearization still shows.
-    slope: 2.0 / 1.8,
+    // The slope, not the whole slope, so a moved linearization still shows. The
+    // fallback's value (a white +1.75 stops up) as of `nf-calibration/no-roll-defaults`.
+    slope: 1.413_675,
     // Off: it hides the residual cast an editor or the loop must see.
     highlight_desaturation: HighlightDesaturation {
         strength: 0.0,
@@ -100,7 +101,7 @@ mod tests {
             axes,
         } = DIRECT;
         assert!(!applies_roll);
-        assert_eq!(slope, 1.111_111_2);
+        assert_eq!(slope, 1.413_675);
         assert_eq!(
             highlight_desaturation,
             HighlightDesaturation {

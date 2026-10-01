@@ -120,12 +120,11 @@ impl HighlightDesaturation {
 /// picture instead of moving it.
 pub const MID_GREY: f32 = 0.18;
 
-/// The slope when no roll white gives one: the `default` rendering's fallback
-/// (`nf-calibration/no-roll-defaults` chooses it). `BUNDLED_CONTRAST / LINEARIZATION`,
-/// so a neutral renders where the bundled decode rendered it — a continuity value, not
-/// a tuned one. Moving it moves only renders without a roll white; `direct` pins its own.
+/// The slope when no roll white gives one: the `default` rendering's fallback, placed as
+/// if the roll's white were [`FALLBACK_WHITE_STOPS`](crate::pipeline::roll_white::FALLBACK_WHITE_STOPS).
+/// Moving it moves only renders without a roll white; `direct` pins its own.
 pub const DEFAULT_SLOPE: f32 =
-    crate::algo::fixed::BUNDLED_CONTRAST / crate::algo::fixed::LINEARIZATION;
+    crate::pipeline::roll_white::slope_for(crate::pipeline::roll_white::FALLBACK_WHITE_STOPS);
 
 /// A [`LookSection::slope`] the value rule refuses.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -153,8 +152,8 @@ pub struct LookSection {
     ///
     /// - **One exponent on every channel, pivoted at mid-grey.** For a neutral this is
     ///   exactly a steeper decode — `0.18 · (10^(L·(D′−A_L)) / 0.18)^k` is
-    ///   `10^(L·k·(D′−A_{Lk}))` — so the look's default reproduces the bundled decode's
-    ///   neutrals. It is **not** the same operator on colour: it acts after the
+    ///   `10^(L·k·(D′−A_{Lk}))` — so at `k = 2.0/1.8` the look reproduces the bundled
+    ///   decode's neutrals. It is **not** the same operator on colour: it acts after the
     ///   NC film RGB v1 3×3, the decode's slope before it, and a power does not commute
     ///   with a matrix that mixes channels. Saturated colour therefore differs slightly
     ///   from the bundled decode, by design.
@@ -162,7 +161,7 @@ pub struct LookSection {
     ///   stays neutral under any slope (`pipeline::roll_white`).
     /// - **Exposure is in scene stops, and the slope expands it.** Scene correction runs
     ///   first, so a gain `e` becomes `e^slope` in the output: `--exposure 1` at
-    ///   slope 1.11 moves the picture 1.11 stops. Exposure adjusts the scene after
+    ///   slope 1.41 moves the picture 1.41 stops. Exposure adjusts the scene after
     ///   reconstruction; contrast then expands everything about mid-grey, as paper
     ///   contrast does to a printing exposure.
     /// - **Runs before highlight desaturation**, which divides its saturation measure by
@@ -761,6 +760,16 @@ mod tests {
         }
     }
 
+    /// The look's half of the bundled contrast split at the linearization: the default
+    /// slope until `nf-calibration/no-roll-defaults`, and still `direct`'s before it.
+    fn split_section(desaturation: HighlightDesaturation) -> LookSection {
+        LookSection {
+            slope: crate::algo::fixed::BUNDLED_CONTRAST / crate::algo::fixed::LINEARIZATION,
+            channel_grade: IDENTITY_CHANNEL_GRADE,
+            highlight_desaturation: desaturation,
+        }
+    }
+
     fn off_desaturation() -> HighlightDesaturation {
         HighlightDesaturation {
             strength: 0.0,
@@ -771,7 +780,7 @@ mod tests {
     const DENSITIES: [f32; 9] = [0.0, 0.1, 0.3, 0.5, 0.62, 0.8, 1.0, 1.3, 1.8];
 
     #[test]
-    fn the_default_split_renders_a_neutral_where_the_bundled_decode_did() {
+    fn the_split_renders_a_neutral_where_the_bundled_decode_did() {
         // The task's acceptance check. For a neutral the look's pivoted power is a
         // steeper decode exactly — `0.18·(10^(L·(D′−A_L))/0.18)^k = 10^(Lk·(D′−A_Lk))` —
         // so the two agree up to f32 rounding: the product `1.8 · (2.0/1.8)` is not
@@ -781,14 +790,7 @@ mod tests {
         use crate::algo::fixed::{BUNDLED_CONTRAST, LINEARIZATION};
         let scan = scan_at(&DENSITIES, |t| [t; 3]);
         let bundled = graded(&scan, BUNDLED_CONTRAST, bundled_section(off_desaturation()));
-        let split = graded(
-            &scan,
-            LINEARIZATION,
-            LookSection {
-                highlight_desaturation: off_desaturation(),
-                ..LookSection::default()
-            },
-        );
+        let split = graded(&scan, LINEARIZATION, split_section(off_desaturation()));
         for (i, (a, b)) in bundled.iter().zip(&split).enumerate() {
             let rel = ((a - b) / a).abs();
             assert!(rel < 2e-6, "sample {i}: bundled {a} vs split {b} ({rel:e})");
@@ -796,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_split_moves_saturated_colour_by_design() {
+    fn the_split_moves_saturated_colour_by_design() {
         // Not the same operator on colour: the decode's slope acts before the NC film
         // RGB v1 3×3, the look's after it, and a power does not commute with a matrix
         // that mixes channels. Stated rather than hidden — the difference exists, and
@@ -804,14 +806,7 @@ mod tests {
         use crate::algo::fixed::{BUNDLED_CONTRAST, LINEARIZATION};
         let scan = scan_at(&[0.3, 0.62, 1.0], |t| [t + 0.25, t, t - 0.25]);
         let bundled = graded(&scan, BUNDLED_CONTRAST, bundled_section(off_desaturation()));
-        let split = graded(
-            &scan,
-            LINEARIZATION,
-            LookSection {
-                highlight_desaturation: off_desaturation(),
-                ..LookSection::default()
-            },
-        );
+        let split = graded(&scan, LINEARIZATION, split_section(off_desaturation()));
         let widest = bundled
             .iter()
             .zip(&split)
@@ -850,16 +845,17 @@ mod tests {
                 .map(|(a, b)| ((a - b) / a).abs())
                 .fold(0.0_f32, f32::max)
         };
-        let split = graded(&scan, LINEARIZATION, LookSection::default());
+        let section = split_section(HighlightDesaturation::default());
+        let split = graded(&scan, LINEARIZATION, section);
         let right = widest(&split);
         // Falsifiability, through the stage: the same split with the band divided by the
-        // linearization alone (the look told `LINEARIZATION / DEFAULT_SLOPE`, so the
-        // product it forms is `LINEARIZATION`) keys the ramp pixels differently.
+        // linearization alone (the look told `LINEARIZATION / slope`, so the product it
+        // forms is `LINEARIZATION`) keys the ramp pixels differently.
         let wrong = widest(&graded_with(
             &scan,
             LINEARIZATION,
-            LINEARIZATION / DEFAULT_SLOPE,
-            LookSection::default(),
+            LINEARIZATION / section.slope,
+            section,
         ));
         // Measured 8.6e-5 right and 1.3e-2 wrong.
         assert!(right < 1e-3, "bundled vs split: {right:e}");

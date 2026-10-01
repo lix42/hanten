@@ -430,7 +430,7 @@ knob starts from, and each has one principle (`crate::rendering`):
 |---|---|---|
 | roll section | not applied, and reported as not applied | applied |
 | white balance | identity | the roll's gains |
-| base slope (`look.contrast` multiplies it) | `2.0 / 1.8`, pinned | the roll's, else the fallback `2.0 / 1.8` with a warning |
+| base slope (`look.contrast` multiplies it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
 | highlight desaturation | off | 0.8 |
 | display black | 6 stops below mid-grey, pinned | 6 |
 | fit range | reinhard at 6 stops of headroom, pinned | 6 stops |
@@ -903,13 +903,13 @@ re-derives it from the recipe:
     ],
     "rendering": "default",
     "scene_correction": { "white_balance": [1.0, 1.0, 1.0], "exposure": 0.0 },
-    "look": { "contrast": 1.0, "base_slope": 1.1111112, "base_from": "fallback", "slope": 1.1111112,
+    "look": { "contrast": 1.0, "base_slope": 1.413675, "base_from": "fallback", "slope": 1.413675,
               "channel_grade": [1.0, 1.0],
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
     "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
                    "display_peak": 1.0,
                    "display_black": { "setting": 6.0, "curve": "log-shift-to-mid-grey-v1",
-                                      "film_base_stops": 3.85, "shift_stops": -2.15 } },
+                                      "film_base_stops": 4.96, "shift_stops": -1.04 } },
     "destination": { "display": { "range": "sdr", "transfer": "native", "gamut": "display-p3",
                                   "container": "tiff" } }
   }
@@ -1459,11 +1459,11 @@ stage is a bit-exact identity. Controls run in the order listed.
   `base × contrast`, pivoted at mid-grey: `out_c = 0.18 · (in_c / 0.18)^slope` on each
   ACEScg channel; slope 1 reproduces the scene's contrast, and non-positive and
   non-finite samples pass through. The base is the applied roll's
-  (`log2(1/0.18) / roll.white_stops`), else the fallback `2.0 / 1.8`
-  (`look::DEFAULT_SLOPE`, `nf-calibration/no-roll-defaults`), and `direct`'s pinned
-  `2.0 / 1.8`. At the fallback, with the decode's linearization, a neutral renders where
-  the single-slope decode rendered it; saturated colour differs slightly, because the
-  power acts after the 3×3. Scene correction runs first, so an exposure of `e` stops
+  (`log2(1/0.18) / roll.white_stops`), else the fallback, the same formula at a white
+  of +1.75 (`look::DEFAULT_SLOPE` ≈ 1.414, whole slope 2.54; `nf-calibration/no-roll-defaults`
+  chose it by review over 2.0 and the white rule's floor), and `direct`'s pinned ≈ 1.414.
+  On a neutral the look's slope is a steeper decode exactly; saturated colour differs
+  slightly from a single-slope decode, because the power acts after the 3×3. Scene correction runs first, so an exposure of `e` stops
   leaves the look as `e · slope` stops. The **whole slope**, `linearization · slope`, is
   internal (what highlight desaturation's band divides by) and must be a normal `f32`;
   no report states it, since it moves when the linearization is recalibrated even when
@@ -2127,9 +2127,6 @@ Each names the task that owns it, or says it has none.
   that it is optional and in rendering, not which stage. No task yet.
 - **Other outputs the old chain had** (ProPhoto, arbitrary ICC paths): keep or drop.
   No task yet.
-- **The rendering without a roll measurement**: the fallback slope (`2.0 / 1.8` today;
-  measured rolls give 2.23–2.97 as a whole slope) and the other fallbacks
-  (`nf-calibration/no-roll-defaults`).
 - **The roll's white rule in HDR** (`nf-calibration/white-rule-hdr`) and the saturation
   warning's margin (`nf-calibration/saturation-margin`).
 - **Rebuilding the pipeline as decode → roll → style** (`nf-core/three-step-pipeline`).
@@ -2138,4 +2135,5 @@ Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for 
 film master (§6); the recipe travels in the report, not the image container (§5);
 reinhard over a parametric shoulder (§6); a separate contrast and per-channel grade
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
-(§6); one black point, fit range's display black (§6).
+(§6); one black point, fit range's display black (§6); the fallback slope without a
+roll measurement, a white +1.75 stops up (§9 Look).

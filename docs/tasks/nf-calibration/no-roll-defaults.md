@@ -11,36 +11,28 @@ measurement replaces them.
 
 What is known:
 
-- **The first value is the default whole contrast.** Today it is `2.0`, which is
-  `algo::fixed::BUNDLED_CONTRAST`: the decode's linearization `1.8` times the look's
-  fallback slope `look::DEFAULT_SLOPE`, `2.0 / 1.8 ≈ 1.11`. It was kept so that the new flow renders
-  a neutral where the bundled decode did — a continuity choice, never a tuned one.
+- **The first value is the default whole contrast.** When filed it was `2.0`, the
+  bundled decode's: the linearization `1.8` times a fallback slope `2.0 / 1.8 ≈ 1.11`,
+  kept for continuity, never tuned.
 - **The roll-measured whole contrast runs 2.23–2.97** on the nine reviewed rolls
-  (`anchor-comparison`, `roll-white-rule`), all above the fallback. The user has a
+  (`anchor-comparison`, `roll-white-rule`), all above the old fallback. The user has a
   strong prior to raise it, to about `2.5` (slope ≈ 1.39 at the 1.8
   linearization; 2026-09-27).
-- **Whole contrast, not the slope, is the number to choose.** `DEFAULT_SLOPE` is
-  derived as `whole / LINEARIZATION`, so the whole contrast holds if
-  `neutrality-gate` moves the linearization (`scale-gamma-loop` kept it at 1.8).
 - **Moving it moves only renders without a roll white** (`nf-look/contrast-definition`):
   `look.contrast` is a multiplier on this base, so a stated contrast moves with it too.
 - **`direct` does not follow this default by itself.** Its contrast is a separate
-  pinned value (`2.0 / 1.8`, `direct-preset`), so moving the fallback does not move the
-  rendering the calibration loop holds fixed.
+  pinned value (`direct-preset`), so it moves only when decided explicitly.
 
-Open:
+Decided (2026-09-30, progress log):
 
-- Whether `direct`'s pinned contrast moves with the fallback: decided here, explicitly,
-  and logged as a move of the held rendering if it does.
-- The white balance's fallback (neutral today) is the one other value in scope: only
-  the white balance and the contrast have a roll measurement to fall back from.
+- **The fallback is a white**, `roll_white::FALLBACK_WHITE_STOPS` = **+1.75** (whole
+  contrast 2.54), chosen by review over 2.0 and the floor; the slope is `slope_for` of it.
+- **`direct`'s pinned slope moved to the same value**, logged as a move of the held
+  rendering.
+- **White balance stays neutral and exposure 0** without a measurement — the other two
+  values a `roll` section supplies (`roll.exposure` arrived after this task was filed).
   Highlight desaturation and display black are the `default` rendering's defaults
-  whether or not a roll is measured, so tuning them is their own tasks'
-  (`nf-look/desaturation-band-refit`; display black's default was chosen in
-  `nf-display-stages/parametric-operator`), never a value that changes with the
-  presence of a `roll` section.
-- How to judge a fallback: a single value against every roll's measured contrast, or a
-  review of frames rendered without a measurement.
+  whether or not a roll is measured, so tuning them is their own tasks'.
 
 ## How to Verify
 
