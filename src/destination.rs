@@ -125,38 +125,29 @@ pub fn parse<A: Axis>(s: &str) -> std::result::Result<A, String> {
         })
 }
 
-/// A removed spelling of `A`, in any case, with why it went.
+/// A removed spelling of `A`, in any case, with why it went. Untrimmed: the caller
+/// decides whether surrounding space is part of the value.
 fn removed<A: Axis>(s: &str) -> Option<(&'static str, &'static str)> {
     A::REMOVED
         .iter()
         .copied()
-        .find(|(name, _)| s.trim().eq_ignore_ascii_case(name))
+        .find(|(name, _)| s.eq_ignore_ascii_case(name))
 }
 
-/// A removed value a recipe states under `output.display`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RemovedValue<'v> {
-    /// The axis's recipe key.
-    pub key: &'static str,
-    /// The value as written.
-    pub stated: &'v str,
-    /// Why it went.
-    pub why: &'static str,
-    /// The axis's own default, the value a recipe states instead.
-    pub default: &'static str,
-}
-
-/// The first removed value a raw recipe `output.display` object states — for
-/// `recipe::check_body`, which refuses it by key before serde would word it as the flag.
-pub fn removed_in_recipe(display: &serde_json::Value) -> Option<RemovedValue<'_>> {
-    fn one<A: Axis>(display: &serde_json::Value) -> Option<RemovedValue<'_>> {
+/// The refusal for the first removed value a raw recipe `output.display` object states
+/// — for `recipe::check_body`, which words it by key before serde would word it as the
+/// flag.
+pub fn removed_in_recipe(display: &serde_json::Value) -> Option<String> {
+    fn one<A: Axis>(display: &serde_json::Value) -> Option<String> {
         let stated = display.get(A::KEY)?.as_str()?;
-        removed::<A>(stated).map(|(_, why)| RemovedValue {
-            key: A::KEY,
-            stated,
-            why,
-            default: A::DEFAULT.name(),
-        })
+        // Trimmed, as `parse` reads it, so nothing serde would accept slips past.
+        let (_, why) = removed::<A>(stated.trim())?;
+        Some(format!(
+            "`output.display.{key}` \"{stated}\" was removed: {why}. State \
+             `\"{key}\": \"{default}\"` there instead, or drop the key",
+            key = A::KEY,
+            default = A::DEFAULT.name(),
+        ))
     }
     one::<Range>(display)
         .or_else(|| one::<Transfer>(display))
@@ -456,10 +447,7 @@ impl Container {
     /// Why a path's suffix names a removed container, if it does — so `out.avif` is
     /// refused rather than read as the stem of `out.avif.tiff`.
     pub fn removed_suffix(ext: &std::ffi::OsStr) -> Option<&'static str> {
-        <Self as Axis>::REMOVED
-            .iter()
-            .find(|(name, _)| ext.eq_ignore_ascii_case(name))
-            .map(|(_, why)| *why)
+        ext.to_str().and_then(removed::<Self>).map(|(_, why)| why)
     }
 }
 
@@ -1533,17 +1521,20 @@ mod tests {
             Container::removed_suffix(std::ffi::OsStr::new("tiff")),
             None
         );
-        // And so does the recipe's, keeping the value as written.
-        let display = serde_json::json!({"transfer": "pq", "container": "AVIF"});
+        // A suffix is not trimmed: ` avif` is no spelling of a container.
         assert_eq!(
-            removed_in_recipe(&display),
-            Some(RemovedValue {
-                key: "container",
-                stated: "AVIF",
-                why: AVIF_REMOVED,
-                default: "tiff",
-            })
+            Container::removed_suffix(std::ffi::OsStr::new(" avif")),
+            None
         );
+        // And so does the recipe's, keeping the value as written and naming the key.
+        let display = serde_json::json!({"transfer": "pq", "container": " AVIF"});
+        let err = removed_in_recipe(&display).unwrap();
+        assert!(
+            err.starts_with("`output.display.container` \" AVIF\" was removed"),
+            "{err}"
+        );
+        assert!(err.contains(AVIF_REMOVED), "{err}");
+        assert!(err.contains("`\"container\": \"tiff\"`"), "{err}");
         assert_eq!(
             removed_in_recipe(&serde_json::json!({"container": "tiff"})),
             None

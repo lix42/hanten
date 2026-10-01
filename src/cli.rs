@@ -1796,6 +1796,16 @@ fn resolve_output_path(
     context: SuffixContext<'_>,
 ) -> Result<PathBuf> {
     let container = target.container();
+    // First: `out.tiff/` has a known suffix but names a directory, and would fail only
+    // at the write, after the render.
+    if let Some(reason) = Unappendable::of(given) {
+        return Err(unappendable_error(
+            reason,
+            given,
+            container.canonical(),
+            context,
+        ));
+    }
     if let Some(why) = given.extension().and_then(Container::removed_suffix) {
         return Err(NcError::Usage(format!(
             "{}the output path {}: {why}. Name it `.{}`, or leave the suffix off and \
@@ -1817,7 +1827,7 @@ fn resolve_output_path(
             }
         }
         // No dot-segment, or one no container claims: the whole path is the stem.
-        _ => append_suffix(given, container.canonical(), context),
+        _ => Ok(append_suffix(given, container.canonical())),
     }
 }
 
@@ -1885,7 +1895,7 @@ impl Unappendable {
     }
 }
 
-/// The diagnosis for a path with nothing to append a suffix to. Like
+/// The diagnosis for a path that names no file to write. Like
 /// [`suffix_mismatch_error`], every arm names a remedy the *reader's* command line
 /// can actually reach — a bare message told a `roll` user to "use `hanten roll
 /// --out-dir`" while they were running exactly that, and never said which of 40
@@ -1901,9 +1911,9 @@ fn unappendable_error(
         // remedies *that entry* has. Never `--out-dir`: it is a whole-roll flag the
         // reader has already passed, and it cannot fix one entry.
         SuffixContext::RollFrame(input) => format!(
-            "frame {}: the manifest's explicit output {} {}, so Hanten has nothing to \
-             append a `.{ext}` suffix to — give the entry's `output` a file name, or drop \
-             its `output` key to take the derived name inside the out-dir",
+            "frame {}: the manifest's explicit output {} {}, not a file Hanten can write \
+             the `.{ext}` output to — give the entry's `output` a file name, or drop its \
+             `output` key to take the derived name inside the out-dir",
             input.display(),
             given.display(),
             reason.what()
@@ -1913,8 +1923,8 @@ fn unappendable_error(
         // trailing separator comes from in the first place.
         _ => {
             let mut msg = format!(
-                "the output path {} {}, so Hanten has nothing to append a `.{ext}` \
-                 suffix to — give a path ending in a file name",
+                "the output path {} {}, not a file Hanten can write the `.{ext}` output \
+                 to — give a path ending in a file name",
                 given.display(),
                 reason.what()
             );
@@ -1933,20 +1943,17 @@ fn unappendable_error(
 /// Appended, never [`PathBuf::set_extension`]: that *replaces*, so it would turn
 /// `out.v2` into `out.jpg` and eat a stem the user typed.
 ///
-/// Refused for either [`Unappendable`] shape rather than completed — completing a
-/// directory path writes its sibling, which on `roll` puts the whole roll outside
-/// the `--out-dir` the user named, at exit 0, with the report agreeing.
-fn append_suffix(given: &Path, ext: &str, context: SuffixContext<'_>) -> Result<PathBuf> {
-    if let Some(reason) = Unappendable::of(given) {
-        return Err(unappendable_error(reason, given, ext, context));
-    }
+/// The caller has refused either [`Unappendable`] shape — completing a directory path
+/// writes its sibling, which on `roll` puts the whole roll outside the `--out-dir` the
+/// user named, at exit 0, with the report agreeing.
+fn append_suffix(given: &Path, ext: &str) -> PathBuf {
     let mut completed = given
         .file_name()
-        .expect("Unappendable::of rejects a path with no file name")
+        .expect("resolve_output_path refuses a path with no file name")
         .to_os_string();
     completed.push(".");
     completed.push(ext);
-    Ok(given.with_file_name(completed))
+    given.with_file_name(completed)
 }
 
 /// The diagnosis for a stated suffix the resolved destination does not write. Every
@@ -3323,8 +3330,7 @@ fn report_hdr_coded_tiff(
         sample_format: summary.sample_format,
         bigtiff: summary.bigtiff,
         icc_bytes: summary.icc_bytes,
-        // Deliberately **not** `metadata.cicp_matrix_coefficients` (9, Y'CbCr): an
-        // RGB ICC profile requires 0, and the profile this file embeds writes 0.
+        // MatrixCoefficients 0: an RGB ICC profile requires it (ICC.1:2022 §10.3).
         cicp: [metadata.cicp_color_primaries, metadata.cicp_transfer, 0],
         full_range: metadata.full_range,
         max_quantization_error_codes: summary.max_quantization_error_codes,

@@ -1347,9 +1347,9 @@ this predictable:
   `roll-1.2.tiff`. Only `.tif`, `.tiff`, `.jpg` and `.jpeg` are read as a
   container request, and `.avif` is refused (AVIF was removed) rather than read as a
   stem.
-- **A path that names a directory is refused.** There is nothing to append to, so
-  `-o positives/` and `-o positives/.` both exit 2 rather than writing
-  `positives.tiff` beside the directory. Name the file inside it
+- **A path that names a directory is refused**, before anything renders and whatever
+  its suffix: `-o positives/`, `-o positives/.` and `-o out.tiff/` all exit 2 rather
+  than writing `positives.tiff` beside the directory or failing at the write. Name the file inside it
   (`-o positives/out`), or use `hanten roll --out-dir positives/` for a whole roll.
   In a `roll` manifest the same applies to an `"output"` of `"."` — drop the
   `output` key instead and the frame takes its derived name inside `--out-dir`.

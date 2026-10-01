@@ -6386,6 +6386,24 @@ fn an_output_path_naming_a_directory_is_refused_not_completed_to_a_sibling() {
         );
     }
 
+    // A stated suffix does not make a directory path a file: refused before the render,
+    // not at the write (exit 5) — and ahead of the removed-container refusal, whose
+    // remedy would otherwise lead straight to `out.tiff/`.
+    for name in ["out.tiff", "out.avif"] {
+        let given = format!("{}/", tmp.path(name).display());
+        let (code, _stdout, err) = run(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            &given,
+            "--film-base",
+            "1,1,1",
+        ]);
+        assert_eq!(code, 2, "{given}: {err}");
+        assert!(err.contains("names a directory"), "{given}: {err}");
+        assert!(!err.contains("AVIF"), "{given}: {err}");
+    }
+
     // Falsifiable control: the same path without the separator is a stem and works.
     let stem = tmp.path("stem");
     let (code, _stdout, err) = run(&[

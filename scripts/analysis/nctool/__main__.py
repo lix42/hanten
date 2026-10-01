@@ -165,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="set output.display.transfer in the recipe")
     rconvert.add_argument("--gamut", choices=("display-p3", "adobe-rgb", "srgb", "bt2020"),
                           help="set output.display.gamut in the recipe")
-    rconvert.add_argument("--container", choices=("tiff", "jpeg", "avif"),
+    rconvert.add_argument("--container", choices=("tiff", "jpeg"),
                           help="set output.display.container in the recipe")
     rconvert.add_argument("--exposure", type=float,
                           help="set scene_correction.exposure (stops) in the recipe")

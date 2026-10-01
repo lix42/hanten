@@ -762,19 +762,12 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     }
     // A removed destination value (AVIF, `output/drop-avif`). Named by key here: serde
     // would word it as the flag, which cannot rescue a recipe that fails before merge.
-    if let Some(r) = body
+    if let Some(message) = body
         .get("output")
         .and_then(|o| o.get("display"))
         .and_then(crate::destination::removed_in_recipe)
     {
-        return usage(format!(
-            "`output.display.{key}` \"{stated}\" was removed: {why}. State \
-             `\"{key}\": \"{default}\"` there instead, or drop the key",
-            key = r.key,
-            stated = r.stated,
-            why = r.why,
-            default = r.default,
-        ));
+        return usage(message);
     }
     // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
     // Refused at every value, the old default included: no single new key replays it.
