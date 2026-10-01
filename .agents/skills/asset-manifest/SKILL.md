@@ -80,24 +80,26 @@ warm updates, but a same-size edit would go undetected).
 ```
 <asset-root>/
   manifest.json
-  rolls/<roll>/<frame>.tif          # roles: unexposed | leader | real
+  rolls/<roll>/<frame>.tif          # roles: unexposed | leader | calibration | real
   samples/<file>.tif  samples/<sub>/<file>.tif   # standalone fixtures
   converted/<producer>/<version>/[<roll>/]<file> # producer: nc | nlp
 ```
 
-- New rolls/frames default `role: "real"`; mark `unexposed`/`leader` by editing
-  `manifest.json` (preserved thereafter). Known nc rolls have seeded
-  roles/stock for first-ever generation.
+- A frame or roll new to the manifest is seeded from its name: `base.tif` →
+  `unexposed`, `leader.tif` → `leader`, `calibration.tif` → `calibration`, any other
+  frame `real`; stock from a `<date>-<Stock><speed>` roll name, else `unknown`.
+  Correct a role by editing `manifest.json`; the edit is preserved thereafter.
 - **A frame's `role` is the only way to keep a non-picture frame out of a
   measurement.** Consumers filter on `role == "real"`; no density or span threshold
   can do it, because a half-leader/half-base frame has the *largest* density span on
-  its roll — what it lacks is scene content. Give such a frame any non-`real` role
-  (`nctool manifest roles` warns on an unrecognised one and treats it as `real`,
-  which only affects the harness's grouping).
+  its roll — what it lacks is scene content. Give such a frame a non-`real` role.
+  Not every consumer honours that yet:
+  `manifest roles` and `shadow_metrics` count `calibration` as `real`, and `nctool
+  roll` refuses its roll (`analysis/calibration-role-consumers`).
 - `converted/nc/*` buckets default `regenerable: true` (sha256 skipped, since the
   harness reproduces them) except `V0`; `nlp/*` and everything else are hashed.
 - `source_frame` for a converted output is resolved by matching its filename stem
-  against the source roll's frames; NLP outputs map to `Portra160-2026-07-22`.
+  against the source roll's frames; NLP outputs with no roll directory map to `2026-07-23-Portra160`.
 - The inventory tracks **image artifacts** (`.tif`/`.tiff`). Companion files that
   share an image's stem — `.json` recipe/report sidecars and `.jpg` previews — are
   intentionally **not** separate entries; they travel with their image. `validate`

@@ -38,45 +38,20 @@ from . import patches as _patches
 SCHEMA = 2
 
 # Seeds applied ONLY when neither the existing manifest nor a prior run supplies
-# the value (i.e. first-ever generation). Human edits in manifest.json always win.
-SEED_ROLES = {
-    "Ektar": {"20260713-nikon-963": "unexposed", "20260715-nikon-1009": "leader"},
-    "phoenix": {"20260712-nikon-933": "unexposed", "20260715-nikon-1010": "leader"},
-    "Portra160": {"20260720-nikon-1059": "unexposed", "20260720-nikon-1058": "leader"},
-    "Portra400": {"20260714-nikon-994": "unexposed", "20260717-nikon-1032": "leader"},
-    "Portra400-leica-flaw": {"20260719-nikon-1034": "unexposed",
-                             "20260719-nikon-1033": "leader"},
-    # Confirmed 2026-08-02 while freezing the sigmoid-baseline fixtures. These two rolls
-    # had no seed, so a from-scratch generation (no `prev` to inherit roles from) left every
-    # frame `real`, `manifest roles` skipped both rolls, and the committed freeze recipes
-    # became unreproducible. Seeds exist precisely to survive that case.
-    "Portra160-2026-07-22": {"20260722-nikon-1097": "unexposed",
-                             "20260722-nikon-1096": "leader"},
-    "2026-07-24-Gold200": {"20260724-leica-1130": "unexposed",
-                           "20260724-leica-1129": "leader"},
-    "portra400-2026-08-04": {"20260803-film-1230": "unexposed",
-                              "20260803-film-1229": "leader"},
-    # Stems here are the post-rename spelling (2026-09-13): frames carry their serial
-    # number, and a roll's reference frames are named for their role. The entries above
-    # keep the old `<date>-<camera>-<serial>` stems and no longer match anything on disk.
-    "2026-09-14-Ektar100": {"base": "unexposed", "leader": "leader"},
-}
-SEED_STOCK = {
-    "Ektar": "Kodak Ektar 100", "phoenix": "Harman Phoenix 200",
-    "Portra160": "Kodak Portra 160", "Portra160-2026-07-22": "Kodak Portra 160",
-    "Portra400": "Kodak Portra 400", "Portra400-leica-flaw": "Kodak Portra 400",
-    "2026-07-24-Gold200": "Kodak Gold 200", "2026-09-14-Ektar100": "Kodak Ektar 100",
-}
+# the value: a frame or roll new to the manifest, or every one on a first-ever
+# generation (a stored `unknown` stock counts as missing). Human edits in
+# manifest.json always win.
+# They follow the asset folder's naming, not the scanner's: a roll is
+# `<date>-<Stock><speed>[-suffix]` and its reference frames are named for their role.
+SEED_ROLE_BY_STEM = {"base": "unexposed", "leader": "leader", "calibration": "calibration"}
+SEED_STOCK_BRAND = {"Ektar": "Kodak Ektar", "Portra": "Kodak Portra", "Gold": "Kodak Gold",
+                    "Phoenix": "Harman Phoenix"}
+SEED_ROLL_NAME = re.compile(r"\d{4}-\d{2}-\d{2}-([A-Za-z]+)(\d+)(?:-.*)?")
+# The roll a `converted/nlp/<version>/` output with no roll directory came from.
+NLP_SOURCE_ROLL = "2026-07-23-Portra160"
 SEED_ROLL_NOTE = {
-    # The earlier "no in-roll unexposed/leader reference frame" claim was wrong: this
-    # roll has leader 20260722-nikon-1096 and unexposed 20260722-nikon-1097, confirmed
-    # by `manifest roles` on 2026-08-02.
-    #
-    # A seed is NOT a migration: `build_manifest` prefers `prev.roll[roll].note`, so this
-    # value only applies when no prior note exists. Fixing the seed alone would have left
-    # the wrong sentence in place on every ordinary regeneration — the live manifest and
-    # `scripts/analysis/manifest.sample.json` were corrected directly for that reason.
-    "Portra160-2026-07-22": "NLP comparison source",
+    # A seed is NOT a migration: `build_manifest` prefers `prev.roll[roll].note`.
+    NLP_SOURCE_ROLL: "NLP comparison source",
 }
 SEED_SAMPLE = {
     "largest.tif": {"kind": "perf-worst-case",
@@ -86,6 +61,14 @@ SEED_SAMPLE = {
 IMG_EXT = (".tif", ".tiff")
 SUFFIXES = ("_positive_hdr.tiff", "_positive.tiff", "_corr.tif", "_pos.tif",
             "-positive.tif")
+
+
+def seed_stock(roll: str) -> str:
+    """The stock a roll's name spells (`2026-09-20-Portra400` -> `Kodak Portra 400`),
+    else `unknown`."""
+    m = SEED_ROLL_NAME.fullmatch(roll)
+    brand = SEED_STOCK_BRAND.get(m.group(1)) if m else None
+    return f"{brand} {m.group(2)}" if brand else "unknown"
 
 
 # --------------------------------------------------------------------------- nc
@@ -544,7 +527,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                     prevf = cf
                     restored.append(r)
             prevf = prevf or {}
-            role = prevf.get("role") or SEED_ROLES.get(roll, {}).get(stem) or "real"
+            role = prevf.get("role") or SEED_ROLE_BY_STEM.get(stem) or "real"
             frame = {"file": r, "role": role, **fm}
             if prevf.get("patches"):
                 frame["patches"] = prevf["patches"]
@@ -554,8 +537,10 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                     rescanned.append(r)
             frames.append(frame)
         roll_prev = prev.roll.get(roll) or carry.roll.get(roll, {})
-        entry = {"stock": roll_prev.get("stock")
-                 or SEED_STOCK.get(roll, "unknown"), "frames": frames}
+        stock = roll_prev.get("stock")
+        if stock in (None, "", "unknown"):  # a stored miss retries the parse
+            stock = seed_stock(roll)
+        entry = {"stock": stock, "frames": frames}
         note = roll_prev.get("note") or SEED_ROLL_NOTE.get(roll)
         if note:
             entry["note"] = note
@@ -602,7 +587,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                 if fn.endswith(suf):
                     stem = fn[:-len(suf)]
                     break
-            src_roll = roll or "Portra160-2026-07-22"  # nlp default source roll
+            src_roll = roll or NLP_SOURCE_ROLL
             o = {"file": r}
             if roll:
                 o["roll"] = roll
@@ -639,13 +624,13 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
             for o in b["outputs"]:
                 if o.get("source_frame"):
                     nlp_sources.add(o["source_frame"])
-    src_roll_dir = os.path.join(rolls_dir, "Portra160-2026-07-22")
+    src_roll_dir = os.path.join(rolls_dir, NLP_SOURCE_ROLL)
     if os.path.isdir(src_roll_dir):
-        allsrc = {rel("rolls", "Portra160-2026-07-22", f) for f in list_imgs(src_roll_dir)}
+        allsrc = {rel("rolls", NLP_SOURCE_ROLL, f) for f in list_imgs(src_roll_dir)}
         missing = sorted(os.path.basename(x) for x in (allsrc - nlp_sources))
         if missing:
             m["coverage_gaps"].append(
-                "NLP: Portra160-2026-07-22 frames without an NLP output: "
+                f"NLP: {NLP_SOURCE_ROLL} frames without an NLP output: "
                 + ", ".join(missing))
 
     unresolved = [o["file"] for b in m["converted"].values() for o in b["outputs"]

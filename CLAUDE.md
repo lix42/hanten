@@ -173,6 +173,7 @@ Read the module docs before changing these; they hold the traps.
 | telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill; the uploader's lock order on `telemetry/maintenance.rs`; the ingestion Worker in `services/telemetry-ingest/` (its `CLAUDE.md`) |
 | stage names, per-stage timing | `stage.rs` (`StageKind`, `StageClock`) |
 | build identity (`NC_GIT_*`) | `build.rs` |
+| stdout / stderr writes (lint-enforced: `main.rs`, `clippy.toml`) | `stdio.rs` |
 
 Gain-map container changes need the manual `scripts/iso-decoder-oracle/` check
 (macOS only): exiftool accepts files no decoder parses.
@@ -183,7 +184,8 @@ Rust (edition 2024), one binary crate `nc` with binary `hanten`; `Cargo.lock` is
 committed.
 
 - **Before pushing, match CI** (`.github/workflows/ci.yml`):
-  `cargo fmt --all --check` →
+  `cargo fmt --all --check` → `cargo machete` (unused crates; `cargo install
+  cargo-machete`) →
   `cargo clippy --all-targets --all-features -- -D warnings` →
   `cargo build --all-targets --all-features` →
   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` → the `nctool` suite

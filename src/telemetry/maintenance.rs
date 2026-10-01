@@ -14,7 +14,7 @@
 //! Conversions take shared collection lease → gate (briefly) → queue lock; a
 //! drainer takes drain lock → queue lock (released) → gate → shared request lease.
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,7 +26,15 @@ use super::durable::{self, Held, Mode};
 use super::managed::{disabled_by_env, spawn_helper};
 use super::net::{self, Endpoint};
 use super::spool::Queue;
+use crate::stdio;
 use crate::types::{NcError, Result};
+
+/// A line on stderr (`crate::stdio`, which survives a closed pipe).
+macro_rules! say {
+    ($($arg:tt)*) => {
+        stdio::stderr_line(format_args!($($arg)*))
+    };
+}
 
 fn other(e: impl std::fmt::Display) -> NcError {
     NcError::Other(format!("telemetry: {e}"))
@@ -60,7 +68,7 @@ fn wait_for(
     if let Some(held) = take(Some(Duration::from_millis(50))).map_err(other)? {
         return Ok(held);
     }
-    eprintln!("telemetry: waiting for {what}…");
+    say!("telemetry: waiting for {what}…");
     take(None)
         .map_err(other)?
         .ok_or_else(|| other("a blocking lock returned nothing"))
@@ -75,8 +83,7 @@ fn confirm(yes: bool, question: &str) -> Result<()> {
             "telemetry: {question} needs confirmation: pass --yes when not on a terminal"
         )));
     }
-    eprint!("{question} [y/N] ");
-    let _ = io::stderr().flush();
+    say!("{question} [y/N]");
     let mut answer = String::new();
     io::stdin().lock().read_line(&mut answer).map_err(other)?;
     if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
@@ -147,38 +154,38 @@ fn day(ms: u64) -> String {
 fn notice(queue: &Queue, endpoint: &Endpoint) {
     let usage = queue.usage().unwrap_or_default();
     let (records, span) = queue.summary();
-    eprintln!("{MANIFEST}");
-    eprintln!();
+    say!("{MANIFEST}");
+    say!("");
     if *endpoint == Endpoint::Url(net::DEFAULT_ENDPOINT.into()) {
-        eprintln!("Backend: {endpoint}, Hanten's ingestion service on Cloudflare, which");
-        eprintln!("keeps events 180 days.");
+        say!("Backend: {endpoint}, Hanten's ingestion service on Cloudflare, which");
+        say!("keeps events 180 days.");
     } else {
-        eprintln!("Backend: {endpoint} (not Hanten's default service).");
+        say!("Backend: {endpoint} (not Hanten's default service).");
     }
-    eprintln!("Disabling or purging later cannot delete events already uploaded: they");
-    eprintln!("carry no identity to find them by, and expire after 180 days.");
-    eprintln!();
-    eprintln!("Queue: {}", queue.file.display());
-    eprintln!("Spool: {}", queue.spool.display());
+    say!("Disabling or purging later cannot delete events already uploaded: they");
+    say!("carry no identity to find them by, and expire after 180 days.");
+    say!("");
+    say!("Queue: {}", queue.file.display());
+    say!("Spool: {}", queue.spool.display());
     match span {
-        Some((first, last)) => eprintln!(
+        Some((first, last)) => say!(
             "Already queued: {records} records, {} to {} ({} bytes).",
             day(first),
             day(last),
             usage.total_bytes
         ),
-        None => eprintln!(
+        None => say!(
             "Already queued: {records} records ({} bytes).",
             usage.total_bytes
         ),
     }
-    eprintln!("The queue is capped at 25 MiB and records expire after 30 days.");
-    eprintln!();
-    eprintln!("Once enabled, every `hanten convert` records one event to this queue and a");
-    eprintln!("short-lived background process uploads it. Uploading empties the queue file:");
-    eprintln!("it stops being a local history (`--telemetry` to another NC_TELEMETRY_LOG");
-    eprintln!("keeps one). NC_TELEMETRY=0 turns collection off for one process;");
-    eprintln!("`hanten telemetry disable` turns it off.");
+    say!("The queue is capped at 25 MiB and records expire after 30 days.");
+    say!("");
+    say!("Once enabled, every `hanten convert` records one event to this queue and a");
+    say!("short-lived background process uploads it. Uploading empties the queue file:");
+    say!("it stops being a local history (`--telemetry` to another NC_TELEMETRY_LOG");
+    say!("keeps one). NC_TELEMETRY=0 turns collection off for one process;");
+    say!("`hanten telemetry disable` turns it off.");
 }
 
 /// `hanten telemetry enable [--queue PATH] [--yes]`.
@@ -196,7 +203,7 @@ pub fn enable(queue: Option<&Path>, yes: bool) -> Result<()> {
     let current = read(&store)?;
     match &current {
         Some(c) if c.is_active() && c.queue == path => {
-            eprintln!(
+            say!(
                 "telemetry: upload is already enabled for {}",
                 path.display()
             );
@@ -221,9 +228,9 @@ pub fn enable(queue: Option<&Path>, yes: bool) -> Result<()> {
         Some(old) => retarget(&store, &old, &target, &fresh)?,
     }
     if let Err(e) = spawn_helper(&fresh.generation) {
-        eprintln!("hanten: warning: telemetry: could not start the upload helper: {e}");
+        say!("hanten: warning: telemetry: could not start the upload helper: {e}");
     }
-    eprintln!("telemetry: upload enabled for {}", fresh.queue.display());
+    say!("telemetry: upload enabled for {}", fresh.queue.display());
     Ok(())
 }
 
@@ -301,11 +308,11 @@ pub fn disable() -> Result<()> {
     let store = store()?;
     match read(&store)? {
         None => {
-            eprintln!("telemetry: upload was never enabled");
+            say!("telemetry: upload was never enabled");
             return Ok(());
         }
         Some(c) if c.state == State::Inactive => {
-            eprintln!("telemetry: upload is already disabled");
+            say!("telemetry: upload is already disabled");
             return Ok(());
         }
         Some(_) => {}
@@ -318,7 +325,7 @@ pub fn disable() -> Result<()> {
     if let Some(c) = read(&store)?.filter(|c| c.state == State::Active) {
         store.publish(&c.deactivated()).map_err(other)?;
     }
-    eprintln!(
+    say!(
         "telemetry: upload disabled. Queued records are kept; `hanten telemetry purge` \
          deletes them"
     );
@@ -360,7 +367,7 @@ pub fn purge(yes: bool) -> Result<()> {
     }
     let _queue = wait_for(|w| queue.queue_lock(w), "the queue lock")?;
     queue.purge().map_err(other)?;
-    eprintln!("telemetry: purged {}", queue.file.display());
+    say!("telemetry: purged {}", queue.file.display());
     Ok(())
 }
 
@@ -403,7 +410,7 @@ pub fn status() -> Result<()> {
 
 fn print_json(value: &serde_json::Value) -> Result<()> {
     let text = serde_json::to_string_pretty(value).map_err(other)?;
-    writeln!(io::stdout(), "{text}").map_err(other)
+    stdio::stdout_line(&text).map(drop).map_err(other)
 }
 
 /// `hanten telemetry preview`: the request bodies a drain would send now, one per
@@ -420,9 +427,10 @@ pub fn preview() -> Result<()> {
         }
     };
     let bodies = queue.preview(super::now_unix_millis()).map_err(other)?;
-    let mut stdout = io::stdout().lock();
     for body in bodies {
-        writeln!(stdout, "{body}").map_err(other)?;
+        if stdio::stdout_line(&body).map_err(other)? == stdio::Delivery::ReaderGone {
+            break;
+        }
     }
     Ok(())
 }

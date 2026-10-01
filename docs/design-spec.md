@@ -1355,9 +1355,9 @@ keeping the roll color-consistent. The sources, in decreasing reliability:
    cropped to the image with no unexposed film visible, a per-channel high
    percentile of the *exposed content* approximates the base (the thinnest area of
    a negative is the scene's deepest black, close to true base). It would be an
-   **explicit opt-in source** owned by `film-base/content-fallback`
-   (`--base-content` / `calibration.film_base = "content"`), recorded as such in the
-   report — never a silent fallback. When the assumption fails (foggy/high-key
+   **explicit opt-in** `hanten measure-roll` option owned by
+   `film-base/content-fallback`, pooled over the roll's picture frames and frozen as an
+   explicit base, its source recorded in the report — never a silent fallback. When the assumption fails (foggy/high-key
    scenes), blacks wash out and pick up a cast — recoverable downstream as a global
    cast (`reconstruction.offset` / white balance).
 
@@ -1636,14 +1636,15 @@ would cost a Unix-only code path for output that is reproducible by re-running.
 - **Gain-map JPEG** (`nf-destinations/gain-map-destination`, `io::iso_gain_map`) — an
   8-bit SDR base in Display P3 or sRGB, and a half-resolution **per-channel** gain map
   to the HDR rendition, described by **ISO 21496-1 metadata only**, in a Multi-Picture
-  Format container nc writes itself; the gain map's MP Type is `050000`. The Ultra HDR
-  v1 XMP dialect cannot describe a per-channel map and is not written, so neither is
-  libultrahdr used. Every APP segment sits before `SOF0`, where readers stop looking.
+  Format container nc writes itself; the gain map's MP Type is `050000`. It carries no
+  Exif, so its base is not the CIPA DC-007 baseline ISO 21496-1 C.4.3 asks for
+  (DC-007 §4.2.1, §5.1); no reader tested needs one. The Ultra HDR v1 XMP dialect cannot describe a per-channel map and
+  is not written, so neither is libultrahdr used. Every APP segment sits before `SOF0`, where readers stop looking.
   The gain is taken against the base **as stored**, since that is what a decoder
   multiplies (`pipeline::gain_ratio`). Adobe RGB has no gain-map row. Apple ImageIO
   reads it as HDR with three distinct channel entries; a change to the container needs
   the manual `scripts/iso-decoder-oracle/` check (macOS), since exiftool accepts files
-  no decoder parses. Android decoder verification is `output/gain-map-dialect-activation`.
+  no decoder parses. Android and other viewers are `analysis/viewer-interoperability`'s.
 - **PQ / HLG AVIF** — 10-bit, full-range, 4:4:4 AVIF (AV1 High Profile, level capped
   at 6.0 for the Advanced Profile) with CICP `9/16/9` for PQ and `9/18/9` for HLG, a
   203 cd/m² reference white and a 1000 cd/m² mastering peak, in a MIAF container nc
@@ -1953,7 +1954,7 @@ added. Each module's `//!` docs hold its traps (CLAUDE.md, "Where the detail liv
 | TIFF decode/encode | `tiff` (custom handling for scanner extras) |
 | ICC color management | `lcms2` (rust-lcms2) |
 | JPEG | `jpeg-encoder` |
-| Metadata read | `kamadak-exif`, `roxmltree` (SilverFast XMP) |
+| Metadata read | `tiff` (tags), `roxmltree` (SilverFast XMP) |
 | AV1 coding | `libaom` (static, via `libaom-sys`) |
 | Recipe / report JSON | `serde`, `serde_json` |
 | Parallelism | `rayon` |
@@ -1990,6 +1991,13 @@ artifact is left at a final path, and a failure while writing any of one convers
 artifacts leaves *no* primary output rather than an orphaned one (§9 Output/encode).
 A run that fails through an ordinary error path also leaves no `*.nctmp` staging files;
 a run killed by a signal may leave one, since destructors do not run then.
+
+**A reader that goes away is not a failure.** When stdout's or stderr's reader
+closes the pipe (`hanten … | head`), the write is dropped and the run carries on —
+the `--out` recipe, the `--strict` and failed-frame gates and telemetry all come
+after the report — so the exit code is the run's own. `SIGPIPE` stays ignored for the
+same reason: restoring it would kill the run at the report. Any other failure to
+write the report or `params` to stdout is exit 5 (`cli::print_stdout`).
 
 **Memory preflight** (§9 Global, `--max-memory`) maps to exit **6**: before any
 input is decoded, every command that reads a scan estimates the run's peak
@@ -2114,11 +2122,8 @@ shipped or retired item keeps its number and shrinks to one line.
     area (§6.1, §9 `measure`).
 16. **Conversion versioning & baseline comparison** — *shipped*: `identity` (§8), and
     `nctool compare` over `scripts/analysis/benchmark.json`.
-17. **Stdout broken-pipe safety.** Every stdout JSON write uses `println!`, which
-    panics on a closed pipe (`hanten … | head`), printing a backtrace and returning
-    failure though the conversion succeeded. Route all stdout writes through a
-    broken-pipe-tolerant helper, reusing the fail-soft `writeln!(stdout)` pattern the
-    `--telemetry-file -` sink already uses. Tracked: `core/stdout-broken-pipe-safety`.
+17. **Stdout broken-pipe safety** — *shipped* (§11): a reader that closes stdout or
+    stderr early ends neither the run nor its exit code.
 18. **Input data semantics** — *shipped* (§4, §9 Input / decode).
 19. **Conventional scanner ICC before density — deferred experiment.** Compare
     `scanner RGB → Dmin/log density` against applying the same scanner ICC to image
@@ -2132,9 +2137,8 @@ shipped or retired item keeps its number and shrinks to one line.
 22. **Display HDR rendering and AVIF** — *shipped* (§5, §9). Open: the Windows build
     (`output/hdr-avif-windows-packaging`).
 23. **ISO gain-map HDR** — *shipped* as the per-channel, ISO-only gain-map JPEG (§9).
-    Open: Android decoder verification (`output/gain-map-dialect-activation`), MP
-    container conformance (`output/mp-container-conformance`), and cross-device
-    acceptance (`analysis/display-output-acceptance`).
+    Open: viewer checks, Android included (`analysis/viewer-interoperability`), and
+    cross-device acceptance (`analysis/display-output-acceptance`).
 
 ## 13. Open questions
 

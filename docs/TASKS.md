@@ -181,6 +181,7 @@ graph TD
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
+  nf-verification --> analysis
   nf-core --> telemetry
 ```
 
@@ -300,6 +301,8 @@ graph TD
   subgraph analysis
     analysis/real-scan-verification
     analysis/display-output-acceptance
+    analysis/display-acceptance-harness
+    analysis/viewer-interoperability
     analysis/conversion-analysis-tooling
     analysis/asset-manifest
     analysis/conversion-metrics
@@ -314,6 +317,7 @@ graph TD
     analysis/review-build-axis
     analysis/probe-fixture-roll-names
     analysis/manifest-seed-roles
+    analysis/calibration-role-consumers
     analysis/review-test-local-binary
   end
   subgraph nf-core
@@ -465,13 +469,14 @@ graph TD
   core/pipeline-orchestration --> algo/bw-support
   algo/dmax-white-anchor --> algo/bw-support
   film-base/estimation --> film-base/content-fallback
+  core/measure-base --> film-base/content-fallback
   film-base/auto-base-redesign --> film-base/ir-holder-detection
   algo/dmax-white-anchor --> film-base/dmax-reference
   core/pipeline-orchestration --> core/roll-conversion
   algo/dmax-white-anchor --> core/roll-conversion
   core/pipeline-orchestration --> core/conversion-versioning
   core/conversion-versioning --> core/recipe-replay-fidelity
-  algo/reference-anchored-sigmoid --> core/recipe-replay-fidelity
+  nf-core/default-flip --> core/recipe-replay-fidelity
   core/pipeline-orchestration --> io/input-data-semantics
   io/input-data-semantics --> color/scanner-profile-before-density-experiment
   color/management --> color/scanner-profile-before-density-experiment
@@ -581,6 +586,7 @@ graph TD
   analysis/asset-manifest --> analysis/drive-asset-migration
   analysis/asset-manifest --> analysis/probe-fixture-roll-names
   analysis/asset-manifest --> analysis/manifest-seed-roles
+  analysis/asset-manifest --> analysis/calibration-role-consumers
   analysis/asset-manifest --> analysis/calibration-frame-capture
   core/roll-conversion --> core/auto-calibration
   film-base/auto-base-redesign --> core/auto-calibration
@@ -699,6 +705,11 @@ graph TD
   nf-scene-correction/stage --> nf-retire/print-prefix-rename
   nf-core/default-flip --> nf-docs/using-nc
   nf-core/default-flip --> analysis/display-output-acceptance
+  analysis/display-acceptance-harness --> analysis/display-output-acceptance
+  analysis/viewer-interoperability --> analysis/display-output-acceptance
+  nf-core/default-flip --> analysis/display-acceptance-harness
+  nf-verification/benchmark-set --> analysis/display-acceptance-harness
+  nf-core/default-flip --> analysis/viewer-interoperability
   nf-retire/sigmoid-and-simple --> nf-retire/characteristic
   nf-look/stock-data-home --> nf-retire/characteristic
   nf-core/stage-skeleton --> nf-core/report-contract
@@ -719,7 +730,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `core/cli-framework`: `core/project-foundation`
 - `core/pipeline-orchestration`: `io/silverfast-decode`, `io/tiff-encode`, `color/management`, `film-base/estimation`, `algo/simple`, `algo/density`, `core/cli-framework`
 - `core/conversion-versioning` (post-MVP): `core/pipeline-orchestration`
-- `core/recipe-replay-fidelity` (post-MVP): `core/conversion-versioning`, `algo/reference-anchored-sigmoid`
+- `core/recipe-replay-fidelity` (post-MVP; re-scoped 2026-10-01): `core/conversion-versioning`, `nf-core/default-flip`
 - `core/stdout-broken-pipe-safety` (post-MVP, hardening): `core/cli-framework`
 - `core/value-domain-terminology` (post-MVP, cleanup, **preserves data flow**): `core/pipeline-orchestration`
 - `core/dependency-hygiene` (post-MVP, cleanup): `core/pipeline-orchestration` (dep removal is standalone)
@@ -762,7 +773,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `film-base/estimation`: `core/project-foundation`
 - `film-base/auto-base-redesign` (post-MVP): `film-base/estimation`
 - `film-base/ir-holder-detection` (post-MVP): `film-base/auto-base-redesign`
-- `film-base/content-fallback` (post-MVP): `film-base/estimation`
+- `film-base/content-fallback` (post-MVP; re-scoped 2026-10-01): `film-base/estimation`, `core/measure-base`
 - `film-base/estimate-reuse-output` (post-MVP): `core/pipeline-orchestration`
 - `film-base/dmax-reference` (post-MVP): `algo/dmax-white-anchor`
 - `film-base/ir-usability-detection` (post-MVP): `film-base/ir-holder-detection`
@@ -875,7 +886,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
-- `algo/density-safety-bounds` (post-MVP): `algo/density`, `core/pipeline-orchestration`
+- `algo/density-safety-bounds` (post-MVP; re-scoped 2026-10-01): `algo/density`, `core/pipeline-orchestration`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/regional-color-balance` (post-MVP): `algo/density`
 - `algo/bw-support` (post-MVP): `algo/density`, `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `io/gray-primary-decode`
@@ -903,7 +914,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   reproduce **both** dialects, so its C.4.3/C.4.6 placement rules have to be settled
   or the ISO container work gets written twice
 - `output/iso-gain-map-metadata` (post-MVP): `output/gain-map-hdr-output`
-- `output/mp-container-conformance` (post-MVP, **deferred conformance**; no downstream blockers): `output/iso-gain-map-metadata`
+- `output/mp-container-conformance` (post-MVP, **closed—narrowed claim** 2026-10-01; the dep below is decision history): `output/iso-gain-map-metadata`
   — split out 2026-08-06 after reading CIPA DC-007-2025: the gain map is typed
   `Undefined` (`000000`) where Table 4 assigns `050000` and marks `000000` "shall not
   be used", and the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an
@@ -911,7 +922,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   today with both gaps present — so this is conformance-claim work. Deliberately
   *not* a dependency of `output/presets`: it changes shipped `ultra-hdr-v1` container
   bytes and would otherwise hold the product default behind an unrelated change
-- `output/gain-map-dialect-activation` (post-MVP; no downstream blockers): `output/iso-gain-map-metadata`
+- `output/gain-map-dialect-activation` (post-MVP, **closed: merged into `analysis/viewer-interoperability`** 2026-10-01; the dep below is decision history): `output/iso-gain-map-metadata`
   — Android 15+ is the only platform that reads *both* dialects, so the only place
   coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 - `output/sdr-preset-followups` (post-MVP; no downstream blockers): `output/presets`
@@ -969,8 +980,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/upload-live-check` (post-MVP): `telemetry/upload`
 - `telemetry/upload-windows` (post-MVP, **low priority**): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
-- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `nf-core/default-flip`
-  — the default it accepts is the one that move ships
+- `analysis/display-output-acceptance` (post-MVP; re-scoped and split 2026-10-01): `output/presets`, `analysis/real-scan-verification`, `nf-core/default-flip`, `analysis/display-acceptance-harness`, `analysis/viewer-interoperability`
+  — `output/presets` is history: its presets retired with the flip; the default it accepts is
+  the one `nf-core/default-flip` ships
+- `analysis/display-acceptance-harness` (post-MVP; split from `display-output-acceptance` 2026-10-01): `nf-core/default-flip`, `nf-verification/benchmark-set`
+- `analysis/viewer-interoperability` (post-MVP; split from `display-output-acceptance` 2026-10-01, absorbs `output/gain-map-dialect-activation`): `nf-core/default-flip`
 - `analysis/conversion-analysis-tooling` (post-MVP, spike): `analysis/real-scan-verification`
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
@@ -992,6 +1006,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — filed 2026-09-24: the `#[ignore]`d asset probes look rolls up by pre-rename names and panic
 - `analysis/manifest-seed-roles` (post-MVP): `analysis/asset-manifest`
   — filed 2026-09-24: no `SEED_ROLES` entry matches a date-named roll, so a from-scratch generation marks reference frames `real`
+- `analysis/calibration-role-consumers` (post-MVP): `analysis/asset-manifest`
+  — filed 2026-10-01: `manifest roles` and `shadow_metrics` count a `calibration` frame as `real`, and `nctool roll` refuses its roll
 - `analysis/review-test-local-binary` (post-MVP): none
   — filed 2026-09-25: the `nctool` gate fails locally whenever a release binary is built,
   which every review set does
@@ -1297,17 +1313,19 @@ the design now in `docs/design-spec.md` (§6–§7):
   `nf-scene-correction/roll-white-balance`), and the one per-frame
   measurement left, a `region` film base, is the one `roll` already warns about
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
-- [ ] [Recipe replay fidelity for non-default behavior changes](tasks/core/recipe-replay-fidelity.md) — `pipeline_version` covers the **default** path only, so a recipe opting into a non-default curve replays under a new build with the same label and different pixels (first instance: the 2026-08-03 sigmoid defaults). Decide the policy — widen the label, add a second one, generalize the drift warning, or keep historical defaults — then retrofit that instance and retire its bespoke warning.
-- [ ] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
+- [ ] [Recipe replay fidelity](tasks/core/recipe-replay-fidelity.md) — *re-scoped 2026-10-01*: the replay check reads `meta.pipeline_version` from an envelope, and since `pipeline_version` 8 nothing hanten writes is one (`--dump-params`, `measure-roll --out`), so a moved default replays silently; `roll.json` also omits the decode it measured under. Direction: stamp provenance into every written document and always write the decode into `roll.json`.
+- [x] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
   stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed
-  pipe (e.g. `hanten … | head`) without a panic/backtrace. Pre-existing on `main`, not
-  caused by the telemetry work.
+  pipe (e.g. `hanten … | head`) without a panic/backtrace. **Done 2026-10-01**: every
+  stdout and stderr write goes through `stdio`; a closed pipe drops the write and the
+  run carries on with its own exit code (`SIGPIPE` stays ignored, since `--out`,
+  the gates and telemetry come after the report); any other stdout failure is exit 5
 - [ ] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
-- [ ] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
-  hygiene review: drop three unused crates (`image`, `kamadak-exif`, `palette` —
-  verified builds without them; `image` pulls a large codec tree) and unify the two
-  `Algorithm` enums onto `types::Algorithm`, removing the dead copy and its
-  `#[allow(dead_code)]`. Pure cleanup, byte-identical output.
+- [x] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
+  hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image`
+  (test-only, JPEG decode) to a JPEG-only dev-dependency; CI runs `cargo machete`.
+  Pure cleanup, byte-identical output. The review's duplicate `Algorithm` enum had already gone with the
+  `reconstruction` object.
 - [ ] [Release readiness](tasks/core/release-readiness.md) — from the release-readiness
   review: (1) correct public docs that misstate the product (README "pre-implementation"
   + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in
@@ -1368,7 +1386,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Film-base / Dmin estimation](tasks/film-base/estimation.md)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
-- [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
+- [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — *re-scoped 2026-10-01*: an opt-in `measure-roll` option pooling a high percentile over the roll's picture frames into one explicit base, its source in the report; whether `convert` keeps a per-frame form is open
 - [x] [Reuse-ready `hanten estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
 
@@ -1475,11 +1493,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
 - [ ] [Black & white negative support (mono color model)](tasks/algo/bw-support.md)
-- [ ] [Density safety bounds](tasks/algo/density-safety-bounds.md) — from the
-  density-safety review: physical bounds on `density_scale`/`offset`/`gamma` (the
-  sigmoid-bounds analogue density lacks) + a degenerate-output (histogram/dynamic-
-  range collapse) warning catching the finite-all-black underflow the loss counters
-  miss, with a false-positive guard validated on real scans.
+- [ ] [Density safety bounds](tasks/algo/density-safety-bounds.md) — *re-scoped
+  2026-10-01* for the new chain: `--density-offset=-5,…`, `--exposure=-100` and a tiny
+  white-balance gain still render all black with no warning, and extreme decode values
+  reach an internal error in fit range. Make every such value a named usage error, warn
+  when an output channel is entirely 0, then tune a near-black collapse warning on real
+  scans.
 
 ### color — [progress](progress/color.md)
 > `pipeline/color.rs`, `pipeline/working_space.rs`, and
@@ -1510,8 +1529,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Ultra HDR v1 gain-map JPEG output](tasks/output/gain-map-hdr-output.md) — write an explicit backward-compatible Display P3 JPEG plus public Ultra HDR v1 gain-map metadata
 - [x] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needs CMake and NASM for libaom and a C compiler for lcms2. Retained as decision history
 - [x] [Final ISO gain-map metadata](tasks/output/iso-gain-map-metadata.md) — add verified ISO 21496-1:2025 metadata to the same JPEG and prove dual-dialect agreement. **Metadata and container halves implemented against the licensed text** (2026-08-04: `pipeline/gain_map/iso.rs` C.2.2 payload + normative validation; `io/ultra_hdr.rs` `Dialects::LegacyPlusIso` writing C.4.3/C.4.6 segments into both images, MPF-safe). **Code complete**; verified with exiftool (MPF index resolves, second image extracts, 2350+1186=3536 bytes) and `sips`. **Both blockers cleared 2026-08-06**: the CIPA DC-007 text was fetched and read (its two conformance gaps split into `output/mp-container-conformance`), and the external decoder oracle ran — Apple ImageIO, harness committed at `scripts/iso-decoder-oracle/`. The oracle found a real defect: the baseline segment sat *after* `SOF0`, where no reader scans, so ImageIO saw no gain map at all; fixed, and the metadata now reads back field-for-field as written (the decoder's 4.926 headroom is nc's own declared constant echoed back, not evidence — `GainMapMax` is). **Done 2026-08-07** on the strength of the Apple oracle plus libultrahdr; the Android 15+ half and CLI activation moved to `output/gain-map-dialect-activation` so they stop gating `output/presets`. **Note the `ts:` URN is the published first edition's, not a draft** — and libultrahdr's compact-denominator ISO layout is *non-conformant*, so nc owns its serializer.
-- [ ] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — *Premise moved (`nf-core/default-flip`, 2026-09-27): libultrahdr and `ultra-hdr-v1` are gone, and the ISO-only writer `io::iso_gain_map` already writes MP Type `050000`; re-scope before starting.* **Deferred conformance**, split out of `iso-gain-map-metadata` on 2026-08-06 after reading the free CIPA text. Three gaps, none functional: the gain map carries MP Type `000000` (Undefined) where DC-007 Table 4 assigns `050000` and marks `000000` "shall not be used" in a Baseline MP File — inherited from libultrahdr, whose own output does the same — the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file (§7's *tag* requirements are only "should"), and in the gain-map image libultrahdr's prepended XMP puts `APP1` before `APP0 JFIF`, so JFIF is not first in the dependent image (found by review, not in the CIPA read). The type code is a masked 4-byte MPEntry patch but **changes shipped `ultra-hdr-v1` bytes**; the Exif half must be probed against `package()` and re-run through the ImageIO oracle, since a marker-layout change is exactly what silently disabled the ISO metadata once. Blocks nothing
-- [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09). *Premise moved (`nf-core/default-flip`, 2026-09-27): the gain map is now `--range hdr`'s ISO-only per-channel JPEG and not the default; re-scope before starting*
+- [x] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **closed—narrowed claim** (2026-10-01): `io::iso_gain_map` already writes MP Type `050000` and keeps `APP0 JFIF` first; the file carries no Exif, so its base is not the DC-007 baseline ISO 21496-1 C.4.3 asks for (DC-007 §4.2.1, §5.1), recorded in its module doc and design-spec §9
+- [x] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is that task's
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
 - [x] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
 - [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — *re-scoped
@@ -1640,7 +1659,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 > it is not part of it.
 
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
-- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — verify the default preset as shipped, SDR fallback, explicit output presets, metadata, and cross-device behavior on the same real scans
+- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
+- [ ] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans
+- [ ] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS/iPhone, Android 15+ (from `output/gain-map-dialect-activation`), another non-Apple reader and an SDR-only reader
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
 - [x] [Conversion metrics & photographic analysis](tasks/analysis/conversion-metrics.md) —
@@ -1702,7 +1723,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   about itself, never typed into the matrix — and a build that reports two identities in one
   run aborts it.
 - [x] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
-- [ ] [Seed roles for the date-named rolls](tasks/analysis/manifest-seed-roles.md) — a from-scratch `nctool manifest generate` would mark every roll's `base.tif`/`leader.tif` as `real`
+- [x] [Seed roles for the date-named rolls](tasks/analysis/manifest-seed-roles.md) — done
+  2026-10-01. A frame or roll new to the manifest is seeded from its name: `base` /
+  `leader` / `calibration` stems give those roles, and stock is parsed from a
+  `<date>-<Stock><speed>` roll name. A from-scratch generation reproduces the live manifest.
+- [ ] [Teach the role consumers the `calibration` role](tasks/analysis/calibration-role-consumers.md) — `manifest roles` and `shadow_metrics` count it as `real`; `nctool roll` refuses the roll
 - [x] [`nctool`'s default-binary test depends on the
   checkout](tasks/analysis/review-test-local-binary.md) — fails whenever
   `target/release/hanten` exists; CI never builds one, so only local gates see it

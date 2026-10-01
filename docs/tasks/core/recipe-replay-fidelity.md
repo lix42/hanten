@@ -1,136 +1,77 @@
-# Recipe replay fidelity for non-default behavior changes
+# Recipe replay fidelity
+
+> **Re-scoped 2026-10-01** for the new chain. The original file was about recipes
+> opting into a non-default curve (the 2026-08-03 sigmoid defaults, the 2026-09-09
+> `density.scale` move) and the stopgap `cli::unpinned_curve`. All three are moot:
+> recipes written before `pipeline_version` 8 are refused whole, and the stopgap is
+> deleted. The four policy options and the two rejected remedies are in git. The
+> problem below replaces them.
 
 ## Goal
 
-Decide and implement what `nc` owes a **frozen recipe whose render changed because a
-non-default path's defaults moved**. Today `pipeline_version` answers this for the
-*default* path only, so a recipe that opts into a non-default curve can be replayed under
-a new build, carry the same `pipeline_version`, and produce different pixels.
+Every document `hanten` writes can tell a later build that a default it relied on
+moved. A replay either reproduces its render or says loudly that it cannot.
 
-## Background
+## The gap, measured 2026-10-01
 
-`core/conversion-versioning` shipped the identity stamp, the `pipeline_version` label, and
-the `PIPELINE_FINGERPRINTS` drift gate. Its contract is deliberately narrow — the constant
-"bumps *only* when the **default** conversion behavior changes" and the gate hashes the
-default recipe plus the curated golden vectors. That was the right scope for the label; it
-leaves a real hole one level down.
+`cli::pipeline_version_warning` is the only replay check. It reads
+`meta.pipeline_version` from a `{meta, params}` envelope. Since `pipeline_version` 8
+no run writes a sidecar, and every document a run does write is a **bare** recipe:
 
-`algo/reference-anchored-sigmoid` (2026-08-03) is the first instance and made the hole
-concrete. It changed three sigmoid defaults — `contrast` 1.0 → ≈2.0687, `shoulder` 0.2 →
-0.6, and a new `curve.anchor` defaulting to mid-grey placement where the previous behavior
-pinned display white. The default curve was `exponential` at the time (it became the
-sigmoid five days later, on 2026-08-08), so:
+- `convert --dump-params` — no `meta`, no version;
+- `measure-roll --out` (`roll.json`) — no `meta`, no version;
+- `hanten params` — the same.
 
-- `PIPELINE_VERSION` correctly did **not** move, by its own documented contract;
-- the drift gate correctly did **not** fail, because it stops at the default recipe;
-- yet any recipe selecting `sigmoid` renders differently, even with `contrast`, `toe`,
-  `shoulder` and `dmax` all pinned — because omitted keys take the *new* defaults.
+A hand-made envelope stamped 8 does warn on this build (9). Nothing hanten writes is
+an envelope, so the check never fires in practice.
 
-That task shipped a hand-written, `--strict`-promotable warning
-(`cli::sigmoid_anchor_default_warning`) for the `anchor` case, modelled on the existing
-`pipeline_version_warning`. It closes that one instance and does not generalize: it names
-one knob and one date in prose, and it says nothing about the `contrast` and `shoulder`
-moves that have the identical property.
+Two instances follow:
 
-**Second instance — `reconstruction.density.scale`, 2026-09-09 (`pipeline_version` 4).**
-`algo/film-stock-profiles` moved the parametric curves' per-channel density gain from
-`[1, 1, 1]` to `[1, 0.90, 0.86]`. This one *did* bump `PIPELINE_VERSION` — it moved the
-default render — and the hole survived anyway: the label rides in `meta.pipeline_version`,
-which a bare `--params` recipe does not carry, so a recipe pinning every curve knob and
-silent on the gain replayed in a different **colour** with no warning at all. The stopgap
-was widened rather than generalized: `cli::unpinned_curve` (the first instance's warning,
-since renamed from `sigmoid_anchor_default_warning` and extended to the whole curve object)
-now also reports an unstated gain, as `UnpinnedCurve::DensityScale`.
-
-Two things this instance adds to the decision below:
-
-- The two classes differ **in kind** — 2026-08-03 moved tone, this moved colour — and
-  nothing in a recipe distinguishes them, so a policy scoped to "behavior-selecting" keys
-  has to answer for both.
-- The gap was found by review, not by a failing test. That is the concrete argument for
-  option 3's *declared, tested* table over further hand-written predicates: today a new
-  default move warns only if whoever moves it remembers this function exists.
-
-**Two remedies were considered and rejected there, for reasons that should not be
-re-derived:**
-
-- **Bumping `reconstruction.schema_version`** — that constant versions the schema *shape*
-  and the reader checks it for **exact equality**, so bumping rejects every recipe that
-  emitted the old version, including the majority selecting `exponential` that such a
-  change does not touch. Trading silent reinterpretation of some recipes for hard rejection
-  of all of them is not an improvement.
-- **Per-schema-version default tables** (decode v1 as `white-at-dmax`) — a defensible
-  design, but it cannot stop at one knob, and committing the project to maintaining
-  historical defaults per version is a *policy* decision that belongs here rather than
-  inside an algo task.
+1. **The fallback slope (`pipeline_version` 9, `nf-calibration/no-roll-defaults`).** A
+   `--dump-params` file written under 8 with no `roll.white_stops` replays under 9's
+   moved fallback slope, with no warning. Values a recipe leaves unset come from the
+   rendering's base (`crate::rendering`), which a default move changes.
+2. **`roll.json` does not record the decode it measured under.** `measure-roll`
+   carries `input`, `measure` and `reconstruction` into `--out` only when the input
+   recipe stated them. Its gains, white and exposure are measured through the decode
+   (`scale`, `linearization`, `anchor`), so a move to a decode default leaves every
+   saved roll measurement wrong, without a warning.
 
 ## Design
 
-**This task's first deliverable is the decision, not code.** Pick one policy and write it
-down where the next default change will find it; the implementation follows from the pick.
-Sketched options, with what each costs:
+Agreed direction (2026-10-01 review), to confirm at execution:
 
-1. **Widen the label.** `pipeline_version` bumps for any behavior change reachable from a
-   recipe, not only the default path. Cheapest to state, and the gate already knows how to
-   enforce a label. Cost: the version stops meaning "the default render moved", so
-   comparing two default renders needs a second signal, and the gate's coverage must grow
-   to the non-default paths it currently skips (the sigmoid *is* pinned by
-   `pipeline::stages::golden`, but no label is keyed to it).
-2. **A second label** for opt-in path behavior, leaving `pipeline_version` alone.
-   Preserves the existing meaning; costs a new concept in every report and comparison.
-3. **Generalize the warning.** Keep both labels as they are and make "this defaulted key's
-   default moved in build X" a declared, tested table rather than a hand-written string —
-   so the *next* default move cannot ship without an entry. Cheapest to live with, weakest
-   guarantee: a warning is not reproducibility.
-4. **Historical defaults**, keyed on schema version. Strongest fidelity — an archived
-   recipe reproduces exactly — and the most expensive to maintain, since every future
-   default change adds a row that must stay correct forever.
+- **Stamp provenance** (`meta.pipeline_version`) into every document hanten writes,
+  which brings the existing check back.
+- **Always write the decode into `roll.json`**, so its measurements are pinned to the
+  decode that produced them, stated or not.
 
-Whatever is chosen must state its answer to the questions the sigmoid instance raised:
+Alternatives, if the direction does not hold:
 
-- Does replaying an archived recipe **reproduce** its original render, or merely **say
-  loudly** that it cannot? (1–3 choose the latter; 4 the former.)
-- Which defaults are in scope — every `#[serde(default)]` recipe key, or only those on a
-  behavior-selecting path?
-- What does the **gate** cover? `PIPELINE_FINGERPRINTS` stops before lcms2 and before
-  `io::{decode,encode}` and hashes only the default recipe; a policy that promises more
-  than the gate enforces is a promise no CI failure will keep.
+- Write resolved values instead of nulls, so a document pins itself.
+- A declared, tested table of moved defaults.
 
-**Retrofit the known instances.** Whatever the policy, the three sigmoid defaults that
-moved on 2026-08-03 are its first rows / labels and `density.scale`'s 2026-09-09 move is
-the next, and the hand-written warning (`cli::unpinned_curve` / `curve_default_warning`,
-which is what `sigmoid_anchor_default_warning` became) either becomes an instance of the
-general mechanism or is deleted in favour of it. Leaving a bespoke warning beside a
-general mechanism is the outcome to avoid.
+## Open questions
 
-**Boundaries.** This is about *behavior* drift under a stable recipe, not schema evolution
-(`reconstruction.schema_version` keeps versioning shape) and not the comparison metric set
-(`core/conversion-versioning`'s boundary note still applies). `output/presets` will flip
-the default curve to sigmoid and owns the `pipeline_version` bump *for that default
-change*; this task decides what is owed to recipes that opted in **before** it became the
-default.
+- Envelope or a new key? A bare recipe must not contain `meta` today
+  (`split_envelope`). Switching `--dump-params` to the envelope changes the bytes
+  `identity.params_hash` hashes.
+- Does `hanten params` (a template, not a record) get stamped?
+- What does the drift gate (`version::PIPELINE_FINGERPRINTS`) need to cover so the
+  promise is enforced, not only stated?
 
 ## How to Verify
 
-- The chosen policy is written down in `docs/design-spec.md` (§8, beside the existing
-  identity/version contract) with its answers to the three questions above, and
-  `PIPELINE_VERSION`'s doc comment says explicitly what it does *not* cover.
-- A test proves the mechanism fires for the 2026-08-03 sigmoid defaults: a recipe frozen
-  with the old values either reproduces its original render (option 4) or fails/warns
-  loudly and specifically (options 1–3). `--strict` promotes any warning.
-- Under the chosen mechanism, moving a defaulted non-default-path value **without** the
-  corresponding label/row/entry fails a test — the same "cannot silently drift" property
-  `pipeline_version` already has for the default path.
-- `cli::sigmoid_anchor_default_warning` is either gone or reimplemented on top of the
-  general mechanism; no bespoke per-knob warning remains beside it.
-- Full CI gate green: `cargo fmt --all --check`, `cargo clippy --all-targets -- -D
-  warnings`, `cargo build`, `cargo test`.
+- A document written by each command, replayed after a simulated default move,
+  warns (`--strict` promotes) or reproduces its render.
+- A `roll.json` replays under its own decode even after a decode default moves.
+- `docs/design-spec.md` §8 states the replay contract beside the identity/version
+  contract, and `PIPELINE_VERSION`'s doc says what it does not cover.
+- `docs/using-nc.md` updated for any change to a written document's shape.
 
 ## Dependencies
 
-- [Conversion versioning & baseline comparison](conversion-versioning.md) — owns the label
-  and the gate this extends. Completed; this task changes what its contract *promises*, so
-  it is filed as a sibling rather than reopening it (reopening would also make
-  `output/presets` non-executable).
-- [Reference-anchored sigmoid calibration and redesign](../algo/reference-anchored-sigmoid.md)
-  — the instance that exposed the gap and shipped the stopgap warning.
+- [Conversion versioning & baseline comparison](conversion-versioning.md) — the label
+  and the gate this extends.
+- [Flip the default to the new flow](../nf-core/default-flip.md) — removed the
+  sidecar, which is where the gap opened.

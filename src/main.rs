@@ -4,6 +4,9 @@
 //! [`NcError`](types::NcError) to its stable process exit code (design-spec §11). All real work
 //! happens in the pure pipeline stages; `main`/`cli` are the only orchestrators.
 
+// Every stdout/stderr write goes through `stdio`, which survives a closed pipe.
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 mod algo;
 mod cli;
 mod destination;
@@ -16,6 +19,7 @@ mod pipeline;
 mod recipe;
 mod rendering;
 mod stage;
+mod stdio;
 mod telemetry;
 mod types;
 mod version;
@@ -26,7 +30,7 @@ fn main() -> ExitCode {
     match cli::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("{err}");
+            stdio::stderr_line(format_args!("{err}"));
             ExitCode::from(err.exit_code() as u8)
         }
     }

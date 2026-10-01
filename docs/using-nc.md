@@ -143,6 +143,13 @@ default recipe, and `telemetry` has its own output (§11). Logs and warnings go 
 > aggregates per-frame failures into its report and still emits it. So a script
 > must check the exit code, not just parse stdout.
 
+> **A reader that stops early is not a failure.** Under `hanten … | head` (or
+> `2>&1 | head`) the run finishes: the image and a `--out` recipe are still written,
+> and the exit code is the run's own — `--strict` and a failed `roll` frame still
+> exit 1. Under `-v`, stderr notes the dropped report (`hanten: stdout's reader
+> closed; the report was not read`). Any other failure to write the report or
+> `params` to stdout, such as a full disk behind `>`, exits 5.
+
 ---
 
 ## 4. The core workflow
@@ -1633,7 +1640,8 @@ else.
 (exit 1), after the report is emitted — the right default for scripts and CI.
 
 > One deliberate exception: a failure to write an opted-in **telemetry**
-> destination prints `hanten: warning:` on stderr but is kept out of the report set, so
+> destination prints `hanten: warning:` on stderr (a closed stdout pipe is not a
+> failure — `-v` notes it) but is kept out of the report set, so
 > it stays fail-soft even under `--strict`. Telemetry must never change a
 > conversion's outcome. A script that needs to know telemetry landed has to check
 > the file, not the exit code. A telemetry path may not be the input, the
@@ -1650,7 +1658,7 @@ else.
 | 2 | Invalid CLI usage or parameters (bad flag value, a destination not written, wrong suffix, bad recipe, a removed flag) |
 | 3 | Input read/decode error |
 | 4 | Unsupported variant (e.g. a channel layout not handled yet) |
-| 5 | Output write error |
+| 5 | Output write error — including the report or `params` on stdout, unless its reader closed early |
 | 6 | Resource limit — estimated peak memory exceeds the budget |
 
 ---
@@ -1791,7 +1799,7 @@ So you don't go looking:
 | Missing | Owning task |
 |---|---|
 | **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/auto-calibration`](tasks/core/auto-calibration.md) |
-| **Content-based film-base fallback** (`--base-content`) for cropped scans with no visible rebate | [`film-base/content-fallback`](tasks/film-base/content-fallback.md) |
+| **Content-based film-base fallback** (a `measure-roll` option) for cropped scans with no visible rebate | [`film-base/content-fallback`](tasks/film-base/content-fallback.md) |
 | **IR dust removal** | roadmap follow-up, no task file yet |
 
 [`docs/TASKS.md`](TASKS.md) is the authoritative status for all of it.
