@@ -1154,8 +1154,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   — curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
 - `nf-verification/benchmark-set` (new flow): `nf-verification/reference-snapshot`, `nf-core/minimal-end-to-end`
-  — the cases are a holding set since `legacy` retired; comparability comes from
-  the tagged build
+  — one fixtures case per ready destination; comparability comes from re-running the
+  reference build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
   — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
 - `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
@@ -2064,10 +2064,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
   curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
-- [ ] [A benchmark set for the new
-  flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
-  `film-master` holding set since `legacy` retired; comparability comes from the
-  reference build
+- [~] [A benchmark set for the new
+  flow](tasks/nf-verification/benchmark-set.md) — one fixtures case per ready
+  destination, run only on the interfaces it has a block for; comparability comes from
+  re-running the reference build
 - [x] [Export the pre-matrix film
   RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
   `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32

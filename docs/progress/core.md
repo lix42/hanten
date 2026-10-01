@@ -750,6 +750,17 @@ Two remedies were rejected and should not be re-derived: bumping
 it rejects every archived recipe), and per-schema-version historical default
 tables (a policy decision, which the new task owns).
 
+### 2026-10-01 — the fixed set is rebuilt; the pre-migration records are superseded
+
+`nf-verification/benchmark-set` rebuilt `benchmark.json`, the change to the fixed set
+this task reserved for itself. **Records made before it are superseded by the
+reference build** (`scripts/reference-snapshot/`): the old pipeline is compared by
+re-running that build over the new set, not by keeping old cases in the tree. The
+`fixtures` set now covers every ready destination, the film master, `direct` and the
+product default (the gap noted under "Comparison harness"). A case runs only on the
+output interfaces it has a block for. Run records are schema 3 (`not_run`); benchmark
+manifests are schema 2.
+
 
 ## recipe-replay-fidelity
 

@@ -35,13 +35,10 @@ What remains here are the carried-over findings below.
   cross-encoding analysis would decode it with the wrong primaries. Latent today; the
   fix needs real provenance (the sidecar's `output_render.encoding`), not a second
   filename guess.
-- **`nctool compare` does not cover the default preset.** `benchmark.json`'s fixture
-  cases state `--output-preset legacy` explicitly so they stay comparable with records
-  made before the default flip, so the product default is not in the fixed comparison
-  set at all and a cross-build comparison says nothing about the container users get.
-  Adding a case changes that fixed set, which was `core/conversion-versioning`'s call;
-  that task is closed, so this needs an owner. The units question rides along: `mean`
-  for a JPEG preset is the normalized 8-bit buffer handed to the compressor.
+- ~~**`nctool compare` does not cover the default preset.**~~ Resolved 2026-10-01 by
+  `nf-verification/benchmark-set`: the `fixtures` set has a `default` case with no
+  output flag, plus one case per ready destination. A gain-map JPEG's `mean` is still
+  the normalized 8-bit buffer handed to the compressor.
 
 ## Settled
 

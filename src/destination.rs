@@ -1465,4 +1465,43 @@ mod tests {
             "{err}"
         );
     }
+
+    /// `nctool compare`'s `fixtures` set states one case per ready row, all four axes
+    /// stated, so a new destination is benchmarked (`scripts/analysis/benchmark.json`).
+    #[test]
+    fn every_ready_row_has_a_benchmark_case() {
+        let bench: serde_json::Value =
+            serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
+        let stated = |args: &[serde_json::Value], flag: &str| {
+            let i = args.iter().position(|a| a == flag)?;
+            Some(args.get(i + 1)?.as_str()?.to_owned())
+        };
+        let cases: BTreeSet<[String; 4]> = bench["sets"]["fixtures"]["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|case| case["destination"]["args"].as_array())
+            .filter_map(|args| {
+                Some([
+                    stated(args, Range::FLAG)?,
+                    stated(args, Transfer::FLAG)?,
+                    stated(args, Gamut::FLAG)?,
+                    stated(args, Container::FLAG)?,
+                ])
+            })
+            .collect();
+        let ready: BTreeSet<[String; 4]> = ROWS
+            .iter()
+            .filter(|r| is_ready(r))
+            .map(|r| {
+                [
+                    r.range.name().to_owned(),
+                    r.transfer.name().to_owned(),
+                    r.gamut.name().to_owned(),
+                    r.container.name().to_owned(),
+                ]
+            })
+            .collect();
+        assert_eq!(cases, ready);
+    }
 }

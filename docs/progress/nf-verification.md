@@ -299,10 +299,52 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## benchmark-set
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** in progress
+**Updated:** 2026-10-01
 
 - 2026-09-19: created with the new-flow plan. Goal: a benchmark set for the new flow.
+
+### 2026-10-01 — implemented
+
+- **The `fixtures` set:** one HDRi case per ready `destination::ROWS` row (13) with all
+  four axes stated, plus `film-master`, `--rendering direct` and `default` (no output
+  flag, so it tracks what a user gets). HDR 48-bit, the other input format, runs as
+  `default` and `film-master`. 18 cases, about 12 s for two runs on a debug build.
+  Every depth a record can carry (`u8`, `u10`, `u16`, `f32`) is exercised. Each one
+  already reported `output_stats.mean`, `loss` and a `chain.destination` that
+  `depth_for_destination` maps, so the diff logic did not change.
+- **User decisions:**
+  - **Per-interface blocks.** A case carries `destination` and/or `preset`, each
+    holding that interface's `args` and `recipe`, and runs on a build only when it has
+    that build's block. Before this, a missing `preset_args` meant "no flags", which
+    would render the reference's default preset under the case's name. Benchmark
+    manifest schema 2. Unknown case and block keys are refused, so a v1
+    `destination_args` cannot be silently ignored. The record lists skipped cases in
+    `not_run` (record schema 3), and `diff` reports them as `not-run`, not `missing`.
+  - **`rolls` runs on the reference too.** The destination block keeps the frozen
+    recipe. The preset block restates its Dmin as `--film-base`, and a test keeps the
+    two equal.
+  - **The coverage gate is a Rust test**
+    (`destination::tests::every_ready_row_has_a_benchmark_case`). It reads
+    `benchmark.json` and asserts that the fixtures cases' stated axes equal the ready
+    rows. Falsified by hand: dropping the HLG AVIF case reds it.
+- **The reference arm states `--preset sigmoid-knees`** (the README's pinned config);
+  the holding set had omitted it. The exception is `film-master`, which the reference
+  refuses with any `--preset`. Preset map: `display-p3`, `compatibility`,
+  `hdr-linear-tiff`, `hdr-pq-tiff`, `hdr-hlg-tiff`, `hdr-pq`, `hdr-hlg`,
+  `gain-map-hdr`, `film-master`. No reference equivalent: Adobe RGB SDR, linear
+  P3/sRGB/Adobe RGB, the sRGB gain map, `direct`.
+- **Verified** (x86_64 Linux, rustc 1.97.0; reference `reserve` @ `0da32d0` built by
+  `build.sh` here, release):
+  - HEAD vs HEAD: `identical: true` on 18 cases. A CI test
+    (`TestFixturesSetEndToEnd`) now runs exactly this on `target/debug/hanten`.
+  - Reference vs reference: `identical: true` on 12 cases, 6 `not_run`.
+  - Reference vs HEAD: all 12 paired cases differ at the same depth, so a pairing
+    compares the pipeline and not the container. The new chain's encoded means are
+    about 0.09–0.24 lower; the film master's are higher by 0.07–0.25.
+    The P3 gain map's delta matches the P3 TIFF's, so the reference's gain-map base is
+    Display P3 too.
+  - Not verified here: the `rolls` set, which needs `../nc-assets`.
 
 ## film-rgb-export
 
