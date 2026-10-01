@@ -13,9 +13,11 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 
 use super::consent::{Consent, Store};
+use super::durable;
 use super::durable::Mode;
 use super::managed::disabled_by_env;
 use super::net::{self, Acknowledgement, Endpoint, Sent};
+use super::now_unix_millis;
 use super::spool::{self, Kind, LastError, Queue, Status};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,61 +51,86 @@ fn backoff(failures: u32) -> Duration {
     Duration::from_secs((minutes * 60).min(6 * 3600))
 }
 
-fn millis(t: SystemTime) -> u64 {
-    t.duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
+/// Passes per drain. A helper that finds the drain lock busy exits, leaving any
+/// event appended since the holder rotated to it; the holder's next pass takes it.
+const PASSES: usize = 3;
 
 /// Drain the queue `captured` names. I/O failures end the drain and are reported;
-/// none is ever raised to a conversion.
+/// none is ever raised to a conversion. The status is written once, under the
+/// drain lock.
 pub fn drain(store: &Store, captured: &Consent, endpoint: &Endpoint, trigger: Trigger) -> Report {
     let mut report = Report::default();
     let queue = Queue::of(captured);
-    if let Err(e) = run(store, captured, endpoint, trigger, &queue, &mut report) {
-        report.error = Some(format!("io: {e}"));
-        let mut status = queue.read_status();
-        status.last_error = Some(LastError {
-            at_ms: millis(SystemTime::now()),
-            kind: "io".into(),
-        });
-        let _ = queue.write_status(&status);
+    let wait = match trigger {
+        Trigger::Background => Some(Duration::ZERO),
+        Trigger::Flush => None,
+    };
+    let _drain = match queue.drain_lock(wait) {
+        Ok(Some(held)) => held,
+        Ok(None) => {
+            report.stopped = Some("another upload is draining this queue".into());
+            return report;
+        }
+        Err(e) => {
+            report.error = Some(format!("io: {e}"));
+            return report;
+        }
+    };
+    let mut status = queue.read_status();
+    for _ in 0..PASSES {
+        if let Err(e) = pass(
+            store,
+            captured,
+            endpoint,
+            trigger,
+            &queue,
+            &mut status,
+            &mut report,
+        ) {
+            report.error = Some(format!("io: {e}"));
+            status.last_error = Some(LastError {
+                at_ms: now_unix_millis(),
+                kind: "io".into(),
+            });
+            break;
+        }
+        let refilled = durable::regular_or_missing(&queue.file)
+            .ok()
+            .flatten()
+            .is_some_and(|m| m.len() > 0);
+        if report.error.is_some() || report.stopped.is_some() || !refilled {
+            break;
+        }
     }
+    let _ = queue.write_status(&status);
     report
 }
 
-fn run(
+/// Rotate, project, enforce the limits, then send every batch.
+fn pass(
     store: &Store,
     captured: &Consent,
     endpoint: &Endpoint,
     trigger: Trigger,
     queue: &Queue,
+    status: &mut Status,
     report: &mut Report,
 ) -> io::Result<()> {
-    let wait = match trigger {
-        Trigger::Background => Some(Duration::ZERO),
-        Trigger::Flush => None,
-    };
-    let Some(_drain) = queue.drain_lock(wait)? else {
-        report.stopped = Some("another upload is draining this queue".into());
-        return Ok(());
-    };
     let now = SystemTime::now();
-    let now_ms = millis(now);
-    let mut status = queue.read_status();
+    let now_ms = now_unix_millis();
     {
         let Some(_queue) = queue.queue_lock(Some(Duration::from_secs(10)))? else {
             return Err(io::Error::other("the queue lock stayed busy"));
         };
         queue.rotate()?;
     }
-    queue.reconcile(&mut status)?;
+    queue.reconcile(status)?;
     for e in queue.entries()? {
         if e.kind == Kind::Raw {
-            queue.project_raw(&e.name, now_ms, &mut status)?;
+            queue.project_raw(&e.name, now_ms, status)?;
         }
     }
-    queue.enforce_limits(now, &mut status)?;
-    queue.write_status(&status)?;
+    queue.enforce_limits(now, status)?;
 
     let batches: Vec<String> = queue
         .entries()?
@@ -117,12 +144,9 @@ fn run(
         return Ok(());
     }
     for name in batches {
-        let Ok(body) = queue.read_batch(&name) else {
-            queue.quarantine(&[spool::record("corrupt_batch", &name)])?;
-            queue.remove(&name)?;
-            report.pending_batches -= 1;
-            continue;
-        };
+        // A read error keeps the batch for the next drain; only an unparsable body
+        // is quarantined, and then whole.
+        let body = queue.read_batch(&name)?;
         let Some(ids) = spool::batch_ids(body.as_bytes()) else {
             queue.quarantine(&[spool::record("corrupt_batch", &body)])?;
             queue.remove(&name)?;
@@ -147,7 +171,7 @@ fn run(
             drop(lease);
             sent
         };
-        let now_ms = millis(SystemTime::now());
+        let now_ms = now_unix_millis();
         match sent {
             Sent::Acknowledged(ack) if accounts_for(&ack, &ids) => {
                 let rejected = rejected_records(&ack, &body);
@@ -166,7 +190,7 @@ fn run(
                 status.next_attempt_ms = None;
             }
             Sent::Acknowledged(_) => {
-                fail(&mut status, report, now_ms, "bad_response", None);
+                fail(status, report, now_ms, "bad_response", None);
                 break;
             }
             Sent::Malformed => {
@@ -180,13 +204,13 @@ fn run(
                 kind,
                 retry_after_s,
             } => {
-                fail(&mut status, report, now_ms, &kind, retry_after_s);
+                fail(status, report, now_ms, &kind, retry_after_s);
                 break;
             }
         }
         report.pending_batches -= 1;
     }
-    queue.write_status(&status)
+    Ok(())
 }
 
 fn fail(

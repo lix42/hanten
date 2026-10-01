@@ -97,19 +97,35 @@ fn append_locked(queue: &Queue, line: &str) -> io::Result<()> {
     }
 }
 
+/// The consent (active or not) whose queue is `path`, with its store.
+fn selecting(path: &Path) -> Option<(Consent, Store)> {
+    Store::locate()
+        .filter(Store::exists)
+        .and_then(|store| Some((store.read().ok()??, store)))
+        .filter(|(c, _)| consent::normalize_queue(path).is_ok_and(|p| p == c.queue))
+}
+
+/// Whether consent, active or not, selected `path` as its upload queue.
+pub fn is_selected_queue(path: &Path) -> bool {
+    selecting(path).is_some()
+}
+
 /// Append an explicit `--telemetry` line to `path`. When `path` is the queue that
 /// consent (active or not) selected, the append synchronizes like a managed one —
 /// shared collection lease, then the path re-checked under the gate, then the
-/// queue lock — so `purge` and retarget never race it. Elsewhere it is a plain
+/// queue lock — so `purge` and retarget never race it; under `NC_TELEMETRY=0` it is
+/// refused, since a line there would be uploaded later. Elsewhere it is a plain
 /// append.
 pub fn append_explicit(path: &Path, line: &str) -> io::Result<()> {
-    let selected = Store::locate()
-        .filter(Store::exists)
-        .and_then(|store| Some((store.read().ok()??, store)))
-        .filter(|(c, _)| consent::normalize_queue(path).is_ok_and(|p| p == c.queue));
-    let Some((consent, store)) = selected else {
+    let Some((consent, store)) = selecting(path) else {
         return super::append_jsonl(path, line);
     };
+    if disabled_by_env() {
+        return Err(io::Error::other(
+            "it is the upload queue and NC_TELEMETRY=0 forbids uploading this run; \
+             set NC_TELEMETRY_LOG to another file to keep a local log",
+        ));
+    }
     let busy = || io::Error::other("the telemetry queue stayed locked");
     let _lease = store
         .collection_lease(Mode::Shared, Some(LEASE_WAIT))?
@@ -131,7 +147,7 @@ pub fn append_explicit(path: &Path, line: &str) -> io::Result<()> {
 /// Start `hanten telemetry upload-once` detached, with no standard streams.
 /// `NC_TELEMETRY_HELPER=0` starts none (diagnostic: uploads then wait for `flush`).
 pub fn spawn_helper(generation: &str) -> io::Result<()> {
-    if std::env::var_os("NC_TELEMETRY_HELPER").is_some_and(|v| v == "0") {
+    if disabled_by_env() || std::env::var_os("NC_TELEMETRY_HELPER").is_some_and(|v| v == "0") {
         return Ok(());
     }
     let mut cmd = Command::new(std::env::current_exe()?);

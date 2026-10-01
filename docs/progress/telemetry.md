@@ -70,7 +70,8 @@ What other epics need to know about `telemetry` (refreshed 2026-10-01):
   selects one queue, every `convert` appends there and a detached helper uploads.
   Tests that run the binary must set `NC_TELEMETRY=0` (as `tests/pipeline.rs` does)
   or give it its own `XDG_CONFIG_HOME`, or a developer's own consent collects their
-  test runs. The lock order is on `telemetry::maintenance`.
+  test runs (unit tests are safe: `Store::locate` is `None` under `cfg(test)`).
+  Scripts that convert (`nctool`, the real-scan harness) are collected too. The lock order is on `telemetry::maintenance`.
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
@@ -535,8 +536,41 @@ What shipped, and the parts the open tasks build on:
   lease but not a collection lease, purge and same-queue re-enable wait collection
   leases, inactive retarget needs an empty queue, an explicit log on the selected
   queue is written once. Stable over five runs. Not verified here: the live
-  endpoint, macOS (CI's job runs the same tests), Windows beyond a compile check.
+  endpoint, macOS (CI's job runs the same tests), Windows beyond a compile check;
+  the review round below lists what else is untested.
 
+
+### 2026-10-01 — review round (`/code-review` and `nc-reviewer`)
+- No lock-order reversal or deadlock found; the check→disable→send race holds. What
+  changed:
+  - **Data loss:** a re-projection now skips IDs its raw file's earlier batches hold
+    and numbers after them (the 30-day expiry could shift the split and drop
+    events); only a too-large raw file (`ErrorKind::FileTooLarge`) is dropped, not
+    one failing a permission check; a batch read error keeps the batch (only an
+    unparsable body is quarantined); `--telemetry-file` naming the upload queue is
+    not written; the status is written once per drain under the drain lock.
+  - **Opt-out:** under `NC_TELEMETRY=0` an explicit `--telemetry` append to the
+    upload queue is refused with a warning, and `enable` starts no helper. Unit tests
+    never see the developer's consent (`Store::locate` is `None` under `cfg(test)`):
+    `cli`'s in-process conversions would otherwise have queued and uploaded.
+  - **Endpoint:** the run-time `NC_TELEMETRY_ENDPOINT` only narrows (`none`, a file,
+    loopback); a `none` build stays `none`; a URL with user info is refused (it got
+    past the loopback check).
+  - **Smaller:** group-writable files pass (`umask 002`), world-writable do not; a
+    queue fault no longer says "remove the consent record"; a stale-manifest record
+    still `Active` must be disabled before a retarget; lines of a newer schema are
+    quarantined, not dropped; a drainer takes up to three passes, so an event a busy
+    helper left behind is not stranded; the notice gives the record count and date
+    range and says uploading empties the file; `begin` runs before the run's clock;
+    stale consent and purge temps are removed.
+- **Still not tested** (beyond the live endpoint, macOS and Windows): crash
+  injection at each fsync/rename step (one re-projection test stands for it);
+  concurrent append against rotation; purge racing an explicit append, rotation or
+  a drain; a real 10 s timeout during `disable` (a held request lease stands for
+  it); a failed helper launch and its launch overhead. Appends dropped at the cap
+  or on a busy lock are not counted.
+- On a developer machine with consent, `nctool`'s and the harness's `convert` runs
+  are collected like any other; set `NC_TELEMETRY=0` where that is unwanted.
 
 ## panic-hook
 **Status:** not started

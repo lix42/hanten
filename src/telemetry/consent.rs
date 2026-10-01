@@ -90,11 +90,15 @@ impl Consent {
 
 /// Why a consent record could not be used.
 #[derive(Debug)]
-pub struct ConsentError(String);
+pub struct ConsentError {
+    message: String,
+    /// The record itself is at fault, not the queue or spool it names.
+    pub in_record: bool,
+}
 
 impl fmt::Display for ConsentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -117,7 +121,11 @@ pub struct Store {
 
 impl Store {
     /// `$XDG_CONFIG_HOME/nc`, else `%APPDATA%\nc` (Windows), else `$HOME/.config/nc`.
+    /// None in unit tests, which must never see the developer's own consent.
     pub fn locate() -> Option<Self> {
+        if cfg!(test) {
+            return None;
+        }
         let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
         let appdata = if cfg!(windows) { env("APPDATA") } else { None };
         resolve_config_dir(env("XDG_CONFIG_HOME"), appdata, env("HOME")).map(Self::at)
@@ -140,8 +148,14 @@ impl Store {
     /// The validated record; `Ok(None)` when there is none.
     pub fn read(&self) -> Result<Option<Consent>, ConsentError> {
         let path = self.record_path();
-        let fail =
-            |what: String| ConsentError(format!("consent record {}: {what}", path.display()));
+        let fail = |what: String| ConsentError {
+            message: format!("consent record {}: {what}", path.display()),
+            in_record: true,
+        };
+        let unsafe_target = |e: io::Error| ConsentError {
+            message: format!("the consented queue is unusable: {e}"),
+            in_record: false,
+        };
         match durable::regular_or_missing(&path) {
             Ok(None) => return Ok(None),
             Ok(Some(_)) => {}
@@ -170,8 +184,8 @@ impl Store {
         if !queue.is_absolute() || spool::spool_for(&queue).as_ref() != Some(&spool) {
             return Err(fail("the queue and spool paths do not match".into()));
         }
-        durable::regular_or_missing(&queue).map_err(|e| fail(e.to_string()))?;
-        durable::dir_or_missing(&spool).map_err(|e| fail(e.to_string()))?;
+        durable::regular_or_missing(&queue).map_err(unsafe_target)?;
+        durable::dir_or_missing(&spool).map_err(unsafe_target)?;
         Ok(Some(Consent {
             state: record.state,
             manifest_version: record.manifest_version,
@@ -199,6 +213,15 @@ impl Store {
         let mut bytes = serde_json::to_vec_pretty(&record).map_err(io::Error::other)?;
         bytes.push(b'\n');
         self.ensure_dir()?;
+        // A crashed publish's temp; every caller holds the gate, so none is live.
+        let stale = format!(".{RECORD}.");
+        for e in fs::read_dir(&self.dir)?.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&stale) && name.ends_with(".tmp") {
+                let _ = fs::remove_file(e.path());
+            }
+        }
         let tmp = format!(".{RECORD}.{}.tmp", durable::random_hex()?);
         durable::publish(&self.dir, &tmp, RECORD, &bytes)
     }
@@ -336,6 +359,33 @@ mod tests {
             std::os::unix::fs::symlink(dir.join("real.json"), store.record_path()).unwrap();
             assert!(store.read().is_err(), "a symlinked record");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsafe_queue_is_not_the_records_fault() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("queue");
+        let store = Store::at(dir.join("cfg"));
+        let queue = normalize_queue(&dir.join("t.jsonl")).unwrap();
+        store
+            .publish(&Consent::activate(queue.clone()).unwrap())
+            .unwrap();
+        fs::write(&queue, b"").unwrap();
+        fs::set_permissions(&queue, fs::Permissions::from_mode(0o666)).unwrap();
+        let err = store.read().unwrap_err();
+        assert!(!err.in_record, "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_record_is_the_records_fault() {
+        let dir = scratch("record");
+        let store = Store::at(dir.join("cfg"));
+        fs::create_dir_all(dir.join("cfg")).unwrap();
+        fs::write(store.record_path(), b"{").unwrap();
+        assert!(store.read().unwrap_err().in_record);
         let _ = fs::remove_dir_all(&dir);
     }
 

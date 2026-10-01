@@ -2,8 +2,9 @@
 //! queue and the consent record (`docs/telemetry-strategy.md`).
 //!
 //! Every managed path is a regular file or directory owned by the current user:
-//! a symlink, another file type, or (on Unix) another owner or a group/world
-//! writable mode is refused, so the caller fails closed. Locks are `flock`-style
+//! a symlink, another file type, or (on Unix) another owner or a world-writable
+//! mode is refused, so the caller fails closed. Group-writable is allowed: a
+//! `umask 002` (user-private groups) makes every file so. Locks are `flock`-style
 //! whole-file locks (`File::lock`) on files that are created once and never
 //! unlinked, so a waiter can never end up on a different inode than the holder.
 
@@ -44,8 +45,8 @@ fn check_owner(path: &Path, meta: &Metadata) -> io::Result<()> {
         if meta.uid() != me {
             return Err(unsafe_entry(path, "owned by another user"));
         }
-        if meta.mode() & 0o022 != 0 {
-            return Err(unsafe_entry(path, "writable by other users"));
+        if meta.mode() & 0o002 != 0 {
+            return Err(unsafe_entry(path, "writable by every user"));
         }
     }
     #[cfg(not(unix))]
@@ -122,7 +123,8 @@ pub fn open_append(path: &Path) -> io::Result<File> {
     no_follow(OpenOptions::new().append(true).create(true)).open(path)
 }
 
-/// Read a regular file of at most `limit` bytes, never through a symlink.
+/// Read a regular file of at most `limit` bytes, never through a symlink. A larger
+/// one is `ErrorKind::FileTooLarge`, the only error that says so.
 pub fn read_capped(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     use std::io::Read;
     let file = no_follow(OpenOptions::new().read(true)).open(path)?;
@@ -134,7 +136,10 @@ pub fn read_capped(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(unsafe_entry(path, "larger than expected"));
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!("{} is larger than expected", path.display()),
+        ));
     }
     Ok(bytes)
 }
@@ -259,6 +264,20 @@ mod tests {
         std::os::unix::fs::symlink(&dir, dir.join("dirlink")).unwrap();
         assert!(dir_or_missing(&dir.join("dirlink")).is_err());
         assert_eq!(fs::read(dir.join("real")).unwrap(), b"x");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn group_writable_is_accepted_and_world_writable_is_not() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("modes");
+        let file = dir.join("f");
+        fs::write(&file, b"x").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(regular_or_missing(&file).is_ok(), "umask 002");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(regular_or_missing(&file).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 

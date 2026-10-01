@@ -4119,9 +4119,10 @@ fn render_frame(
 /// Telemetry (opt-in) is emitted here, once the run's outcome is fixed: a success
 /// event, or a failure event carrying what [`ConvertAttempt`] had learned.
 fn run_convert(args: ConvertArgs) -> Result<()> {
-    let started = Instant::now();
-    // Persistent consent, captured before anything runs and held to the end.
+    // Persistent consent, captured before anything runs and held to the end. Ahead
+    // of the clock, so its bounded lock waits never count as the run's time.
     let managed = telemetry::managed::begin();
+    let started = Instant::now();
     let log = Log::new(&args.report);
     // Read once, so the guarded and the written log path are the same.
     let telemetry_log = if args.telemetry {
@@ -6800,7 +6801,7 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
 /// had learned — and write it to the requested sink(s): the persistent JSONL log
 /// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`), and the
 /// consented upload queue when `managed` holds a snapshot. The managed append is
-/// silent: nothing the user did not ask for this run reaches stderr.
+/// silent but for a `-v` line: no warning the user did not ask for this run.
 /// `telemetry_log` is the log path resolved once, so the guarded and the written
 /// path are the same. Best-effort — every failure is warned on stderr and
 /// swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
@@ -6972,6 +6973,11 @@ fn emit_telemetry(
             if let Err(e) = writeln!(std::io::stdout(), "{line}") {
                 warn(format!("telemetry: could not write to stdout: {e}"));
             }
+        } else if telemetry::managed::is_selected_queue(Path::new(target)) {
+            // Overwriting it would erase every queued record.
+            warn(format!(
+                "telemetry: not written: --telemetry-file {target} is the upload queue"
+            ));
         } else if let Err(e) = telemetry::write_oneoff(Path::new(target), &line) {
             warn(format!("telemetry: could not write {target}: {e}"));
         } else {

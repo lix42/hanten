@@ -52,6 +52,16 @@
   (`telemetry/upload-windows`); the live endpoint and macOS are checked in
   `telemetry/upload-live-check`. The panic-ready files are recognized but projected
   only once `telemetry/panic-hook` lands.
+- **Spool names and reconcile, as built** (`telemetry::spool`'s module doc is
+  authoritative): batches are `batch-<raw id>-<n>.json`, temps
+  `.<final name>.<random>.tmp`. Reconcile discards our temps rather than completing
+  them (each one's source still exists), and a batch is validated when it is read
+  to send: a body that does not parse is quarantined whole, a read error keeps it.
+  Re-projecting a raw file skips events its earlier batches hold. Lines of a newer
+  local schema are quarantined, not dropped.
+- **Uncounted drops:** an append refused at the cap or skipped because a lock
+  stayed busy (a `convert` never waits long) is not counted in `status`; only
+  drain-time drops are.
 
 **2026-09-30** (at `telemetry/ingestion-service`, user-approved):
 

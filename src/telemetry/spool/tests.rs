@@ -110,6 +110,7 @@ fn projection_drops_other_schemas_and_expired_lines_and_quarantines_bad_ones() {
         r#"{"no_version":true}"#.to_string(),
         "{\"schema_version\":11, torn".to_string(),
         r#"{"schema_version":11,"event_id":"x"}"#.to_string(),
+        r#"{"schema_version":99,"from":"a newer build"}"#.to_string(),
         event_line(NOW_MS - 31 * DAY_MS),
         String::new(),
         event_line(NOW_MS - DAY_MS),
@@ -121,11 +122,15 @@ fn projection_drops_other_schemas_and_expired_lines_and_quarantines_bad_ones() {
     assert_eq!(p.events.len(), 2);
     assert_eq!(p.other_schema, 2);
     assert_eq!(p.expired, 1);
-    assert_eq!(p.quarantine.len(), 2);
-    for q in &p.quarantine {
-        let v: serde_json::Value = serde_json::from_str(q).unwrap();
-        assert_eq!(v["reason"], "malformed");
-    }
+    let reasons: Vec<String> = p
+        .quarantine
+        .iter()
+        .map(|q| serde_json::from_str::<serde_json::Value>(q).unwrap()["reason"].to_string())
+        .collect();
+    assert_eq!(
+        reasons,
+        [r#""malformed""#, r#""malformed""#, r#""newer_schema""#]
+    );
 }
 
 #[test]
@@ -395,5 +400,88 @@ fn purge_keeps_the_spool_and_its_lock_files() {
     assert!(queue.spool.join("notes.txt").exists());
     #[cfg(unix)]
     assert_eq!(locks, (inode("queue.lock"), inode("drain.lock")));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The ids of every batch in the spool, in name order.
+fn all_batched(queue: &Queue) -> Vec<String> {
+    queue
+        .entries()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == Kind::Batch)
+        .flat_map(|e| batch_ids(queue.read_batch(&e.name).unwrap().as_bytes()).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_reprojection_that_splits_differently_loses_nothing() {
+    let dir = scratch("resplit");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    let lines: Vec<String> = (0..3).map(|_| event_line(NOW_MS)).collect();
+    for l in &lines {
+        queue.append(l).unwrap();
+    }
+    queue.rotate().unwrap();
+    let raw = queue
+        .entries()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == Kind::Raw)
+        .unwrap()
+        .name;
+    let id = raw
+        .trim_start_matches("raw-ready-")
+        .trim_end_matches(".jsonl");
+    // An earlier projection crashed after writing a first batch holding only the
+    // first event: a split this projection would not make.
+    let first = project(lines[0].as_bytes(), NOW_MS).events;
+    fs::write(
+        queue.spool.join(format!("batch-{id}-0000.json")),
+        &chunk(&first).0[0],
+    )
+    .unwrap();
+    queue
+        .project_raw(&raw, NOW_MS, &mut Status::default())
+        .unwrap();
+    let mut batched = all_batched(&queue);
+    let mut expected: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["event_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    batched.sort();
+    expected.sort();
+    assert_eq!(batched, expected, "every event once");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_raw_file_is_kept_not_dropped() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("unreadable");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    queue.append(&event_line(NOW_MS)).unwrap();
+    queue.rotate().unwrap();
+    let raw = queue
+        .entries()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == Kind::Raw)
+        .unwrap()
+        .name;
+    let path = queue.spool.join(&raw);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+    let mut status = Status::default();
+    assert!(queue.project_raw(&raw, NOW_MS, &mut status).is_err());
+    assert!(path.exists());
+    assert_eq!(status.dropped_over_cap, 0);
     let _ = fs::remove_dir_all(&dir);
 }

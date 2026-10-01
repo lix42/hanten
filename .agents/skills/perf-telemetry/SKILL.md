@@ -105,7 +105,9 @@ Default log path (first match wins): `$NC_TELEMETRY_LOG` → `$XDG_DATA_HOME/nc/
 → `%APPDATA%\nc\telemetry.jsonl` (Windows) → `$HOME/.local/share/nc/telemetry.jsonl`.
 Point a whole batch at a scratch log with `NC_TELEMETRY_LOG=/tmp/nc.jsonl`. The log
 is create-append with parent dirs created; **one compact JSON object per line**, so
-N runs append N lines. `--telemetry-file <path>` overwrites (a single event).
+N runs append N lines — unless `hanten telemetry enable` selected this log as its
+upload queue, which drains it: then keep a local history in another
+`NC_TELEMETRY_LOG`. `--telemetry-file <path>` overwrites (a single event).
 
 ## 3. Reading the logs
 

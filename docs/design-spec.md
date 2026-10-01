@@ -751,7 +751,8 @@ pub fn render_pair(image: AcesCgImage, film_base: AcesCgImage, shared: &SharedPa
 
 A single binary (`hanten`) with subcommands. The agent-facing surface is
 optimized for scripting: flags for everything, JSON in/out, stable exit codes,
-no interactive prompts.
+no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
+`--yes` skips).
 
 ### Subcommands
 
@@ -762,6 +763,7 @@ no interactive prompts.
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
 | `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, and the input and decode sections it measured under when stated — that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
 | `hanten params`  | Print the full default parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
@@ -1852,7 +1854,8 @@ A failure carries only what the run reached — here a scan refused right after 
 ```
 `event_id` is 128 random bits, new for every event: the upload's deduplication key,
 never a correlation across events. `stage` is a `crate::stage::StageKind` name, or
-`setup` (recipe, validation, output path, the write-target guard), `preflight` (a
+`parse` (a command line clap refused; written only under upload consent), `setup`
+(recipe, validation, output path, the write-target guard), `preflight` (a
 frame's checks before its first stage) or `finalize` (the report and the `--strict`
 gate, where every success ends); a check between two stages belongs to the one before
 it. `error_kind` is `none` exactly for a success, else `usage`, `decode`,

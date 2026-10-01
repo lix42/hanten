@@ -1688,7 +1688,7 @@ its siblings are still written, and the roll exits **1**, not 6.
 
 ### Telemetry upload
 
-`--telemetry` only ever writes locally. Uploading is a separate, persistent opt-in:
+`--telemetry` never uploads by itself. Uploading is a separate, persistent opt-in:
 
 ```bash
 hanten telemetry enable            # shows what is sent, asks, then turns it on
@@ -1705,12 +1705,14 @@ event there — a command line clap refuses too, as a `parse` failure — and a
 short-lived background process uploads it once the run has finished: nothing waits
 on the network, and the run's output, report and exit code are unchanged. Events of
 the current schema already in the queue are uploaded too; older records are dropped.
-The queue and its hidden sibling spool (`.<name>.nc-telemetry-spool`) are capped at
-25 MiB, and records expire after 30 days.
+Uploading empties the queue file, so once it is the `--telemetry` log that log stops
+being a local history: point `NC_TELEMETRY_LOG` elsewhere to keep one. The queue and
+its hidden sibling spool (`.<name>.nc-telemetry-spool`) are capped at 25 MiB, and
+records expire after 30 days.
 
 | Command | What it does |
 |---|---|
-| `hanten telemetry status` | JSON on stdout: consent (`never_enabled`, `active`, `inactive`, `unreadable`), the queue and spool paths, what is queued, and upload counters with the last success and last error. |
+| `hanten telemetry status` | JSON on stdout: consent (`never_enabled`, `active`, `inactive`, `unreadable`, or `needs_reconsent` after an upgrade that uploads more fields: `enable` again), the queue and spool paths, what is queued, and upload counters with the last success and last error. |
 | `hanten telemetry preview` | The request bodies that would be sent now, one per line on stdout, exactly as sent. Sends nothing. |
 | `hanten telemetry flush` | Upload now, in the foreground; prints a JSON summary and exits 1 if the upload failed (the queue is kept for a retry). |
 | `hanten telemetry disable` | Stops collecting and uploading. Waits for an upload already in flight (at most 10 s), but not for a running `convert`, which may still queue its event. Keeps the queue. |
@@ -1723,9 +1725,12 @@ queue still holds records (`flush` it after enabling it again, or `purge` it). D
 or purging cannot delete events already uploaded: they carry no identity to find them
 by, and the service keeps them 180 days.
 
-`NC_TELEMETRY=0` turns automatic collection and upload off for one process. Where
+`NC_TELEMETRY=0` turns automatic collection and upload off for one process; a
+`--telemetry` event is then not written to the upload queue either (it warns). Where
 uploads go is fixed when the binary is built (`NC_TELEMETRY_ENDPOINT`); a build made
-with `none` has nothing to enable.
+with `none` has nothing to enable. Set at run time, the same variable can only narrow
+that — to `none`, a `file:<path>` that receives the request bodies, or a loopback
+test server. A `--telemetry-file` naming the upload queue is not written (it warns).
 
 `--new-flow`, which selected this chain while a second one was the default, was removed
 when it became the only one; passing it exits 2 on every command.

@@ -10,8 +10,9 @@
 //! deletes its input, so a crash at any point leaves the record in some file and a
 //! later drain resends it (the server deduplicates by `event_id`).
 //!
-//! A line from another local schema version (a record written before
-//! `SCHEMA_VERSION`, or by an older build) is dropped and only counted.
+//! A line of an older local schema version (a record written before
+//! `SCHEMA_VERSION`, or by an older build) is dropped and only counted; one of a
+//! newer version is quarantined, for the build that wrote it.
 
 use std::ffi::OsString;
 use std::fs::{self, Metadata};
@@ -291,8 +292,10 @@ impl Queue {
         Ok(())
     }
 
-    /// Project `raw` into batches and a quarantine file, then delete it. Names derive
-    /// from the raw file's, so re-projecting after a crash rewrites nothing.
+    /// Project `raw` into batches and a quarantine file, then delete it. Batches are
+    /// named `batch-<raw id>-<n>`; re-projecting after a crash skips every event a
+    /// batch of this raw file already holds, and numbers new batches after them, so
+    /// a projection that splits differently the second time loses nothing.
     pub fn project_raw(&self, raw: &str, now_ms: u64, status: &mut Status) -> io::Result<()> {
         let id = raw
             .strip_prefix("raw-ready-")
@@ -300,35 +303,54 @@ impl Queue {
             .unwrap_or(raw);
         let bytes = match durable::read_capped(&self.spool.join(raw), CAP_BYTES + (1 << 20)) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+            Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
                 // Larger than any queue the cap allows: not ours to parse.
                 status.dropped_over_cap += 1;
                 return durable::remove(&self.spool, raw);
             }
             Err(e) => return Err(e),
         };
-        let projected = project(&bytes, now_ms);
+        let prefix = format!("batch-{id}-");
+        let mut batched = std::collections::HashSet::new();
+        let mut next = 0;
+        for e in self.entries()? {
+            let Some(n) = e
+                .name
+                .strip_prefix(&prefix)
+                .and_then(|r| r.strip_suffix(".json"))
+                .and_then(|n| n.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            next = next.max(n + 1);
+            batched.extend(batch_ids(self.read_batch(&e.name)?.as_bytes()).unwrap_or_default());
+        }
+        let mut projected = project(&bytes, now_ms);
+        if !batched.is_empty() {
+            projected
+                .events
+                .retain(|e| event_id(e).is_none_or(|id| !batched.contains(&id)));
+        }
         let (bodies, oversized) = chunk(&projected.events);
         let mut quarantine = projected.quarantine;
         quarantine.extend(oversized.into_iter().map(|e| record("oversized", &e)));
         if !quarantine.is_empty() {
-            self.publish_once(&format!("quarantine-{id}.jsonl"), &lines(&quarantine))?;
+            // Re-projected, it may differ: a duplicate record beats a lost one.
+            let name = format!("quarantine-{id}.jsonl");
+            if durable::regular_or_missing(&self.spool.join(&name))?.is_some() {
+                self.quarantine(&quarantine)?;
+            } else {
+                self.publish(&name, &lines(&quarantine))?;
+            }
         }
         for (i, body) in bodies.iter().enumerate() {
-            self.publish_once(&format!("batch-{id}-{i:04}.json"), body.as_bytes())?;
+            self.publish(&format!("batch-{id}-{:04}.json", next + i), body.as_bytes())?;
         }
         durable::remove(&self.spool, raw)?;
         status.quarantined += quarantine.len() as u64;
         status.dropped_other_schema += projected.other_schema;
         status.expired += projected.expired;
         Ok(())
-    }
-
-    fn publish_once(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        if durable::regular_or_missing(&self.spool.join(name))?.is_some() {
-            return Ok(());
-        }
-        self.publish(name, bytes)
     }
 
     fn publish(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
@@ -404,6 +426,39 @@ impl Queue {
         }
     }
 
+    /// Records not yet projected (the queue file's lines and raw files'), and the
+    /// first and last `timestamp_ms` among them. Best effort: unreadable is empty.
+    pub fn summary(&self) -> (u64, Option<(u64, u64)>) {
+        let mut sources = vec![self.file.clone()];
+        if let Ok(entries) = self.entries() {
+            sources.extend(
+                entries
+                    .into_iter()
+                    .filter(|e| e.kind == Kind::Raw)
+                    .map(|e| self.spool.join(e.name)),
+            );
+        }
+        let (mut records, mut span) = (0, None::<(u64, u64)>);
+        for path in sources {
+            let Ok(bytes) = durable::read_capped(&path, CAP_BYTES + (1 << 20)) else {
+                continue;
+            };
+            for line in bytes.split(|b| *b == b'\n') {
+                if line.iter().all(u8::is_ascii_whitespace) {
+                    continue;
+                }
+                records += 1;
+                let ts = serde_json::from_slice::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v.get("timestamp_ms")?.as_u64());
+                if let Some(t) = ts {
+                    span = Some(span.map_or((t, t), |(a, b)| (a.min(t), b.max(t))));
+                }
+            }
+        }
+        (records, span)
+    }
+
     pub fn usage(&self) -> io::Result<Usage> {
         let queue_bytes = durable::regular_or_missing(&self.file)?.map_or(0, |m| m.len());
         let mut usage = Usage {
@@ -461,7 +516,16 @@ impl Queue {
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| io::Error::other("the queue path has no UTF-8 file name"))?;
-        let tmp = format!(".{name}.nc-telemetry-empty.{}.tmp", durable::random_hex()?);
+        let empty = format!(".{name}.nc-telemetry-empty.");
+        // A crashed purge's temp; the caller holds the queue lock, so none is live.
+        for e in fs::read_dir(self.parent())?.flatten() {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            if n.starts_with(&empty) && n.ends_with(".tmp") {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+        let tmp = format!("{empty}{}.tmp", durable::random_hex()?);
         durable::publish(self.parent(), &tmp, name, b"")
     }
 
@@ -548,7 +612,7 @@ pub struct Projected {
     pub events: Vec<String>,
     /// Quarantine records.
     pub quarantine: Vec<String>,
-    /// Lines of another local schema version: dropped.
+    /// Lines of an older local schema version (or none): dropped.
     pub other_schema: u64,
     /// Lines older than [`MAX_AGE_MS`]: dropped.
     pub expired: u64,
@@ -566,13 +630,20 @@ pub fn project(bytes: &[u8], now_ms: u64) -> Projected {
             out.quarantine.push(record("malformed", &text));
             continue;
         };
-        if value
+        match value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64)
-            != Some(u64::from(SCHEMA_VERSION))
         {
-            out.other_schema += 1;
-            continue;
+            Some(v) if v == u64::from(SCHEMA_VERSION) => {}
+            // A newer build's record: kept for that build, never dropped by this one.
+            Some(v) if v > u64::from(SCHEMA_VERSION) => {
+                out.quarantine.push(record("newer_schema", &text));
+                continue;
+            }
+            _ => {
+                out.other_schema += 1;
+                continue;
+            }
         }
         let event: TelemetryEvent = match serde_json::from_value(value) {
             Ok(event) => event,
@@ -631,6 +702,15 @@ pub fn chunk(events: &[String]) -> (Vec<String>, Vec<String>) {
     }
     flush(&mut current, &mut bodies);
     (bodies, oversized)
+}
+
+/// The `event_id` of one serialized upload event.
+fn event_id(event: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(event)
+        .ok()?
+        .get("event_id")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// The `event_id`s of a request body, in order; `None` if it is not one.

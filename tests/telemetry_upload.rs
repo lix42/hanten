@@ -802,3 +802,142 @@ fn an_explicit_log_on_the_selected_queue_is_written_once() {
     assert_eq!(event_ids(&fs::read_to_string(&sent).unwrap()).len(), 2);
     assert_eq!(fs::read_to_string(&custom).unwrap().lines().count(), 1);
 }
+
+/// The convert arguments `Home::convert` uses, for a test that sets its own env.
+fn convert_args(home: &Home, name: &str) -> Vec<String> {
+    [
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        home.path(name).to_str().unwrap(),
+        "--film-base",
+        "0.8,0.5,0.3",
+        "--report",
+        "none",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+#[test]
+fn nc_telemetry_zero_keeps_an_explicit_event_out_of_the_upload_queue() {
+    let home = Home::new("envoff-explicit");
+    enable_collect_only(&home);
+    let out = home
+        .command("none", &[])
+        .args(convert_args(&home, "a.tiff"))
+        .arg("--telemetry")
+        .env("NC_TELEMETRY", "0")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stderr(&out).contains("NC_TELEMETRY=0"), "{}", stderr(&out));
+    assert!(queued_ids(&home).is_empty());
+}
+
+#[test]
+fn a_telemetry_file_never_overwrites_the_upload_queue() {
+    let home = Home::new("oneoff");
+    enable_collect_only(&home);
+    home.convert("none", "a.tiff", &[]);
+    let queued = queued_ids(&home);
+    let out = home.convert(
+        "none",
+        "b.tiff",
+        &["--telemetry-file", home.queue().to_str().unwrap()],
+    );
+    assert!(
+        stderr(&out).contains("is the upload queue"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(queued_ids(&home), queued);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_batch_that_cannot_be_read_is_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new("unreadable");
+    let server = Endpoint::start(|n, body| Reply {
+        status: if n == 0 { 503 } else { 200 },
+        body: acknowledge(body, &[], &[]),
+        delay: Duration::ZERO,
+    });
+    enable_collect_only(&home);
+    home.convert("none", "a.tiff", &[]);
+    assert_eq!(code(&home.run(&server.url, &["telemetry", "flush"])), 1);
+    let batch = spool_names(&home)
+        .into_iter()
+        .find(|n| n.starts_with("batch-"))
+        .unwrap();
+    let path = home.spool().join(&batch);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+    let out = home.run(&server.url, &["telemetry", "flush"]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(
+        path.exists(),
+        "an unreadable batch is kept, not quarantined"
+    );
+    assert_eq!(server.requests(), 1);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(code(&home.run(&server.url, &["telemetry", "flush"])), 0);
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_pending_batch_blocks_an_inactive_retarget() {
+    let home = Home::new("retarget-batch");
+    let server = Endpoint::start(|_, _| Reply {
+        status: 503,
+        body: "{}".into(),
+        delay: Duration::ZERO,
+    });
+    enable_collect_only(&home);
+    home.convert("none", "a.tiff", &[]);
+    assert_eq!(code(&home.run(&server.url, &["telemetry", "flush"])), 1);
+    assert_eq!(fs::metadata(home.queue()).unwrap().len(), 0, "rotated");
+    assert_eq!(batches(&home), 1);
+    assert_eq!(code(&home.run("none", &["telemetry", "disable"])), 0);
+    let other = home.path("other.jsonl");
+    let out = home.run(
+        "file:/dev/null",
+        &[
+            "telemetry",
+            "enable",
+            "--yes",
+            "--queue",
+            other.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code(&out), 2);
+    assert!(stderr(&out).contains("batch-"), "{}", stderr(&out));
+    assert_eq!(home.consent()["state"], "inactive");
+}
+
+#[test]
+fn reenabling_waits_for_the_old_helper_too() {
+    let home = Home::new("reenable-drain");
+    enable_collect_only(&home);
+    assert_eq!(code(&home.run("none", &["telemetry", "disable"])), 0);
+    // The old helper, still draining.
+    let drain = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(home.spool().join("drain.lock"))
+        .unwrap();
+    drain.lock().unwrap();
+    let enable = home
+        .command("file:/dev/null", &["telemetry", "enable", "--yes"])
+        .env("NC_TELEMETRY_HELPER", "0")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = finishes_only_after(enable, drain, "enable");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(home.consent()["state"], "active");
+}

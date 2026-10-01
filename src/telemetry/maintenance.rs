@@ -16,7 +16,7 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -43,16 +43,13 @@ fn store() -> Result<Store> {
 
 fn read(store: &Store) -> Result<Option<Consent>> {
     store.read().map_err(|e| {
-        other(format!(
-            "{e}. Telemetry stays off while it is unreadable; remove the file to start over"
-        ))
+        let remedy = if e.in_record {
+            "remove the record to start over"
+        } else {
+            "make it a regular file and directory of yours, not writable by every user"
+        };
+        other(format!("{e}. Telemetry stays off until then: {remedy}"))
     })
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Take a blocking lock, saying what it waits for when it is not free at once.
@@ -132,8 +129,24 @@ contracts/telemetry/upload-v1/README.md):
 Never uploaded: file or folder names, pixels, recipe or parameter values,
 exact sizes, dimensions or timestamps, error text, any user/machine/install ID.";
 
+/// `YYYY-MM-DD` (UTC) of a Unix-epoch millisecond time.
+fn day(ms: u64) -> String {
+    // Howard Hinnant's civil-from-days.
+    let z = (ms / 86_400_000) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 fn notice(queue: &Queue, endpoint: &Endpoint) {
     let usage = queue.usage().unwrap_or_default();
+    let (records, span) = queue.summary();
     eprintln!("{MANIFEST}");
     eprintln!();
     if *endpoint == Endpoint::Url(net::DEFAULT_ENDPOINT.into()) {
@@ -147,12 +160,25 @@ fn notice(queue: &Queue, endpoint: &Endpoint) {
     eprintln!();
     eprintln!("Queue: {}", queue.file.display());
     eprintln!("Spool: {}", queue.spool.display());
-    eprintln!("Already queued: {} bytes.", usage.total_bytes);
+    match span {
+        Some((first, last)) => eprintln!(
+            "Already queued: {records} records, {} to {} ({} bytes).",
+            day(first),
+            day(last),
+            usage.total_bytes
+        ),
+        None => eprintln!(
+            "Already queued: {records} records ({} bytes).",
+            usage.total_bytes
+        ),
+    }
     eprintln!("The queue is capped at 25 MiB and records expire after 30 days.");
     eprintln!();
     eprintln!("Once enabled, every `hanten convert` records one event to this queue and a");
-    eprintln!("short-lived background process uploads it. NC_TELEMETRY=0 turns that off");
-    eprintln!("for one process; `hanten telemetry disable` turns it off.");
+    eprintln!("short-lived background process uploads it. Uploading empties the queue file:");
+    eprintln!("it stops being a local history (`--telemetry` to another NC_TELEMETRY_LOG");
+    eprintln!("keeps one). NC_TELEMETRY=0 turns collection off for one process;");
+    eprintln!("`hanten telemetry disable` turns it off.");
 }
 
 /// `hanten telemetry enable [--queue PATH] [--yes]`.
@@ -176,7 +202,8 @@ pub fn enable(queue: Option<&Path>, yes: bool) -> Result<()> {
             );
             return Ok(());
         }
-        Some(c) if c.is_active() => {
+        // Active for this build or for an older one (a stale manifest).
+        Some(c) if c.state == State::Active && c.queue != path => {
             return Err(NcError::Usage(format!(
                 "telemetry: upload is enabled for {}; run `hanten telemetry disable` before \
                  selecting another queue",
@@ -246,7 +273,7 @@ fn retarget(store: &Store, old: &Consent, target: &Queue, fresh: &Consent) -> Re
     )?;
     let _drain = wait_for(|w| from.drain_lock(w), "a running upload helper")?;
     let _gate = wait_for(|w| store.gate(w), "the consent gate")?;
-    if read(store)?.is_none_or(|c| c.is_active() || !c.same_target(old)) {
+    if read(store)?.is_none_or(|c| c.state == State::Active || !c.same_target(old)) {
         return Err(changed());
     }
     let _queue = wait_for(|w| from.queue_lock(w), "the queue lock")?;
@@ -392,7 +419,7 @@ pub fn preview() -> Result<()> {
             Queue::at(path).ok_or_else(|| other("the queue has no file name"))?
         }
     };
-    let bodies = queue.preview(now_ms()).map_err(other)?;
+    let bodies = queue.preview(super::now_unix_millis()).map_err(other)?;
     let mut stdout = io::stdout().lock();
     for body in bodies {
         writeln!(stdout, "{body}").map_err(other)?;

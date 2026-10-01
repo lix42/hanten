@@ -1,10 +1,13 @@
 //! Where uploads go, and one bounded `POST /v1/events` request.
 //!
 //! The endpoint is fixed at build time by `NC_TELEMETRY_ENDPOINT` (default: the
-//! production Worker, `contracts/telemetry/upload-v1/README.md`). The same variable
-//! at run time overrides it, for tests and diagnosis. A value is an `https://` URL,
-//! an `http://` URL on a loopback host, `none` (this build uploads nothing), or
-//! `file:<path>` (append each request body to `<path>` instead of sending it).
+//! production Worker, `contracts/telemetry/upload-v1/README.md`). A value is an
+//! `https://` URL, an `http://` URL on a loopback host, `none` (this build uploads
+//! nothing), or `file:<path>` (append each request body to `<path>` instead of
+//! sending it). The same variable at run time may only narrow that, for tests and
+//! diagnosis: to `none`, a file or a loopback host. It can never point a build at
+//! another remote backend than the one its `enable` notice names, nor revive a
+//! `none` build.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -44,9 +47,33 @@ impl fmt::Display for Endpoint {
 /// The endpoint this process uploads to. An unparsable value is an error, which
 /// callers treat like `none`.
 pub fn endpoint() -> Result<Endpoint, String> {
-    let runtime = std::env::var("NC_TELEMETRY_ENDPOINT").ok();
-    let built = option_env!("NC_TELEMETRY_ENDPOINT");
-    parse_endpoint(runtime.as_deref().or(built).unwrap_or(DEFAULT_ENDPOINT))
+    let built = parse_endpoint(option_env!("NC_TELEMETRY_ENDPOINT").unwrap_or(DEFAULT_ENDPOINT))?;
+    match std::env::var("NC_TELEMETRY_ENDPOINT") {
+        Ok(runtime) => narrow(built, parse_endpoint(&runtime)?),
+        Err(_) => Ok(built),
+    }
+}
+
+/// The run-time override applied to the build's endpoint.
+fn narrow(built: Endpoint, runtime: Endpoint) -> Result<Endpoint, String> {
+    let local = match &runtime {
+        Endpoint::None | Endpoint::File(_) => true,
+        Endpoint::Url(url) => url_is_loopback(url) || runtime == built,
+    };
+    match built {
+        Endpoint::None => Ok(Endpoint::None),
+        _ if local => Ok(runtime),
+        _ => Err(format!(
+            "NC_TELEMETRY_ENDPOINT at run time may only be `none`, `file:<path>` or a \
+             loopback URL, not {runtime}"
+        )),
+    }
+}
+
+fn url_is_loopback(url: &str) -> bool {
+    url.strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .is_some_and(is_loopback)
 }
 
 pub fn parse_endpoint(value: &str) -> Result<Endpoint, String> {
@@ -62,6 +89,9 @@ pub fn parse_endpoint(value: &str) -> Result<Endpoint, String> {
     }
     if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(bad("contains whitespace"));
+    }
+    if value.contains('@') {
+        return Err(bad("a URL with user info is refused"));
     }
     if let Some(rest) = value.strip_prefix("https://") {
         return if rest.is_empty() {
@@ -154,17 +184,7 @@ fn append_body(path: &std::path::Path, body: &str) -> io::Result<()> {
 
 /// A `file:` endpoint accepts everything it is given.
 fn acknowledge_all(body: &str) -> Acknowledgement {
-    #[derive(Deserialize)]
-    struct Ids {
-        events: Vec<Id>,
-    }
-    #[derive(Deserialize)]
-    struct Id {
-        event_id: String,
-    }
-    let ids = serde_json::from_str::<Ids>(body)
-        .map(|b| b.events.into_iter().map(|e| e.event_id).collect())
-        .unwrap_or_default();
+    let ids = super::spool::batch_ids(body.as_bytes()).unwrap_or_default();
     Acknowledgement {
         upload_schema_version: super::upload::UPLOAD_SCHEMA_VERSION,
         accepted: ids,
@@ -178,10 +198,7 @@ fn post(url: &str, body: &str) -> Sent {
         kind: kind.into(),
         retry_after_s: None,
     };
-    let loopback = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .is_some_and(is_loopback);
+    let loopback = url_is_loopback(url);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .http_status_as_error(false)
@@ -259,8 +276,26 @@ mod tests {
             "https://",
             "ftp://x",
             "https://a b",
+            "http://127.0.0.1:x@collector.example/v1/events",
+            "https://user@hanten-telemetry.example/v1/events",
         ] {
             assert!(parse_endpoint(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_run_time_override_only_narrows() {
+        let prod = Endpoint::Url(DEFAULT_ENDPOINT.into());
+        let other = Endpoint::Url("https://collector.example/v1/events".into());
+        let local = Endpoint::Url("http://127.0.0.1:9/v1/events".into());
+        let file = Endpoint::File("/tmp/x".into());
+        assert_eq!(narrow(prod.clone(), Endpoint::None), Ok(Endpoint::None));
+        assert_eq!(narrow(prod.clone(), file.clone()), Ok(file.clone()));
+        assert_eq!(narrow(prod.clone(), local.clone()), Ok(local.clone()));
+        assert_eq!(narrow(prod.clone(), prod.clone()), Ok(prod.clone()));
+        assert!(narrow(prod.clone(), other.clone()).is_err());
+        for runtime in [other, local, file, prod] {
+            assert_eq!(narrow(Endpoint::None, runtime), Ok(Endpoint::None));
         }
     }
 
