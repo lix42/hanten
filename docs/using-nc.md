@@ -15,7 +15,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > reaches were re-run: §6's `reconstruction.contrast` refusal, §7's rendering table,
 > no-roll warning, look report and fit-range report. At `nf-calibration/frame-level-trim`
 > the roll section's examples (§5, §7) were re-run. At `algo/density-safety-bounds`
-> (`pipeline_version` 9) §10's examples and §12's new entries were re-run. The staleness signal is
+> (`pipeline_version` 9) §10's examples and §12's new entries were re-run, and at
+> `output/drop-avif` §2's build prerequisites and §8's destination examples. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -100,8 +101,7 @@ They are not two ends of one scale; don't conflate them.
 cargo build --release      # → target/release/hanten
 ```
 
-A fresh machine needs CMake, C and C++ compilers, and NASM — the build compiles
-libaom (the AVIF encoder) from the `libaom-sys` crate's vendored source. Cargo still
+A fresh machine needs only a C compiler besides Rust (no CMake or NASM). Cargo
 fetches the Rust crates from crates.io, so the build needs network access (or a warm
 cargo cache).
 
@@ -1227,7 +1227,6 @@ spelling is the one `hanten` writes when you leave the suffix off:
 | `sdr` *(default)* | `native` | `display-p3` *(default)* / `adobe-rgb` / `srgb` | `tiff` | `.tif` / **`.tiff`** | 16-bit TIFF in the gamut's own curve (sRGB curve / `563/256` / sRGB curve) |
 | `hdr` | `linear` | `display-p3` / `adobe-rgb` / `srgb` / `bt2020` | `tiff` | `.tif` / **`.tiff`** | 32-bit float display-linear TIFF (1.0 = 203 cd/m²) |
 | `hdr` | `pq` / `hlg` | `bt2020` | `tiff` | `.tif` / **`.tiff`** | Rec.2100 signal as full-range 16-bit TIFF codes |
-| `hdr` | `pq` / `hlg` | `bt2020` | `avif` | **`.avif`** | 10-bit 4:4:4 AVIF |
 | `hdr` | `native` | `display-p3` / `srgb` | `jpeg` | **`.jpg`** / `.jpeg` | gain-map JPEG: an 8-bit SDR base with a per-channel ISO 21496-1 gain map |
 
 With no destination flag the result is an **SDR Display P3 16-bit TIFF** under the
@@ -1290,23 +1289,28 @@ usage: no destination combines --range sdr and --gamut bt2020 (recipe keys
 
 The report records every resolved axis in `chain.destination`
 (`{"display": {"range": "hdr", "transfer": "pq", "gamut": "bt2020", "container":
-"avif"}}`, or `"film-master"`), which is exactly the recipe `output` that replays it.
+"tiff"}}`, or `"film-master"`), which is exactly the recipe `output` that replays it.
+
+**AVIF was removed** ([`design/avif-removal.md`](design/avif-removal.md)). `--container
+avif`, the recipe's `"container": "avif"` and an `.avif` output path are each refused
+(exit 2), naming the 16-bit PQ/HLG TIFF that carries the same signal and the gain-map
+JPEG as the compact HDR file.
 
 ### HDR destinations
 
 An HDR destination clamps its rendition to the 1000 cd/m² peak and counts what that
 clamped in `chain.peak_clamp` and in `loss`, where `--strict` sees it. Each also
 fills a block stating what the encoder wrote and the luminance anchors no container
-can carry — `avif` for the AVIF pair, `hdr_coded_tiff` for the PQ/HLG TIFFs,
-`hdr_linear_tiff` for the float TIFF, whose `pixel_contract`, `linear_domain` and
-embedded profile name its gamut (in a `roll` report, on each frame):
+can carry — `hdr_coded_tiff` for the PQ/HLG TIFFs, `hdr_linear_tiff` for the float
+TIFF, whose `pixel_contract`, `linear_domain` and embedded profile name its gamut (in
+a `roll` report, on each frame):
 
 ```console
-$ hanten convert scan.tif -o out --film-base … --transfer pq --container avif | jq -c .avif.rendering
-{"reference_white_nits":203.0,"target_peak_nits":1000.0,"linear_headroom":4.9261084,"tone_curve":"reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","gamut_mapping":"acescg-to-bt2020-matrix+neutral-axis-radial-boundary-v2","linear_domain":"bt2020-linear-relative-to-203-nit-reference-white"}
+$ hanten convert scan.tif -o out --film-base … --transfer pq | jq -c '.hdr_coded_tiff | {reference_white_nits,target_peak_nits,tone_curve,cicp}'
+{"reference_white_nits":203.0,"target_peak_nits":1000.0,"tone_curve":"reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","cicp":[9,16,0]}
 ```
 
-A TIFF or AVIF whose brightest pixel stays at or below reference white is warned
+A TIFF whose brightest pixel stays at or below reference white is warned
 about (`HDR output carries an SDR-range signal`), naming `--exposure` and `--range sdr`
 as the remedies. The gain-map JPEG is not: an SDR-range frame makes a **flat** gain
 map, which `chain.gain_map.flat` states and which is a correct file (it displays as
@@ -1341,11 +1345,12 @@ this predictable:
   `out.tiff`; case is preserved as typed.
 - **A dot-segment is only a suffix if `hanten` recognises the container.**
   `-o out.v2` and `-o roll-1.2` are stems, so they get `out.v2.tiff` and
-  `roll-1.2.tiff`. Only `.tif`, `.tiff`, `.jpg`, `.jpeg` and `.avif` are read as a
-  container request.
-- **A path that names a directory is refused.** There is nothing to append to, so
-  `-o positives/` and `-o positives/.` both exit 2 rather than writing
-  `positives.tiff` beside the directory. Name the file inside it
+  `roll-1.2.tiff`. Only `.tif`, `.tiff`, `.jpg` and `.jpeg` are read as a
+  container request, and `.avif` is refused (AVIF was removed) rather than read as a
+  stem.
+- **A path that names a directory is refused**, before anything renders and whatever
+  its suffix: `-o positives/`, `-o positives/.` and `-o out.tiff/` all exit 2 rather
+  than writing `positives.tiff` beside the directory or failing at the write. Name the file inside it
   (`-o positives/out`), or use `hanten roll --out-dir positives/` for a whole roll.
   In a `roll` manifest the same applies to an `"output"` of `"."` — drop the
   `output` key instead and the frame takes its derived name inside `--out-dir`.
@@ -1361,9 +1366,9 @@ usage: the output path out.jpg does not end in .tif or .tiff: the destination is
        --container jpeg; --range hdr --gamut srgb --container jpeg
 ```
 
-`-o out.avif` offers `--transfer pq --container avif; --transfer hlg --container
-avif`, and with a recipe stating `"gamut": "adobe-rgb"` each offer also carries
-`--gamut bt2020`. With a typed `--film-master` the offer says to drop it first; a
+With a recipe stating `"gamut": "adobe-rgb"`, each offer for `-o out.jpg` restates
+the gamut (`--range hdr --gamut display-p3 --container jpeg; --range hdr --gamut srgb
+--container jpeg`). With a typed `--film-master` the offer says to drop it first; a
 recipe's `"film-master"` is replaced by the offered flags themselves. A `roll` frame's
 refusal names the recipe keys (`output.display.…`) instead of flags. With `-v`,
 `hanten` says on stderr when it completed a path.
@@ -1386,8 +1391,9 @@ names the preset's counterpart where one exists:
 ```
 usage: --output-preset was removed with the chain its presets named: a destination is
        four separate knobs — --range, --transfer, --gamut, --container (recipe
-       `output.display`) — or --film-master. For `hdr-pq`, pass --transfer pq
-       --container avif. There is no alias.
+       `output.display`) — or --film-master. For `hdr-pq`, the nearest is --transfer
+       pq: the same Rec.2100 signal as a 16-bit TIFF, since Hanten no longer writes
+       AVIF (`docs/design/avif-removal.md`). There is no alias.
 ```
 
 Each named set resolves to the same destination under either rendering (so
@@ -1624,8 +1630,8 @@ Clipping is reported, never silent:
 ["output lost 126296 clipped and 0 non-finite of 695772 samples (18.15%)"]
 ```
 
-Every encoder counts this, not just the TIFF ones — the gain-map JPEG and the
-AVIF paths build the same report when they quantize.
+Every encoder counts this, not just the TIFF ones — the gain-map JPEG builds the same
+report when it quantizes.
 
 A channel written as 0 everywhere is in range, so no loss counter sees it; it warns on
 its own (`--exposure=-100` on a fixture, with the roll stated):

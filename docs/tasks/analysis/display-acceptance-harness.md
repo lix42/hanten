@@ -16,7 +16,8 @@ needs no real scans and no human eyes.
   tolerances. It reuses `nf-verification/benchmark-set`'s case list (one case per
   destination) rather than keeping a second one.
 - **The oracles** for every encoding acceptance names: film master, 16-bit SDR TIFF,
-  HDR float and PQ/HLG TIFF, PQ/HLG AVIF, and the ISO 21496-1 gain-map JPEG.
+  HDR float and PQ/HLG TIFF, and the ISO 21496-1 gain-map JPEG (AVIF was removed,
+  `output/drop-avif`).
   Each decodes with a decoder independent of nc and compares against the canonical
   buffer.
 - **Where it lives**: `nctool` (`scripts/analysis/`), beside `metrics` and `compare`,
@@ -25,7 +26,7 @@ needs no real scans and no human eyes.
 ## Open questions
 
 - Which independent decoders, and how CI gets them: an ICC/transfer decoder for TIFF,
-  an AVIF decoder (libavif / dav1d), an ISO 21496-1 gain-map decoder (libultrahdr
+  an ISO 21496-1 gain-map decoder (libultrahdr
   reads ISO; Apple ImageIO is macOS-only and stays the manual oracle).
 - How the canonical pre-encode buffer is exported from nc: a debug export or an
   existing report field.

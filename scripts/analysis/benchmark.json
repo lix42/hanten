@@ -246,64 +246,6 @@
           }
         },
         {
-          "name": "hdri-hdr-pq-bt2020-avif",
-          "input": "tests/fixtures/hdri-64bit.tif",
-          "args": [
-            "--film-base",
-            "0.9,0.55,0.42"
-          ],
-          "output_ext": "avif",
-          "destination": {
-            "args": [
-              "--range",
-              "hdr",
-              "--transfer",
-              "pq",
-              "--gamut",
-              "bt2020",
-              "--container",
-              "avif"
-            ]
-          },
-          "preset": {
-            "args": [
-              "--preset",
-              "sigmoid-knees",
-              "--output-preset",
-              "hdr-pq"
-            ]
-          }
-        },
-        {
-          "name": "hdri-hdr-hlg-bt2020-avif",
-          "input": "tests/fixtures/hdri-64bit.tif",
-          "args": [
-            "--film-base",
-            "0.9,0.55,0.42"
-          ],
-          "output_ext": "avif",
-          "destination": {
-            "args": [
-              "--range",
-              "hdr",
-              "--transfer",
-              "hlg",
-              "--gamut",
-              "bt2020",
-              "--container",
-              "avif"
-            ]
-          },
-          "preset": {
-            "args": [
-              "--preset",
-              "sigmoid-knees",
-              "--output-preset",
-              "hdr-hlg"
-            ]
-          }
-        },
-        {
           "name": "hdri-hdr-native-display-p3-jpeg",
           "input": "tests/fixtures/hdri-64bit.tif",
           "args": [

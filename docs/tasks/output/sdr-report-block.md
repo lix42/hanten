@@ -3,8 +3,8 @@
 > **Re-scoped (2026-09-30).** The presets and the `SdrRenderMetadata` below went with
 > `nf-core/default-flip`, and the render half is done: every destination's `chain`
 > states its operator, headroom, peak, gamut map and destination
-> (`nf-core/report-contract`). What is left is the **encoder** half. The HDR TIFFs and
-> the AVIF each report a block of what was written (`pixel_contract`,
+> (`nf-core/report-contract`). What is left is the **encoder** half. The HDR TIFFs
+> each report a block of what was written (`pixel_contract`,
 > `bits_per_sample`, `icc_bytes`, …); the SDR TIFF and the gain-map base report none.
 > Decide whether they need one — the HDR blocks exist because an ICC profile cannot
 > carry luminance, which an SDR profile does not need to — and add it or close this.

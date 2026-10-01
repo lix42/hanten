@@ -29,15 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # libaom (`libaom-sys`) builds with CMake and NASM.
-      - name: Install native build prerequisites (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake nasm
-
-      - name: Install native build prerequisites (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cmake nasm
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

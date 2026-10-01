@@ -510,7 +510,7 @@ pub struct ConversionInfo {
     pub params_hash: String,
     /// Film-base provenance (`{"region":…}` / `{"explicit":…}`).
     pub film_base_source: FilmBaseProvenance,
-    /// The primary image's sample depth as written (`u8` / `u10` / `u16` / `f32`),
+    /// The primary image's sample depth as written (`u8` / `u16` / `f32`),
     /// fixed by the destination's encoding.
     pub output_depth: Cow<'static, str>,
 }

@@ -56,9 +56,9 @@ What other epics need to know about `output`:
   The spike waived the licensed-normative-text review at spike level and re-homed
   it as a pre-merge gate on the encoder tasks; the ISO 21496-1 half was discharged
   by buying the text (2026-08-04), the AVIF/AV1 half by reading the public specs.
-- **Containers:** JPEG + ISO 21496-1 gain map is the default HDR still; 10-bit
-  4:4:4 BT.2020 AVIF is the explicit PQ/HLG path; three HDR TIFFs are interchange
-  encodings. HEIC is deferred (no portable encoder API for the final gain-map
+- **Containers:** JPEG + ISO 21496-1 gain map is the default HDR still; three HDR
+  TIFFs are interchange encodings. The 10-bit 4:4:4 BT.2020 AVIF PQ/HLG path was
+  removed 2026-10-01 (`drop-avif`). HEIC is deferred (no portable encoder API for the final gain-map
   container, plus HEVC licensing risk).
 - **`gain-map-hdr` and `ultra-hdr-v1` are one render packaged twice**, differing
   only in dialect (`Dialects::LegacyPlusIso` vs `LegacyUltraHdrV1`), which rides in
@@ -118,25 +118,27 @@ What other epics need to know about `output`:
   raised to 65500 through `ultrahdr-sys`'s `jpeg-max-dimension` feature (no
   vendored source patched); at its 8192 default packaging refuses real 5000 dpi
   scans after the full render.
-- **The AVIF path does *not* use libavif** (decided 2026-08-05 in
-  `hdr-avif-output`): no published crate ships libavif ≥ 1.4.2 and
+- **AVIF was removed 2026-10-01** (`drop-avif`); `docs/design/avif-removal.md` says
+  why and how to restore it. While it shipped, **the AVIF path did *not* use
+  libavif** (decided 2026-08-05 in `hdr-avif-output`): no published crate ships libavif ≥ 1.4.2 and
   `avif-serialize` cannot emit `MA1A`, so it is published `libaom-sys` for the
   codestream plus an nc-owned Rust MIAF/AVIF container writer. `av1C` is filled by
   **parsing the encoded sequence-header OBU**, never from the encoder config.
-  Windows static builds are deferred → `output/hdr-avif-windows-packaging`.
+  Windows static builds were deferred → `output/hdr-avif-windows-packaging`, closed
+  as superseded by the removal.
 - **`hdr-linear-tiff` is the display-linear HDR interchange master**: it is not
   `film-master` (linear ACEScg *before* display rendering), not `hdr-pq`/`hdr-hlg`
   (no transfer applied), and not `--out-depth f32` on `legacy` (print-rendered
   float in the selected output space). It writes `pipeline::hdr::render_linear`'s
   pre-transfer BT.2020/D65 samples verbatim as unclamped f32. The **report block and
   sidecar `meta`, not the ICC profile, are authoritative** for reference white /
-  peak / headroom. **`hdr-pq-tiff` / `hdr-hlg-tiff`** store the same rendition as
-  the AVIF presets as full-range 16-bit codes; they are **limited-interoperability
+  peak / headroom. **`hdr-pq-tiff` / `hdr-hlg-tiff`** store the same rendition the
+  removed AVIF presets coded, as full-range 16-bit codes; they are **limited-interoperability
   interchange, never display-ready** (only a CICP-aware reader honours the ICC
   `cicpTag`), and their profiles are conformant Display-class since 2026-08-09.
 - **Which memory phase peaks is per profile, and measured.** `HdrLinearTiff`,
   `HdrCodedTiff`, `SdrTiff`, `UltraHdrV1`/`GainMapHdr` all peak at **render**;
-  `HdrAvif` and `Convert` at encode. Read it off
+  `Convert` at encode, as did the removed `HdrAvif`. Read it off
   `pipeline::memory`'s `which_phase_peaks_is_per_profile_and_measured_not_assumed`,
   never off a category — prose about it has been wrong three times.
 - **`definitions::BT2020` is fed to Little CMS** by `color::hdr_linear_bt2020_icc`,
@@ -1765,3 +1767,32 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   only, written by nc's own `io::iso_gain_map`; the manual Apple ImageIO gate
   (`scripts/iso-decoder-oracle/`) remains its external check. The build still needs
   CMake and NASM for libaom and a C compiler for lcms2.
+
+## drop-avif
+
+**Status:** done
+**Updated:** 2026-10-01
+
+- 2026-10-01: **Removed the AVIF destinations and `libaom-sys`** (user decision; the
+  record is `docs/design/avif-removal.md`). libaom was the only reason the build
+  needed CMake, C++ and NASM (NASM only on x86/x86_64, where libaom's CMake refuses to
+  configure without it). CI's install steps for them are gone. The PQ/HLG TIFFs carry
+  the same `hdr::encode_transfer` signal, so no HDR signal was lost, only the compact
+  container. `hdr-avif-windows-packaging` closed as superseded.
+- `avif` is refused by name through one table: `Axis::REMOVED` on `Container`, read
+  by `destination::parse` (recipe and flag alike — the axis flags now use a clap
+  `TypedValueParser` over `parse` instead of `ValueEnum`, so the flag gets the
+  recipe's message) and by `Container::removed_suffix` in `cli::resolve_output_path`,
+  so `out.avif` is refused rather than completed to `out.avif.tiff`. An unknown axis
+  value now reads `unknown --container value … — accepted: …` on the flag too.
+- Also gone: `BT2020_NCL_RGB_TO_YCBCR` and `derive::ycbcr_from_luma` (AVIF-only;
+  `derived-artifacts.txt` regenerated, a pure deletion), `RunProfile::Avif` with its
+  48 B/px staging fit (kept in the design doc), the report's `avif` block.
+- Kept: `"avif"` in the upload contract's `conversion.encoding` for older clients, and
+  `nctool`'s AVIF handling, since it drives older builds and reads their reports.
+- 2026-10-01 (review follow-up): the bullet above no longer holds for the recipe.
+  `Axis::REMOVED` is now read in three places: the flag through `destination::parse`
+  (flag wording only), a recipe or per-frame override in `recipe::check_body` before
+  serde, via `destination::removed_in_recipe` (worded by key, since no flag can rescue
+  a recipe refused before merge), and an output suffix through
+  `Container::removed_suffix`. Restoring AVIF means removing all three.

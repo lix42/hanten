@@ -16,7 +16,8 @@ Step-1 (MVP) plan for the `hanten` CLI negative→positive converter. See
 A command-line tool (`nc`) that reads a film-negative scan (SilverFast HDR/HDRi
 first), converts it to a positive image, and writes a TIFF (including the
 display-linear and Rec.2100-coded HDR TIFFs) or an explicitly selected
-`ultra-hdr-v1` gain-map JPEG or `hdr-pq`/`hdr-hlg` AVIF. "AI-friendly" means
+`ultra-hdr-v1` gain-map JPEG (the `hdr-pq`/`hdr-hlg` AVIF shipped and was removed by
+`output/drop-avif`). "AI-friendly" means
 **every conversion parameter is a CLI flag** and the tool is deterministic and
 scriptable with JSON recipes/reports — not that ML processes the image.
 
@@ -32,7 +33,6 @@ decode → validate input semantics → film-base → preset dispatch
        → tagged reconstruction (simple | density, including density curve)
        → FilmRgbImage → NC film RGB v1 → linear ACEScg → shared print controls
        → ultra-hdr-v1: SDR/HDR + gain map → JPEG package
-       → hdr-pq / hdr-hlg: HDR → Rec.2100 PQ/HLG → 10-bit 4:4:4 AVIF
        → hdr-pq-tiff / hdr-hlg-tiff: the same signal → 16-bit TIFF codes
        → hdr-linear-tiff: HDR, no transfer → 32-bit float BT.2020 TIFF
 ```
@@ -76,8 +76,8 @@ under, and the parenthesized paths are the modules it owns.
   `legacy`.
 - **output** (the encoders downstream of `color`) — the display renditions:
   Display P3 / SDR, BT.2020 PQ/HLG, explicit legacy Ultra HDR v1 gain-map JPEG
-  (with final ISO metadata planned), AVIF, and the presets that resolve them
-  together.
+  (with final ISO metadata planned), and the presets that resolve them together.
+  (AVIF shipped and was removed, `output/drop-avif`.)
 - **core** (`cli.rs`, `main.rs`, `types.rs`, `pipeline/stages.rs`) — clap subcommands (`convert`/`inspect`/`measure-base`/`measure-roll`/`params`/`roll`), recipe load/merge, JSON report, exit codes, the roll/batch workflow, the shared types, and the pure algorithm→output-color render core the CLI drives.
 - **telemetry** (`src/telemetry.rs`) — that module and the opt-in upload stack. Operational, never a conversion knob.
 - **analysis** (`scripts/`) — the real-scan verification harness, the `nctool` Python toolkit, the asset manifest, and NLP comparison. Verifies the pipeline; is not part of it.
@@ -285,6 +285,7 @@ graph TD
     output/parallel-display-stages
     output/parallel-hdr-stages
     output/avif-row-multithreading
+    output/drop-avif
     output/post-fanout-encode-slowdown
   end
   subgraph telemetry
@@ -569,6 +570,7 @@ graph TD
   output/hdr-display-rendering --> output/parallel-hdr-stages
   output/gain-map-hdr-output --> output/parallel-hdr-stages
   output/hdr-avif-output --> output/avif-row-multithreading
+  output/hdr-avif-output --> output/drop-avif
   core/conversion-versioning --> output/avif-row-multithreading
   output/parallel-hdr-stages --> output/post-fanout-encode-slowdown
   output/lossless-hdr-tiff --> output/presets
@@ -953,7 +955,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   4.79x unbounded, identical on every frame, where the plateau share separates them
   6.6–15.2% against 0.26–0.61%
 - `output/hdr-avif-output` (post-MVP): `output/hdr-display-rendering`
-- `output/hdr-avif-windows-packaging` (post-MVP): `output/hdr-avif-output`
+- `output/hdr-avif-windows-packaging` (post-MVP, **closed—superseded** by `output/drop-avif`): `output/hdr-avif-output`
 - `output/lossless-hdr-tiff` (post-MVP): `output/hdr-display-rendering`, `color/colorimetry-source-of-truth`, `io/transactional-output-writes`
 - `output/presets` (post-MVP): `output/iso-gain-map-metadata`, `output/hdr-avif-output`, `output/lossless-hdr-tiff`, `algo/reference-anchored-sigmoid`, `core/roll-conversion`, `core/conversion-versioning`
 - `output/output-path-suffix` (post-MVP): `output/hdr-avif-output`
@@ -966,6 +968,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 - `output/parallel-hdr-stages` (post-MVP): `output/parallel-display-stages`, `output/hdr-display-rendering`, `output/gain-map-hdr-output` — the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
 - `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
+- `output/drop-avif` (post-MVP, **done** 2026-10-01): `output/hdr-avif-output` — remove the AVIF destinations and `libaom-sys`, so the build needs no CMake or NASM
 - `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
 - `telemetry/perf-instrumentation` (post-MVP, **parked**): `core/pipeline-orchestration`
   — LAB criterion benches; prototyped and parked on git branch
@@ -1529,7 +1532,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [SDR display rendering](tasks/output/sdr-display-rendering.md) — render intentional linear ACEScg film values into a valid Display P3 or sRGB SDR rendition with explicit reference-white, tone, and gamut policy
 - [x] [Display-HDR rendering](tasks/output/hdr-display-rendering.md) — render intentional linear ACEScg film values into BT.2020 PQ/HLG with explicit headroom, tone, and gamut mapping
 - [x] [Ultra HDR v1 gain-map JPEG output](tasks/output/gain-map-hdr-output.md) — write an explicit backward-compatible Display P3 JPEG plus public Ultra HDR v1 gain-map metadata
-- [x] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needs CMake and NASM for libaom and a C compiler for lcms2. Retained as decision history
+- [x] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needed CMake and NASM for libaom (until `output/drop-avif`) and a C compiler for lcms2. Retained as decision history
 - [x] [Final ISO gain-map metadata](tasks/output/iso-gain-map-metadata.md) — add verified ISO 21496-1:2025 metadata to the same JPEG and prove dual-dialect agreement. **Metadata and container halves implemented against the licensed text** (2026-08-04: `pipeline/gain_map/iso.rs` C.2.2 payload + normative validation; `io/ultra_hdr.rs` `Dialects::LegacyPlusIso` writing C.4.3/C.4.6 segments into both images, MPF-safe). **Code complete**; verified with exiftool (MPF index resolves, second image extracts, 2350+1186=3536 bytes) and `sips`. **Both blockers cleared 2026-08-06**: the CIPA DC-007 text was fetched and read (its two conformance gaps split into `output/mp-container-conformance`), and the external decoder oracle ran — Apple ImageIO, harness committed at `scripts/iso-decoder-oracle/`. The oracle found a real defect: the baseline segment sat *after* `SOF0`, where no reader scans, so ImageIO saw no gain map at all; fixed, and the metadata now reads back field-for-field as written (the decoder's 4.926 headroom is nc's own declared constant echoed back, not evidence — `GainMapMax` is). **Done 2026-08-07** on the strength of the Apple oracle plus libultrahdr; the Android 15+ half and CLI activation moved to `output/gain-map-dialect-activation` so they stop gating `output/presets`. **Note the `ts:` URN is the published first edition's, not a draft** — and libultrahdr's compact-denominator ISO layout is *non-conformant*, so nc owns its serializer.
 - [x] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **closed—narrowed claim** (2026-10-01): `io::iso_gain_map` already writes MP Type `050000` and keeps `APP0 JFIF` first; the file carries no Exif, so its base is not the DC-007 baseline ISO 21496-1 C.4.3 asks for (DC-007 §4.2.1, §5.1), recorded in its module doc and design-spec §9
 - [x] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is that task's
@@ -1566,7 +1569,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   any default change needs its own `pipeline_version` bump
 - [x] [Derive the output suffix from the resolved preset](tasks/output/output-path-suffix.md) — **done 2026-09-22.** `-o out` takes its container from the resolved preset (`out.jpg` by default, `out.tiff`/`out.avif` elsewhere); a stated suffix is honoured verbatim (`.jpeg` stays `.jpeg`, case preserved) or still fails on a mismatch. A dot-segment is a suffix only when *some* preset accepts that spelling, so `out.v2` is a stem and becomes `out.v2.jpg`. **Refines rather than overturns `output/presets`' "never silently renamed"**: renaming is rewriting typed bytes, completing is appending to them. `cli::container_for` is now the one preset-shaped step both the accepted set and the supplied spelling hang off (`required_extensions` lost its `Option`), which is what `nf-destinations/preset-set` carries forward. `roll` shares the resolver, so an explicit manifest `output` is completed too; the completed path is resolved before the sidecar, the write-target guard, `report.output` and telemetry see it. No pixel, recipe or fingerprint change
 - [x] [HDR AVIF output](tasks/output/hdr-avif-output.md) — 10-bit 4:4:4 Rec.2100 PQ/HLG AVIF via published `libaom-sys` plus an **nc-written MIAF container** (no libavif: no published crate ships ≥ 1.4.2, and `avif-serialize` cannot emit `MA1A`). `hdr-pq`/`hdr-hlg` are live as explicit `convert`-only presets; `av1C` is parsed back out of the codestream; `MA1A` only inside the published Advanced-Profile limits, else general-brand-only **with the reason reported**; `cq_level` and codec bounds calibrated and pinned by equality against `avifdec`/dav1d; `RunProfile::HdrAvif` calibrated on two real scans. Windows deferred → `output/hdr-avif-windows-packaging`; counsel review of the AOM patent grant stays with release
-- [ ] [HDR AVIF Windows packaging](tasks/output/hdr-avif-windows-packaging.md) — add the missing `windows-latest` CI job and prove the static libaom build under MSVC; encoding behavior unchanged, and cross-build byte identity is explicitly not required
+- [x] [HDR AVIF Windows packaging](tasks/output/hdr-avif-windows-packaging.md) — **closed—superseded** by `output/drop-avif` (2026-10-01): no AVIF encoder is left to package; kept as the plan if AVIF returns
+- [x] [Drop AVIF output](tasks/output/drop-avif.md) — **done 2026-10-01.** The `hdr / pq|hlg / bt2020 / avif` destinations, `io::avif` and `libaom-sys` are gone, so the native build is a C compiler only (no CMake, C++ or NASM). The PQ/HLG TIFFs keep the same Rec.2100 signal and the gain-map JPEG the compact HDR file. `avif` is refused by name as a flag, a recipe value, an `.avif` suffix and through `--output-preset hdr-pq|hdr-hlg`; the upload contract keeps `"avif"` for older clients. No `pipeline_version` change. Why, and how to bring it back: [design/avif-removal.md](design/avif-removal.md)
 - [x] [Lossless HDR TIFF outputs](tasks/output/lossless-hdr-tiff.md) — preserve display-linear BT.2020 as 32-bit float TIFF and Rec.2100 PQ/HLG as losslessly stored 16-bit TIFF code values with truthful signaling. **Done 2026-08-06** in two chunks: A = `hdr-linear-tiff` (bit-exact f32 display-linear BT.2020), B = `hdr-pq-tiff`/`hdr-hlg-tiff` (full-range 16-bit codes stored exactly + the ICC `cicpTag` contract). Never blocked on a paywalled standard — ICC.1:2022 §9.2.17/§10.3 pins the code points (`9-16-0-1` PQ, `9-18-0-1` HLG) with **MatrixCoefficients 0** for RGB, unlike the AVIF path's 9. The PQ profile is an **extended-range A2B** (PCS `Y = L/203`, unclipped to ≈49.26) matching Adobe's reference BT.2100 profiles, since a matrix-shaper TRC cannot exceed 1.0; HLG's is scene-referred because its OOTF is not per-channel separable. Verified end to end: PQ-decoding the stored codes recovers the linear TIFF's samples to 0.0149% on a real 18.66 MP scan. Documented as **limited-interoperability interchange, not display-ready** — only a CICP-aware reader honours the tag; the 2026-08-06 viewer gate confirmed the files render correctly but was **not discriminating** for HDR presentation (diffuse-highlight scene, exponential default curve). **Two ICC conformance gaps are documented and deferred to `output/presets`** (§8.4.2 `BToA0Tag`, §8.2 `chromaticAdaptationTag`): the coded profiles are valid *sources* but not conformant Display-class profiles. Neither moves a stored code value; closing them changes the profile bytes, so it rides with preset activation
 - [x] [Output presets and guidance](tasks/output/presets.md) — **done 2026-08-09.** All
   twelve presets ship and `gain-map-hdr` is the default (`pipeline_version` **3**,

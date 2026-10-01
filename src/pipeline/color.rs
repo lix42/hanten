@@ -308,8 +308,8 @@ pub fn hdr_pq_tiff_icc() -> Result<Vec<u8>> {
         // 9-16-0-1 — ICC.1:2022 §10.3 lists this quadruple as "PQ R'G'B' full range
         // representation specified in Recommendation ITU-R BT.2100-2, Table 9".
         // MatrixCoefficients is **0 because the data colour space is RGB**, which
-        // §10.3 requires; `io::avif` writes 9 for the same rendition because AVIF
-        // stores Y'CbCr. Copying that 9 here would be non-conformant.
+        // §10.3 requires. 9 is the Y'CbCr value (as a video container would carry);
+        // it would be non-conformant here.
         cicp: (9, 16, 0, 1),
         peak_relative: transfer::pq::PEAK_NITS / f64::from(hdr::REFERENCE_WHITE_NITS),
         curve: |code| hdr::pq_decode_nits(code) / transfer::pq::PEAK_NITS,
@@ -1468,12 +1468,11 @@ mod tests {
             );
             assert_eq!(got, want, "{name}: cicp quadruple");
             // The one that is easy to get wrong: ICC.1:2022 §10.3 requires
-            // MatrixCoefficients 0 for an RGB data space. `io::avif` writes 9 for
-            // the same rendition because AVIF stores Y'CbCr; if that value ever
-            // leaks in here the file is non-conformant.
+            // MatrixCoefficients 0 for an RGB data space; Y'CbCr's 9 here would be
+            // non-conformant.
             assert_eq!(
                 cicp.MatrixCoefficients, 0,
-                "{name}: MatrixCoefficients must be 0 for an RGB profile, not AVIF's 9"
+                "{name}: MatrixCoefficients must be 0 for an RGB profile"
             );
             // `cicp` is only permitted for an RGB/YCbCr/XYZ data space in an Input
             // or Display profile, so the class and space are part of its validity.

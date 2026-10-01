@@ -46,8 +46,9 @@ The deterministic core owns the image science. Any future ML assistance (see
 - **One reconstruction: the fixed, stock-agnostic decode** (§7). The curves it
   replaced are listed in §7.3.
 - **A staged rendering chain** — scene correction, look, fit range, fit gamut (§6) —
-  into a **destination set** (§5): SDR TIFF, HDR float or PQ/HLG TIFF, PQ/HLG AVIF,
-  a gain-map JPEG, and the unrendered film master.
+  into a **destination set** (§5): SDR TIFF, HDR float or PQ/HLG TIFF, a gain-map
+  JPEG, and the unrendered film master. AVIF was removed
+  ([`design/avif-removal.md`](design/avif-removal.md)).
 - **Measure once per roll** what a roll shares — its film base, white balance, white
   and exposure — and freeze it into a recipe (`measure-base`, `measure-roll`).
 - All conversion parameters controllable via CLI flags and/or a JSON recipe file;
@@ -166,7 +167,7 @@ plane is a separate single channel, carried but not consumed (§6.1).
 | **NC film RGB v1** (`FilmRgbImage`) | the fixed decode's positive: how much light each dye layer received, declared linear Rec.709/D65 (§7.5) | **brighter** positive — a **brighter** scene | unclamped `f32`; mid-grey `0.18` at the anchor rule's placement | `algo::FilmRgbImage`, `algo::fixed::decode` |
 | **linear ACEScg** (`AcesCgImage`) | NC film RGB v1 mapped into linear ACEScg/D60; keeps film/lens/development/scanner character and is not physical scene recovery. The working space of every rendering stage up to fit gamut | **brighter** rendered value | unclamped `f32`; the datasheets' diffuse white decodes to ≈0.80 here, and reaches `1.0` only after the look's contrast (`algo::fixed::DIFFUSE_WHITE`) | `pipeline::working_space`, then the stage modules of `pipeline::chain` |
 | **display-referred positive** | after fit range and fit gamut: display-linear, in the destination's gamut, `1.0` = reference white (203 cd/m²) | **brighter** rendered value | `≥ 0`; content past fit range's white point exceeds the peak and is clamped at the encode (at the HDR hand-off on an HDR destination), counted | `pipeline::fit_gamut::DisplayReferredImage` |
-| **output sample** (terminal) | the written image value | brighter | destination-defined integer or float encoding | `io::encode`, `io::avif`, `io::iso_gain_map` |
+| **output sample** (terminal) | the written image value | brighter | destination-defined integer or float encoding | `io::encode`, `io::iso_gain_map` |
 
 **The one rule.** As the depicted **scene luminance rises**:
 `transmission ↓ · density ↑ · positive ↑ · output ↑`. Transmission is the only
@@ -234,7 +235,7 @@ with, the **gamut** they are rendered into, and the file **container** — or th
 | range | `sdr`, `hdr` | `--range` | `output.display.range` |
 | transfer | `native` (the gamut's own curve), `linear`, `pq`, `hlg` | `--transfer` | `output.display.transfer` |
 | gamut | `display-p3`, `adobe-rgb`, `srgb`, `bt2020` | `--gamut` | `output.display.gamut` |
-| container | `tiff`, `jpeg`, `avif` | `--container` | `output.display.container` |
+| container | `tiff`, `jpeg` | `--container` | `output.display.container` |
 
 Most combinations are nothing the code can write, so the set is **one table**
 (`destination::ROWS`), and everything that has to agree with it reads it: resolution,
@@ -245,7 +246,6 @@ the refusals and their remedies, and the container an output path is judged agai
 | sdr | native | display-p3, adobe-rgb, srgb | tiff | one SDR rendition, 16-bit integer, the gamut's own curve |
 | hdr | linear | display-p3, adobe-rgb, srgb, bt2020 | tiff | one HDR rendition, display-linear 32-bit float, no transfer |
 | hdr | pq, hlg | bt2020 | tiff | a Rec.2100 signal as full-range 16-bit codes |
-| hdr | pq, hlg | bt2020 | avif | the same signal as 10-bit 4:4:4 AV1 |
 | hdr | native | display-p3, srgb | jpeg | an 8-bit SDR base plus a per-channel ISO 21496-1 gain map to the HDR rendition |
 | sdr | native | display-p3, srgb | jpeg | *planned* (`output/sdr-jpeg-preset`); refused naming the task |
 | — | — | — | tiff | **film master** (`--film-master`, `"output": "film-master"`): the decode's linear ACEScg, unclamped 32-bit float, ACEScg profile, no rendering stage |
@@ -259,6 +259,8 @@ user asked for: `--gamut display-p3 --transfer pq` is refused rather than
 reinterpreted. Derivation ignores whether a row is ready, so a command names the
 same row on every build, and a planned row is refused *after* resolution. The
 report records every resolved axis (`chain.destination`), which replays exactly.
+A removed value — `avif` — is refused by name as a flag, a recipe value or an output
+suffix (`Axis::REMOVED`), so an old recipe never reads as a typo.
 
 The rendering (§6) supplies the defaults:
 
@@ -272,7 +274,7 @@ The rendering (§6) supplies the defaults:
 **The output path.** `-o` is required and is never silently renamed. A suffix it
 states must be one the resolved container accepts, or the run is a usage error
 naming the accepted suffixes. A suffix it omits is **completed** with the
-container's canonical spelling (`tiff`, `jpg`, `avif`) — appended, never
+container's canonical spelling (`tiff`, `jpg`) — appended, never
 substituted. A trailing dot-segment counts as a suffix only when *some* container
 accepts that spelling, so `out.v2` is a stem (`out.v2.tiff`), while `out.jpg` under
 a TIFF destination is refused. A path with nothing to append to — one naming a
@@ -282,7 +284,7 @@ destination; an explicit manifest path goes through the same rule as `convert`.
 
 **Metadata.** Each file embeds the profile its pixels are in: the gamut's ICC
 profile on the SDR TIFF, the gain-map base and the linear float TIFF; a
-`cicp`-tagged A2B profile on the PQ/HLG TIFF; CICP in the AVIF; the ACEScg profile
+`cicp`-tagged A2B profile on the PQ/HLG TIFF; the ACEScg profile
 on the film master. The renderer already produces pixels in the destination's
 primaries, so the encode applies only the transfer, never a second gamut transform.
 **No sidecar is written** (since `pipeline_version` 8): the report carries the
@@ -321,7 +323,7 @@ decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 →
 | **look** | creative and optional: contrast, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
 | **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place display black (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
 | **fit gamut** | change primaries into the destination's gamut and move out-of-gamut colour to its boundary, keeping hue | `pipeline::fit_gamut` |
-| **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere | `pipeline::color`, `io::encode`, `io::avif`, `io::jpeg` |
+| **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere | `pipeline::color`, `io::encode`, `io::jpeg` |
 | **package** | container, ICC profile or CICP, metadata; for the gain map, the map itself | `io::*`, `pipeline::gain_ratio`, `pipeline::gain_encode`, `io::iso_gain_map` |
 
 **The order is carried by the types.** Each boundary is a type only the stage before
@@ -347,9 +349,9 @@ allocation.
   function, so skipping a branch skips a call, not a code path.
 - **Fit range and fit gamut are separate but coupled.** Fit gamut's ceiling is
   `max(peak, Y)`, the peak being fit range's, so they stay adjacent.
-- **Encode and package are separate.** The PQ TIFF and the PQ AVIF carry one encoded
-  signal in two containers. The gain map is the one thing spanning the boundary: it
-  needs both renditions, then is built into the package.
+- **Encode and package are separate.** The transfer encode (`hdr::encode_transfer`)
+  produces the signal; the container only stores it. The gain map is the one thing
+  spanning the boundary: it needs both renditions, then is built into the package.
 - **Contrast lives in the look.** The decode keeps only the calibrated linearization
   of the film (§7.2); print contrast is a look knob. Print emulation is a look too,
   and per-stock normalization an optional one.
@@ -889,8 +891,8 @@ own `calibration` and `roll` sections, described above.
 `recipe` (the resolved recipe — what `--dump-params` writes, so it reloads through
 `--params` to this run), `memory`, `input_color`, `film_base` with its source and percentile,
 `film_type` (when declared), `effective_area`, `loss` (clamped and non-finite samples at the encode),
-`output_stats`, `warnings`, `elapsed_ms`, and the destination's own block where it has one (`avif`,
-`hdr_linear_tiff`, `hdr_coded_tiff`). **`chain` records what ran**, so a consumer never
+`output_stats`, `warnings`, `elapsed_ms`, and the destination's own block where it has one
+(`hdr_linear_tiff`, `hdr_coded_tiff`). **`chain` records what ran**, so a consumer never
 re-derives it from the recipe:
 
 ```json
@@ -1085,9 +1087,9 @@ hanten roll --frames frames.json -o out/ --params roll.json
 # the recipe. `-o out` completes to out.tiff; a stated suffix is checked, never renamed.
 hanten convert frame12.tif -o out --params roll.json --report json
 
-# The same frame as an HDR gain-map JPEG, a PQ AVIF, and a linear float TIFF.
+# The same frame as an HDR gain-map JPEG, a PQ TIFF, and a linear float TIFF.
 hanten convert frame12.tif -o out.jpg --params roll.json --range hdr
-hanten convert frame12.tif -o out.avif --params roll.json --transfer pq --container avif
+hanten convert frame12.tif -o out-pq.tiff --params roll.json --transfer pq
 hanten convert frame12.tif -o out.tiff --params roll.json --transfer linear --gamut bt2020
 
 # For an external editor: the `direct` rendering (the roll section unapplied, pinned
@@ -1657,20 +1659,6 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   reads it as HDR with three distinct channel entries; a change to the container needs
   the manual `scripts/iso-decoder-oracle/` check (macOS), since exiftool accepts files
   no decoder parses. Android and other viewers are `analysis/viewer-interoperability`'s.
-- **PQ / HLG AVIF** — 10-bit, full-range, 4:4:4 AVIF (AV1 High Profile, level capped
-  at 6.0 for the Advanced Profile) with CICP `9/16/9` for PQ and `9/18/9` for HLG, a
-  203 cd/m² reference white and a 1000 cd/m² mastering peak, in a MIAF container nc
-  writes (libaom codes only; `av1C` filled from the encoded sequence header). The
-  `MA1A` brand is written only inside the AVIF v1.2 Advanced Profile's published
-  limits — otherwise the file is a valid general-brand AVIF and the report's `avif`
-  block says which limit it exceeded. PQ additionally carries a `clli` box **measured
-  from the frame** (`MaxCLL` its brightest pixel, `MaxFALL` its frame average, per
-  CTA-861.3); HLG omits it, being display-referred. Encoder settings (quality, speed,
-  row multithreading with a pinned worker count of 8, no tiling) are pinned, not knobs:
-  repeated encodes on one build are byte-identical. The worker count is a constant,
-  never derived from the machine: libaom documents no thread-count independence, so it
-  is measured (identical bytes for every count from 2 upward on libaom 3.11.0) and
-  pinned by a test. No EXIF, XMP, ICC, timestamp or identifier is written.
 - **Linear HDR TIFF** — the HDR rendition's display-linear samples, clamped at the
   peak and counted (`chain.peak_clamp`), written verbatim as 32-bit float in Display P3, Adobe RGB, sRGB or BT.2020, with a synthesized
   linear ICC profile of that gamut: `1.0` is the 203 cd/m² reference white, the peak
@@ -1680,7 +1668,7 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   content-light levels. The profile carries **no** `cicpTag`: H.273's full-range flag
   describes a bounded code range, and these samples exceed 1.0 by design. It is not the
   film master (linear ACEScg *before* any rendering).
-- **PQ / HLG TIFF** — the rendition the AVIF codes, as **full-range 16-bit TIFF code
+- **PQ / HLG TIFF** — the Rec.2100 signal as **full-range 16-bit TIFF code
   values**. Lossless *relative to the quantized signal*: quantized once with one pinned
   rounding rule (`round`, half away from zero), every code stored exactly, the max and
   RMS quantization error reported in code units. A sample outside `[0, 1]` is
@@ -1688,8 +1676,7 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   quantization, not one of BT.2100's own depths** (10 and 12), and the report says so.
   TIFF has no CICP tag, so the signalling lives in the embedded ICC profile's `cicpTag`
   (ICC.1:2022 §9.2.17/§10.3): `9-16-0-1` for PQ and `9-18-0-1` for HLG, with
-  **MatrixCoefficients 0** because the data is RGB (the AVIF carries 9 because it
-  stores Y'CbCr). Only a CICP-aware colour-managed reader honours it, so these are
+  **MatrixCoefficients 0** because the data is RGB. Only a CICP-aware colour-managed reader honours it, so these are
   **limited-interoperability interchange, never "display-ready"**. The PQ profile is an
   extended-range A2B (`lutAtoBType`) whose PCS is `Y = L / 203`, unclipped to ≈49.26;
   the HLG profile is scene-referred, since HLG's OOTF is not per-channel separable, and
@@ -1889,7 +1876,7 @@ rustdoc.
 `conversion.destination` is the resolved recipe `output`, every axis stated — without
 it two f32 TIFFs (the film master, a linear HDR TIFF) are indistinguishable.
 `conversion.output_depth` names the **primary** artifact's depth (`u8` for the gain-map
-JPEG, `u10` for the AVIF), not the optional IR TIFF's.
+JPEG), not the optional IR TIFF's.
 `params_hash` is a stable hash (`Recipe::params_hash`) of the bytes `--dump-params`
 writes, the same value as the report's `identity.params_hash`, so identical
 conversions share a hash without the record carrying the recipe. The value shown is
@@ -1928,7 +1915,6 @@ src/
 ├── io/
 │   ├── decode.rs        # SilverFast HDR/HDRi (TIFF) → LinearImage (+IR)
 │   ├── encode.rs        # 16-bit / f32 TIFF with ICC; the IR export
-│   ├── avif.rs          # AVIF container written here; libaom codes only
 │   ├── jpeg.rs          # baseline JPEG for the gain-map container
 │   ├── iso_gain_map.rs  # the gain-map JPEG: MPF container + ISO 21496-1 metadata
 │   └── staged.rs        # write to a temp beside the target, fsync, rename
@@ -1967,7 +1953,6 @@ added. Each module's `//!` docs hold its traps (CLAUDE.md, "Where the detail liv
 | ICC color management | `lcms2` (rust-lcms2) |
 | JPEG | `jpeg-encoder` |
 | Metadata read | `tiff` (tags), `roxmltree` (SilverFast XMP) |
-| AV1 coding | `libaom` (static, via `libaom-sys`) |
 | Recipe / report JSON | `serde`, `serde_json` |
 | Parallelism | `rayon` |
 
@@ -2146,8 +2131,9 @@ shipped or retired item keeps its number and shrinks to one line.
     and NC film RGB v1 (§7). Optional correction profiles remain open
     (`color/optional-color-correction-profiles`).
 21. **Display P3 SDR output** — *shipped*: an SDR destination row (§5).
-22. **Display HDR rendering and AVIF** — *shipped* (§5, §9). Open: the Windows build
-    (`output/hdr-avif-windows-packaging`).
+22. **Display HDR rendering and AVIF** — HDR rendering *shipped* (§5, §9); AVIF
+    shipped and was then **removed** (`output/drop-avif`,
+    [`design/avif-removal.md`](design/avif-removal.md)).
 23. **ISO gain-map HDR** — *shipped* as the per-channel, ISO-only gain-map JPEG (§9).
     Open: viewer checks, Android included (`analysis/viewer-interoperability`), and
     cross-device acceptance (`analysis/display-output-acceptance`).

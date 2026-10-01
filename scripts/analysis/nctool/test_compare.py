@@ -1209,9 +1209,10 @@ class TestFixturesSetEndToEnd(unittest.TestCase):
         self.assertTrue(diff["identical"], diff)
         self.assertEqual(len(diff["frames"]), len(cases))
         self.assertEqual(rec["not_run"], [])
-        # Every depth the record can carry is exercised by some case.
+        # Every depth the record can carry is exercised by some case, but `u10`: the
+        # removed AVIF's, kept so records from builds that wrote it still validate.
         self.assertEqual({f["output_depth"] for f in rec["frames"]},
-                         set(compare.OUTPUT_DEPTHS))
+                         set(compare.OUTPUT_DEPTHS) - {"u10"})
 
 
 if __name__ == "__main__":

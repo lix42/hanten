@@ -22,7 +22,7 @@ On 2026-09-13 the user set the product shape: **SDR lossless is the default**
   `jpeg_encoder` at a pinned quality of 95 with the Display P3 ICC embedded, so the
   encode path exists too; what is missing is a preset that writes it alone.
 - Encoder settings are **pinned parts of a preset, not knobs** (the `JPEG_QUALITY`
-  and AVIF `cq_level` precedent), so repeated encodes on one build are byte-identical.
+  precedent, and the removed AVIF's `cq_level`), so repeated encodes on one build are byte-identical.
 - Every preset states its suffix (`cli::required_extensions`) and its canonical derived
   spelling (`cli::derived_extension`, `jpg`), and must add and calibrate its own
   `memory::RunProfile` on two frame sizes before activation. The JPEG-only profile is

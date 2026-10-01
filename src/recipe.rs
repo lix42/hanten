@@ -768,6 +768,15 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
              `roll.white_balance`: `[r, g, b]`"
         ));
     }
+    // A removed destination value (AVIF, `output/drop-avif`). Named by key here: serde
+    // would word it as the flag, which cannot rescue a recipe that fails before merge.
+    if let Some(message) = body
+        .get("output")
+        .and_then(|o| o.get("display"))
+        .and_then(crate::destination::removed_in_recipe)
+    {
+        return usage(message);
+    }
     // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
     // Refused at every value, the old default included: no single new key replays it.
     if let Some(v) = body.get("reconstruction").and_then(|r| r.get("contrast")) {
@@ -2565,6 +2574,27 @@ mod tests {
     }
 
     #[test]
+    fn a_replayed_avif_container_is_refused_by_key_with_its_remedy() {
+        // A report or sidecar written while AVIF existed replays `"container": "avif"`;
+        // a per-frame override may state it too. Refused before serde, by key: the flag
+        // cannot rescue a recipe that fails before merge.
+        for (json, whole) in [
+            (
+                r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+                true,
+            ),
+            (r#"{"output": {"display": {"container": "AVIF"}}}"#, false),
+        ] {
+            let err = check(json, whole).unwrap_err();
+            assert!(err.contains("`output.display.container` \""), "{err}");
+            assert!(err.contains("no longer writes AVIF"), "{err}");
+            assert!(err.contains(r#"State `"container": "tiff"`"#), "{err}");
+            assert!(!err.contains("--container"), "{err}");
+            assert!(!err.contains("unknown"), "{err}");
+        }
+    }
+
+    #[test]
     fn every_section_rejects_an_unknown_key() {
         for section in [
             "input",
@@ -3827,7 +3857,7 @@ mod tests {
     #[test]
     fn the_film_master_flag_replaces_a_recipes_axes() {
         let r = merged(
-            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "tiff"}}}"#,
             &["--film-master"],
         );
         assert_eq!(r.output, OutputSection::FilmMaster);
@@ -4134,8 +4164,8 @@ mod tests {
             ("--gamut", &["--gamut", "adobe-rgb"], |r| {
                 r.output == display(|a| a.gamut = Some(Gamut::AdobeRgb))
             }),
-            ("--container", &["--container", "avif"], |r| {
-                r.output == display(|a| a.container = Some(Container::Avif))
+            ("--container", &["--container", "jpeg"], |r| {
+                r.output == display(|a| a.container = Some(Container::Jpeg))
             }),
             ("--film-master", &["--film-master"], |r| {
                 r.output == OutputSection::FilmMaster

@@ -164,8 +164,8 @@ left it one-valued; older records carry it.)
 carry a preset name (`gain-map-hdr`, `display-p3`, …, and before
 `nf-retire/legacy-custom` `legacy` or `custom`). **v4** (2026-08-09) renamed
 `conversion.output_hdr` to `conversion.output_depth` (`u8`|`u10`|`u16`|`f32`); it reports
-the **primary image's** depth (`cli::primary_depth`), which for the JPEG and AVIF
-destinations is the container's fixed 8/10-bit.
+the **primary image's** depth (`cli::primary_depth`), which for the JPEG destination
+is the container's fixed 8-bit (`u10` was the AVIF destinations', removed 2026-10-01).
 `params_hash` is a stable FNV-1a (`version::stable_hash`) of the canonical
 effective-recipe JSON — the versioned recipe document, the exact bytes
 `--dump-params` writes — so identical conversions share a hash, and it equals the

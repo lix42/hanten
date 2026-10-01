@@ -28,7 +28,9 @@ temporary worktree, and caches the binary at
 path. The worktree and target dir are removed afterwards. A cached commit is
 re-verified rather than rebuilt. The fetch is silent, and the script only says it could
 not fetch. Run it every time: if `reserve` has moved, it prints `building` and a note
-instead of `cached`. A fresh build takes about a minute on Apple silicon.
+instead of `cached`. A fresh build takes about a minute on Apple silicon. It needs
+**CMake and NASM**, which today's build no longer does: the reference still compiles
+libaom and libultrahdr (`brew install cmake nasm`, or `apt-get install cmake nasm`).
 
 Before a binary goes into the cache, its `--version` must report **exactly** that
 commit, from a clean tree. `BUILD_INFO` beside the binary records the commit, the

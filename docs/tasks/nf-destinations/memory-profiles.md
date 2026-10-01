@@ -47,6 +47,8 @@ Open:
   SDR TIFF and the coded HDR TIFF share `NewFlowU16Tiff`), the f32 TIFF, and the AVIF.
   `preset-set` gives each a provisional arm by counting its buffers; measuring them is
   this task's.
+- **2026-10-01 (`output/drop-avif`):** the AVIF arm went with the destination; its
+  fitted staging is kept in `docs/design/avif-removal.md`.
 
 ## How to Verify
 

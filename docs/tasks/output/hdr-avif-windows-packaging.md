@@ -1,5 +1,9 @@
 # HDR AVIF Windows Packaging
 
+**Status:** closed—superseded (2026-10-01) by `output/drop-avif`: there is no AVIF
+encoder left to package. Kept as the plan to resume if AVIF returns
+(`docs/design/avif-removal.md`).
+
 ## Goal
 
 Prove and gate the static libaom build behind `hdr-pq` / `hdr-hlg` on Windows, so
