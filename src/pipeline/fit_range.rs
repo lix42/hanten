@@ -482,8 +482,8 @@ pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedI
         && !(params.film_base.is_finite() && params.film_base > 0.0)
     {
         return Err(NcError::Other(format!(
-            "fit range was handed a film base that graded to luminance {}; the decoded \
-             base is positive and finite by construction",
+            "fit range was handed a film base that graded to luminance {}; the recipe's \
+             validation should have refused it (`recipe::validate_render`)",
             params.film_base
         )));
     }
