@@ -1234,7 +1234,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/frame-level-trim` (new flow): `nf-calibration/roll-exposure`
   — filed 2026-09-29: `roll-exposure`'s round 2 split by frame, not by roll; the trim is
   measured around the roll's exposure
-- `nf-calibration/exposure-buckets` (new flow): `nf-calibration/roll-exposure`
+- `nf-calibration/exposure-buckets` (new flow, **closed—not needed**; the dep below is decision history): `nf-calibration/roll-exposure`
   — filed 2026-09-29: a group of frames exposed apart from the rest (09-28's battery
   change) is a roll in miniature, measured by the same rule
 
@@ -1988,9 +1988,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [A per-frame level trim](tasks/nf-calibration/frame-level-trim.md) — a small,
   bounded exposure trim per frame around the roll's, so low-key frames render a little
   brighter and bright ones a little darker
-- [ ] [Exposure buckets within a roll](tasks/nf-calibration/exposure-buckets.md) — detect
-  groups of frames exposed differently (a battery change mid-roll) and measure one
-  exposure per group
+- [x] [Exposure buckets within a roll](tasks/nf-calibration/exposure-buckets.md) —
+  **closed—not needed 2026-10-01**: no split of the 09-28 roll moves its exposure more
+  than 0.24 EV (0.05 at the half), so a group measures what the roll does; the residual
+  is per frame, `frame-level-trim`'s
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the

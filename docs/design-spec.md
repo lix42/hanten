@@ -2013,7 +2013,7 @@ shipped or retired item keeps its number and shrinks to one line.
    `measure-roll` (§8). Open: `roll`'s measure mode (`core/roll-measure-mode`), the
    acquisition cascade that *generates* the recipe (`core/auto-calibration`), reusable
    pipeline profiles (`core/profile-authoring`), and bounded per-frame opt-ins
-   (`nf-calibration/thin-frame-lift`, `frame-level-trim`, `exposure-buckets`).
+   (`nf-calibration/thin-frame-lift`, `frame-level-trim`).
 7. **Optional color-correction QA harness.** Target-based fitting and ΔE2000 /
    SSIM regression testing against controlled negatives may support explicitly
    selected correction profiles. It is not part of the default film-preserving
