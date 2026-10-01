@@ -1,5 +1,13 @@
 # Gain-Map Dialect Activation
 
+> **Closed — merged into `analysis/viewer-interoperability` (2026-10-01).**
+> `nf-core/default-flip` retired the Ultra HDR v1 dialect, so this build writes no
+> dual-dialect, legacy-only or conflicting file, and the precedence question is moot.
+> What remains — does Android 15+ display nc's ISO-only, three-channel gain-map JPEG
+> as HDR — is the non-Apple reader in
+> [`analysis/viewer-interoperability`](../analysis/viewer-interoperability.md). What
+> follows is the plan as it stood, kept as decision history.
+
 ## Goal
 
 Verify the dual-dialect gain-map file on **Android 15+**, the one item left over from

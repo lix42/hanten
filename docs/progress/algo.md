@@ -552,7 +552,7 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
 ## density-safety-bounds
 
 **Status:** not started
-**Updated:** —
+**Updated:** 2026-10-01
 
 - Goal: Close the gap where a validation-passing density recipe can silently produce a degenerate (e.g. finite all-black) image, via bounded `density_scale`/`density_offset`/`density_gamma` ranges at the CLI `validate` boundary plus a post-render degenerate-output warning.
 - 2026-07-27 (from the `color/film-master-render-pipeline` review; **no code changed
@@ -568,6 +568,16 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
   (why a naive `is_normal()` on user-supplied gains is the wrong fix here, and where a
   reference predicate already exists in `pipeline::render_split`) are in the task
   file's second `Context` block — start there rather than rediscovering it.
+- 2026-10-01: **Re-scoped for the new chain** (the task file's history is in git). The
+  gap survives the flip, re-measured on `tests/fixtures/hdr-48bit.tif` with the roll
+  stated so no unrelated warning is present: `--density-offset=-5,-5,-5`,
+  `--exposure=-100` and `--roll-exposure=-100` write 100 % zero samples at rc 0 with no
+  warning and `--strict` 0; `--white-balance=1e-30,1,1` zeroes the red channel the same
+  way. New: extreme decode values (`--density-offset=±1e6`, `--density-gamma=1000`,
+  `--roll-white 0.001`, `--density-scale=1e6`) reach fit range's internal-invariant
+  error (exit 1) instead of a usage error. The task is now three parts: named usage
+  errors for every such value, a threshold-free all-zero-channel warning, and the
+  tuned collapse warning on real scans. The tables are in the task file.
 
 
 ## reference-anchored-sigmoid

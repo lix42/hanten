@@ -381,9 +381,15 @@ mask that feeds the RGB rebate search.
 ## content-fallback
 
 **Status:** not started
-**Updated:** —
+**Updated:** 2026-10-01
 
 - Goal: Add an explicit, opt-in film-base source that estimates `Dmin` from the exposed image **content** when no unexposed film (dedicated frame, rebate, or holder-inset band) is available to sample — the design-spec §9 acquisition-ladder **Tier 3**.
+- 2026-10-01: **Re-scoped for the new chain.** `--auto-base` is gone, and the film base
+  is a roll value: `measure-roll` refuses a per-frame base. The task is now an opt-in
+  `measure-roll` option pooling a high percentile over the roll's picture frames'
+  effective areas into one explicit base, its source in the report, and named in the
+  no-base refusal. Whether `convert` keeps a per-frame form is open. New dependency:
+  `core/measure-base`.
 
 
 ## dmax-anchor-reliability
