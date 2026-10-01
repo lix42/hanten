@@ -1301,11 +1301,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   pipe (e.g. `hanten … | head`) without a panic/backtrace. Pre-existing on `main`, not
   caused by the telemetry work.
 - [ ] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
-- [ ] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
-  hygiene review: drop three unused crates (`image`, `kamadak-exif`, `palette` —
-  verified builds without them; `image` pulls a large codec tree) and unify the two
-  `Algorithm` enums onto `types::Algorithm`, removing the dead copy and its
-  `#[allow(dead_code)]`. Pure cleanup, byte-identical output.
+- [x] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
+  hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image`
+  (test-only, JPEG decode) to a JPEG-only dev-dependency. Pure cleanup, byte-identical
+  output. The review's duplicate `Algorithm` enum had already gone with the
+  `reconstruction` object.
 - [ ] [Release readiness](tasks/core/release-readiness.md) — from the release-readiness
   review: (1) correct public docs that misstate the product (README "pre-implementation"
   + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in

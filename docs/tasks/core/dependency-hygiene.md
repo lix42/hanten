@@ -14,9 +14,9 @@ tagged `reconstruction` object. Only the crate cleanup remains, and its shape ch
 ## Scope
 
 `kamadak-exif` and `palette` still have zero references under `src/`. `image` now has
-**one** caller, `image::load_from_memory` inside a `#[cfg(test)]` block in
-`src/io/ultra_hdr.rs`, so it moves to `dev-dependencies` (or that test decodes through
-`tiff` instead) rather than being removed outright.
+only test callers, `image::load_from_memory` in `src/io/iso_gain_map.rs`'s
+`#[cfg(test)]` module and in `tests/pipeline.rs` (re-checked 2026-10-01), so it moves to
+`dev-dependencies` rather than being removed outright.
 
 - Remove the two unused crates and re-home `image`; update the committed `Cargo.lock`.
   `image` pulls a large codec tree, so this trims build time and surface.
