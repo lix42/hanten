@@ -65,8 +65,8 @@ pub struct HighlightDesaturation {
 
 impl HighlightDesaturation {
     /// Strength `0.8`, one stop below white, band `0.015 → 0.025` on the ACEScg measure —
-    /// where marked colours keep 92–100% of their chroma (`nf-look` progress,
-    /// `path-to-white`). A `const` so a rendering's base (`crate::rendering`) can name it.
+    /// re-checked under the roll white rule (`docs/reports/desaturation-band-refit.md`).
+    /// A `const` so a rendering's base (`crate::rendering`) can name it.
     pub const DEFAULT: Self = Self {
         strength: 0.8,
         start_stops: -1.0,

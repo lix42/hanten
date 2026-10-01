@@ -1828,10 +1828,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   anchor then left the operator inert) and behind a roll-level white balance,
   without which its saturation band cannot tell a cast white from skin. **Done
   2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
-- [ ] [Re-fit the highlight-desaturation band under the chosen white and
+- [x] [Re-fit the highlight-desaturation band under the chosen white and
   black](tasks/nf-look/desaturation-band-refit.md) — the band was fitted under a
-  hand-set contrast; whites' chroma rises with contrast and the operator does not take
-  it back
+  hand-set contrast. **Done 2026-09-30: nothing moves** (strength 0.8, start −1, band
+  `0.015 → 0.025`). The band's measure divides out the slope, so contrast never moves a
+  pixel against it; it is only as good as a white balance measured over the whole roll
+  ([`desaturation-band-refit.md`](reports/desaturation-band-refit.md))
 - [x] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`. The knob landed with
   `gamma-split`. **Done 2026-09-24**: one knob (a per-roll contrast under

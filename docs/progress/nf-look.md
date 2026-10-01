@@ -76,9 +76,12 @@ white one. It is a highlight operator and cannot reach cast below about L\* 70.
 Under the base-referenced anchor at contrast 2.0 the operator is **inert** — all three
 measured rolls land 0.55–1.73 stops below white (09-11 corrected 2026-09-23) — so the
 task is developed with a per-roll `--density-gamma` computed from that roll's base and
-red p97 (candidate C/D in `docs/spike/white-placement.md`), and its band values are
-provisional: `nf-calibration/anchor-comparison`
-chose the rule on 2026-09-25, and the band wants re-fitting under it and a black point. Two tasks were split out of it to
+red p97 (candidate C/D in `docs/spike/white-placement.md`). Its band values stood
+provisional until `nf-calibration/anchor-comparison` chose the rule (2026-09-25) and
+`desaturation-band-refit` re-checked them under it and display black (2026-09-30):
+**nothing moved**. The band's measure divides out the slope, so contrast never moves a
+pixel against it; it is only as good as a white balance measured over the whole roll.
+Two tasks were split out of `path-to-white` to
 run against today's binary, and both are done: `desaturation-band-fit` here (below) and
 `nf-display-stages/gamut-map-share` (2026-09-23), which removes the double-up concern: at
 the renders `path-to-white` is built under the gamut map moves no marked white. The
@@ -655,12 +658,40 @@ preset row; do not reuse the name.
 
 ## desaturation-band-refit
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-25: filed from `nf-calibration/anchor-comparison`'s review, where nothing owned
   `path-to-white`'s re-fit. Goal: re-place the band under the chosen white rule and a black
   point.
+- 2026-09-30: **measured and reviewed — nothing moves** (user, after review). Report:
+  [`docs/reports/desaturation-band-refit.md`](../reports/desaturation-band-refit.md);
+  workspace `../temp/band-refit/` (uncommitted). Patches from the manifest (#216): 20
+  near-neutral whites, 11 colours (7 on Ektar 09-14), nine rolls; recipes from
+  `measure-roll` over the full archive roll.
+  - **The band measure is contrast-invariant**: `s` divides out the slope, so every white's
+    `s` was identical at slope ×0.75/×1/×1.5. Contrast changes rendered chroma and who is
+    bright enough, and the pull removes the same share at any contrast — the task file's
+    "the operator does not take it back" premise was about rendered C\*, not the band.
+  - **Gotcha — measure a roll whole.** On the trimmed roll (8 of 32 frames) Ektar 09-14's
+    gains were ~10% off the full roll's, which moved skin/rock/ski into the band (`s` 0.021,
+    26–35% of chroma lost); under the full roll's gains they sit at 0.049–0.056. A 10% gain
+    error is more than the band is wide. Gold200's earlier gap to `band-fit`'s gains (blue
+    1.67 vs 1.27) is the base (`--unexposed` vs `estimate --grid`), not trimming.
+  - Placement simulated on cached film-master pixels and checked against the binary (HDR
+    linear BT.2020, fit range and black off) to 1 C\*. Wider bands only trade the 1727
+    pastel (`s` 0.023) against 09-20 Portra's whites just above `s1` (0.025–0.027, C\*
+    10.8–13.1 — a roll residual, the white balance's or the grade's).
+  - Pair check, 17 frames, SDR P3 with display black: whites 6.28 → 4.55 at 0.8, colours
+    19.82 → 19.74, |ΔL\*| ≤ 0.01. Review (off / default / `0.015 → 0.030`): "only one frame
+    1810, I can tell the difference, and at that frame, 2 is better than 1. and 3 looks same
+    as 2."
+  - The review set was hand-built: `nctool review generate` substitutes one `{dmin}` and
+    cannot give each roll its own `measure-roll` recipe.
+- 2026-09-30: **done** — a decision task; no code or default changed, so no drift row or
+  golden moved. For dependents: `nf-calibration/no-roll-defaults` can treat the
+  desaturation default as settled; 09-20 Portra's residual above `s1` is a white balance or
+  `channel_grade` question, not this operator's.
 
 ## desaturation-band-fit
 

@@ -19,27 +19,36 @@ What is known:
   against C's 2.32–6.61), so a different population of pixels lands in the band. A contrast
   move steepens everything below white, which is the same reason `path-to-white` refused to
   carry over the spike's values.
-- **Whites carry more chroma as contrast rises, and the operator does not take it back.**
-  Contrast is a per-channel power, so it multiplies residual cast along with saturation. On
-  09-18, marked whites' mean C\* was 3.8 at gamma 2.0, 5.5 under the rule and 7.8 at 4.15,
-  with colour patches rising in step.
+- **Whites carry more chroma as contrast rises.** Contrast is a per-channel power, so it
+  multiplies residual cast along with saturation. On 09-18, marked whites' mean C\* was 3.8
+  at gamma 2.0, 5.5 under the rule and 7.8 at 4.15, with colour patches rising in step. The
+  operator removes the same *share* at every contrast (2026-09-30, below).
 - **The black point does not change what reaches the band.** It lands in fit range, after
   the look. It is a dependency because the re-fit is judged by eye, and
   `anchor-comparison` found every render judged without black misleading: all of them
   looked pale, and the review would have tuned around that.
 
-Open:
+Answered 2026-09-30 ([`docs/reports/desaturation-band-refit.md`](../../reports/desaturation-band-refit.md)):
 
-- Whether the band's position, its strength, or both move.
-- Whether chroma that grows with contrast is the band's to remove at all, or the per-channel
-  grade's ([`per-channel-grade`](per-channel-grade.md)), since the operator reaches only
-  highlights.
+- ~~Whether the band's position, its strength, or both move.~~ **Neither** (user, after
+  review): strength `0.8`, start −1, band `0.015 → 0.025` stand. The band's measure divides
+  out the slope, so contrast never moves a pixel against it; and no other band separates the
+  marked whites from the marked colours better.
+- ~~Whether chroma that grows with contrast is the band's to remove at all.~~ **No** — it
+  scales the cast the pull already removes a fixed share of. A roll-constant residual above
+  `s1` (09-20 Portra's whites) is the white balance's or
+  [`per-channel-grade`](per-channel-grade.md)'s.
 
 ## How to Verify
 
 `path-to-white`'s pair check, re-run under the rule and the black point: marked whites'
 C\* falls as strength rises while a marked saturated patch does not, with luminance held.
 The review set is judged with the black point in place.
+
+**Done 2026-09-30.** Pair check on 17 frames under full-roll `measure-roll` recipes and
+display black: near-neutral whites' mean C\* 6.28 → 5.21 → 4.55 → 4.12 at strength 0 / 0.5 /
+0.8 / 1.0, colours 19.82 → 19.72, |ΔL\*| ≤ 0.01. Review: a visible difference on 1810 only,
+default better than off, a wider band the same as the default.
 
 ## Dependencies
 
