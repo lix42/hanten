@@ -3440,7 +3440,7 @@ fn is_nc_sidecar(path: &Path) -> bool {
 }
 
 /// The memory profile a destination is sized with: one per shape of buffers
-/// it holds, not one per destination (`nf-destinations/memory-profiles` measures them).
+/// it holds, not one per destination; each sharing is measured (`pipeline::memory`).
 fn run_profile(destination: recipe::Destination, export_ir: bool) -> RunProfile {
     match destination {
         recipe::Destination::FilmMaster => RunProfile::F32Tiff { export_ir },

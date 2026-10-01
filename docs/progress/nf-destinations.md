@@ -35,9 +35,9 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   never a warning. Verified with the Apple oracle on the CLI's own output.
 - **The film master refuses every stage it does not run**, keyed on "asks for" (neither
   default nor identity) per stage.
-- Memory arms per buffer shape: `NewFlowU16Tiff` (measured for SDR, Display P3 and Adobe
-  RGB), `NewFlowF32Tiff` (measured for the linear HDR TIFF, not the film master),
-  `NewFlowAvif` and `NewFlowGainMapJpeg` provisional.
+- Memory arms per buffer shape, every destination measured (`memory-profiles`): `U16Tiff`
+  (the SDR, PQ and HLG TIFFs), `F32Tiff` (the linear float TIFF and the film master),
+  `GainMapJpeg`. A new destination shares an arm only once a measurement shows it.
 - nctool keys metrics on (gamut, transfer); a review matrix may state a `destination`.
 - **The gamuts are Display P3, Adobe RGB, sRGB and BT.2020** (`easy-destination-rows`,
   2026-09-30): the linear float TIFF is written in all four, so `--transfer linear` alone
@@ -223,10 +223,60 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## memory-profiles
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-10-01
 
 - 2026-09-19: created with the new-flow plan. Goal: a memory profile per destination.
+- 2026-10-01: started and implemented. Two of the three verify items already held on
+  `main`: `cli::run_profile` is an exhaustive match, so a destination without an arm does
+  not compile, and the exit-6-before-decode and per-frame `roll` behaviour have tests
+  (`over_budget_convert_is_rejected_before_decoding_with_exit_six`,
+  `roll_gates_each_frame_against_the_shared_budget`). The work was the measurements.
+  - **Frames.** The 74.65 MP `largest.tif` is in neither `../nc-assets` nor the archive,
+    and every scan on hand carries an IR plane, so the slope came from four HDRi frames
+    of 5.83 MP (`2026-09-28-Portra400-dark/base.tif`), 7.11 MP (its `leader.tif`),
+    16.51 MP (its `1996.tif`, the grainy picture) and 18.66 MP (`2026-07-24-Gold200/1137`).
+    A 3.2x spread separates slope from fixed cost better than any earlier pair.
+    `Portra4000-2026-08-05-positive` is a positive-mode scan and is refused, so it
+    cannot be a calibration frame.
+  - **Method**: release build, `/usr/bin/time -l` peak RSS, explicit `--film-base`, two
+    repeats (they differ by ≤0.25 MB). Every destination was measured at all four sizes.
+    At 7.11 MP: SDR/PQ/HLG 0.310 GB (accounted 0.270), linear float and film master
+    0.267–0.268 (0.228), gain map 0.446 (0.434; 0.484 before). At 16.51 MP: SDR/PQ/HLG
+    0.705 GB (0.628), linear float and film master 0.606 (0.528).
+  - **PQ and HLG TIFFs** peaked within 0.25 MB of the SDR TIFF at every size (42.0 B/px +
+    11 MB) and the **film master** within 0.25 MB of the linear float TIFF (36.0 B/px +
+    11 MB): both share their arm by measurement, no arithmetic changed.
+  - **The gain map was over-counted**: 61.7 B/px + 3 MB measured against 68 accounted
+    (`accounted` 1.08–1.11x of measured, breaking the "slightly under" rule). Its encode
+    staging was a loose 12 B/px; it is now a fitted 5, so `accounted` is 0.97–0.99x.
+    Live at encode are the u8 base (3), the map (0.75), the gain-map JPEG and the base
+    JPEG, which `assemble` grows in place; with its doubling growth and that final copy
+    retained, about 3.75 + 3L + G.
+    Measured JPEGs are 0.29–0.34 B/px at default exposure and at most 0.55 B/px pushed
+    (`1996` +5 EV); pushing `1996` and `1137` +3 or +5 EV moved the peak by ≤10 MB — the
+    grain worry `gain-map-destination`'s ship review raised, as far as these frames go.
+    User decision (2026-10-01): keep the fitted 5 B/px, stated as a content assumption,
+    rather than the raw-size bound (~10.5 B/px) or pre-sizing the assembled buffer; the
+    allowance (~10 B/px at 74.65 MP, less the measured ~0.7 overhead) covers a base JPEG
+    up to about 2–3 B/px. A later `/code-review` corrected the per-pixel overhead claim to
+    13.3% (the `direct` float pair) and counted the base JPEG ~3x (doubling growth plus
+    the final copy), lowering that cover from ~3 B/px.
+  - `--export-ir` measured identical to the run without it on the SDR TIFF and the gain
+    map; PQ, HLG, the linear float TIFF and the film master were not measured with it.
+  - `memory.rs`: calibration rows and a paragraph, the arms' "not yet measured" notes
+    gone, six frozen measured cases, a pin on the gain map's estimate.
+- 2026-10-01: **done.** Reviewed by nc-reviewer, a cold stand-in (Codex out of credits),
+  `/code-review` and `ship:diff-reviewer`; all fixes were prose except removing a
+  duplicate `rgb32` binding in the gain-map arm. Every gate green; the
+  `telemetry_upload` test `a_refused_convert_is_a_parse_failure_event` times out
+  intermittently (a 20 s wait for a background upload) and passes on rerun; this diff
+  does not touch telemetry — worth its own look. What dependents need:
+  - A new destination gets an arm only by measurement: two or more frame sizes, release
+    build, peak RSS, `accounted` just under measured. Calibration frames on hand top out
+    at 18.66 MP; the 74.65 MP `largest.tif` is not in `../nc-assets` or the archive.
+  - The gain map's 5 B/px JPEG staging is a content assumption; a writer that pre-sized
+    the assembled buffer (or streamed the JPEGs to the file) would let it be counted.
 
 ## default-destination
 

@@ -55,7 +55,8 @@ Open:
 - Every destination resolves a profile; a destination with none fails loudly at
   resolution rather than at encode.
 - Each arm's estimate is compared against a measured peak on two frame sizes, with
-  the numbers recorded, and the estimate sits under measured.
+  the numbers recorded: `accounted` sits slightly under measured and the estimate
+  above it.
 - A frame over budget fails with exit 6 before decode, and on `roll` follows roll's
   ordinary per-frame handling (recorded, siblings written, roll exits 1).
 
