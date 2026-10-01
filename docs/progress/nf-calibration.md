@@ -56,8 +56,9 @@ ACEScg luma to −0.6 scene stops from mid-grey (±2 EV), added to
 `scene_correction.exposure` under `default`. The decode still lets film speed show
 through; the roll's level is set after it. The white stays measured at exposure 0, so a
 lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.02 to
-+1.74 EV on ten rolls. A per-frame trim and exposure groups within a roll are
-`frame-level-trim` and `exposure-buckets`.
++1.74 EV on ten rolls. A per-frame trim is `frame-level-trim`. Exposure groups within a
+roll were closed as not needed (`exposure-buckets`, 2026-10-01): no split of 09-28 moves
+its exposure more than 0.24 EV.
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -732,12 +733,20 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## exposure-buckets
 
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** closed — not needed
+**Updated:** 2026-10-01
 
 - 2026-09-29: filed (user) from `roll-exposure`: the 09-28 roll's battery change. Goal:
   detect groups of frames exposed differently within a roll and measure one exposure per
   group.
+- 2026-10-01: **closed as not needed** (user). On 09-28's shipped `level_stops`
+  (`../temp/roll-exposure/reports-impl/`), the roll was cut at every frame and each side's
+  median taken: the halfway split (1980–1996 / 1998–2014) puts the groups 0.05 EV apart,
+  the largest of 27 cuts 0.24 EV (at 2011, four frames after it). Every group would render
+  at the roll's +1.39 within round 2's 0.3 EV per-frame split, so a stated split changes
+  nothing, and automatic detection would only find runs of night scenes. Whatever the
+  battery did is under scene variation. The residual is per frame (`frame-level-trim`); a
+  roll shot with a known exposure change would reopen it as a new task.
 
 ## scale-ladder
 

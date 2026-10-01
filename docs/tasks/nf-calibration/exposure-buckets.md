@@ -1,5 +1,21 @@
 # Exposure buckets within a roll
 
+**Closed — not needed (2026-10-01).** The one known case has no exposure change the
+roll's rule can see, so a group would measure what the roll already measures.
+
+## Outcome
+
+- **No split on 09-28 moves the exposure.** Cutting the roll's shipped `level_stops`
+  (`measure-roll`, `../temp/roll-exposure/reports-impl/`) at every frame and taking each
+  side's median: the halfway split (1980–1996 / 1998–2014) puts the groups 0.05 EV apart,
+  the largest of 27 cuts 0.24 EV (at 2011, a last group of four). Every group lands at the
+  roll's +1.39 within the 0.3 EV per-frame split `roll-exposure`'s round 2 found.
+- **Detection has nothing to find.** Scene content moves a frame's level by up to 2 stops
+  on this roll; an automatic change point would find runs of night scenes, the per-frame
+  failure the median rule exists to avoid.
+- **What is left is per frame**, and `frame-level-trim`'s. A roll with a deliberate,
+  known exposure change would reopen the question as a new task.
+
 ## Goal
 
 Detect groups of frames within one roll that were exposed differently, and measure one
