@@ -763,10 +763,10 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | `hanten convert` | The main pipeline: negative file → positive image at the resolved destination (§5; the SDR Display P3 16-bit TIFF by default). |
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
-| `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, and the input and decode sections it measured under when stated — that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
+| `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
-| `hanten params`  | Print the full default parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
+| `hanten params`  | Print the full default parameter set as JSON, in the §8 envelope (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
 
@@ -785,7 +785,9 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
   so they win over both (`docs/design/roll-workflow.md`).
 - `--dump-params out.json` — write the effective parameters (defaults + layers +
   flags) to JSON: every layer collapsed into one file. An unstated knob stays `null`,
-  so the rendering decides it on replay too.
+  so the rendering decides it on replay too. Written only when the run succeeds: a
+  `--strict` refusal still writes the image and report but not the dump, so a dump
+  already at that path describes an earlier run.
 
 **The document is versioned as a whole** (`crate::recipe`): `"recipe_version": 3` at
 top level, one section per stage in chain order, the destination last:
@@ -835,10 +837,13 @@ top level, one section per stage in chain order, the destination last:
   *unknown* key but is blind to a known, meaningless one. No aliases. A retired key's
   old default, which every earlier file serialized, is dropped on load only where
   replaying it renders the same.
-- `--params` also accepts the envelope `{ "meta": …, "params": {…} }` earlier builds
-  wrote as a sidecar: `meta` is read as provenance and never applied, and a
-  `meta.pipeline_version` other than this build's warns (`--strict`-promotable) that
-  the default render changed underneath the parameters.
+- **Every recipe document hanten writes is an envelope** `{ "meta": …, "params": {…} }`
+  — `--dump-params`, `hanten params`, `measure-base --out`, `measure-roll --out` —
+  with `meta` the build's `identity` (below). `--params` reads it and a bare recipe
+  alike: `meta` is provenance and never applied, and a `meta.pipeline_version` other
+  than this build's warns (`--strict`-promotable) that the default render changed
+  underneath the parameters (the replay contract, below). Earlier builds' sidecars
+  have the same shape.
 - **`recipe_version` and `params` are reserved** and never recipe keys.
 
 **The `calibration` section.** A key belongs here when it is (a) measured from the
@@ -888,7 +893,7 @@ own `calibration` and `roll` sections, described above.
 
 **What a `convert` report carries** (`cli::Report`): `command`, `identity` (below), `input`,
 `output` (the completed path, §5), `working_mapping` (`"nc-film-rgb-v1"`), `chain`,
-`recipe` (the resolved recipe — what `--dump-params` writes, so it reloads through
+`recipe` (the resolved recipe — a `--dump-params` file's `params`, so it reloads through
 `--params` to this run), `memory`, `input_color`, `film_base` with its source and percentile,
 `film_type` (when declared), `effective_area`, `loss` (clamped and non-finite samples at the encode),
 `output_stats`, `warnings`, `elapsed_ms`, and the destination's own block where it has one
@@ -975,12 +980,27 @@ changed output pixel.
   change confined to those can move output with every test green;
   `scripts/real-scan-verify/` and `nctool compare` are the tools for that half.
 - `params_hash` — a stable 64-bit FNV-1a hash of the canonical resolved-recipe
-  JSON: **the exact bytes `--dump-params` writes**, so an agent can reproduce it
-  (`hanten convert --dump-params f.json …` then hash `f.json`) and identical
+  JSON: the report's `recipe` as hanten pretty-prints it, which is the `params` body
+  `--dump-params` writes, dedented, so an agent can reproduce it and identical
   configurations are detectable across frames and versions. Omitted for
   `inspect`/`measure-base`, which resolve no full recipe. `hanten roll` stamps one
   `identity` for the **shared** frozen recipe; a per-frame override changes that
   frame's own hash, which is why each roll frame also reports its own `identity`.
+
+**The replay contract.** A replayed recipe either reproduces its render or says that
+it may not. Values it states are applied as stated; values it leaves unset come from
+this build's defaults and the rendering's base (`crate::rendering`), which a default
+move changes. So every recipe document hanten writes records the `pipeline_version` it
+was written under, and a replay under another one warns, with no claim about which
+values moved. Two rules keep a written document honest:
+
+- **A measurement states what it was measured through.** `measure-roll --out` always
+  writes the decode (`reconstruction`) its gains were measured at, default or not, so
+  a moved decode default cannot render them under another.
+- **The label is only as good as the bump.** The warning keys on `pipeline_version`
+  alone, so a moved default the drift gate does not cover, and nobody bumped for,
+  replays silently; and a recipe hanten did not write (hand-written, a report's
+  `recipe`) records no version and gets no check.
 
 **Comparison basis (`output_stats`, `convert` and each roll frame).** Report-only,
 alongside `loss`:
@@ -1600,7 +1620,8 @@ does not:
   a rename destroys them), and **two artifacts that resolve to the same file** (possible
   when a symlinked output points at another artifact's path, which the up-front collision
   check cannot see because it compares the paths as given). Each is exit 5 with a message
-  naming the path and the reason.
+  naming the path and the reason. A read-only or non-regular target, or a directory, is
+  refused when its file is staged and again before the rename.
 - **Hard links are reported, not refused.** An atomic replace necessarily breaks them — the
   other names keep the previous file's bytes — and writing through the shared inode instead
   *is* the non-atomic behaviour this removes. So a target with `nlink > 1` converts and emits
@@ -1620,8 +1641,12 @@ does not:
   inherent and stated rather than papered over.
 
 `--dump-params` and `--report-file` are staged individually but *not* held back to
-join that set: the former is written before anything is decoded, and the latter must
-land even when `--strict` then fails the run (and under `roll` it is a roll-level
+join that set: the former is staged before the frame and committed only once the run has
+passed. So the run fails before the decode when the dump's path cannot be written (a
+missing directory; a directory, a read-only or a non-regular file there: exit 5) or
+resolves to the output, the IR or film RGB export or `--report-file` through a symlink
+(exit 2).
+`--report-file` must land even when `--strict` then fails the run (and under `roll` it is a roll-level
 artifact no single frame's set could hold). Telemetry is never part of the set: its
 event is written last, best-effort. Directory fsync (power-loss
 durability for the rename itself) is out of scope: the temp+rename pattern already
@@ -1877,8 +1902,9 @@ rustdoc.
 it two f32 TIFFs (the film master, a linear HDR TIFF) are indistinguishable.
 `conversion.output_depth` names the **primary** artifact's depth (`u8` for the gain-map
 JPEG), not the optional IR TIFF's.
-`params_hash` is a stable hash (`Recipe::params_hash`) of the bytes `--dump-params`
-writes, the same value as the report's `identity.params_hash`, so identical
+`params_hash` is a stable hash (`Recipe::params_hash`) of the resolved recipe — the
+`params` body `--dump-params` writes, dedented — the same value as the report's
+`identity.params_hash`, so identical
 conversions share a hash without the record carrying the recipe. The value shown is
 **illustrative**: it covers the whole recipe and changes whenever any key is added,
 removed, or re-defaulted. Nothing asserts it as a constant.
@@ -2004,9 +2030,7 @@ Over budget is a **resource** error, deliberately distinct from *unsupported*
 so an agent can retry with a larger `--max-memory` (or on a bigger machine)
 rather than discard the file. `measure-roll` gates each frame it decodes, and a refusal
 keeps exit 6. On `convert`, `inspect`, and `measure-base` no image
-or report is produced on that path — though `--dump-params`, which is
-written during argument resolution, lands before the gate runs and so survives a
-rejection. On **`roll`** the same rejection is
+or report is produced on that path, and no `--dump-params` file. On **`roll`** the same rejection is
 one frame's error: it is recorded in that frame's report entry, the roll continues
 (sibling frames are converted and written), the report is emitted, and the roll
 exits **1** — the batch-level "frames failed" code, as for any per-frame error.

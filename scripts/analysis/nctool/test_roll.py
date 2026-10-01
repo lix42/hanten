@@ -269,6 +269,56 @@ class TestConvert(unittest.TestCase):
                                                         "container": "jpeg"}})
         self.assertEqual(recipe["scene_correction"]["exposure"], .5)
 
+    def test_an_enveloped_default_recipe_is_read_as_its_params(self):
+        # A build that stamps its recipe documents wraps `hanten params` too.
+        self.defaults = {"meta": {"pipeline_version": 9}, "params": self.DEFAULTS}
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args())
+        self.assertEqual(code, 0, err.getvalue())
+        recipe = json.loads((self.root / "converted/nc/test/R/recipe.json").read_text())
+        self.assertNotIn("meta", recipe)
+        self.assertEqual(recipe["recipe_version"], 3)
+        self.assertEqual(recipe["reconstruction"], self.DEFAULTS["reconstruction"])
+
+    def test_an_enveloped_recipe_keeps_its_meta_in_the_frozen_recipe(self):
+        # `hanten roll` checks the `pipeline_version` a stamped recipe was written
+        # under only if the frozen file still carries it.
+        meta = {"nc_version": "x", "pipeline_version": 8, "target": "test"}
+        recipe_path = self.root / "measured.json"
+        recipe_path.write_text(json.dumps(
+            {"meta": meta, "params": {"recipe_version": 3, "roll": {"exposure": .25}}}))
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(config="stamped", recipe=str(recipe_path)))
+        self.assertEqual(code, 0, err.getvalue())
+        run = self.root / "converted/nc/stamped/R"
+        frozen = json.loads((run / "recipe.json").read_text())
+        self.assertEqual(set(frozen), {"meta", "params"})
+        self.assertEqual(frozen["meta"], meta)
+        self.assertEqual(frozen["params"]["roll"], {"exposure": .25})
+        self.assertEqual(frozen["params"]["calibration"],
+                         {"film_base": {"explicit": [.1, .2, .3]}})
+        # The tags record the recipe itself, as for a bare one.
+        tags = json.loads((run / "tags.json").read_text())
+        self.assertEqual(tags["recipe"], frozen["params"])
+
+    def test_a_malformed_envelope_meta_is_refused_before_measuring(self):
+        # `hanten` refuses a non-object `meta`; written bare (null) or carried verbatim
+        # it would skip the check, or fail only at `hanten roll` after the Dmin step.
+        for meta in (None, "x", [], 1):
+            recipe_path = self.root / "malformed.json"
+            recipe_path.write_text(json.dumps({"meta": meta, "params": {"recipe_version": 3}}))
+            with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run) as run, \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                code = roll.cmd_convert(self.args(recipe=str(recipe_path)))
+            self.assertEqual(code, 2, meta)
+            self.assertIn("envelope `meta` must be an object", err.getvalue())
+            self.assertEqual(run.call_count, 1, meta)  # `params` only
+
     # Refused before the Dmin estimate: everything it depends on is known by then.
     def test_the_destination_flags_on_a_preset_build_are_refused_before_measuring(self):
         self.defaults = self.PRESET_DEFAULTS

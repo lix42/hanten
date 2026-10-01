@@ -76,7 +76,7 @@ pub const V2_RECIPE_VERSION: u32 = 2;
 
 /// The top-level key carrying [`RECIPE_VERSION`].
 ///
-/// Reserved beside `params` (the sidecar envelope's key). The removed chain's recipe
+/// Reserved beside `params` (the envelope's key). The removed chain's recipe
 /// never had a field of this name, which is what tells the two apart.
 pub const VERSION_KEY: &str = "recipe_version";
 
@@ -672,8 +672,9 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                 "a recipe must state `\"{VERSION_KEY}\": {RECIPE_VERSION}`. A document without \
                  it — every sidecar and `--dump-params` file written before `pipeline_version` \
                  8 — describes the rendering chain that version removed, and there is no \
-                 converter. `hanten params` writes the current layout: `input`, `measure` and \
-                 a `region` or `explicit` `calibration.film_base` carry over unchanged (an \
+                 converter. `hanten params` writes the current layout in its `params`: \
+                 `input`, `measure` and a `region` or `explicit` `calibration.film_base` \
+                 carry over unchanged (an \
                  `\"auto\"` one retired: measure the base with `hanten measure-base \
                  <unexposed-frame>`), and the rest is a stage \
                  section each (`reconstruction`, `scene_correction`, `look`, `fit_range`) \
@@ -1886,9 +1887,9 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 }
 
 impl Recipe {
-    /// The recipe's `params_hash` (`version::stable_hash`) over the bytes
-    /// `--dump-params` writes, so a dumped recipe hashes to the run it came from. The
-    /// report's `identity` and the telemetry record carry the same value.
+    /// The recipe's `params_hash` (`version::stable_hash`) over its pretty JSON — the
+    /// `params` `--dump-params` writes, dedented — so a dumped recipe hashes to the run
+    /// it came from. The report's `identity` and the telemetry record carry the same value.
     pub fn params_hash(&self) -> String {
         // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
         // which must never fail a run, total.

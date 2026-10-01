@@ -53,12 +53,14 @@ Alternatives, if the direction does not hold:
 
 ## Open questions
 
-- Envelope or a new key? A bare recipe must not contain `meta` today
-  (`split_envelope`). Switching `--dump-params` to the envelope changes the bytes
-  `identity.params_hash` hashes.
-- Does `hanten params` (a template, not a record) get stamped?
-- What does the drift gate (`version::PIPELINE_FINGERPRINTS`) need to cover so the
-  promise is enforced, not only stated?
+Settled 2026-10-01 (`docs/progress/core.md`, `## recipe-replay-fidelity`):
+
+- Envelope or a new key? **The envelope.** `params_hash` hashes the recipe, not the
+  file, so it did not move.
+- Does `hanten params` get stamped? **Yes**: a look scaffolded from it leaves values
+  to the rendering's base.
+- What must the drift gate cover? **Nothing new**: the warning keys on the version, which
+  the gate already forces within its coverage; `PIPELINE_VERSION`'s doc states the rest.
 
 ## How to Verify
 

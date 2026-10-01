@@ -167,8 +167,8 @@ carry a preset name (`gain-map-hdr`, `display-p3`, …, and before
 the **primary image's** depth (`cli::primary_depth`), which for the JPEG destination
 is the container's fixed 8-bit (`u10` was the AVIF destinations', removed 2026-10-01).
 `params_hash` is a stable FNV-1a (`version::stable_hash`) of the canonical
-effective-recipe JSON — the versioned recipe document, the exact bytes
-`--dump-params` writes — so identical conversions share a hash, and it equals the
+effective-recipe JSON — the versioned recipe, the `params` `--dump-params` writes —
+so identical conversions share a hash, and it equals the
 report's `identity.params_hash`. Records before v8 hashed the removed chain's recipe,
 so the two never compare. The sample value above is
 **illustrative**: it covers the whole recipe and changes when any key is added, removed,
