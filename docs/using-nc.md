@@ -1638,7 +1638,8 @@ else.
 (exit 1), after the report is emitted — the right default for scripts and CI.
 
 > One deliberate exception: a failure to write an opted-in **telemetry**
-> destination prints `hanten: warning:` on stderr but is kept out of the report set, so
+> destination prints `hanten: warning:` on stderr (a closed stdout pipe is not a
+> failure — `-v` notes it) but is kept out of the report set, so
 > it stays fail-soft even under `--strict`. Telemetry must never change a
 > conversion's outcome. A script that needs to know telemetry landed has to check
 > the file, not the exit code. A telemetry path may not be the input, the

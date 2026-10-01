@@ -1,0 +1,5 @@
+# Every stdout/stderr write goes through `crate::stdio`, which survives a closed pipe.
+disallowed-methods = [
+    { path = "std::io::stdout", reason = "write through crate::stdio" },
+    { path = "std::io::stderr", reason = "write through crate::stdio" },
+]

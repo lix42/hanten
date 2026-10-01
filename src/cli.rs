@@ -6729,8 +6729,8 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
 /// had learned — and write it to the requested sink(s): the persistent JSONL log
 /// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`).
 /// `telemetry_log` is the log path resolved once, so the guarded and the written
-/// path are the same. Best-effort — every failure is warned on stderr and
-/// swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
+/// path are the same. Best-effort — every failure is warned on stderr (a closed
+/// stdout pipe is the reader leaving, not a failure) and swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
 /// a telemetry fault can change the run's exit code. This is the one documented
 /// deviation from the house fail-loudly rule (telemetry is non-critical
 /// observability). `error` is never read for its text: only its kind and exit code

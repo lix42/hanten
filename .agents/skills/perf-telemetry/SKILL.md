@@ -68,7 +68,8 @@ TelemetryEvent` (`src/telemetry.rs`). To add a field:
 - **No error text.** A failure event gets the error's kind and exit code, never its
   message — messages carry paths and values.
 - **Fail-soft — telemetry must never change the exit code.** A telemetry
-  write/serialize failure warns on stderr and is swallowed. It must NOT enter
+  write/serialize failure warns on stderr and is swallowed (a closed stdout pipe for
+  `--telemetry-file -` is not a failure: `-v` notes it). It must NOT enter
   `report.warnings` (that would let `--strict` promote it), and it is surfaced even
   under `--quiet` (via `Log::warn_always`, used by the `warn` closure in
   `emit_telemetry`, mirroring the `non_finite` precedent). The one loud exception

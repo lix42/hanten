@@ -19,17 +19,20 @@ pub enum Delivery {
 
 /// Write `text` and a newline to stdout and flush. A closed pipe is
 /// [`Delivery::ReaderGone`]; any other failure (a full disk behind `>`) is an error.
+#[allow(clippy::disallowed_methods)] // the one stdout writer
 pub fn stdout_line(text: &str) -> io::Result<Delivery> {
     write_line(&mut io::stdout().lock(), text)
 }
 
 /// Write a line to stderr, ignoring every failure: stderr is the channel a failure
-/// would be reported on. Never panics, so it is safe in the lcms2 C callback.
+/// would be reported on. Outside tests it never panics, so it is safe in the lcms2
+/// C callback.
 pub fn stderr_line(args: fmt::Arguments<'_>) {
     // libtest captures only the print macros, so tests keep their stderr attached.
     #[cfg(test)]
     eprintln!("{args}");
     #[cfg(not(test))]
+    #[allow(clippy::disallowed_methods)] // the one stderr writer
     let _ = writeln!(io::stderr().lock(), "{args}");
 }
 
