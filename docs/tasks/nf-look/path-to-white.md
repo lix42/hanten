@@ -122,8 +122,8 @@ white.
 - ~~**The functional form.**~~ **Settled 2026-09-24:** a linear band over
   `log10(max/min) / contrast` measured on **ACEScg** (user decision — no inverse matrix,
   and it separates the band fit's patches as well as film RGB did, at ~0.72x the scale),
-  placed at **`0.015 → 0.025`** from the per-pixel study. Provisional until the anchor
-  rule is chosen.
+  placed at **`0.015 → 0.025`** from the per-pixel study. Re-checked under the chosen
+  rule 2026-09-30 and unchanged ([`desaturation-band-refit`](desaturation-band-refit.md)).
 - ~~**Whether the operator earns a default-on place.**~~ **Settled 2026-09-24: on, at
   strength 0.8** (user decision, after judging off / 0.5 / 0.8 / 1.0 on 21 frames — no
   visible difference on most, a wanted one on 1810 and 1735).
