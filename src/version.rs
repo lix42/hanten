@@ -8,8 +8,8 @@
 //! 2. **Behavioral pipeline version** — [`PIPELINE_VERSION`], an integer that is
 //!    **independent of semver** and bumps *only* when the **default** conversion
 //!    behavior changes. Answers "would this build render my frame differently".
-//! 3. **Params hash** — [`stable_hash`] over the canonical recipe JSON, the exact
-//!    bytes `--dump-params` writes. Answers "was this the same configuration". The
+//! 3. **Params hash** — [`stable_hash`] over the canonical recipe JSON, the
+//!    `params` `--dump-params` writes. Answers "was this the same configuration". The
 //!    report's [`Identity::params_hash`] and the telemetry record carry it.
 //!
 //! All of it is **operational metadata**, in the same class as `--report` and the
@@ -124,6 +124,14 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// test fails until the fingerprints **and** this constant are updated together.
 /// Read `PipelineFingerprint` for exactly which stages those are — the gate is not
 /// whole-pipeline coverage and must not be described as if it were.
+///
+/// **What it promises a replay** (design-spec §8): every recipe document hanten writes
+/// carries it in `meta`, and replaying one under another version warns. It does not
+/// cover a moved default nobody bumped for (outside the fingerprints above), a recipe
+/// hanten did not write (hand-written, or a report's `recipe`), or the measuring
+/// commands' own algorithms, which change what a new measurement writes but not how a
+/// written one replays. It cannot tell a document that pins every value it relies on
+/// from one that does not, so a bump warns on both.
 pub const PIPELINE_VERSION: u32 = 9;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
@@ -555,10 +563,10 @@ pub fn git_dirty() -> Option<bool> {
     }
 }
 
-/// The identity block stamped into every JSON report (and, before `pipeline_version` 8,
-/// into each sidecar's `meta` envelope). Serialize-only: nothing deserializes it back
-/// into a run (`meta` is provenance about the run that produced it, never parameters
-/// to re-apply), which is what keeps it out of the recipe schema.
+/// The identity block stamped into every JSON report, and the `meta` of every recipe
+/// document hanten writes. Serialize-only: nothing deserializes it back into a run
+/// (`meta` is provenance about the run that produced it, never parameters to re-apply),
+/// which is what keeps it out of the recipe schema.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Identity {
     /// Crate semver ([`NC_VERSION`]).
@@ -765,9 +773,8 @@ pub(crate) mod drift_gate {
         FilmBaseSource::Region(film_base::golden::REGION)
     }
 
-    /// The default *configuration*'s fingerprint input: the default recipe document —
-    /// exactly the bytes `--dump-params` writes for an untouched default run
-    /// (`hanten params` prints the same text with a trailing newline).
+    /// The default *configuration*'s fingerprint input: the default recipe — the
+    /// `params` that `hanten params` and an untouched default `--dump-params` write.
     /// Then the `default` rendering's base, which holds the values the document leaves
     /// unset (the fallback slope, and each stage knob written `null`).
     fn recipe_fingerprint_text() -> String {

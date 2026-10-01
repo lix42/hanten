@@ -118,15 +118,22 @@ What other epics need to know about `core`:
   *values*. Read `version::PipelineFingerprint` for what it does NOT cover. **Never
   edit a row's `render`/`base` in place for a moved default**; the in-place edits
   it does sanction are listed on `PIPELINE_FINGERPRINTS`.
-- **The sidecar is `{ "meta": {…identity…}, "params": {…recipe…} }`.**
-  `--params` accepts the envelope *and* a bare legacy recipe. Identity must never
-  become a recipe key (`deny_unknown_fields` would reject every new sidecar), and
-  identity / `output_stats` / `compare` are **operational** like `--report` and
-  telemetry: no recipe keys, no `merge` arms, no effect on output bytes.
-- **No document hanten writes carries `pipeline_version`** since sidecars went
-  (`pipeline_version` 8): `pipeline_version_warning` reads only an envelope's `meta`,
-  so a replayed `--dump-params` or `roll.json` gets no skew check. Owned by
-  `core/recipe-replay-fidelity` (re-scoped 2026-10-01).
+- **Every recipe document hanten writes is `{ "meta": {…identity…}, "params": {…recipe…} }`**
+  (`cli::RecipeEnvelope`: `--dump-params`, `hanten params`, `measure-base --out`,
+  `measure-roll --out`; `core/recipe-replay-fidelity`), the shape the pre-8 sidecar had.
+  `--params` accepts it *and* a bare recipe; a replay of one stamped with another
+  `pipeline_version` warns (`--strict`-promotable). A report's `recipe` stays bare.
+  Identity must never become a recipe key (`deny_unknown_fields` would reject every
+  written document), and identity / `output_stats` / `compare` are **operational** like
+  `--report` and telemetry: no recipe keys, no `merge` arms, no effect on output bytes.
+  A reader of `hanten params` or a written recipe must unwrap `params` — and accept a
+  bare one from the reference build (`nctool roll`'s `_unwrap_envelope`).
+- **`measure-roll --out` always states `reconstruction`**, the decode its gains were
+  measured through, default or not. Layered last, it beats a look's decode.
+- **`--dump-params` is staged before the decode and committed after the `--strict`
+  gate**: a run that fails writes none, and a path it cannot write, or one landing on
+  another artifact through a symlink, fails up front. `staged::stage` now refuses a
+  directory, read-only or non-regular target at staging, for every staged write.
 
 
 ## product-naming
@@ -764,7 +771,7 @@ manifests are schema 2.
 
 ## recipe-replay-fidelity
 
-**Status:** not started
+**Status:** done (2026-10-01)
 **Updated:** 2026-10-01
 
 - Goal: decide and implement what `nc` owes a frozen recipe whose render
@@ -784,6 +791,98 @@ manifests are schema 2.
   provenance into every written document and always write the decode into
   `roll.json`; open questions in the task file. Dependency
   `algo/reference-anchored-sigmoid` replaced by `nf-core/default-flip`.
+
+
+### 2026-10-01 — executed
+
+- **Shipped:** the envelope on all four writers (`cli::RecipeEnvelope`, the build's
+  `Identity` as `meta`), `measure-roll --out` always writing `reconstruction`, and the
+  replay contract in design-spec §8 beside identity, with `PIPELINE_VERSION`'s doc
+  saying what it does not cover. The reader was unchanged; its messages say "envelope",
+  not "sidecar".
+- **Decisions (user, 2026-10-01):** an envelope rather than a `meta` key beside a bare
+  recipe (the reader and layering already handled it); `hanten params` is stamped too, since
+  a look scaffolded from it leaves keys to the rendering's base — the fallback-slope case.
+- **Gotcha, the one destructive one:** stale-sidecar removal recognised a sidecar by an
+  identity `meta`, which every `--dump-params` file now has, so `-o out.tiff
+  --dump-params out.tiff.json` deleted its own dump. Recognition now also requires
+  `meta.pipeline_version <= 7` (`LAST_SIDECAR_PIPELINE_VERSION`), the last that wrote one.
+- **`params_hash` is unchanged** (it hashes the recipe, not the file), but it is no
+  longer the hash of the file's bytes: it is the `params` body dedented, which the
+  out-of-crate pin in `tests/pipeline.rs` now hashes. Nothing in `scripts/` hashed the file.
+- **Only `reconstruction` became unconditional.** `measure` reaches no rendered pixel on a
+  replay (the effective area feeds nothing in `convert`), and `input` defaults to `auto`,
+  so writing it out pins nothing. The `auto` resolution itself is outside what a written
+  document can pin.
+- **Drift gate: no new fingerprint.** The warning keys on the version, and the gate
+  already forces the bump within its coverage. A bump now warns on every archived
+  document, including one that pins every value it uses — stated in `PIPELINE_VERSION`'s doc.
+- **Left open, for the user:** a look's `reconstruction` under `roll.json` is silently
+  overridden (the file is layered last); a flag like `--density-scale` still beats it.
+  Neither warns.
+- **Verified:** every CI gate on stable 1.99.0 (692 unit, 242 integration, 475
+  `nctool`). The new tests (stamp + simulated older build on all four writers, the decode
+  pinned at its default, a dump at `<output>.json` surviving) were each checked to fail
+  with the fix reverted. The guide's §4, §5 and §10 examples were re-run on the fixtures.
+
+### 2026-10-01 — review fixes
+
+- **Decision (user):** `--dump-params` is written only when the run succeeds — after the
+  `--strict` gate, like `measure-base`/`measure-roll --out`; the write-target guards stay
+  before decode. Written first, `--params X --dump-params X --strict` failed on X's older
+  stamp but had already re-stamped X, so the rerun passed silently.
+- **Gotcha:** the stamp test's `--strict` replay was vacuous for the dump, the template
+  and the base file — each already warned "no roll measurement" at the current version.
+  It now states the roll values (`MEASURED`), so the as-written replay passes `--strict`.
+- **Verified:** every CI gate (692 unit, 243 integration, 20 upload, 475 `nctool`); both
+  new checks fail with the dump written before the frame, or the stamp ignored.
+
+### 2026-10-01 — review fixes, the dump's staging
+
+- **The dump is staged before the frame and committed after the `--strict` gate**, so it
+  still lands only on success but a bad path fails before the decode: a missing
+  directory, or a directory, read-only or non-regular file there (exit 5; `staged::stage`
+  now runs `check_promotable` too, which every staged write shares, and the commit
+  checks again), or a dump resolving to the output, IR or film RGB export or the
+  report file (exit 2).
+- **Gotcha, destructive:** the write-target guard cannot resolve a dangling symlink, so
+  a dump linked to the output, committed after the frame, replaced the image and the run
+  passed. Refused by where the dump lands (`Staged::lands_on`). A report file linked to
+  the image has the same hole and predates this task; not fixed here. `lands_on` compares
+  case-insensitively, like the up-front guard.
+- **Gaps that predate this task, not fixed:** `commit_all`'s alias pass compares
+  case-sensitively; `--telemetry-file` or the telemetry log as a dangling link to the dump
+  path overwrites the dump after it commits (the base had the same order); and a build
+  before this change, which takes any `{meta, params}` with a u64 version for a sidecar,
+  run over the same `-o` deletes a new build's `--dump-params <output>.json`.
+- **Gotcha:** with staging refusing a directory, the two IR integration tests no longer
+  reached the commit. They now abort the set at commit on two artifacts resolving to one
+  file, which only `commit_all` can see; the commit-time recheck of a directory, a
+  read-only or a non-regular target is covered by `io::staged`'s unit tests.
+- **Decision (user):** a `--strict` refusal writes the image and the report but no
+  dump, so a dump already at that path describes an earlier run — documented, not
+  changed.
+- **Decision (user):** a look's `reconstruction` under `roll.json` stays silently
+  overridden (the "Left open" item above), with no warning.
+- **`nctool roll convert`** keeps an enveloped `--recipe`'s `meta` in `recipe.json`, so
+  `hanten roll` checks its version, and refuses a non-object `meta` before measuring.
+- **Verified:** every CI gate (692 unit, 245 integration, 20 upload, 477 `nctool`).
+
+### 2026-10-01 — closed
+
+Reviewed in five rounds (Codex, `nc-reviewer`, a user-run `/code-review`, then ship's
+`ship:diff-reviewer`); every finding was fixed or is recorded above as a gap that
+predates the task. The task file's three open questions are settled: an envelope, not a
+new key (`params_hash` hashes the recipe, so it did not move); `hanten params` is
+stamped; and the drift gate gains no fingerprint, since the warning keys on the version
+the gate already forces. Final gates on stable 1.99.0: 692 unit, 245 integration, 20
+upload, 477 `nctool`. `tests/telemetry_upload.rs`'s
+`a_refused_convert_is_a_parse_failure_event` times out under heavy machine load
+(also on `origin/main`) and passes run serially; it is unrelated.
+
+**For dependent work.** `core/profile-authoring` decides whether a JSONC profile is
+stamped (its open question 5). Any new command that writes a recipe goes through
+`RecipeEnvelope`, and any reader of one unwraps `params`.
 
 
 ## dependency-hygiene

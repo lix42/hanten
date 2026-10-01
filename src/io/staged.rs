@@ -170,6 +170,18 @@ impl Staged {
         rename.map(|()| notes)
     }
 
+    /// Whether a write to `path` would land on this one's file: symlinks followed as
+    /// [`stage`] follows them, so a dangling link to this target counts. Case-insensitive,
+    /// like `cli`'s up-front guard: on a case-insensitive filesystem a case-only
+    /// difference is the same file, and over-rejecting elsewhere is the safe side.
+    pub fn lands_on(&self, path: &Path) -> bool {
+        resolve_target(path).is_ok_and(|p| {
+            alias_key(&p)
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&alias_key(&self.target).to_string_lossy())
+        })
+    }
+
     /// The temp path bytes are currently at. Test-only introspection — production
     /// code has no business knowing this.
     #[cfg(test)]
@@ -354,7 +366,8 @@ fn hard_link_warning(target: &Path) -> Option<String> {
     }
 }
 
-/// Whether `target` can be promoted onto — checked *before* any rename.
+/// Whether `target` can be promoted onto — checked when staging, so a run learns before
+/// its work, and again before the rename, since the path can change in between.
 ///
 /// `rename` is far more permissive than the `File::create` it replaced, so three cases
 /// that used to fail loudly would now succeed destructively. All three are rejected:
@@ -450,6 +463,7 @@ fn resolve_target(target: &Path) -> Result<PathBuf> {
 /// The writer is `BufWriter<File>`, which is `Write + Seek` — the TIFF encoder needs
 /// `Seek` to backfill IFD offsets, so this cannot be narrowed to `Write`.
 ///
+/// A target [`check_promotable`] refuses is refused here, before any byte is written.
 /// A failure anywhere (create, the closure, flush, fsync) removes the temp before
 /// returning, so an error path never litters. `write`'s value is returned alongside
 /// the [`Staged`] handle, which lets an encoder report what it wrote (clipping
@@ -460,6 +474,7 @@ pub fn stage<T>(
 ) -> Result<(Staged, T)> {
     // Follow a symlinked target so the rename replaces the referent, not the link.
     let target = &resolve_target(target)?;
+    check_promotable(target)?;
     // `create_new`, never `create`: two processes in separate PID namespaces can
     // derive the same candidate name, and `create` would silently *truncate* the
     // other one's live staging file — promoting mixed bytes as a complete output.
@@ -513,14 +528,10 @@ pub fn stage<T>(
 /// Commit a whole artifact set, checking first that every rename can plausibly
 /// succeed.
 ///
-/// **Why the pre-check exists.** Staging removes *write* failures from the commit
-/// phase, but not every rename failure: a target path occupied by a **directory**
-/// cannot be renamed onto on any platform, and that is detectable up front. Without
-/// this pass the commits run in order and a later failure leaves earlier artifacts
-/// already promoted — reintroducing exactly the orphaned-primary case this module
-/// exists to prevent. (Found by the failure-injection test, not by reasoning: the
-/// obvious way to make an artifact's write fail — occupy its path with a directory —
-/// fails at the rename, not at the write.)
+/// **Why the pre-check exists.** A target occupied after [`stage`] checked it — by a
+/// directory, say — still cannot be renamed onto, so this pass rejects the set before
+/// any commit. Without it the commits run in order and a later failure leaves earlier
+/// artifacts already promoted — the orphaned-primary case this module exists to prevent.
 ///
 /// **What it still does not promise.** The pre-check narrows the window; it cannot
 /// close it. A rename can fail for reasons no cheap check predicts (permissions
@@ -748,9 +759,10 @@ mod tests {
         let dir = TempDir::new("commitall");
         let good = dir.join("good.bin");
         let blocked = dir.join("blocked.bin");
-        fs::create_dir(&blocked).unwrap();
         let a = stage_bytes(&good, b"a").unwrap();
         let b = stage_bytes(&blocked, b"b").unwrap();
+        // Occupied after staging, which refuses a directory already there.
+        fs::create_dir(&blocked).unwrap();
         let err = commit_all(vec![a, b]).unwrap_err();
         assert!(err.to_string().contains("blocked.bin"), "{err}");
         assert!(
@@ -971,13 +983,23 @@ mod tests {
             return;
         }
 
-        let err = stage_bytes(&target, b"new").unwrap().commit().unwrap_err();
+        let err = stage_bytes(&target, b"new").unwrap_err();
         assert!(err.to_string().contains("not writable"), "{err}");
-        assert_eq!(
-            fs::read(&target).unwrap(),
-            b"protected",
-            "the protected file must be untouched"
-        );
+        assert!(dir.temps().is_empty(), "refused before a temp exists");
+        // Made read-only after staging: the commit checks again.
+        let late = dir.join("late.bin");
+        fs::write(&late, b"protected").unwrap();
+        let staged = stage_bytes(&late, b"new").unwrap();
+        fs::set_permissions(&late, fs::Permissions::from_mode(0o400)).unwrap();
+        let err = staged.commit().unwrap_err();
+        assert!(err.to_string().contains("not writable"), "{err}");
+        for path in [&target, &late] {
+            assert_eq!(
+                fs::read(path).unwrap(),
+                b"protected",
+                "the protected file must be untouched"
+            );
+        }
         assert!(dir.temps().is_empty(), "and the refused temp is cleaned up");
     }
 
@@ -988,20 +1010,34 @@ mod tests {
         // type check also has to run BEFORE the writability probe, or opening the FIFO for
         // writing would block forever — this test would hang, not fail.
         let dir = TempDir::new("fifo");
+        let mkfifo = |path: &Path| {
+            let status = std::process::Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .expect("mkfifo");
+            assert!(status.success(), "mkfifo failed");
+        };
         let target = dir.join("pipe");
-        let status = std::process::Command::new("mkfifo")
-            .arg(&target)
-            .status()
-            .expect("mkfifo");
-        assert!(status.success(), "mkfifo failed");
-
-        let err = stage_bytes(&target, b"new").unwrap().commit().unwrap_err();
+        mkfifo(&target);
+        let err = stage_bytes(&target, b"new").unwrap_err();
         assert!(err.to_string().contains("not a regular file"), "{err}");
+        assert!(dir.temps().is_empty(), "refused before a temp exists");
+
+        // Created after staging: the commit checks again.
+        let late = dir.join("late-pipe");
+        let staged = stage_bytes(&late, b"new").unwrap();
+        mkfifo(&late);
+        let err = staged.commit().unwrap_err();
+        assert!(err.to_string().contains("not a regular file"), "{err}");
+        assert!(dir.temps().is_empty(), "and the refused temp is cleaned up");
+
         use std::os::unix::fs::FileTypeExt;
-        assert!(
-            fs::symlink_metadata(&target).unwrap().file_type().is_fifo(),
-            "the FIFO must survive"
-        );
+        for path in [&target, &late] {
+            assert!(
+                fs::symlink_metadata(path).unwrap().file_type().is_fifo(),
+                "the FIFO must survive"
+            );
+        }
     }
 
     #[test]
@@ -1212,8 +1248,8 @@ mod tests {
         // must name the artifact, and the temp must not survive.
         let dir = TempDir::new("commitfail");
         let target = dir.join("out.bin");
-        fs::create_dir(&target).unwrap();
         let staged = stage_bytes(&target, b"x").unwrap();
+        fs::create_dir(&target).unwrap();
         let temp = staged.temp_path().unwrap().to_path_buf();
         let err = staged.commit().unwrap_err();
         assert!(matches!(err, NcError::Write(_)), "{err}");

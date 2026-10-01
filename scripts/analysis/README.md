@@ -118,8 +118,9 @@ non-empty destination is refused so a new run cannot silently mix with or
 overwrite an old configuration.
 
 Use `--recipe FILE` for the full configuration surface. It accepts a partial nc
-recipe (or a preset build's image sidecar envelope); the measured Dmin
-deliberately replaces any film base in it. `--film-type` is a convenience
+recipe, bare or in the `{meta, params}` envelope hanten writes; the measured Dmin
+deliberately replaces any film base in it. An enveloped one keeps its `meta` in
+`recipe.json`, so `hanten roll` checks the `pipeline_version` it was written under. `--film-type` is a convenience
 override, and so are the destination flags `--film-master` or `--range`,
 `--transfer`, `--gamut`, `--container` (the recipe `output`) and `--exposure`
 (`scene_correction.exposure`). Those write keys of `recipe_version` 2 and later, so they need a
