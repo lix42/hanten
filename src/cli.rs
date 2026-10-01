@@ -324,9 +324,9 @@ pub struct MeasureRollArgs {
     /// the decode the gains, the white and the exposure are measured under. Its `scene_correction` and
     /// `look` values are not read — this command measures the white balance, the white and
     /// the exposure — though the recipe must still load (a retired or unknown key there is
-    /// refused). Repeatable, and `-` reads stdin, as on `convert`. Its `input`, `measure`
-    /// and `reconstruction` keys, when stated, travel into `--out`: the gains hold only
-    /// under that decode.
+    /// refused). Repeatable, and `-` reads stdin, as on `convert`. `--out` always writes the
+    /// decode (`reconstruction`), since the gains hold only under it, and the recipe's
+    /// `input` and `measure` keys when stated.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Vec<PathBuf>,
     /// The roll's unexposed frame: measure the film base from it first — the median
@@ -377,7 +377,7 @@ pub struct ConvertArgs {
     /// `--flag`s win over them all.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Vec<PathBuf>,
-    /// Write the effective (resolved) parameters to JSON and continue.
+    /// Write the effective (resolved) parameters to JSON, once the run has succeeded.
     #[arg(long, value_name = "JSON")]
     pub dump_params: Option<PathBuf>,
     /// Treat warnings (clipping, IR-ignored, …) as hard errors.
@@ -1215,7 +1215,7 @@ pub struct Report {
     /// stage and the destination. See [`ChainResult`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<ChainResult>,
-    /// The resolved recipe (`convert`): what `--dump-params` would write, so it
+    /// The resolved recipe (`convert`): the `params` of a `--dump-params` file, so it
     /// reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
@@ -1382,9 +1382,29 @@ struct LoadedRecipe {
     provenance_warnings: Vec<String>,
 }
 
-/// The read side of the envelope `{ "meta": {…identity…}, "params": {…recipe…} }` a
-/// sidecar carries: identity beside the recipe, never inside it, since every recipe
-/// struct is `deny_unknown_fields`. `meta` is kept as a raw `Value` on purpose: it is
+/// The envelope every recipe document hanten writes is wrapped in — `--dump-params`,
+/// `hanten params`, `measure-base --out`, `measure-roll --out` — so a replay on another
+/// `pipeline_version` warns ([`pipeline_version_warning`]). `params` is last, so the
+/// recipe's text is [`Recipe::params_hash`]'s input indented two spaces deeper.
+#[derive(Serialize)]
+struct RecipeEnvelope<'a, T> {
+    meta: Identity,
+    params: &'a T,
+}
+
+impl<'a, T> RecipeEnvelope<'a, T> {
+    /// `params` stamped with this build's identity.
+    fn new(params: &'a T) -> Self {
+        Self {
+            meta: Identity::new(),
+            params,
+        }
+    }
+}
+
+/// The read side of [`RecipeEnvelope`] (and of the sidecars builds before
+/// `pipeline_version` 8 wrote): identity beside the recipe, never inside it, since every
+/// recipe struct is `deny_unknown_fields`. `meta` is kept as a raw `Value` on purpose: it is
 /// provenance, so an older build must not reject a newer build's extra `meta` fields,
 /// and nothing in it may influence the conversion. `params` is likewise raw here so the
 /// *identical* body checks (migration errors, the typed `deny_unknown_fields` parse)
@@ -1392,7 +1412,7 @@ struct LoadedRecipe {
 /// keeps a third sibling key from being silently ignored.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SidecarEnvelopeIn {
+struct RecipeEnvelopeIn {
     #[serde(default)]
     meta: Option<serde_json::Value>,
     params: serde_json::Value,
@@ -1465,7 +1485,7 @@ struct Layer {
 ///
 /// Accepts **both** shapes: the envelope `{ "meta": …, "params": {…recipe…} }` —
 /// identity read for provenance and otherwise ignored — and a bare recipe object (a
-/// hand-written recipe, or `--dump-params` output). The two are told apart by the
+/// hand-written recipe, or a report's `recipe`). The two are told apart by the
 /// presence of a top-level `params` key, which is not (and must never become) a recipe
 /// key.
 fn read_layer(txt: &str, name: &str) -> Result<Layer> {
@@ -1514,8 +1534,8 @@ fn read_layer(txt: &str, name: &str) -> Result<Layer> {
 }
 
 /// Split a loaded document into `(recipe body JSON, meta.pipeline_version)` when it
-/// is a sidecar envelope; `None` when it is a bare recipe (a hand-written or
-/// `--dump-params` document) and the caller should use the file text as-is.
+/// is an envelope; `None` when it is a bare recipe and the caller should use the file
+/// text as-is.
 ///
 /// A document carrying `meta` but no `params` is a *malformed* envelope, not a bare
 /// recipe: it gets a pointed error rather than the opaque `unknown field 'meta'`
@@ -1535,18 +1555,18 @@ fn split_envelope(
     if !obj.contains_key("params") {
         if obj.contains_key("meta") {
             return Err(NcError::Usage(format!(
-                "{context}: has a `meta` block but no `params` — a sidecar envelope \
+                "{context}: has a `meta` block but no `params` — an envelope \
                  is `{{\"meta\": {{…}}, \"params\": {{…recipe…}}}}`; a bare recipe \
                  object must not contain `meta`"
             )));
         }
         return Ok(None);
     }
-    let envelope: SidecarEnvelopeIn = serde_json::from_value(value.unwrap().clone())
-        .map_err(|e| NcError::Usage(format!("{context}: invalid sidecar envelope: {e}")))?;
+    let envelope: RecipeEnvelopeIn = serde_json::from_value(value.unwrap().clone())
+        .map_err(|e| NcError::Usage(format!("{context}: invalid recipe envelope: {e}")))?;
     if !envelope.params.is_object() {
         return Err(NcError::Usage(format!(
-            "{context}: sidecar `params` must be a recipe OBJECT, got {}. A non-object \
+            "{context}: envelope `params` must be a recipe OBJECT, got {}. A non-object \
              `params` would convert with all-default parameters instead of the recipe \
              this file claims to carry",
             json_kind(&envelope.params)
@@ -1555,7 +1575,7 @@ fn split_envelope(
     // `meta`, when the document has the key at all, must be an OBJECT. Checked
     // against the raw JSON rather than `envelope.meta`, because serde folds
     // `"meta": null` into the same `None` an omitted key produces — and an omitted
-    // `meta` is legal (a bare `--dump-params` recipe wrapped by hand).
+    // `meta` is legal (a bare recipe wrapped by hand).
     //
     // Without this, a corrupt *container* is silently softer than a corrupt *field*:
     // `Value::get` on a non-object returns `None`, which this path reads as "records
@@ -1569,7 +1589,7 @@ fn split_envelope(
         && !meta.is_object()
     {
         return Err(NcError::Usage(format!(
-            "{context}: sidecar `meta` must be an object, got {}. A malformed `meta` \
+            "{context}: envelope `meta` must be an object, got {}. A malformed `meta` \
              carries no readable provenance, and treating it as absent would silently \
              skip the pipeline_version skew check this envelope exists to enable — \
              omit `meta` entirely if the recipe has no provenance to record",
@@ -1580,12 +1600,12 @@ fn split_envelope(
     Ok(Some((envelope.params, meta_pipeline_version)))
 }
 
-/// The `pipeline_version` recorded in a sidecar's `meta`, when present.
+/// The `pipeline_version` recorded in an envelope's `meta`, when present.
 ///
 /// Present-but-unreadable is a **loud error**, not `None`. `None` means "this file
 /// records no version" and suppresses the skew check entirely, so silently mapping a
 /// `1.0`, a `"1"`, or a negative number onto it would disable the very warning the
-/// label exists to raise — a sidecar round-tripped through a tool that emits `1.0`
+/// label exists to raise — a recipe round-tripped through a tool that emits `1.0`
 /// would then replay on a later build and produce different pixels in silence. The
 /// range check matters for the same reason in the other direction: `as u32`
 /// truncation turns `4294967297` into `1`, which *matches* this build and suppresses
@@ -2130,15 +2150,23 @@ pub fn validate_shared(r: &Recipe) -> Result<()> {
 
 /// Serialize a value as pretty JSON to a file; an I/O failure is a write error.
 ///
-/// Staged and committed immediately, so a failure mid-write cannot leave a truncated
-/// document at `path` — but *not* held back to join a conversion's artifact set
-/// (`io/transactional-output-writes`). Both callers are deliberately outside it:
-/// `--dump-params` is written before anything is decoded, and `--report-file` must
-/// land even when `--strict` subsequently fails the run — and in `roll` it is a
-/// roll-level artifact that no single frame's set could hold.
+/// Staged and committed at once, so a failure mid-write cannot leave a truncated document
+/// at `path`, and outside a conversion's artifact set (`io/transactional-output-writes`):
+/// `--report-file` must land even when `--strict` then fails the run, and in `roll` it is
+/// a roll-level artifact no single frame's set could hold.
 fn write_json<T: Serialize>(path: &Path, value: &T, log: &Log) -> Result<()> {
+    commit_json(stage_json(path, value)?, log)
+}
+
+/// Stage `value` as pretty JSON at `path`, for [`commit_json`].
+fn stage_json<T: Serialize>(path: &Path, value: &T) -> Result<staged::Staged> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| NcError::Other(format!("serializing JSON: {e}")))?;
+    staged::stage_bytes(path, json.as_bytes())
+}
+
+/// Commit a document [`stage_json`] staged.
+fn commit_json(doc: staged::Staged, log: &Log) -> Result<()> {
     // Promotion notes (currently: a hard-linked target whose aliases keep the old bytes)
     // go to stderr here rather than into `report.warnings`. These are *operational*
     // artifacts — `--dump-params`, `--report-file` — and folding them into the conversion's
@@ -2150,7 +2178,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T, log: &Log) -> Result<()> {
     // exactly the defect this reporting exists to close. That combination is what
     // `warn_always` is for (see its doc comment; fail-soft telemetry uses it for the same
     // reason).
-    for note in staged::stage_bytes(path, json.as_bytes())?.commit()? {
+    for note in doc.commit()? {
         log.warn_always(&note);
     }
     Ok(())
@@ -2353,10 +2381,10 @@ fn run_telemetry(args: TelemetryArgs) -> Result<()> {
     }
 }
 
-/// `hanten params` — print the full default recipe as JSON to stdout.
+/// `hanten params` — print the full default recipe, in its [`RecipeEnvelope`], to stdout.
 fn run_params(args: &ParamsArgs) -> Result<()> {
     reject_new_flow(args.new_flow)?;
-    let json = serde_json::to_string_pretty(&Recipe::default())
+    let json = serde_json::to_string_pretty(&RecipeEnvelope::new(&Recipe::default()))
         .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
     print_stdout(&json, "params")?;
     Ok(())
@@ -3418,12 +3446,17 @@ fn report_hdr_linear_tiff(
     });
 }
 
+/// The last `pipeline_version` that wrote a sidecar.
+const LAST_SIDECAR_PIPELINE_VERSION: u64 = 7;
+
 /// Whether `path` holds one of nc's sidecars, recognised by its provenance rather
 /// than by key names: the `{meta, params}` envelope with `params` an object and
 /// `meta` carrying the identity every sidecar stamps (`nc_version`,
-/// `pipeline_version`, `target`). Deleting is destructive, so anything short of that
-/// — missing, unreadable, or a different file that merely shares the shape — is not
-/// ours to remove.
+/// `pipeline_version`, `target`), from a build that wrote sidecars. Every recipe
+/// document a later build writes has the same envelope ([`RecipeEnvelope`]), so the
+/// version is what keeps a `--dump-params` file named `<output>.json` from being
+/// deleted. Deleting is destructive, so anything short of that — missing, unreadable,
+/// or a different file that merely shares the shape — is not ours to remove.
 fn is_nc_sidecar(path: &Path) -> bool {
     let Some(doc) = std::fs::read(path)
         .ok()
@@ -3435,7 +3468,9 @@ fn is_nc_sidecar(path: &Path) -> bool {
     doc.as_object().is_some_and(|o| o.len() == 2)
         && doc["params"].is_object()
         && meta["nc_version"].is_string()
-        && meta["pipeline_version"].is_u64()
+        && meta["pipeline_version"]
+            .as_u64()
+            .is_some_and(|v| v <= LAST_SIDECAR_PIPELINE_VERSION)
         && meta["target"].is_string()
 }
 
@@ -4043,12 +4078,13 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
 /// Where a `convert` is, for a failure event's `stage`.
 #[derive(Clone, Copy, Debug, Default)]
 enum ConvertPhase {
-    /// Before the frame: recipe, validation, output path, the write-target guard.
+    /// Before the frame: recipe, validation, output path, the write-target guard, the
+    /// `--dump-params` staging.
     #[default]
     Setup,
     /// Inside [`convert_frame`]; its stage clock says where.
     Frame,
-    /// After the frame: the report and the `--strict` gate.
+    /// After the frame: the report, the `--strict` gate and the `--dump-params` commit.
     Finalize(FinishedFrame),
 }
 
@@ -4206,15 +4242,41 @@ fn convert_attempt(
     }
     attempt.guarded = true;
 
-    // The resolved recipe, which reloads through `--params` to the same run.
-    if let Some(path) = &args.dump_params {
-        write_json(path, &recipe, log)?;
+    // The resolved recipe, which reloads through `--params` to the same run. Staged here,
+    // so a bad path fails before the decode, and committed only once the run has passed,
+    // so a failed one leaves a replayed layer as it was (dropping it removes the temp).
+    let dump = args
+        .dump_params
+        .as_deref()
+        .map(|path| stage_json(path, &RecipeEnvelope::new(&recipe)))
+        .transpose()?;
+    // The guard above cannot resolve a dangling symlink, so a dump linked to an artifact
+    // written before it commits (or one linked to the dump) is caught here, by where it
+    // lands.
+    if let (Some(dump), Some(dump_path)) = (&dump, &args.dump_params) {
+        let earlier = [
+            ("--output", Some(output.as_path())),
+            ("--export-ir", attempt.export_ir.as_deref()),
+            ("--export-film-rgb", args.export_film_rgb.as_deref()),
+            ("--report-file", args.report.report_file.as_deref()),
+        ];
+        for (label, path) in earlier {
+            if let Some(path) = path.filter(|p| dump.lands_on(p)) {
+                return Err(NcError::Usage(format!(
+                    "--dump-params ({}) and {label} ({}) resolve to the same file — one \
+                     would silently overwrite the other. This can happen when a symlinked \
+                     path points at another artifact's path",
+                    dump_path.display(),
+                    path.display()
+                )));
+            }
+        }
     }
     // `--seed` is reserved (no stochastic step in Step 1) but accepted so the
     // documented flag isn't rejected; nothing consumes it yet.
     let _ = args.seed;
 
-    // Replaying a sidecar captured under a *different* behavioral `pipeline_version`
+    // Replaying a recipe written under a *different* behavioral `pipeline_version`
     // still applies its parameters, but the default render has changed underneath
     // them — so the pixels won't match the original. Loud and `--strict`-promotable
     // rather than a silently-different image: exposing exactly that mismatch is why
@@ -4299,6 +4361,9 @@ fn convert_attempt(
             "--strict: {} warning(s) present (see report)",
             report.warnings.len()
         )));
+    }
+    if let Some(dump) = dump {
+        commit_json(dump, log)?;
     }
     Ok(())
 }
@@ -5806,8 +5871,9 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
 
 /// The recipe a measuring command writes with `--out`: only what the measurement
 /// holds, so a later layer is pinned by nothing else. `measure-base` states
-/// `calibration`; `measure-roll` states `calibration` and `roll`, plus the input and
-/// decode sections it measured under when they are not the defaults.
+/// `calibration`; `measure-roll` states `calibration`, `roll` and the decode its gains
+/// were measured through, plus `input` and `measure` when they are not the defaults.
+/// The decode is stated even at its default, so a moved default cannot change it.
 #[derive(Debug, Serialize)]
 struct MeasuredRecipe {
     recipe_version: recipe::RecipeVersion,
@@ -5836,7 +5902,7 @@ fn check_recipe_out(out: &RecipeOutArgs) -> Result<()> {
 /// Write a `--out` recipe: pretty JSON with a trailing newline, staged so a failed
 /// write leaves no partial file.
 fn write_recipe_out(path: &Path, recipe: &MeasuredRecipe, log: &Log) -> Result<()> {
-    let mut json = serde_json::to_string_pretty(recipe)
+    let mut json = serde_json::to_string_pretty(&RecipeEnvelope::new(recipe))
         .map_err(|e| NcError::Other(format!("serializing recipe: {e}")))?;
     json.push('\n');
     for note in staged::stage_bytes(path, json.as_bytes())?.commit()? {
@@ -6606,8 +6672,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         white.stops, white.bound, white.slope
     ));
     // Everything a roll shares, as one recipe `roll --params` renders alone: the base,
-    // the roll section with its clamps, and the input and decode sections the gains
-    // were measured under, when stated — the gains hold only under that decode.
+    // the roll section with its clamps, the decode the gains hold under, and the input
+    // and measure sections when stated.
     let measured = MeasuredRecipe {
         recipe_version: recipe::RecipeVersion,
         // The decode's input assertions only: an IR export path is one frame's output,
@@ -6628,8 +6694,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             ..recipe::RollSection::default()
         }),
         measure: (recipe.measure != MeasureParams::default()).then(|| recipe.measure.clone()),
-        reconstruction: (recipe.reconstruction != fixed::DecodeParams::default())
-            .then_some(recipe.reconstruction),
+        reconstruction: Some(recipe.reconstruction),
     };
 
     let report = MeasureRollReport {
@@ -7809,9 +7874,9 @@ mod tests {
 
     #[test]
     fn params_default_is_parseable_json_but_no_longer_runnable() {
-        // The subject is the exact document `hanten params` prints — `run_params`
-        // serializes `Recipe::default()` — so this must stay on the real default, not on
-        // a film-base-stated stand-in.
+        // The subject is `Recipe::default()`, the `params` of what `hanten params` prints
+        // (`hanten_params_writes_the_recipe_convert_reads` covers the envelope), so this
+        // must stay on the real default, not on a film-base-stated stand-in.
         let json = serde_json::to_string_pretty(&Recipe::default()).unwrap();
         let back: Recipe = serde_json::from_str(&json).unwrap();
         assert_eq!(back, Recipe::default());
@@ -8326,7 +8391,7 @@ mod tests {
         for reserved in ["params", "meta"] {
             assert!(
                 !keys.iter().any(|k| k.as_str() == reserved),
-                "`{reserved}` is reserved for the sidecar envelope but is now a recipe key: \
+                "`{reserved}` is reserved for the recipe envelope but is now a recipe key: \
                  {keys:?}"
             );
         }
@@ -8352,8 +8417,8 @@ mod tests {
                 "{body}: got {err}"
             );
         }
-        // An OMITTED `meta` stays legal — a hand-wrapped `--dump-params` recipe has no
-        // provenance to record, and that is not a malformed envelope.
+        // An OMITTED `meta` stays legal — a hand-wrapped bare recipe has no provenance
+        // to record, and that is not a malformed envelope.
         assert_eq!(
             load_recipe_body("no-meta", r#"{"params":{"recipe_version":3}}"#)
                 .unwrap()

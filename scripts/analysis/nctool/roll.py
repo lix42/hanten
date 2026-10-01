@@ -138,20 +138,34 @@ def _base_command(nc: str) -> str:
     return "measure-base" if proc.returncode == 0 else "estimate"
 
 
-def _recipe_input(path: str | None) -> tuple[dict | None, str | None]:
+def _recipe_input(path: str | None) -> tuple[dict | None, dict | None, str | None]:
+    """The `--recipe` file's recipe, and its envelope's `meta` (None when bare)."""
     if path is None:
-        return {}, None
+        return {}, None, None
     value, error = _load_object(Path(path))
     if error:
-        return None, error
+        return None, None, error
     assert value is not None
-    # A preset build's `<out>.json` sidecar wraps its recipe; a destination build
-    # writes none, and its recipes are read as they are.
-    if set(value) == {"meta", "params"}:
-        value = value.get("params")
-        if not isinstance(value, dict):
-            return None, f"{path}: sidecar `params` must be an object"
-    return json.loads(json.dumps(value)), None
+    meta = value.get("meta") if set(value) == {"meta", "params"} else None
+    value, error = _unwrap_envelope(value, str(path))
+    if error:
+        return None, None, error
+    return json.loads(json.dumps(value)), meta, None
+
+
+def _unwrap_envelope(value: dict, label: str) -> tuple[dict | None, str | None]:
+    """The recipe in a `{meta, params}` envelope — a preset build's sidecar, or any
+    recipe document a build from `core/recipe-replay-fidelity` on writes — or `value`
+    itself when it is a bare recipe (the builds between)."""
+    if set(value) != {"meta", "params"}:
+        return value, None
+    # As `hanten` refuses it, so a malformed one fails before the Dmin measurement.
+    if not isinstance(value.get("meta"), dict):
+        return None, f"{label}: envelope `meta` must be an object"
+    params = value.get("params")
+    if not isinstance(params, dict):
+        return None, f"{label}: envelope `params` must be an object"
+    return params, None
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
@@ -352,10 +366,13 @@ def cmd_convert(args) -> int:
         return 2
     assert roles is not None
     defaults, error = _run_json([args.nc, "params"], "default recipe query")
+    if not error:
+        assert defaults is not None
+        defaults, error = _unwrap_envelope(defaults, "default recipe query")
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    partial, error = _recipe_input(args.recipe)
+    partial, meta, error = _recipe_input(args.recipe)
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -469,7 +486,9 @@ def cmd_convert(args) -> int:
         "dmin": {"frame": unexposed["file"], "region": dmin_region,
                  "mode": args.dmin_mode, "value": dmin, "report": dmin_report},
     }
-    _write_json(recipe_path, recipe)
+    # An enveloped `--recipe` keeps its `meta`, so `hanten roll` checks the
+    # `pipeline_version` it was written under; a bare one stays bare.
+    _write_json(recipe_path, recipe if meta is None else {"meta": meta, "params": recipe})
     _write_json(calibration_path, calibration)
 
     real_paths = [str(root / frame["file"]) for frame in roles["real"]]

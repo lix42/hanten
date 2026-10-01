@@ -812,16 +812,18 @@ fn staging_temps(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
-fn a_failing_ir_export_leaves_no_primary_output() {
-    // IR is staged before the primary, so its failure must abort the whole set. The
-    // ordering trick that used to provide this (export IR first) only ever helped
-    // because IR came first; now it holds because nothing is committed until all
-    // three artifacts exist.
-    let tmp = TempDir::new("ir-fails");
-    let out = tmp.path("out.tiff");
+fn an_artifact_set_refused_at_commit_leaves_no_output() {
+    // Nothing is renamed until every artifact is staged, so a set refused at commit
+    // leaves none of it. Two targets resolving to one file are found only there: each
+    // is promotable on its own, and a dangling link defeats the up-front guard. (The
+    // pre-pass's other refusals are caught when staging; `io::staged`'s unit tests cover
+    // the commit-time recheck.)
+    let tmp = TempDir::new("set-refused");
+    let out = tmp.path("latest.tiff");
     let ir = tmp.path("ir.tiff");
-    std::fs::create_dir(&ir).expect("occupy the IR path");
+    std::os::unix::fs::symlink(&ir, &out).unwrap();
 
     let (code, _stdout, err) = run(&[
         "convert",
@@ -833,11 +835,9 @@ fn a_failing_ir_export_leaves_no_primary_output() {
         "--film-base",
         "0.9,0.55,0.42",
     ]);
-    assert_ne!(code, 0, "a failing IR export must fail the run: {err}");
-    assert!(
-        !out.exists(),
-        "no primary output for an aborted artifact set"
-    );
+    assert_eq!(code, 5, "{err}");
+    assert!(err.contains("resolve to the same file"), "{err}");
+    assert!(!ir.exists(), "no artifact of an aborted set is committed");
     assert!(
         staging_temps(&tmp.0).is_empty(),
         "no staging temps survive: {:?}",
@@ -845,35 +845,47 @@ fn a_failing_ir_export_leaves_no_primary_output() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_interrupted_overwrite_leaves_the_previous_output_intact() {
     // The decided contract is atomic *replace*: `nc` keeps overwriting its own
     // output. What must never happen is a truncated new file where a valid old one
-    // was — so a run that fails after the primary is encoded must leave the previous
-    // bytes untouched, not a half-written TIFF.
+    // was — so a run that fails after the primary is encoded (here at commit, on two
+    // exports resolving to one file) must leave the previous bytes untouched.
     let tmp = TempDir::new("overwrite");
     let out = tmp.path("out.tiff");
-    let ir = tmp.path("ir.tiff");
     let input = fixture("hdri-64bit.tif");
-    let args = [
-        "convert",
-        input.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--export-ir",
-        ir.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-    ];
-    let (code, _o, _e) = run(&args);
-    assert_eq!(code, 0, "first conversion should succeed");
+    let convert = |base: &str, extra: &[&str]| {
+        let mut args = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            base,
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let (code, _o, err) = convert("0.9,0.55,0.42", &[]);
+    assert_eq!(code, 0, "first conversion should succeed: {err}");
     let original = std::fs::read(&out).expect("first output readable");
 
-    // Now make the IR path unwritable so the second run fails after encoding.
-    std::fs::remove_file(&ir).expect("remove the first IR export");
-    std::fs::create_dir(&ir).expect("occupy the IR path");
-    let (code, _o, err) = run(&args);
-    assert_ne!(code, 0, "the second run must fail: {err}");
+    // A film RGB export dangling-linked to the IR export: both stage, the set does not.
+    let ir = tmp.path("ir.tiff");
+    let film_rgb = tmp.path("film.tiff");
+    std::os::unix::fs::symlink(&ir, &film_rgb).unwrap();
+    let (code, _o, err) = convert(
+        "0.95,0.55,0.42",
+        &[
+            "--export-ir",
+            ir.to_str().unwrap(),
+            "--export-film-rgb",
+            film_rgb.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 5, "the second run must fail at commit: {err}");
+    assert!(err.contains("resolve to the same file"), "{err}");
     assert_eq!(
         std::fs::read(&out).expect("previous output still readable"),
         original,
@@ -1144,8 +1156,7 @@ fn measure_base_out_writes_a_recipe_that_round_trips() {
     let value = flag.strip_prefix("--film-base ").expect("flag prefix");
     // The file states the measurement and nothing else, so a later layer is pinned by
     // nothing the run did not measure.
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
+    let written = written_recipe(&recipe);
     assert_eq!(
         written,
         serde_json::json!({
@@ -4538,6 +4549,21 @@ fn report_carries_every_identity_layer() {
     assert!(!id["target"].as_str().unwrap().is_empty());
 }
 
+/// The recipe in a document hanten wrote — `--dump-params`, `hanten params`,
+/// `measure-base --out`, `measure-roll --out` — checked to be the stamped envelope.
+fn recipe_in(doc: &serde_json::Value) -> serde_json::Value {
+    assert!(
+        doc.as_object().is_some_and(|o| o.len() == 2) && doc["meta"]["pipeline_version"].is_u64(),
+        "a written recipe is `{{meta, params}}`: {doc}"
+    );
+    doc["params"].clone()
+}
+
+/// [`recipe_in`] the file at `path`.
+fn written_recipe(path: &Path) -> serde_json::Value {
+    recipe_in(&serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap())
+}
+
 /// The `pipeline_version` this binary prints from `--version` — the independent
 /// witness a report's value is checked against.
 fn pipeline_version_from_version_flag() -> u64 {
@@ -4621,11 +4647,11 @@ fn convert_report_echoes_a_declared_film_type_only() {
 }
 
 #[test]
-fn params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
+fn params_hash_is_the_hash_of_the_dumped_recipe() {
     // The documented contract (`Recipe::params_hash`): the report's
     // `identity.params_hash` and the record's `conversion.params_hash` are FNV-1a-64
-    // over exactly the bytes `--dump-params` writes, so either can be matched to a kept
-    // recipe file.
+    // over the `params` body `--dump-params` writes, dedented to the top level, so
+    // either can be matched to a kept recipe file.
     let tmp = TempDir::new("paramshash");
     let out = tmp.path("out.tiff");
     let dump = tmp.path("params.json");
@@ -4641,8 +4667,14 @@ fn params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
         ],
     );
     assert_eq!(code, 0, "{err}");
+    let text = std::fs::read_to_string(&dump).unwrap();
+    let body = text
+        .split_once("\n  \"params\": ")
+        .and_then(|(_, rest)| rest.strip_suffix("\n}"))
+        .unwrap_or_else(|| panic!("`params` is the envelope's last key: {text}"));
+    let body = body.replace("\n  ", "\n");
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in &std::fs::read(&dump).unwrap() {
+    for &b in body.as_bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
@@ -5264,26 +5296,25 @@ fn identity_stamping_does_not_perturb_the_output_pixels() {
     let tmp = TempDir::new("no-perturb");
     let input = fixture("hdri-64bit.tif");
     let base = tmp.path("base.tiff");
-    let dump = tmp.path("bare.json");
+    let envelope = tmp.path("envelope.json");
     let (code, _, err) = convert_p3(
         &input,
         &base,
-        &["--dump-params", dump.to_str().unwrap(), "--report", "none"],
+        &[
+            "--dump-params",
+            envelope.to_str().unwrap(),
+            "--report",
+            "none",
+        ],
     );
     assert_eq!(code, 0, "{err}");
     let expected = std::fs::read(&base).unwrap();
 
-    let bare = std::fs::read_to_string(&dump).unwrap();
+    let bare = written_recipe(&envelope).to_string();
+    let dump = write_file(&tmp.path("bare.json"), &bare);
     let skewed = write_file(
         &tmp.path("skew.json"),
         &format!(r#"{{ "meta": {{ "pipeline_version": 9999 }}, "params": {bare} }}"#),
-    );
-    let envelope = write_file(
-        &tmp.path("envelope.json"),
-        &format!(
-            r#"{{ "meta": {{ "pipeline_version": {} }}, "params": {bare} }}"#,
-            pipeline_version_from_version_flag()
-        ),
     );
     let variants: [(&str, Vec<&str>); 4] = [
         ("report json", vec!["--params", dump.to_str().unwrap()]),
@@ -6064,10 +6095,9 @@ fn the_retired_display_tone_flags_are_refused_with_a_migration_error() {
 fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
     // The headroom bound is a **value** rule, so it runs with the recipe's validation —
     // not in the stage, which runs after the decode. Proof: a nonexistent input still
-    // exits 2 (usage), never 3 (decode), and `--dump-params` writes nothing.
+    // exits 2 (usage), never 3 (decode).
     let tmp = TempDir::new("reinhard-gate");
     let missing = tmp.path("does-not-exist.tif");
-    let dumped = tmp.path("dumped.json");
     //
     // Each case asserts the **rule's own wording**, not just exit 2: clap also exits 2,
     // so a bare code check cannot tell a parse error from the validation rule. That
@@ -6093,8 +6123,6 @@ fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.6,0.5",
-            "--dump-params",
-            dumped.to_str().unwrap(),
         ];
         argv.extend(extra.iter().copied());
         let (code, _stdout, err) = run(&argv);
@@ -6103,10 +6131,6 @@ fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
         assert!(
             err.contains("--display-tone-headroom"),
             "{extra:?}: clap answered for the validation rule: {err}"
-        );
-        assert!(
-            !dumped.exists(),
-            "{extra:?}: an invalid recipe was written to disk before failing"
         );
     }
     // Falsifiable control: the same invocation with a usable headroom gets past
@@ -7536,8 +7560,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
         std::fs::read(&warm).unwrap(),
         "the recipe key and the flag are one knob"
     );
-    let dumped: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    let dumped = written_recipe(&dump);
     assert_eq!(
         dumped["scene_correction"],
         serde_json::json!({"white_balance": {"explicit": [1.3, 1.0, 0.7]}, "exposure": 0.0})
@@ -8198,7 +8221,8 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 fn hanten_params_writes_the_recipe_convert_reads() {
     let (code, params, err) = run(&["params"]);
     assert_eq!(code, 0, "{err}");
-    let doc: serde_json::Value = serde_json::from_str(&params).unwrap();
+    let written: serde_json::Value = serde_json::from_str(&params).unwrap();
+    let doc = recipe_in(&written);
     assert_eq!(doc["recipe_version"], 3);
     assert!(doc.get("print").is_none(), "{doc}");
 
@@ -8207,10 +8231,11 @@ fn hanten_params_writes_the_recipe_convert_reads() {
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--new-flow was removed"), "{err}");
 
-    // What it writes is what `convert` reads, once a film base is stated.
+    // What it writes is what `convert` reads, envelope and all, once a film base is
+    // stated.
     let tmp = TempDir::new("params-roundtrip");
-    let mut doc = doc.clone();
-    doc["calibration"]["film_base"] = serde_json::json!({"explicit": [0.9, 0.55, 0.42]});
+    let mut doc = written;
+    doc["params"]["calibration"]["film_base"] = serde_json::json!({"explicit": [0.9, 0.55, 0.42]});
     let recipe = write_file(&tmp.path("r.json"), &doc.to_string());
     let (code, _out, err) = run(&[
         "convert",
@@ -8512,6 +8537,22 @@ fn convert_never_removes_the_recipe_it_read() {
             .any(|w| w.as_str().unwrap().contains("because this run read it")),
         "{stdout}"
     );
+}
+
+#[test]
+fn a_dump_named_like_a_sidecar_is_not_removed_as_one() {
+    // A `--dump-params` file has the sidecar's envelope and identity, so only the
+    // version that wrote it tells the two apart. One at `<output>.json` must survive
+    // its own run and every later run over that output.
+    let tmp = TempDir::new("dump-as-sidecar");
+    let out = tmp.path("out.tiff");
+    let dump = sidecar_of(&out);
+    for extra in [&["--dump-params", dump.to_str().unwrap()][..], &[]] {
+        let (code, stdout, err) = convert_p3(&fixture("hdr-48bit.tif"), &out, extra);
+        assert_eq!(code, 0, "{err}");
+        assert!(dump.exists(), "the dump must survive: {extra:?}");
+        assert!(json(&stdout)["chain"].get("removed_sidecar").is_none());
+    }
 }
 
 #[test]
@@ -9018,8 +9059,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     );
 
     // The written recipe states the base it measured under too, so it renders alone.
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
+    let written = written_recipe(&recipe);
     assert_eq!(
         written["calibration"]["film_base"]["explicit"],
         serde_json::json!([0.9, 0.55, 0.42]),
@@ -9876,8 +9916,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         "--no-frame-lift",
     ]);
     assert_eq!(code, 0, "{err}");
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&measured).unwrap()).unwrap();
+    let written = written_recipe(&measured);
     assert_eq!(written["roll"]["white_stops"], white["stops"], "{written}");
     assert_eq!(
         written["roll"]["frames"],
@@ -10037,8 +10076,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(capped["white"]["bound"], "cap", "{capped}");
     assert_eq!(capped["white"]["slope"], clamped["slope"], "{capped}");
     assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&capped_recipe).unwrap()).unwrap();
+    let written = written_recipe(&capped_recipe);
     assert_eq!(
         written["roll"]["frames"],
         serde_json::json!({}),
@@ -10084,8 +10122,7 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let (code, stdout, err) = run(&argv);
         assert_eq!(code, 0, "{err}");
-        let written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap();
+        let written = written_recipe(out);
         (json(&stdout), written)
     };
 
@@ -10567,8 +10604,7 @@ fn measure_roll_out_diagnoses_the_specific_fault_and_writes_a_file_roll_accepts(
 
     let (code, _, err) = run(&["measure-roll", f, "--params", r, "--out", o]);
     assert_eq!(code, 0, "{err}");
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    let written = written_recipe(&out);
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
     assert!(written["input"]["export_ir"].is_null(), "{written}");
     let (code, _, err) = run(&[
@@ -10656,8 +10692,7 @@ fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
     ]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(json(&stdout)["chain"]["roll"]["white_stops"], 1.7);
-    let dumped: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    let dumped = written_recipe(&dump);
     assert!(
         dumped["roll"]["frames"].get("hdr-48bit.tif").is_none()
             && dumped["roll"]["frames"].get("other.tif").is_some(),
@@ -11028,8 +11063,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         ],
     );
     assert_eq!(on, from_recipe, "the recipe key and the flag are one knob");
-    let dumped: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    let dumped = written_recipe(&dump);
     assert_eq!(dumped["look"]["highlight_desaturation"]["strength"], 1.0);
 
     // A flag wins over the recipe, down to the identity: the recipe's pull is live
@@ -12407,8 +12441,7 @@ fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
         dump.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let mut look: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    let mut look = written_recipe(&dump);
     let obj = look.as_object_mut().unwrap();
     obj.remove("calibration");
     obj.remove("roll");
@@ -12865,6 +12898,289 @@ fn measure_roll_warns_on_a_layer_from_another_pipeline_version() {
     assert_eq!(code, 0, "{err}");
     let warnings = json(&stdout)["warnings"].to_string();
     assert!(warnings.contains("pipeline_version 9999"), "{warnings}");
+}
+
+#[test]
+fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
+    // The replay check reads the `pipeline_version` a recipe was written under, so
+    // every recipe document hanten writes carries it. A later build is simulated by
+    // stamping the document one version back: its replay warns, and `--strict` refuses.
+    let tmp = TempDir::new("written-recipes-stamped");
+    let scan = fixture("hdr-48bit.tif");
+    let s = scan.to_str().unwrap();
+    let current = pipeline_version_from_version_flag();
+    let base = write_file(
+        &tmp.path("base.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+    );
+
+    let dump = tmp.path("dump.json");
+    let (code, _, err) = convert_p3(
+        &scan,
+        &tmp.path("dumped.tiff"),
+        &["--dump-params", dump.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
+    let measured_base = tmp.path("measured-base.json");
+    let (code, _, err) = run(&[
+        "measure-base",
+        s,
+        "--base-region",
+        "0,0,60,60",
+        "--out",
+        measured_base.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let measured_roll = tmp.path("measured-roll.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        s,
+        "--params",
+        base.to_str().unwrap(),
+        "--out",
+        measured_roll.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let (code, params, err) = run(&["params"]);
+    assert_eq!(code, 0, "{err}");
+    let template = write_file(&tmp.path("params.json"), &params);
+
+    let skew = format!("pipeline_version {}", current - 1);
+    for doc in [&dump, &measured_base, &measured_roll, &template] {
+        let name = doc.file_name().unwrap().to_str().unwrap();
+        let mut written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(doc).unwrap()).unwrap();
+        recipe_in(&written);
+        assert_eq!(written["meta"]["pipeline_version"], current, "{name}");
+        // `convert_p3` states a base, which `hanten params` leaves unset, and `MEASURED`
+        // the roll values only `measure-roll` writes, so `--strict` fails on the stamp alone.
+        let replay = |recipe: &Path, extra: &[&str]| {
+            convert_p3(
+                &scan,
+                &tmp.path("replay.tiff"),
+                &[
+                    &["--params", recipe.to_str().unwrap()][..],
+                    &MEASURED,
+                    extra,
+                ]
+                .concat(),
+            )
+        };
+        let (code, _, err) = replay(doc, &["--strict"]);
+        assert_eq!(
+            code, 0,
+            "{name}: replayed on the build that wrote it: {err}"
+        );
+
+        written["meta"]["pipeline_version"] = (current - 1).into();
+        let older = write_file(&tmp.path("older.json"), &written.to_string());
+        let (code, stdout, err) = replay(&older, &[]);
+        assert_eq!(code, 0, "{name}: {err}");
+        assert!(
+            json(&stdout)["warnings"].to_string().contains(&skew),
+            "{name}: {stdout}"
+        );
+        let (code, _, err) = replay(&older, &["--strict"]);
+        assert_eq!(code, 1, "{name}: {err}");
+        assert!(err.contains(&skew), "{name}: {err}");
+    }
+}
+
+#[test]
+fn a_failed_run_writes_no_dump() {
+    // `--dump-params` is written only once the run has passed, so a failed replay
+    // leaves the recipe it would rewrite as it was.
+    let tmp = TempDir::new("dump-after-success");
+    let scan = fixture("hdr-48bit.tif");
+    let older_version = pipeline_version_from_version_flag() - 1;
+    let older = format!(
+        r#"{{"meta": {{"pipeline_version": {older_version}}}, "params": {{"recipe_version": 3}}}}"#
+    );
+    let layer = write_file(&tmp.path("layer.json"), &older);
+    let l = layer.to_str().unwrap();
+    // The dump is staged before the frame; a failed run must not leave its temp behind.
+    let no_temp_left = || {
+        let left: Vec<_> = std::fs::read_dir(tmp.path("."))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.ends_with(".nctmp"))
+            .collect();
+        assert!(left.is_empty(), "staging temps left behind: {left:?}");
+    };
+    let replay = |extra: &[&str]| {
+        convert_p3(
+            &scan,
+            &tmp.path("out.tiff"),
+            &[&["--params", l, "--dump-params", l][..], &MEASURED, extra].concat(),
+        )
+    };
+    let (code, _, err) = replay(&["--strict"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains(&format!("pipeline_version {older_version}")),
+        "{err}"
+    );
+    assert_eq!(std::fs::read_to_string(&layer).unwrap(), older);
+    no_temp_left();
+    // Without `--strict` the run passes and re-stamps it.
+    let (code, _, err) = replay(&[]);
+    assert_eq!(code, 0, "{err}");
+    let restamped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&layer).unwrap()).unwrap();
+    assert_eq!(
+        restamped["meta"]["pipeline_version"],
+        older_version + 1,
+        "{restamped}"
+    );
+
+    // A frame that fails to decode writes none either.
+    let bad = write_file(&tmp.path("bad.tif"), "not a TIFF");
+    let dump = tmp.path("dump.json");
+    let (code, _, err) = convert_p3(
+        &bad,
+        &tmp.path("bad-out.tiff"),
+        &["--dump-params", dump.to_str().unwrap()],
+    );
+    assert_eq!(code, 3, "{err}");
+    assert!(!dump.exists(), "{err}");
+    no_temp_left();
+}
+
+#[test]
+fn an_unwritable_dump_fails_before_the_decode() {
+    // The dump is staged before the frame, so a path it cannot be written to fails the
+    // run up front rather than after a full render, leaving no image and no report.
+    let tmp = TempDir::new("dump-unwritable");
+    let out = tmp.path("out.tiff");
+    let report = tmp.path("report.json");
+    std::fs::create_dir(tmp.path("dir.json")).unwrap();
+    let read_only = write_file(&tmp.path("read-only.json"), "{}");
+    let mut cases = vec![
+        ("missing-dir/r.json", "r.json"),
+        ("dir.json", "a directory exists"),
+    ];
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // Root ignores the mode, and then nothing refuses the file.
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&read_only)
+            .is_err()
+        {
+            cases.push(("read-only.json", "not writable"));
+        }
+    }
+    for (name, expected) in cases {
+        let dump = tmp.path(name);
+        let (code, _, err) = convert_p3(
+            &fixture("hdr-48bit.tif"),
+            &out,
+            &[
+                "--dump-params",
+                dump.to_str().unwrap(),
+                "--report-file",
+                report.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(code, 5, "{name}: {err}");
+        assert!(err.contains(expected), "{name}: {err}");
+        assert!(!out.exists() && !report.exists(), "{name}: {err}");
+    }
+    assert_eq!(std::fs::read_to_string(&read_only).unwrap(), "{}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dump_linked_to_the_image_is_refused_before_the_decode() {
+    // The write-target guard cannot resolve a dangling symlink, so a dump linked to the
+    // output (or an output, or a report file, linked to the dump) is refused by where the
+    // dump lands — otherwise the dump, committed last, would replace it and the run pass.
+    let tmp = TempDir::new("dump-linked");
+    let image = tmp.path("img.tiff");
+    let link = tmp.path("link.json");
+    std::os::unix::fs::symlink(&image, &link).unwrap();
+    let dump = tmp.path("dump.json");
+    let linked_out = tmp.path("linked.tiff");
+    std::os::unix::fs::symlink(&dump, &linked_out).unwrap();
+    let linked_report = tmp.path("report.json");
+    std::os::unix::fs::symlink(&dump, &linked_report).unwrap();
+    // A case-only difference is the same file on a case-insensitive filesystem.
+    let case_link = tmp.path("case.json");
+    std::os::unix::fs::symlink(tmp.path("IMG.tiff"), &case_link).unwrap();
+    let (l, d, r, c) = (
+        link.to_str().unwrap(),
+        dump.to_str().unwrap(),
+        linked_report.to_str().unwrap(),
+        case_link.to_str().unwrap(),
+    );
+    for (out, extra) in [
+        (&image, vec!["--dump-params", l]),
+        (&linked_out, vec!["--dump-params", d]),
+        (&image, vec!["--dump-params", d, "--report-file", r]),
+        (&image, vec!["--dump-params", c]),
+    ] {
+        let (code, _, err) = convert_p3(&fixture("hdr-48bit.tif"), out, &extra);
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        assert!(err.contains("resolve to the same file"), "{err}");
+        assert!(!image.exists() && !dump.exists(), "{extra:?}: {err}");
+    }
+    let left: Vec<_> = std::fs::read_dir(tmp.path("."))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.ends_with(".nctmp"))
+        .collect();
+    assert!(left.is_empty(), "staging temps left behind: {left:?}");
+}
+
+#[test]
+fn measure_roll_out_states_the_decode_even_at_its_default() {
+    // The roll's gains are measured through the decode, so its file pins that decode
+    // whether or not a layer stated it: neither a moved default nor a layer below it
+    // stating another decode can render the gains under one they were not measured under.
+    let tmp = TempDir::new("measure-roll-decode");
+    let base = write_file(
+        &tmp.path("base.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+    );
+    let measured = tmp.path("roll.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--params",
+        base.to_str().unwrap(),
+        "--out",
+        measured.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let (code, params, err) = run(&["params"]);
+    assert_eq!(code, 0, "{err}");
+    let default_decode =
+        recipe_in(&serde_json::from_str(&params).unwrap())["reconstruction"].clone();
+    let written = written_recipe(&measured);
+    assert_eq!(written["reconstruction"], default_decode, "{written}");
+
+    let other = write_file(
+        &tmp.path("other-decode.json"),
+        r#"{"recipe_version": 3, "reconstruction": {"linearization": 2.0}}"#,
+    );
+    let (code, stdout, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("replay").to_str().unwrap(),
+        "--params",
+        other.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        json(&stdout)["recipe"]["reconstruction"],
+        default_decode,
+        "{stdout}"
+    );
 }
 
 #[test]

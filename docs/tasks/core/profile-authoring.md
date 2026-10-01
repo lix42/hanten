@@ -54,13 +54,16 @@ composing a real recipe means splicing the measured fragments in by hand.
 4. **Does a profile validate as a profile, or as a whole recipe?** A profile
    legitimately has no `calibration` section, so whole-recipe validation would
    reject every one of them.
+5. **Is a profile stamped?** Design-spec §8's replay contract makes every recipe
+   document hanten writes a stamped `{meta, params}` envelope, so a stamped
+   hand-edited look would warn after every `pipeline_version` bump.
 
 ## How to Verify
 
 - `hanten profile <overrides> --out look.jsonc` writes a file with no scan present,
   and that file is accepted by `--params` unchanged.
 - `hanten profile <look flags> --out look.jsonc` writes the same values
-  `convert --dump-params` writes today.
+  `convert --dump-params` writes today in its `params`.
 - The emitted comments survive a round trip *as comments in the file*, and the
   file still parses — the JSONC-is-a-superset claim, tested rather than assumed.
 - A contradictory override set (e.g. a sigmoid flag with an exponential curve) is
