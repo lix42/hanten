@@ -84,8 +84,11 @@ What other epics need to know about `core`:
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
   *before* any `--strict` gate, so the machine-readable record always lands and
-  the signal is the exit code. Known gap: the report and `hanten params` writes still
-  use `println!` and panic on a closed pipe (`core/stdout-broken-pipe-safety`).
+  the signal is the exit code. **Every stdout and stderr write goes through
+  `crate::stdio`** — never `println!`/`eprintln!`, which panic when the reader has
+  gone (`hanten … | head`). A closed pipe drops the write and the run carries on with
+  its own exit code; `SIGPIPE` stays ignored, because work follows the report
+  (`core/stdout-broken-pipe-safety`).
 - **lcms2 gotcha:** `transform_in_place` is infallible and Little CMS's default
   error handler silently swallows faults, so `cli` installs the *process-global*
   handler via `lcms2-sys` FFI at startup and `run_convert` checks the flag around
@@ -834,10 +837,43 @@ tables (a policy decision, which the new task owns).
 
 ## stdout-broken-pipe-safety
 
-**Status:** not started
-**Updated:** —
+**Status:** done (2026-10-01)
+**Updated:** 2026-10-01
 
 - Goal: Make every stdout write in `nc` tolerate a **closed pipe** without a panic or backtrace, exiting cleanly instead.
+
+### 2026-10-01 — research
+
+Reproduced on `b4a919a` with a pipe whose reader was closed before the spawn: `params`,
+`inspect`, `convert`, `measure-base` and `roll` all exited 101 with a backtrace;
+`measure-base --out` **lost its recipe** (written after the report); `--help` and
+`--version` were already fine (clap ignores the error). A closed **stderr** did the same
+under `-v` (exit 101, the panic message itself lost), and the lcms2 callback's
+`eprintln!` would abort, since a panic cannot unwind out of `extern "C"`.
+
+The task file's "clean exit, not a swallow" predates the commands that work after the
+report: `measure-base`/`measure-roll` write `--out`, `roll` gates failed frames,
+`convert` gates `--strict` and then writes telemetry. Restoring `SIGPIPE` would kill
+all of that at the report write and turn exits 0/1 into 141; it is also process-wide
+(the planned telemetry upload) and absent on Windows.
+
+### 2026-10-01 — executed
+
+- **Decisions (user, 2026-10-01):** stderr is in scope; the `--telemetry-file -` sink
+  is silent on a closed pipe like the report, not warned; a dropped write leaves one
+  `-v` line (`stdout's reader closed; the report was not read`) and nothing otherwise.
+- **`src/stdio.rs`**: `stdout_line` writes, newlines and flushes, returning
+  `Delivery::ReaderGone` for `BrokenPipe` (at any point, flush included) and the error
+  otherwise; `stderr_line` ignores every failure. `cli::print_stdout` maps a non-pipe
+  failure to `NcError::Write` (exit 5) — a full disk behind `>` used to panic too.
+- Every non-test `println!`/`eprintln!` in `cli.rs` and `main.rs` now goes through it:
+  `emit_json` (all five reports), `run_params`, the telemetry stdout sink, `Log`,
+  the lcms2 handler, the `--quiet` non-finite warning and `main`'s error line.
+- **Tests** (`tests/pipeline.rs`, end of file): `std::io::pipe()` with the reader dropped
+  before the spawn, so the closed pipe is deterministic. Covered: every stdout writer
+  exits 0 with its files written (the `measure-base` recipe included); `--strict` and a
+  failed roll frame still exit 1; the `-v` lines and no telemetry warning; a closed
+  stderr; `/dev/full` exits 5 (Linux only). All five tests fail on `b4a919a`.
 
 
 ## value-domain-terminology

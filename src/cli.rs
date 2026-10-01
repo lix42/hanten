@@ -15,7 +15,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Display;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -44,6 +43,7 @@ use crate::pipeline::{
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
+use crate::stdio::{self, Delivery};
 use crate::telemetry;
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseProvenance,
@@ -2208,7 +2208,9 @@ fn emit_json<T: Serialize>(
         None => {
             let json = serde_json::to_string_pretty(value)
                 .map_err(|e| NcError::Other(format!("serializing report: {e}")))?;
-            println!("{json}");
+            if print_stdout(&json, "the report")? == Delivery::ReaderGone {
+                log.info("stdout's reader closed; the report was not read");
+            }
             Ok(())
         }
     }
@@ -2238,7 +2240,7 @@ unsafe extern "C" fn cms_error_handler(
         // SAFETY: lcms2 passes a NUL-terminated C string for the message text.
         unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy()
     };
-    eprintln!("hanten: lcms2 error [{code}]: {msg}");
+    stdio::stderr_line(format_args!("hanten: lcms2 error [{code}]: {msg}"));
 }
 
 /// Install the process-global lcms2 error handler at startup. `pipeline::color`
@@ -2281,14 +2283,14 @@ impl Log {
     /// Progress line — only shown with `-v` (and never when `--quiet`).
     fn info(&self, msg: impl Display) {
         if !self.quiet && self.verbose >= 1 {
-            eprintln!("hanten: {msg}");
+            stdio::stderr_line(format_args!("hanten: {msg}"));
         }
     }
 
     /// Warning line — shown unless `--quiet` (the report keeps it either way).
     fn warn(&self, msg: &str) {
         if !self.quiet {
-            eprintln!("hanten: warning: {msg}");
+            stdio::stderr_line(format_args!("hanten: warning: {msg}"));
         }
     }
 
@@ -2299,7 +2301,7 @@ impl Log {
     /// [`warn`](Self::warn), which `--quiet` suppresses since the report still
     /// records them.
     fn warn_always(&self, msg: &str) {
-        eprintln!("hanten: warning: {msg}");
+        stdio::stderr_line(format_args!("hanten: warning: {msg}"));
     }
 }
 
@@ -2352,8 +2354,15 @@ fn run_params(args: &ParamsArgs) -> Result<()> {
     reject_new_flow(args.new_flow)?;
     let json = serde_json::to_string_pretty(&Recipe::default())
         .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
-    println!("{json}");
+    print_stdout(&json, "params")?;
     Ok(())
+}
+
+/// Print `json` to stdout through [`stdio::stdout_line`]: a closed pipe is not a
+/// failure (the run continues and keeps its exit code), any other write error is
+/// exit 5. `what` names the document in that error.
+fn print_stdout(json: &str, what: &str) -> Result<Delivery> {
+    stdio::stdout_line(json).map_err(|e| NcError::Write(format!("writing {what} to stdout: {e}")))
 }
 
 /// Best-effort stable key for path-collision checks. Canonicalize the path when
@@ -3279,10 +3288,10 @@ fn report_encode_outcome(
     // sure it is never fully silenced (the `--quiet --report none` combination
     // would otherwise suppress both channels of the warning above).
     if loss.non_finite > 0 && log.quiet {
-        eprintln!(
+        stdio::stderr_line(format_args!(
             "hanten: warning: {} non-finite (NaN/inf) output sample(s) — numerical fault",
             loss.non_finite
-        );
+        ));
     }
 }
 
@@ -6720,8 +6729,8 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
 /// had learned — and write it to the requested sink(s): the persistent JSONL log
 /// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`).
 /// `telemetry_log` is the log path resolved once, so the guarded and the written
-/// path are the same. Best-effort — every failure is warned on stderr and
-/// swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
+/// path are the same. Best-effort — every failure is warned on stderr (a closed
+/// stdout pipe is the reader leaving, not a failure) and swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
 /// a telemetry fault can change the run's exit code. This is the one documented
 /// deviation from the house fail-loudly rule (telemetry is non-critical
 /// observability). `error` is never read for its text: only its kind and exit code
@@ -6846,14 +6855,17 @@ fn emit_telemetry(
 
     if let Some(target) = args.telemetry_file.as_deref() {
         if target == "-" {
-            // `-` = stdout. Written fail-soft with `writeln!` (not `println!`,
-            // which panics on a broken pipe) so a closed stdout reader can't turn
-            // the run into a panic. Note: if the JSON report is also on stdout (the
-            // default), stdout then carries the report plus this one line — pair
+            // `-` = stdout. If the JSON report is also on stdout (the default),
+            // stdout then carries the report plus this one line — pair
             // `--telemetry-file -` with `--report none`/`--report-file` when a
-            // parser consumes stdout.
-            if let Err(e) = writeln!(std::io::stdout(), "{line}") {
-                warn(format!("telemetry: could not write to stdout: {e}"));
+            // parser consumes stdout. A closed pipe is the reader leaving, not a
+            // telemetry failure.
+            match stdio::stdout_line(&line) {
+                Ok(Delivery::Written) => {}
+                Ok(Delivery::ReaderGone) => {
+                    log.info("stdout's reader closed; the telemetry event was not read")
+                }
+                Err(e) => warn(format!("telemetry: could not write to stdout: {e}")),
             }
         } else if let Err(e) = telemetry::write_oneoff(Path::new(target), &line) {
             warn(format!("telemetry: could not write {target}: {e}"));

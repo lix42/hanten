@@ -21,6 +21,15 @@ itself fully succeeded.
 > the report write that panics first, which is why the telemetry-local fix is not
 > sufficient on its own.
 
+## Outcome (2026-10-01)
+
+Done; [the progress log](../../progress/core.md#stdout-broken-pipe-safety) has the
+decisions. Two bullets below were overtaken: the run **carries on** after a closed
+pipe rather than exiting at the write, and `SIGPIPE` was **not** restored —
+`measure-base`/`measure-roll` write `--out` after the report, and `roll`'s
+failed-frame gate, `--strict` and telemetry also follow it. Stderr was brought into
+scope.
+
 ## Design
 
 - **Inventory the stdout writers.** All go through `cli.rs`: `emit_report` (the

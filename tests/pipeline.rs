@@ -13089,3 +13089,200 @@ fn a_roll_flag_beats_a_frames_table_entry_as_on_convert() {
     let (_, convert_bytes) = convert_ok(&tmp, "flag", &["--params", m, "--roll-white", "3.0"]);
     assert!(bytes == convert_bytes);
 }
+
+// ---------------------------------------------------------------------------
+// A reader that goes away (`core/stdout-broken-pipe-safety`)
+// ---------------------------------------------------------------------------
+
+/// Which of the child's output streams [`run_reader_gone`] closes.
+#[derive(Clone, Copy)]
+enum Gone {
+    Stdout,
+    Stderr,
+}
+
+/// Run with one output stream a pipe whose reader has already exited — `hanten … |
+/// head` once `head` is done, made deterministic. Returns the exit code and the other
+/// stream.
+fn run_reader_gone(args: &[&str], gone: Gone) -> (i32, String) {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut cmd = Command::new(NC);
+    cmd.args(args);
+    match gone {
+        Gone::Stdout => cmd.stdout(writer),
+        Gone::Stderr => cmd.stderr(writer),
+    };
+    let out = cmd.output().expect("failed to spawn nc binary");
+    let other = match gone {
+        Gone::Stdout => out.stderr,
+        Gone::Stderr => out.stdout,
+    };
+    (
+        out.status.code().expect("process terminated by signal"),
+        String::from_utf8(other).unwrap(),
+    )
+}
+
+const BASE: [&str; 2] = ["--film-base", "0.9,0.55,0.42"];
+
+#[test]
+fn a_closed_stdout_is_not_a_failure_and_the_run_finishes() {
+    let tmp = TempDir::new("stdout-gone");
+    let fix = fixture("hdr-48bit.tif");
+    let fix = fix.to_str().unwrap();
+    let out = tmp.path("out.tiff");
+    let recipe = tmp.path("base.json");
+    let roll_recipe = tmp.path("roll.json");
+    let roll_dir = tmp.path("roll");
+    let runs: [Vec<&str>; 6] = [
+        vec!["params"],
+        vec!["inspect", fix],
+        [&["convert", fix, "-o", out.to_str().unwrap()][..], &BASE].concat(),
+        // `--out` is written after the report.
+        vec!["measure-base", fix, "--out", recipe.to_str().unwrap()],
+        [
+            &["measure-roll", fix, "--out", roll_recipe.to_str().unwrap()][..],
+            &BASE,
+        ]
+        .concat(),
+        [
+            &["roll", fix, "--out-dir", roll_dir.to_str().unwrap()][..],
+            &BASE,
+        ]
+        .concat(),
+    ];
+    for args in &runs {
+        let (code, err) = run_reader_gone(args, Gone::Stdout);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert!(!err.contains("panicked"), "{args:?}: {err}");
+        assert!(
+            !err.contains("reader closed"),
+            "silent without -v: {args:?}: {err}"
+        );
+    }
+    assert!(is_tiff(&out));
+    assert!(recipe.exists(), "measure-base's recipe is written");
+    assert!(roll_recipe.exists(), "measure-roll's recipe is written");
+    assert!(is_tiff(&roll_dir.join("hdr-48bit_positive.tiff")));
+}
+
+#[test]
+fn a_closed_stdout_keeps_the_runs_own_exit_code() {
+    let tmp = TempDir::new("stdout-gone-exit");
+    // `--strict` is gated after the report: the IR plane's warning fails it.
+    let fix = fixture("hdri-64bit.tif");
+    let out = tmp.path("out.tiff");
+    let args = [
+        &[
+            "convert",
+            fix.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ][..],
+        &BASE,
+        &["--strict"],
+    ]
+    .concat();
+    let (code, err) = run_reader_gone(&args, Gone::Stdout);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("--strict"), "{err}");
+
+    // A roll's failed frame is gated after the report too.
+    let good = fixture("hdr-48bit.tif");
+    let missing = tmp.path("does-not-exist.tif");
+    let roll_dir = tmp.path("roll");
+    let args = [
+        &[
+            "roll",
+            good.to_str().unwrap(),
+            missing.to_str().unwrap(),
+            "--out-dir",
+            roll_dir.to_str().unwrap(),
+        ][..],
+        &BASE,
+    ]
+    .concat();
+    let (code, err) = run_reader_gone(&args, Gone::Stdout);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("1 of 2 frame(s) failed"), "{err}");
+}
+
+#[test]
+fn a_closed_stdout_is_one_info_line_and_no_telemetry_warning() {
+    let tmp = TempDir::new("stdout-gone-telemetry");
+    let fix = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tiff");
+    let args = [
+        &[
+            "convert",
+            fix.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ][..],
+        &BASE,
+        &["--telemetry-file", "-", "-v"],
+    ]
+    .concat();
+    let (code, err) = run_reader_gone(&args, Gone::Stdout);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("the report was not read"), "{err}");
+    assert!(err.contains("the telemetry event was not read"), "{err}");
+    assert!(!err.contains("could not write"), "{err}");
+}
+
+#[test]
+fn a_closed_stderr_is_not_a_failure() {
+    let tmp = TempDir::new("stderr-gone");
+    let fix = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tiff");
+    // `-v` writes progress to stderr throughout the run.
+    let args = [
+        &[
+            "convert",
+            fix.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "-v",
+        ][..],
+        &BASE,
+    ]
+    .concat();
+    let (code, stdout) = run_reader_gone(&args, Gone::Stderr);
+    assert_eq!(code, 0);
+    assert_eq!(json(&stdout)["command"], "convert");
+    assert!(is_tiff(&out));
+
+    // The error message itself goes to stderr; the exit code still lands.
+    let (code, _) = run_reader_gone(&["params", "--new-flow"], Gone::Stderr);
+    assert_eq!(code, 2);
+}
+
+/// Any stdout failure other than a closed pipe is a write error. Linux only: macOS
+/// has no `/dev/full`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_is_a_write_error() {
+    let fix = fixture("hdr-48bit.tif");
+    let runs = [
+        (vec!["params"], "writing params to stdout"),
+        (
+            vec!["inspect", fix.to_str().unwrap()],
+            "writing the report to stdout",
+        ),
+    ];
+    for (args, message) in &runs {
+        let full = std::fs::File::options()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let out = Command::new(NC)
+            .args(args)
+            .stdout(full)
+            .output()
+            .expect("failed to spawn nc binary");
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(out.status.code(), Some(5), "{args:?}: {err}");
+        assert!(err.contains(message), "{args:?}: {err}");
+    }
+}

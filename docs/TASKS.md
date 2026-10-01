@@ -1308,10 +1308,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   measurement left, a `region` film base, is the one `roll` already warns about
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
 - [ ] [Recipe replay fidelity](tasks/core/recipe-replay-fidelity.md) — *re-scoped 2026-10-01*: the replay check reads `meta.pipeline_version` from an envelope, and since `pipeline_version` 8 nothing hanten writes is one (`--dump-params`, `measure-roll --out`), so a moved default replays silently; `roll.json` also omits the decode it measured under. Direction: stamp provenance into every written document and always write the decode into `roll.json`.
-- [ ] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
+- [x] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
   stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed
-  pipe (e.g. `hanten … | head`) without a panic/backtrace. Pre-existing on `main`, not
-  caused by the telemetry work.
+  pipe (e.g. `hanten … | head`) without a panic/backtrace. **Done 2026-10-01**: every
+  stdout and stderr write goes through `stdio`; a closed pipe drops the write and the
+  run carries on with its own exit code (`SIGPIPE` stays ignored, since `--out`,
+  the gates and telemetry come after the report); any other stdout failure is exit 5
 - [ ] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
 - [x] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
   hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image`
