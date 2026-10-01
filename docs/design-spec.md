@@ -611,7 +611,8 @@ bracketed calibration frames. Moving one moves every default pixel, so it costs 
 
 - **`d` is a calibration, not a brightness knob** (0.62, hand-frozen as `generic-c41`'s
   mid aim; stocks measure 0.54–0.70). Brightness is set in rendering: a roll's level
-  by its measured exposure (`roll.exposure`).
+  by its measured exposure (`roll.exposure`), and a low-key frame's by a small lift on
+  top (`roll.frame_exposure`).
 - **`gamma` split in two** (`nf-reconstruction/gamma-split`). Linearizing the film
   (≈1/0.55 ≈ 1.8) is calibration and stays as `reconstruction.linearization`; at 1.8
   the decode's output is scene-linear (double the exposure, double the value), which
@@ -1058,7 +1059,10 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5 --roll-exposure 0.455" } }
 # roll.json: { "recipe_version": 3, "calibration": { "film_base": { "explicit": [...] } },
 #   "roll": { "white_balance": [...], "white_stops": 1.5, "exposure": 0.455,
-#             "frames": { "f07.tif": { "white_stops": 2.0 } } } }   # a clamped frame
+#             "frame_exposure": null, "frame_lift": null,
+#             "frames": { "f07.tif": { "white_stops": 2.0, "exposure": null },     # clamped
+#                         "f12.tif": { "white_stops": null, "exposure": 0.3 } } } } # lifted
+# (`--no-frame-lift` writes no lifts; `convert`/`roll --frame-lift off` ignores them.)
 
 # Convert the roll from that one frozen recipe: SDR Display P3 16-bit TIFFs,
 # out/<stem>_positive.tiff. A look is its own layer, and a flag beats both.
@@ -1385,15 +1389,28 @@ is refused (exit 2), since it asks for something the run will not do.
   and `look.contrast` multiplies it. A higher white is a flatter picture.
 - `--roll-exposure EV` ⇒ `roll.exposure` — the roll's measured exposure, a neutral
   gain added to `scene_correction.exposure` (`2^EV` must be normal), so a frame darker
-  than its roll stays dark. It does not move `white_stops`, which is measured at
+  than its roll stays dark, beyond a bounded lift. It does not move `white_stops`, which is measured at
   exposure 0.
+- `--roll-frame-exposure EV` ⇒ `roll.frame_exposure` — this frame's own exposure, a
+  **delta** added to `roll.exposure`: the lift `measure-roll` gives a low-key frame
+  (`nf-calibration/frame-level-trim`), 0 to +0.3 EV, keyed on where the frame's white
+  renders after the roll's exposure. A delta, so it keeps its meaning when the roll is
+  re-measured. `roll` refuses it stated for the whole roll (a flag, or the shared
+  recipe), which would lift every frame alike.
+- `--frame-lift on|off` ⇒ `roll.frame_lift` (unset `null` is on, so `measure-roll`'s file, layered last, keeps an earlier `"off"`) — whether
+  `roll.frame_exposure` applies. Off keeps the measured lifts in the recipe, so one
+  frame or a whole roll can be compared without them and turned back on. Typed `off` is
+  spared by the roll-flag refusals under `direct` and the film master: it asks for
+  nothing.
 - `roll.frames` (no flag) maps a **file name** to that frame's own
-  `{"white_stops": …}` — the clamps `measure-roll --out` writes. `convert` and each
-  `roll` frame apply their input's entry before any flag, and a `--frames` manifest's
-  `params` beat it; a manifest may not state `roll.frames` itself.
+  `{"white_stops": …, "exposure": …}` (either may be `null`) — the clamps and lifts
+  `measure-roll --out` writes. `convert` and each `roll` frame move their input's entry
+  into `roll.white_stops` and `roll.frame_exposure` before any flag, and a `--frames`
+  manifest's `params` beat it; a manifest may not state `roll.frames` itself.
 
 The report's `chain.roll` states each value, the `slope` derived, and whether each was
-applied (`white_balance_applied`, `slope_applied`, `exposure_applied`). A rendered run
+applied (`white_balance_applied`, `slope_applied`, `exposure_applied`,
+`frame_exposure_applied`). A rendered run
 warns once where a recipe file's `scene_correction.white_balance` (not the identity)
 or non-zero `scene_correction.exposure` sits beside the roll's — a possible leftover
 (`Recipe::roll_overlap_warnings`) — and where a section with gains or a white has no
@@ -1444,8 +1461,8 @@ Per-channel gains on linear ACEScg, after the NC film RGB v1 3×3 and before the
   (`nf-scene-correction/roll-white-balance`) — a frame's own statistics read a sunset as
   the cast — and are refused by name.
 - `--exposure <stops>` ⇒ `scene_correction.exposure` (default `0`) — adds to
-  `roll.exposure`; the sum is applied as `2^EV`, and each gain times that resolved gain
-  must be a normal `f32`.
+  `roll.exposure` and the frame's `roll.frame_exposure`; the sum is applied as `2^EV`,
+  and each gain times that resolved gain must be a normal `f32`.
 
 The report's `chain.scene_correction` states the gains and the exposure applied.
 

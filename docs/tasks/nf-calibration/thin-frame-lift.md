@@ -70,9 +70,13 @@ Open:
 - **Colour.** Lifted, 1983 grew bluer (written blue 0.52 against red and green about
   0.30). The user judged this to be the scene, not a toe cast. So no cast appeared on
   these frames, but a thinner frame on another roll could still show one.
-- **Total or delta.** Whether a lifted frame's exposure in `roll.frames` replaces the roll's
-  or adds to it (on 2005: +2.26 total, or +0.86 over the roll). `roll-exposure` makes the
-  stated exposure add to the roll's, so the entry's merge must be pinned either way.
+- **Total or delta: settled, delta** (`frame-level-trim`, 2026-09-30): a `roll.frames`
+  entry's `exposure` adds to `roll.exposure` (on 2005: +0.86 over the roll, not +2.26).
+- **Coexisting with `frame-level-trim`'s lift.** Every frame this task targets already
+  gets that lift's full +0.3 EV. The solve places the white itself, so its exposure should
+  **replace** the small lift in the entry, not add to it. Open: whether `--frame-lift off`
+  / `roll.frame_lift` also turns off this task's slope, or the slope has its own switch.
+  Exposure off with the slope kept renders neither picture.
 - **Scope beyond thin frames.** The folded spike asked about any frame's own range,
   NLP-style (`docs/design-update.md` Appendix D), where a frame filled by one surface
   visibly fails. The appendix treats that collapse as an observation to explain, not as

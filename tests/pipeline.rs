@@ -9056,8 +9056,12 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         "{report}"
     );
 
+    // The fixture is low-key, so the frame is lifted and takes its own flags: the roll's,
+    // plus its lift.
+    let lift = report["frames"][0]["lift_ev"].as_f64().unwrap();
+    assert!(lift > 0.0, "{report}");
     let by_flag = tmp.path("flag.tiff");
-    let flag: Vec<&str> = report["reuse"]["flag"]
+    let flag: Vec<&str> = report["frames"][0]["flag"]
         .as_str()
         .unwrap()
         .split_whitespace()
@@ -9065,6 +9069,14 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(flag[0], "--roll-white-balance", "{report}");
     assert_eq!(flag[2], "--roll-white", "{report}");
     assert_eq!(flag[4], "--roll-exposure", "{report}");
+    assert_eq!(flag[6], "--roll-frame-exposure", "{report}");
+    assert!(
+        report["reuse"]["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&flag[..6].join(" ")),
+        "the roll's flag is the frame's without its lift: {report}"
+    );
     let (code, stdout, err) = run(&[
         &[
             "convert",
@@ -9095,12 +9107,23 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(roll["exposure"], report["exposure"]["ev"], "{converted}");
     assert_eq!(roll["exposure_applied"], true, "{converted}");
     assert_eq!(
-        converted["chain"]["scene_correction"]["exposure"], report["exposure"]["ev"],
-        "the flag's text round-trips the exposure exactly"
+        roll["frame_exposure"], report["frames"][0]["lift_ev"],
+        "the flag's text round-trips the lift exactly: {converted}"
+    );
+    assert_eq!(roll["frame_exposure_applied"], true, "{converted}");
+    let summed = (report["exposure"]["ev"].as_f64().unwrap() as f32) + lift as f32;
+    assert_eq!(
+        converted["chain"]["scene_correction"]["exposure"]
+            .as_f64()
+            .unwrap() as f32,
+        summed,
+        "the roll's exposure plus the frame's: {converted}"
     );
 
-    // The gains as a style knob: the section is where they live, not what they do.
+    // The gains as a style knob: the section is where they live, not what they do. The
+    // stated exposure starts the sum where the roll's would, then the lift adds.
     let as_style = tmp.path("style.tiff");
+    let lift_text = report["frames"][0]["lift_ev"].to_string();
     let gains_text = gains
         .iter()
         .map(|g| g.to_string())
@@ -9117,6 +9140,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         &gains_text,
         "--exposure",
         &exposure_text,
+        "--roll-frame-exposure",
+        &lift_text,
         "--roll-white",
         &stops_text,
         "-o",
@@ -9143,6 +9168,10 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     );
     assert_eq!(written["roll"]["white_stops"], report["white"]["stops"]);
     assert_eq!(written["roll"]["exposure"], report["exposure"]["ev"]);
+    assert_eq!(
+        written["roll"]["frames"]["hdr-48bit.tif"]["exposure"], report["frames"][0]["lift_ev"],
+        "{written}"
+    );
     assert!(
         report["reuse"].get("recipe").is_none(),
         "the recipe is the file, not a report field: {report}"
@@ -9956,7 +9985,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
 
     // The reuse forms: the roll's white by flag, and the whole measurement — the
     // clamped frame's own white (the cap) included — as the `--out` recipe, which
-    // `roll` renders with no manifest.
+    // `roll` renders with no manifest. Without lifts, so the table holds the clamp alone
+    // (`measure_roll_lifts_a_low_key_frame_…` covers them).
     assert!(
         report["reuse"]["flag"]
             .as_str()
@@ -9980,6 +10010,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         far.to_str().unwrap(),
         "--out",
         measured.to_str().unwrap(),
+        "--no-frame-lift",
     ]);
     assert_eq!(code, 0, "{err}");
     let written: serde_json::Value =
@@ -9987,8 +10018,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(written["roll"]["white_stops"], white["stops"], "{written}");
     assert_eq!(
         written["roll"]["frames"],
-        serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"]}}),
-        "keyed by file name, the clamped frame only: {written}"
+        serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"],
+            "exposure": null}}),
+        "keyed by file name, the clamped frame only (`--no-frame-lift`): {written}"
     );
     // The input it was decoded under travels too: these scans state no transfer.
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
@@ -10123,7 +10155,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
 
     // A roll whose every frame is above the cap lands on the cap: its frames are still
     // disclosed as clamped, but they render at the roll's own contrast, so the table
-    // names no frame.
+    // names no frame (without lifts: the roll's exposure binds at -2 EV, so this one
+    // frame would be lifted).
     let capped_recipe = tmp.path("capped.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
@@ -10134,6 +10167,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         far.to_str().unwrap(),
         "--out",
         capped_recipe.to_str().unwrap(),
+        "--no-frame-lift",
     ]);
     assert_eq!(code, 0, "{err}");
     let capped = json(&stdout);
@@ -10146,6 +10180,252 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         written["roll"]["frames"],
         serde_json::json!({}),
         "{written}"
+    );
+}
+
+#[test]
+fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
+    // `nf-calibration/frame-level-trim`: a night frame (~-1 stop), an ordinary one (~0)
+    // and a bright one (~+2.9) on one roll. The lift follows where each white renders
+    // after the roll's exposure: the night frame is held at the bound, the bright one is
+    // not lifted, and the report names each. Off at measurement (`--no-frame-lift`) and
+    // off at render (`--frame-lift off`, `roll.frame_lift`) render alike.
+    let tmp = TempDir::new("measure-roll-lift");
+    let base = [0.9f32, 0.55, 0.42];
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let (night, mid, bright, leader) = (
+        tmp.path("night.tif"),
+        tmp.path("mid.tif"),
+        tmp.path("bright.tif"),
+        tmp.path("leader.tif"),
+    );
+    write_uniform_density(&night, base, 0.45);
+    write_uniform_density(&mid, base, 0.62);
+    write_uniform_density(&bright, base, 1.1);
+    write_uniform_density(&leader, base, 1.5);
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let measure = |out: &Path, extra: &[&str]| {
+        let mut argv = vec![
+            "measure-roll".to_owned(),
+            "--params".to_owned(),
+            s(&recipe),
+            s(&night),
+            s(&mid),
+            s(&bright),
+            "--leader".to_owned(),
+            s(&leader),
+            "--out".to_owned(),
+            s(out),
+        ];
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{err}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap();
+        (json(&stdout), written)
+    };
+
+    let lifted = tmp.path("lifted.json");
+    let (report, written) = measure(&lifted, &[]);
+    let lift = |i: usize| report["frames"][i]["lift_ev"].as_f64().unwrap();
+    let bound = report["frame_lift"]["bound_ev"].as_f64().unwrap();
+    assert!(
+        (lift(0) - bound).abs() < 1e-6,
+        "held at the bound: {report}"
+    );
+    assert!(lift(1) > 0.0 && lift(1) <= bound, "{report}");
+    assert_eq!(lift(2), 0.0, "a bright frame is not lifted: {report}");
+    assert_eq!(report["frame_lift"]["written"], true, "{report}");
+    assert_eq!(report["frame_lift"]["lifted"], 2, "{report}");
+    let frames = &written["roll"]["frames"];
+    assert_eq!(
+        frames["night.tif"]["exposure"],
+        report["frames"][0]["lift_ev"]
+    );
+    assert_eq!(
+        frames["mid.tif"]["exposure"],
+        report["frames"][1]["lift_ev"]
+    );
+    assert!(
+        frames["bright.tif"]["exposure"].is_null(),
+        "only its clamp: {written}"
+    );
+    assert!(
+        report["frames"][0]["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("--roll-frame-exposure {}", lift(0) as f32))
+    );
+
+    // `roll` reports each frame's lift as applied.
+    let out = tmp.path("out");
+    let (code, stdout, err) = run(&[
+        "roll",
+        &s(&night),
+        &s(&mid),
+        &s(&bright),
+        "--params",
+        &s(&lifted),
+        "-o",
+        &s(&out),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let rolled = json(&stdout);
+    let chain_roll = |path: &Path| {
+        rolled["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["input"] == path.to_str().unwrap())
+            .map(|f| f["chain"]["roll"].clone())
+            .unwrap()
+    };
+    assert_eq!(
+        chain_roll(&night)["frame_exposure"],
+        report["frames"][0]["lift_ev"],
+        "{rolled}"
+    );
+    assert_eq!(chain_roll(&night)["frame_exposure_applied"], true);
+    assert!(chain_roll(&bright)["frame_exposure"].is_null(), "{rolled}");
+
+    // Off three ways, one picture: measured without lifts, turned off by flag, and
+    // turned off by a recipe layer.
+    let unlifted = tmp.path("unlifted.json");
+    let (report_off, written_off) = measure(&unlifted, &["--no-frame-lift"]);
+    assert_eq!(report_off["frame_lift"]["written"], false, "{report_off}");
+    assert_eq!(
+        report_off["frames"][0]["lift_ev"], report["frames"][0]["lift_ev"],
+        "still reported: {report_off}"
+    );
+    assert!(
+        written_off["roll"]["frames"].get("night.tif").is_none(),
+        "{written_off}"
+    );
+    let off_layer = write_file(
+        &tmp.path("off.json"),
+        r#"{"recipe_version": 3, "roll": {"frame_lift": "off"}}"#,
+    );
+    let convert = |name: &str, extra: &[&str]| {
+        let output = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            night.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{err}");
+        (std::fs::read(&output).unwrap(), json(&stdout))
+    };
+    let (on, on_report) = convert("on.tiff", &["--params", &s(&lifted)]);
+    let (never, _) = convert("never.tiff", &["--params", &s(&unlifted)]);
+    let (by_flag, flag_report) = convert(
+        "flag.tiff",
+        &["--params", &s(&lifted), "--frame-lift", "off"],
+    );
+    let (by_key, _) = convert(
+        "key.tiff",
+        &["--params", &s(&lifted), "--params", &s(&off_layer)],
+    );
+    assert_ne!(on, never, "not vacuous: the lift moved the picture");
+    assert_eq!(
+        by_flag, never,
+        "`--frame-lift off` renders the unlifted recipe"
+    );
+    assert_eq!(
+        by_key, never,
+        "`roll.frame_lift` off renders the unlifted recipe"
+    );
+    // The measured file states no `frame_lift`, so layered last it keeps an earlier off.
+    assert!(written["roll"]["frame_lift"].is_null(), "{written}");
+    let (key_first, _) = convert(
+        "key-first.tiff",
+        &["--params", &s(&off_layer), "--params", &s(&lifted)],
+    );
+    assert_eq!(
+        key_first, never,
+        "an off layer before the measured file holds"
+    );
+    assert_eq!(
+        on_report["chain"]["roll"]["frame_exposure_applied"], true,
+        "{on_report}"
+    );
+    assert_eq!(
+        flag_report["chain"]["roll"]["frame_exposure"], report["frames"][0]["lift_ev"],
+        "kept in the recipe: {flag_report}"
+    );
+    assert_eq!(
+        flag_report["chain"]["roll"]["frame_exposure_applied"], false,
+        "{flag_report}"
+    );
+}
+
+#[test]
+fn frame_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_exposure() {
+    let tmp = TempDir::new("frame-lift-rules");
+    // `off` asks for nothing, so neither `direct` nor the film master refuses it.
+    for (name, extra) in [
+        ("direct.tiff", &["--rendering", "direct"][..]),
+        ("master.tiff", &["--film-master"][..]),
+    ] {
+        let (code, _, err) =
+            convert_48bit(&tmp.path(name), &[extra, &["--frame-lift", "off"]].concat());
+        assert_eq!(code, 0, "{name}: {err}");
+    }
+    // `on` asks for a lift the film master would ignore, and is named as typed.
+    let (code, _, err) = convert_48bit(
+        &tmp.path("on.tiff"),
+        &["--film-master", "--frame-lift", "on"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "--frame-lift on applies the roll's measurements through the rendering \
+                      stages, but --film-master writes"
+        ) && err.contains("drop --film-master"),
+        "{err}"
+    );
+    assert!(!err.contains("recipe's `output`"), "{err}");
+
+    // On `roll`, one frame's exposure stated for all lifts every frame alike.
+    let input = fixture("hdr-48bit.tif");
+    let input = input.to_str().unwrap();
+    let out = tmp.path("out");
+    let (code, _, err) = run(&[
+        "roll",
+        input,
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--roll-frame-exposure",
+        "0.2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-exposure is one frame's own exposure, and on `roll`"),
+        "{err}"
+    );
+    let dumped = write_file(
+        &tmp.path("dumped.json"),
+        r#"{"recipe_version": 3, "roll": {"exposure": 0.5, "frame_exposure": 0.2}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        input,
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        dumped.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("the recipe's `roll.frame_exposure` is one frame's own exposure"),
+        "{err}"
     );
 }
 
@@ -10268,11 +10548,20 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
         1,
         "not vacuous: one frame is clamped: {by_hand}"
     );
+    // Each frame's lift as its own `roll.frame_exposure`; both frames are lifted here.
+    let lift = |i: usize| by_hand["frames"][i]["lift_ev"].clone();
+    assert!(
+        (0..2).all(|i| lift(i).as_f64().unwrap() > 0.0),
+        "not vacuous: {by_hand}"
+    );
     let manifest = write_file(
         &tmp.path("frames.json"),
         &serde_json::json!({"frames": [
-            {"input": dim},
-            {"input": bright, "params": {"roll": {"white_stops": by_hand["white"]["rule"]["cap_stops"]}}},
+            {"input": dim, "params": {"roll": {"frame_exposure": lift(0)}}},
+            {"input": bright, "params": {"roll": {
+                "white_stops": by_hand["white"]["rule"]["cap_stops"],
+                "frame_exposure": lift(1),
+            }}},
         ]})
         .to_string(),
     );
