@@ -1139,9 +1139,9 @@ hanten inspect in.tif --report json
 Every conversion flag has a recipe key (for example, `--exposure` ⇒
 `scene_correction.exposure`), and flags win over the recipe (§8). Names are binding and
 unknown keys are rejected (`deny_unknown_fields`). The **operational** flags
-(`--report`, `--telemetry*`, `--max-memory`, `--export-film-rgb`) are the exception: they touch no
-parameter at all, so they have no recipe key. Retired flags and keys are listed at the
-end of this section.
+(`--report`, `--telemetry*`, `--max-memory`, `--export-film-rgb`, `--export-pre-encode`) are
+the exception: they touch no parameter at all, so they have no recipe key. Retired flags
+and keys are listed at the end of this section.
 
 ### Input / decode
 - `--export-ir <path>` — write the IR plane to a separate TIFF (HDRi only).
@@ -1156,6 +1156,12 @@ end of this section.
   point for per-layer measurement (`nctool metrics --space film-rgb`). Reported as
   `film_rgb_exported`; per-frame exports from `roll` are
   `nf-verification/roll-side-exports`.
+- `--export-pre-encode <path>` (`convert` only; operational, no recipe key) — write what
+  the destination's encoder receives, one untagged TIFF page per buffer: the linear
+  rendition before any transfer (both, for the gain map) and the gain map's codes
+  before its JPEG. The reference `nctool acceptance` checks an independent decode of the
+  output against (`analysis/display-acceptance-harness`). Reported as
+  `pre_encode_exported`.
 - `--film-type <silver|chromogenic|unknown>` ⇒ `input.film_type` (default
   `"unknown"`) — the declared film chemistry. **Provenance only: it gates nothing.**
   IR-assisted film-holder detection (§6.1) is enabled by *measuring* the IR plane,

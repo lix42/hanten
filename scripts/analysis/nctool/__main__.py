@@ -1,12 +1,13 @@
 """`python -m nctool` entry point.
 
-Five command groups: `manifest` (generate / validate / roles / patches), `compare`
+Six command groups: `manifest` (generate / validate / roles / patches), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
-converted image, whatever produced it), and `review` (render a described matrix
-of conversions into a review set for `tools/review-app`).
+converted image, whatever produced it), `review` (render a described matrix
+of conversions into a review set for `tools/review-app`), and `acceptance`
+(decode every encoding without nc and check it against nc's pre-encode buffers).
 
-`metrics` is the one group that needs third-party packages; see
+`metrics` and `acceptance` need third-party packages; see
 `scripts/analysis/requirements.txt`. Importing the module is still free — it
 pulls `numpy`/`tifffile` inside the functions that touch pixels — so a checkout
 without the venv builds the same parser and gets a real error only if it runs the
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from . import acceptance as _acceptance
 from . import compare as _compare
 from . import manifest as _manifest
 from . import metrics as _metrics
@@ -298,6 +300,38 @@ def build_parser() -> argparse.ArgumentParser:
                       help="re-measure every rendition even when a stored record "
                            "already describes those exact bytes")
     rgen.set_defaults(func=_review.cmd_generate)
+
+    # --- acceptance: independent decode-back oracles --------------------------
+    acc = sub.add_parser(
+        "acceptance",
+        help="decode every output encoding without nc and check it against the "
+             "buffers nc's encoders received")
+    asub = acc.add_subparsers(dest="cmd", required=True)
+    arun = asub.add_parser("run", help="convert the acceptance cases and write the result")
+    arun.add_argument("--nc", required=True,
+                      help="path to the hanten binary under acceptance (explicit, never "
+                           "auto-discovered)")
+    arun.add_argument("--manifest", default=_acceptance.MANIFEST,
+                      help="acceptance manifest (default: scripts/analysis/acceptance.json)")
+    arun.add_argument("--benchmark", default=_compare.BENCHMARK,
+                      help="benchmark manifest the cases come from (default: "
+                           "scripts/analysis/benchmark.json)")
+    arun.add_argument("--case", action="append",
+                      help="run only this case (repeatable)")
+    arun.add_argument("--out", help="write the result here (default: stdout)")
+    arun.add_argument("--golden", help="also compare each case's canonical buffer, file and "
+                                       "metadata against this golden (same machine only)")
+    arun.add_argument("--write-golden", metavar="PATH",
+                      help="write this run as the golden; an existing golden's changed "
+                           "entries are kept under `previous`")
+    arun.set_defaults(func=_acceptance.cmd_run)
+
+    achart = asub.add_parser("chart", help="write the synthetic acceptance chart")
+    achart.add_argument("--out", default=_acceptance.CHART,
+                        help="where to write it (default: tests/fixtures/chart-48bit.tif)")
+    achart.add_argument("--check", action="store_true",
+                        help="check the file at --out matches the generator instead")
+    achart.set_defaults(func=_acceptance.cmd_chart)
 
     return ap
 

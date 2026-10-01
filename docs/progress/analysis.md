@@ -23,11 +23,11 @@ What other epics need to know about `analysis`:
   `scripts/`, and the hard invariant is that **only derived numbers and
   downscaled thumbnails leave the tools** — never sample pixels into context.
   Metadata comes from `nc inspect`; bytes are streamed only to hash.
-- **`nctool metrics` reads output pixels (2026-09-02), and is the toolkit's only
-  command that does.** Every other number here comes from `nc`'s own JSON report
+- **`nctool metrics` reads output pixels (2026-09-02)**, as does `acceptance` (below);
+  every other number here comes from `nc`'s own JSON report
   and therefore exists only for nc outputs; `metrics` measures any producer's
-  image — NLP, SmartConvert, a hand-edited export — on the same footing. It is
-  also the only command that is not stdlib-only (`numpy`, `tifffile`, via
+  image — NLP, SmartConvert, a hand-edited export — on the same footing. Those two
+  are the commands that are not stdlib-only (`numpy`, `tifffile`, via
   `scripts/analysis/requirements.txt`, plus `Pillow` for JPEG; CI installs them into
   a venv and sets `NCTOOL_REQUIRE_DEPS=1`). It still emits derived numbers only. `metrics image`
   measures one file; `metrics roll` measures a converted roll and rolls the scalars
@@ -39,6 +39,11 @@ What other epics need to know about `analysis`:
   stops); `cast_by_tone_band` is the **crossover** detector, the one colour number
   a negative conversion turns on; and a roll's spread is **not attributable** to
   the calibration, because scene content is mixed into it.
+- **Every encoding is decode-checked without nc (2026-10-01).** `nctool acceptance run`
+  converts the benchmark's fixture cases (plus a synthetic chart) with `hanten convert
+  --export-pre-encode`, decodes each output from the standards, and checks it against
+  the buffers its encoder received; `scripts/analysis/acceptance.json` holds the bounds.
+  `display-output-acceptance` runs it on real scans.
 - **Comparing renders by eye is one command (2026-09-12).** `nctool review generate
   <matrix.json>` renders every (frame x config) cell a matrix names, writes each rendition's
   `nctool metrics` record beside it, and emits the `review.json` that `tools/review-app`
@@ -1135,13 +1140,115 @@ What other epics need to know about `analysis`:
 
 ## display-acceptance-harness
 
-**Status:** not started
+**Status:** done (2026-10-01)
 **Updated:** 2026-10-01
 
 - 2026-10-01: Split out of `display-output-acceptance`: build the manifest-driven
   harness and the independent decode-back oracles that task specifies, proven on
   fixtures, so the real-scan run needs only the assets. Waits on
   `nf-verification/benchmark-set` for the case list.
+
+### 2026-10-01 — implemented
+
+- **`hanten convert --export-pre-encode PATH`** writes the canonical buffers: an
+  untagged TIFF, one page per buffer, each page's `ImageDescription` naming its
+  `buffer` and `space` — `film-master`, `sdr-linear`, `hdr-linear` (1.0 = 203 cd/m²,
+  after the peak clamp), and for the gain map both renditions plus `gain-map-codes`
+  (pre-JPEG). It writes buffers the render already holds, so `pipeline::memory` gains
+  no term; the gain map now drops its HDR rendition after the map is built rather than
+  before, which the model already summed. Timed as `destination`.
+- **`nctool acceptance run`** converts every `benchmark.json` `fixtures` case (no second
+  case list) plus their copies on a synthetic chart (`nctool.chart`,
+  `tests/fixtures/chart-48bit.tif`), runs each twice, and writes a JSON result. Decoders
+  are written from the standards in `nctool.icc`, `rec2100`, `gainmap` and `cie`; JPEG
+  is Pillow's libjpeg-turbo. CI needs nothing new.
+- **User decisions:** the export is a flag, not an `NC_*` variable; the gain map is gated
+  at its own grid (below); determinism, cross-encoding ΔE and the ramp/saturated-patch
+  bounds are in scope; independent decoders are numpy code plus Pillow. AVIF was planned
+  (avifdec/dav1d) and dropped when `output/drop-avif` landed mid-task.
+- **Measured on the fixtures (aarch64-apple-darwin):** film master, HDR linear and the
+  chart's HDR TIFFs bit-identical; SDR TIFF max 1 code, on 0.3–0.5 % of pixels against
+  the standard curve (30 % against the profile's own s15Fixed16-rounded curve, which is
+  why the oracle uses the standard's and checks the profile separately); PQ/HLG TIFF max
+  1 code; gain-map grid max 0.49999 step; base JPEG max 21 / RMS 2.7 codes on the scan, 1 /
+  0.5 on the chart; map JPEG max 22 / RMS 1.9. JPEG bounds are those with ~25 % headroom.
+  The whole run is ~7 s on the debug build.
+- **The gain map's full-resolution reconstruction cannot meet the spec bound.** From the
+  pre-JPEG base and map, 60 % of pixels miss max(0.02 nit, 0.5 %), worst 29 %; with the
+  exact linear SDR as base, still 13 %. The cause is the half-resolution map against
+  grain-scale gain. Gated instead: the map's gains, decoded from the file's ISO metadata
+  and the pre-JPEG codes, against the gains this harness derives from the two renditions
+  resampled to the map grid — within ½ step everywhere, i.e. exact quantization.
+- **The spec's cross-encoding bound is beyond 8 bits.** On the chart's untouched patches
+  every 16-bit and float encoding is within ΔE00 0.011; quantizing the gain-map base to 8
+  bits alone reaches 0.52, its JPEG 1.39, and its HDR rendition's neutral Δu'v' 2.5×10⁻³.
+  The canonical buffers of all four renders are identical, so this is precision, not
+  rendering. The gain map has a manifest allowance (ΔE00 2.0, Δu'v' 0.004).
+- **Found, not fixed: MaxCLL / MaxFALL are luminance, not CTA-861.3's max(R, G, B).**
+  `hdr::measure_content_light` takes BT.2020 luminance; CTA-861.3 (and x265) take each
+  pixel's largest component. The AVIF `clli` box that exposed it is gone; the HDR TIFF
+  reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning still use it,
+  under names a reader takes for CTA-861.3's. Filed as `output/content-light-levels`.
+- **The chart is a negative of chosen film-RGB values** (the decode's documented line,
+  inverted), on unexposed base; it needs `--input-transfer linear --input-meaning
+  scanner-device`. Neutral steps below −3 stops decode above the film base and clip, so
+  the ramp is −3..+4. Its muted patches and the ramp to +1 stop are untouched by every
+  destination's tone and gamut mapping (ΔE00 0.00 between SDR and HDR canonicals).
+- **For `display-output-acceptance`:** its task file now says which oracles the harness
+  changed. Goldens are per machine (`--write-golden`, then `--golden`).
+
+### 2026-10-01 — review fixes
+
+- **The coded-HDR profile's `A2B0` is evaluated**, the path a CICP-unaware ICC reader
+  decodes through: M curves, matrix, B curves (`icc.eval_lut_atob`), against BT.2100 in
+  the D50 PCS (Bradford). PQ maps to `Y = L / 203`, HLG (scene-referred) to scene light
+  with reference white at 1. Two facts it needed: PCSXYZ holds no negatives, so a
+  saturated red's adapted Z clips to 0; and the profiles' 1024-entry curves leave PQ
+  ~0.07 cd/m² off near black, so the bound's absolute term is 0.1 cd/m².
+- **Goldens:** `--write-golden` keeps the cases a run did not cover, keeps a changed
+  entry's old values under `previous` and an unchanged entry's `previous` as it was, and
+  refuses to write from a failed run.
+- Also: TIFF layout (photometric, planar, compression, page count) is checked; a
+  malformed output is a failed `decode` check, not a crash; a build without the export
+  is refused before converting (exit 2); the gain-map window follows the whole-map flat
+  rule; a negative or non-finite rendition sample fails; the film master is held to bit
+  identity; the grid gate's f32 slack is a log2 tolerance (1e-5), not a widened step
+  bound; a cross-encoding group with no reference is recorded as skipped.
+
+### 2026-10-01 — code-review fixes
+
+- **A rendition sample an ulp below zero is legitimate.** `gain_ratio::between`
+  documents fit gamut leaving about −1e-17 where two channels tie on the black face, and
+  clamps it; the oracle now fails only non-finite samples and negatives past
+  `gain_map.negative_tolerance` (1e-6). Without this a real scan could fail a correct
+  file.
+- **Bit identity is gated** for the film master and HDR linear TIFF (`bit_identical` in
+  their bounds): a zero bound cannot see a flipped sign of zero or a rewritten NaN.
+- **Re-baselining works**: `--write-golden` waits on the oracles (`checks_passed`), not
+  on the golden comparison, so `--golden G --write-golden G` records a deliberate change.
+- Also: the base's ISO version payload must be 0/0, not merely four bytes; a missing
+  profile in the light decode is a decode fault, not a crash; a missing `--golden`, a
+  non-JSON report or an empty case list exits 2; the determinism rerun hashes only
+  (byte-identical encodings), and each case reads its pre-encode file once; a patch
+  with undefined u'v' keeps its row.
+
+### 2026-10-01 — done
+
+- **Landed:** `convert --export-pre-encode`; `nctool acceptance {run,chart}` with
+  `acceptance.json`, the chart fixture, and decoders in `nctool.{icc,rec2100,gainmap,cie}`.
+  Every fixture case passes; each oracle fails its corruption test (wrong ICC, swapped
+  LUT, moved APP segment, swapped channel, shifted code, sign-flipped zero, base ISO
+  version). A missing venv, golden or output path exits 2.
+- **Gates** (aarch64-apple-darwin, rustc 1.99.0): fmt, machete, clippy, build, doc,
+  `cargo test` 675 + 238 + 20, nctool 523. Reviewed by `nc-reviewer`, `/code-review`,
+  `ship:diff-reviewer` and Codex; all findings fixed. `telemetry_upload`'s
+  `a_refused_convert_is_a_parse_failure_event` times out under load (load average
+  15–25): 2/12 runs here, 1/12 on origin/main — pre-existing, not this change.
+- **For `display-output-acceptance`:** add the real scans as an `inputs` entry, run
+  `--write-golden` once on the acceptance machine, then `--golden`. Two things to plan
+  for: the gain-map oracle holds about ten full-frame float64 arrays (≈4–5 GB at
+  18.7 MP), and the cross-platform margins are reasoned, not observed — this ran on
+  aarch64 only, so the first Linux CI run is the check.
 
 
 ## viewer-interoperability

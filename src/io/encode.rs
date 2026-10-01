@@ -23,7 +23,7 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
-use tiff::encoder::colortype::{ColorType, Gray16, Gray32Float, RGB16, RGB32Float};
+use tiff::encoder::colortype::{ColorType, Gray16, Gray32Float, RGB8, RGB16, RGB32Float};
 use tiff::encoder::{TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard, TiffValue};
 use tiff::tags::Tag;
 
@@ -88,6 +88,122 @@ pub fn encode_film_rgb(film: &FilmRgbImage, path: &Path) -> Result<Staged> {
         write_rgb_f32(writer, w, h, film.rgb(), big, None)
     })?;
     Ok(staged)
+}
+
+/// The samples of one `--export-pre-encode` page.
+#[derive(Clone, Copy)]
+pub enum PreEncodeSamples<'a> {
+    /// Linear RGB, written verbatim as f32.
+    F32(&'a [f32]),
+    /// 8-bit RGB codes (the gain map before its JPEG).
+    U8(&'a [u8]),
+}
+
+/// One page of a `--export-pre-encode` file: a buffer an encoder receives.
+#[derive(Clone, Copy)]
+pub struct PreEncodePage<'a> {
+    /// What the buffer is, e.g. `sdr-linear`; the page's `ImageDescription` names it.
+    pub buffer: &'static str,
+    /// The space its samples are in, e.g. `display-p3`.
+    pub space: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub samples: PreEncodeSamples<'a>,
+}
+
+impl<'a> PreEncodePage<'a> {
+    /// Interleaved f32 RGB as a page.
+    pub fn rgb_f32(
+        buffer: &'static str,
+        space: &'static str,
+        width: u32,
+        height: u32,
+        rgb: &'a [f32],
+    ) -> Self {
+        Self {
+            buffer,
+            space,
+            width,
+            height,
+            samples: PreEncodeSamples::F32(rgb),
+        }
+    }
+
+    /// A linear image's RGB as an f32 page.
+    pub fn f32(buffer: &'static str, space: &'static str, image: &'a LinearImage) -> Self {
+        Self::rgb_f32(buffer, space, image.width, image.height, &image.rgb)
+    }
+}
+
+/// Write the buffers the destination encoder receives (`--export-pre-encode`), one
+/// untagged TIFF page each, in order. Each page's `ImageDescription` is a JSON object
+/// naming its `buffer` and `space`, so a reader never infers which page is which. The
+/// decode-back oracles (`nctool acceptance`) compare an independent decode of the
+/// output against these.
+pub fn export_pre_encode(pages: &[PreEncodePage<'_>], path: &Path) -> Result<Staged> {
+    let bytes: u64 = pages
+        .iter()
+        .map(|p| match p.samples {
+            PreEncodeSamples::F32(s) => s.len() as u64 * 4,
+            PreEncodeSamples::U8(s) => s.len() as u64,
+        })
+        .sum();
+    let big = bytes.saturating_add(BIGTIFF_MARGIN_BYTES) > CLASSIC_TIFF_LIMIT;
+    let (staged, ()) = staged::stage(path, |writer| {
+        if big {
+            write_pre_encode_pages(TiffEncoder::new_big(writer)?, pages)
+        } else {
+            write_pre_encode_pages(TiffEncoder::new(writer)?, pages)
+        }
+    })?;
+    Ok(staged)
+}
+
+fn write_pre_encode_pages<W: Write + Seek, K: TiffKind>(
+    mut encoder: TiffEncoder<W, K>,
+    pages: &[PreEncodePage<'_>],
+) -> Result<()> {
+    for page in pages {
+        let description = serde_json::json!({
+            "nc_pre_encode": 1,
+            "buffer": page.buffer,
+            "space": page.space,
+        })
+        .to_string();
+        match page.samples {
+            PreEncodeSamples::F32(data) => {
+                write_described_page::<_, _, RGB32Float>(&mut encoder, page, &description, data)
+            }
+            PreEncodeSamples::U8(data) => {
+                write_described_page::<_, _, RGB8>(&mut encoder, page, &description, data)
+            }
+        }?;
+    }
+    Ok(())
+}
+
+fn write_described_page<W, K, C>(
+    encoder: &mut TiffEncoder<W, K>,
+    page: &PreEncodePage<'_>,
+    description: &str,
+    data: &[C::Inner],
+) -> Result<()>
+where
+    W: Write + Seek,
+    K: TiffKind,
+    C: ColorType,
+    [C::Inner]: TiffValue,
+{
+    let mut image = encoder
+        .new_image::<C>(page.width, page.height)
+        .map_err(|e| NcError::Write(format!("starting TIFF page: {e}")))?;
+    image
+        .encoder()
+        .write_tag(Tag::ImageDescription, description)
+        .map_err(|e| NcError::Write(format!("writing TIFF page description: {e}")))?;
+    image
+        .write_data(data)
+        .map_err(|e| NcError::Write(format!("writing TIFF sample data: {e}")))
 }
 
 /// Write interleaved f32 RGB verbatim, as classic or BigTIFF, embedding `icc` when

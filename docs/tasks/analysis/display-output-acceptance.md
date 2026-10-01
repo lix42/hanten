@@ -25,7 +25,8 @@ case: the source asset ID and hash (never the asset), the resolved recipe and it
 hash, `pipeline_version`, `working_mapping`, the destination (four axes or
 `--film-master`), the rendering, the expected container and signalling, a canonical
 pre-encode buffer hash, a golden metadata dump, the independent decoder and its
-version, and the numeric tolerances. A changed golden needs an explicit reviewed
+version, and the numeric tolerances. (As built, the buffer and metadata hashes live in
+a per-machine golden, not the checked-in manifest; see "Automated oracles".) A changed golden needs an explicit reviewed
 update recording old and new metrics. The case list should be
 `nf-verification/benchmark-set`'s, extended rather than duplicated.
 
@@ -61,6 +62,13 @@ For representative colour and HDR frames:
 
 ### Automated oracles
 
+`analysis/display-acceptance-harness` built these as `nctool acceptance`
+(`scripts/analysis/README.md`); its manifest, `scripts/analysis/acceptance.json`, holds
+the bounds. Running on real scans adds an `inputs` entry and a `--write-golden` run on
+the acceptance machine: canonical buffers differ by target, so goldens are
+per-machine, never committed for CI. Where the harness departed from the list below, the
+bullet says so.
+
 All comparisons start from the manifest's canonical buffers and use a decoder
 independent of nc:
 
@@ -69,15 +77,21 @@ independent of nc:
   exactly.
 - 16-bit SDR TIFF: after independent ICC/transfer decode to linear destination RGB,
   each channel differs by at most 1 code value when re-quantized to 16 bits.
-- HDR float TIFF and PQ/HLG TIFF: bounds pinned by the harness task from each
-  encoder's contract.
+- HDR float TIFF: bit-identical to the canonical buffer (the encoder writes it
+  verbatim). PQ/HLG TIFF: BT.2100 of the canonical buffer in binary64, quantized to 16
+  bits, within 1 code.
 - Lossy 8-bit JPEG (the gain-map base): compare the independent decode with the
   canonical encoded base using pinned max/RMS error, structural, neutral-ramp and
   saturated-patch bounds. A universal one-code bound is not valid for JPEG. Record the
   codec version, quality, chroma mode and every threshold in the manifest.
 - Gain-map reconstruction: an independent ISO 21496-1 implementation reconstructs the
   canonical HDR rendition and declared headroom within max(0.02 nit, 0.5 % relative)
-  per channel, with the three channels read separately. The oracle converts both
+  per channel, with the three channels read separately. **The harness gates this at the
+  map's own grid** instead: the half-resolution map cannot match the rendition pixel
+  for pixel (on the fixture, 60 % of pixels miss the bound before any JPEG), so the
+  gains decoded from the file's metadata and the pre-JPEG codes must lie within ½ code
+  step of the canonical gains resampled to the map grid, and the full-resolution
+  error is reported. The oracle converts both
   linear renditions to reference-white-relative units (SDR white `1.0`; HDR absolute
   luminance divided by the pinned 203 cd/m²) and derives each canonical gain as
   `(HDR_c + offset_hdr,c) / (SDR_c + offset_sdr,c)` with the manifest-pinned positive
@@ -89,7 +103,8 @@ independent of nc:
   matches, with only manifest-listed volatile fields allowed to differ.
 - Cross-encoding colour comparisons use only manifest-listed patches that are neither
   tone- nor gamut-mapped: independent decodes to XYZ D65 must have ΔE2000 ≤ 0.5 and
-  neutral Δu'v' ≤ 0.0001. Mapped patches compare against their own canonical buffer
+  neutral Δu'v' ≤ 0.0001. 8-bit quantization alone reaches ΔE2000 0.52, so the gain
+  map's renditions are held to a measured allowance in the manifest instead. Mapped patches compare against their own canonical buffer
   and report hue-angle, clipping and compression deltas.
 
 For the cross-encoding oracle, the manifest pins each rendition's declared

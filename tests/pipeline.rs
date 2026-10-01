@@ -1379,6 +1379,39 @@ fn export_film_rgb_is_convert_only_and_guarded_as_a_write_target() {
 }
 
 #[test]
+fn export_pre_encode_is_convert_only_and_guarded_as_a_write_target() {
+    let tmp = TempDir::new("pre-encode");
+    let out = tmp.path("out.tiff");
+    let input = fixture("hdr-48bit.tif");
+    let (code, _stdout, err) = run(&[
+        "convert",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--export-pre-encode",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--export-pre-encode"), "{err}");
+    assert!(!out.exists());
+
+    let (code, _stdout, err) = run(&[
+        "roll",
+        input.to_str().unwrap(),
+        "-o",
+        tmp.path("roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--export-pre-encode",
+        tmp.path("pre.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--export-pre-encode"), "{err}");
+}
+
+#[test]
 fn bad_params_are_usage_errors() {
     let tmp = TempDir::new("usage");
     let out = tmp.path("out.tiff");

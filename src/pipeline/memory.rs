@@ -48,7 +48,8 @@
 //! - **Two images at render, not one.** Every colour transform runs in place, so
 //!   there is no third, but the decoded image still outlives the render, so
 //!   `render` counts two. `--export-film-rgb` writes the decode's buffer verbatim
-//!   before the 3×3, so it adds no term.
+//!   before the 3×3, and `--export-pre-encode` the buffers the render already holds,
+//!   so neither adds a term.
 //! - **Freed is not gone: one retention rule, applied everywhere.** Peak RSS is a
 //!   high-water mark and the allocator does not return freed pages to the OS, so a
 //!   buffer freed mid-run still occupies the process at every later peak. Hence

@@ -28,6 +28,7 @@ use crate::destination::{
 };
 
 use crate::io::decode::{DecodeInfo, decode_within, probe};
+use crate::io::encode::{PreEncodePage, PreEncodeSamples};
 use crate::io::{encode, iso_gain_map, staged};
 use crate::pipeline::chain;
 use crate::pipeline::fit_gamut::DestinationGamut;
@@ -391,6 +392,12 @@ pub struct ConvertArgs {
     /// Operational flag — not a recipe key; never affects the output image.
     #[arg(long, value_name = "PATH")]
     pub export_film_rgb: Option<PathBuf>,
+    /// Also write what the destination's encoder receives — the linear rendition before
+    /// any transfer, and a gain map's codes before its JPEG — as an untagged TIFF, one
+    /// page per buffer: what an independent decode of the output is checked against.
+    /// Operational flag — not a recipe key; never affects the output image.
+    #[arg(long, value_name = "PATH")]
+    pub export_pre_encode: Option<PathBuf>,
 
     /// Append a telemetry record for this run to the local JSONL log (under the
     /// platform data dir, e.g. `$XDG_DATA_HOME/nc/telemetry.jsonl` or
@@ -1303,6 +1310,10 @@ pub struct Report {
     /// ICC profile. Its channels are the dye layers, not a colour space.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_rgb_exported: Option<PathBuf>,
+    /// Path the encoder's input buffers were exported to, when `--export-pre-encode`
+    /// was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_encode_exported: Option<PathBuf>,
     /// Encode-time sample loss (clipped / non-finite counts), for `convert`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loss: Option<EncodeReport>,
@@ -3097,8 +3108,8 @@ fn convert_frame(
     command: &'static str,
     input: &Path,
     output: &Path,
-    // `convert`'s `--export-film-rgb`; `roll` has no such flag.
-    export_film_rgb: Option<&Path>,
+    // `convert`'s side exports; `roll` has neither flag.
+    exports: Exports<'_>,
     recipe: &Recipe,
     input_from_cli: InputFromCli,
     // Files this run *read* besides the scan (`--params`, a roll's `--frames`), so a
@@ -3284,7 +3295,7 @@ fn convert_frame(
             image,
             base: base.base,
             export_ir,
-            export_film_rgb,
+            exports,
             output,
             report,
             read_inputs,
@@ -3607,23 +3618,37 @@ impl DestinationRender {
 /// chain, then the destination's transfer, for a rendered one. A rendered destination
 /// also decodes the film base itself, one pixel through the same decode and 3×3 —
 /// display black's reference (`chain::render`); the film master never reads it.
+///
+/// With `export`, the buffers the encoder receives are staged there too
+/// (`--export-pre-encode`): linear, before any transfer or quantization, written from
+/// the buffers the render already holds.
 fn render_destination(
     aces: AcesCgImage,
     base: &FilmBase,
     recipe: &Recipe,
     destination: recipe::Destination,
+    export: Option<&Path>,
     clock: &mut impl StageClock,
-) -> Result<DestinationRender> {
+) -> Result<(DestinationRender, Option<staged::Staged>)> {
     let d = match destination {
         recipe::Destination::FilmMaster => {
             // Profile only — no transform: the tag names the space the pixels are in.
-            let icc = clock.time(StageKind::Destination, || {
-                color::icc_profile(&color::OutputSpace::AcesCg)
+            let (icc, staged) = clock.time(StageKind::Destination, || {
+                let page = PreEncodePage::rgb_f32(
+                    "film-master",
+                    "acescg",
+                    aces.width(),
+                    aces.height(),
+                    aces.rgb(),
+                );
+                let staged = export_pages(export, &[page])?;
+                Ok::<_, NcError>((color::icc_profile(&color::OutputSpace::AcesCg)?, staged))
             })?;
-            return Ok(DestinationRender::FilmMaster {
+            let render = DestinationRender::FilmMaster {
                 image: aces.into_linear(),
                 icc,
-            });
+            };
+            return Ok((render, staged));
         }
         recipe::Destination::Display(d) => d,
     };
@@ -3632,24 +3657,35 @@ fn render_destination(
     })?;
     // One match on the encoding, so a new row cannot reach an encoder it was not written
     // for: the gain map renders a pair, every other destination one rendition.
-    match d.encoding {
-        Encoding::GainMapJpeg => render_gain_map(aces, film_base, recipe, d, clock),
+    let mut staged = None;
+    let render = match d.encoding {
+        Encoding::GainMapJpeg => {
+            let (render, gain_map_staged) =
+                render_gain_map(aces, film_base, recipe, d, export, clock)?;
+            staged = gain_map_staged;
+            render
+        }
         Encoding::SdrTiff => render_one(aces, film_base, recipe, d, clock, |r| {
+            let page = PreEncodePage::f32("sdr-linear", r.gamut.name(), &r.linear);
+            staged = export_pages(export, &[page])?;
             let (image, icc) = color::encode_display_linear(r.linear, r.gamut)?;
             Ok(DestinationPixels::Sdr { image, icc })
-        }),
+        })?,
         Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.hdr()?;
+            staged = export_pages(export, &[hdr_page(&hdr)])?;
             Ok(DestinationPixels::HdrLinear(hdr, clamp))
-        }),
+        })?,
         Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.hdr()?;
+            staged = export_pages(export, &[hdr_page(&hdr)])?;
             Ok(DestinationPixels::HdrCoded(
                 hdr::encode_transfer(hdr, transfer)?,
                 clamp,
             ))
-        }),
-    }
+        })?,
+    };
+    Ok((render, staged))
 }
 
 /// One rendition out of the chain, as a single-rendition encoder receives it.
@@ -3714,14 +3750,17 @@ fn render_one(
 ///
 /// The report's chain account is the HDR rendition's — the destination's range — and
 /// the SDR base's fit range rides in `gain_map.base_fit_range`. Each full-frame
-/// buffer is dropped as soon as the next one is built from it (`RunProfile::GainMapJpeg`).
+/// buffer is dropped once the map is built (`RunProfile::GainMapJpeg` sums them, since
+/// freed pages stay resident). `export` stages both linear renditions and the map's
+/// codes, in that order.
 fn render_gain_map(
     aces: AcesCgImage,
     film_base: AcesCgImage,
     recipe: &Recipe,
     d: Resolved,
+    export: Option<&Path>,
     clock: &mut impl StageClock,
-) -> Result<DestinationRender> {
+) -> Result<(DestinationRender, Option<staged::Staged>)> {
     let peak = d.range.peak()?;
     // Neither JPEG stores the IR plane (`--export-ir` reads the decoded image), so it is
     // dropped before the pair splits the graded image and copies it.
@@ -3736,11 +3775,25 @@ fn render_gain_map(
     let base_fit_range = sdr.fit_range;
     let (sdr_linear, gamut) = sdr.image.into_parts();
     let (mut hdr_linear, _) = hdr.image.into_parts();
-    let (base, icc, map, clamp, report) = clock.time(StageKind::Destination, || {
+    let (base, icc, map, clamp, report, staged) = clock.time(StageKind::Destination, || {
         let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
         let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
-        drop(hdr_linear);
         let map = gain_encode::encode(&ratios)?;
+        let staged = export_pages(
+            export,
+            &[
+                PreEncodePage::f32("sdr-linear", gamut.name(), &sdr_linear),
+                PreEncodePage::f32("hdr-linear", gamut.name(), &hdr_linear),
+                PreEncodePage {
+                    buffer: "gain-map-codes",
+                    space: "log2-gain-window",
+                    width: map.width,
+                    height: map.height,
+                    samples: PreEncodeSamples::U8(&map.rgb),
+                },
+            ],
+        )?;
+        drop(hdr_linear);
         let report = GainMapResult {
             range: ratios.range(),
             width: map.width,
@@ -3749,9 +3802,9 @@ fn render_gain_map(
         };
         drop(ratios);
         let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
-        Ok::<_, NcError>((base, icc, map, clamp, report))
+        Ok::<_, NcError>((base, icc, map, clamp, report, staged))
     })?;
-    Ok(DestinationRender::Rendered {
+    let render = DestinationRender::Rendered {
         rendered: Box::new(ChainAccount {
             applied: hdr.applied,
             scene_correction: hdr.scene_correction,
@@ -3766,7 +3819,24 @@ fn render_gain_map(
             clamp,
             report,
         },
-    })
+    };
+    Ok((render, staged))
+}
+
+/// Stage `pages` at `export`, when one was asked for.
+fn export_pages(
+    export: Option<&Path>,
+    pages: &[PreEncodePage<'_>],
+) -> Result<Option<staged::Staged>> {
+    export
+        .map(|path| encode::export_pre_encode(pages, path))
+        .transpose()
+}
+
+/// An HDR rendition's page: display-linear, 1.0 = the 203 cd/m² reference white,
+/// after the clamp to the peak.
+fn hdr_page(hdr: &hdr::LinearHdr) -> PreEncodePage<'_> {
+    PreEncodePage::f32("hdr-linear", hdr.gamut().name(), hdr.image())
 }
 
 /// Encode a render into its container, filling the report block its encoder
@@ -3828,6 +3898,15 @@ fn encode_render(
     })
 }
 
+/// `convert`'s side exports, staged with the primary and committed before it.
+#[derive(Clone, Copy, Default)]
+struct Exports<'a> {
+    /// `--export-film-rgb`: the fixed decode before the 3×3.
+    film_rgb: Option<&'a Path>,
+    /// `--export-pre-encode`: the buffers the destination's encoder receives.
+    pre_encode: Option<&'a Path>,
+}
+
 /// What [`convert_frame`] has resolved by the time the render takes over: everything
 /// up to and including the film base.
 struct DecodedFrame<'a> {
@@ -3838,7 +3917,7 @@ struct DecodedFrame<'a> {
     image: LinearImage,
     base: FilmBase,
     export_ir: Option<PathBuf>,
-    export_film_rgb: Option<&'a Path>,
+    exports: Exports<'a>,
     output: &'a Path,
     report: Report,
     read_inputs: &'a [&'a Path],
@@ -3863,7 +3942,7 @@ fn render_frame(
         image,
         base,
         export_ir,
-        export_film_rgb,
+        exports,
         output,
         mut report,
         read_inputs,
@@ -3877,7 +3956,7 @@ fn render_frame(
         fixed::decode(&image, &base, &decode_params)
     })?;
     let mut pending: Vec<staged::Staged> = Vec::new();
-    if let Some(path) = export_film_rgb {
+    if let Some(path) = exports.film_rgb {
         pending.push(clock.time(StageKind::Encode, || encode::encode_film_rgb(&film, path))?);
         report.film_rgb_exported = Some(path.to_path_buf());
     }
@@ -3896,7 +3975,12 @@ fn render_frame(
     // The chain, then the destination's transfer. Clear any stale lcms2 flag first so
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
-    let render = render_destination(aces, &base, recipe, destination, clock)?;
+    let (render, pre_encode) =
+        render_destination(aces, &base, recipe, destination, exports.pre_encode, clock)?;
+    if let Some(staged) = pre_encode {
+        pending.push(staged);
+        report.pre_encode_exported = exports.pre_encode.map(Path::to_path_buf);
+    }
     if cms_error_occurred() {
         return Err(NcError::Other(
             "color management (lcms2) reported a runtime error; see stderr".into(),
@@ -3976,8 +4060,11 @@ fn render_frame(
     for note in staged::commit_all(std::mem::take(&mut pending))? {
         push_warning_buf(warnings, log, note);
     }
-    if let Some(path) = export_film_rgb {
+    if let Some(path) = exports.film_rgb {
         log.info(format_args!("wrote film RGB {}", path.display()));
+    }
+    if let Some(path) = exports.pre_encode {
+        log.info(format_args!("wrote pre-encode buffers {}", path.display()));
     }
     if let Some(path) = &export_ir {
         log.info(format_args!("wrote IR plane {}", path.display()));
@@ -4228,7 +4315,11 @@ fn convert_attempt(
         .filter(|(label, _)| {
             matches!(
                 *label,
-                "--output" | "--report-file" | "--export-ir" | "--export-film-rgb"
+                "--output"
+                    | "--report-file"
+                    | "--export-ir"
+                    | "--export-film-rgb"
+                    | "--export-pre-encode"
             )
         })
         .collect();
@@ -4302,7 +4393,10 @@ fn convert_attempt(
         "convert",
         &args.input,
         &output,
-        args.export_film_rgb.as_deref(),
+        Exports {
+            film_rgb: args.export_film_rgb.as_deref(),
+            pre_encode: args.export_pre_encode.as_deref(),
+        },
         &recipe,
         InputFromCli::of(&args.knobs.input_opts),
         &recipe_files(&args.recipe_in)
@@ -4370,7 +4464,8 @@ fn convert_attempt(
 
 /// Every path a `convert` writes, labelled for [`ensure_write_targets_distinct`]:
 /// the output, `--dump-params`, `--report-file`, `--export-ir`, `--export-film-rgb`,
-/// and telemetry's sinks (`--telemetry-file` unless it is `-`, and the resolved log).
+/// `--export-pre-encode`, and telemetry's sinks (`--telemetry-file` unless it is `-`,
+/// and the resolved log).
 fn write_targets<'a>(
     args: &'a ConvertArgs,
     output: &'a Path,
@@ -4389,6 +4484,9 @@ fn write_targets<'a>(
     }
     if let Some(p) = args.export_film_rgb.as_deref() {
         targets.push(("--export-film-rgb", p));
+    }
+    if let Some(p) = args.export_pre_encode.as_deref() {
+        targets.push(("--export-pre-encode", p));
     }
     if let Some(p) = telemetry_file_target(args) {
         targets.push(("--telemetry-file", p));
@@ -5310,7 +5408,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
             "roll",
             &pf.input,
             &pf.output,
-            None,
+            Exports::default(),
             &pf.recipe,
             pf.input_from_cli,
             &read_files,
@@ -7560,6 +7658,7 @@ mod tests {
             "--dump-params",
             "--seed",
             "--export-film-rgb",
+            "--export-pre-encode",
             "--telemetry",
             "--telemetry-file",
         ];
@@ -9302,5 +9401,246 @@ mod tests {
         let (sdr, film_sdr) = (dir.join("sdr.tiff"), dir.join("film-sdr.tiff"));
         convert(&sdr, &film_sdr, &[]);
         assert_eq!(read_f32_tiff(&film_sdr).2, film_rgb);
+    }
+
+    /// One `--export-pre-encode` page: its description and samples.
+    #[derive(Debug)]
+    struct Page {
+        buffer: String,
+        space: String,
+        width: u32,
+        height: u32,
+        samples: tiff::decoder::DecodingResult,
+    }
+
+    /// Every page of a pre-encode export, in order, with no ICC profile on any.
+    fn read_pre_encode(path: &Path) -> Vec<Page> {
+        use tiff::decoder::Decoder;
+        let mut decoder = Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut pages = Vec::new();
+        loop {
+            assert!(decoder.get_tag_u8_vec(tiff::tags::Tag::IccProfile).is_err());
+            let description: serde_json::Value = serde_json::from_str(
+                &decoder
+                    .get_tag_ascii_string(tiff::tags::Tag::ImageDescription)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(description["nc_pre_encode"], 1);
+            let (width, height) = decoder.dimensions().unwrap();
+            pages.push(Page {
+                buffer: description["buffer"].as_str().unwrap().into(),
+                space: description["space"].as_str().unwrap().into(),
+                width,
+                height,
+                samples: decoder.read_image().unwrap(),
+            });
+            if !decoder.more_images() {
+                return pages;
+            }
+            decoder.next_image().unwrap();
+        }
+    }
+
+    /// The u16 samples of a 16-bit RGB TIFF.
+    fn read_u16_tiff(path: &Path) -> Vec<u16> {
+        use tiff::decoder::{Decoder, DecodingResult};
+        let mut decoder = Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        match decoder.read_image().unwrap() {
+            DecodingResult::U16(data) => data,
+            other => panic!("expected u16 samples, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_pre_encode_export_is_what_each_encoder_receives() {
+        use tiff::decoder::DecodingResult;
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).ok();
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("nc-pre-encode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let input = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hdr-48bit.tif");
+        // Converts with the export when one is given; returns the report.
+        let convert = |output: &Path, export: Option<&Path>, destination: &[&str]| {
+            let report = output.with_extension("report.json");
+            let mut argv = vec![
+                "hanten",
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--quiet",
+                "--report-file",
+                report.to_str().unwrap(),
+            ];
+            if let Some(export) = export {
+                argv.extend(["--export-pre-encode", export.to_str().unwrap()]);
+            }
+            argv.extend_from_slice(destination);
+            let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
+                unreachable!("expected convert")
+            };
+            run_convert(args).unwrap();
+            let report: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+            assert_eq!(
+                report["pre_encode_exported"],
+                export.map_or(serde_json::Value::Null, |e| e.to_str().unwrap().into())
+            );
+        };
+        let f32s = |page: &Page| match &page.samples {
+            DecodingResult::F32(data) => data.clone(),
+            other => panic!("{}: expected f32, got {other:?}", page.buffer),
+        };
+        let summary = |pages: &[Page]| -> Vec<(String, String)> {
+            pages
+                .iter()
+                .map(|p| (p.buffer.clone(), p.space.clone()))
+                .collect()
+        };
+        let pair = |b: &str, s: &str| (b.to_string(), s.to_string());
+
+        // Lossless destinations: the export is the file's pixels to the bit, and the
+        // export leaves the output byte-identical.
+        for (name, destination, buffer, space) in [
+            ("master", &["--film-master"][..], "film-master", "acescg"),
+            (
+                "linear",
+                &[
+                    "--range",
+                    "hdr",
+                    "--transfer",
+                    "linear",
+                    "--gamut",
+                    "bt2020",
+                ][..],
+                "hdr-linear",
+                "bt2020",
+            ),
+        ] {
+            let (out, plain, export) = (
+                dir.join(format!("{name}.tiff")),
+                dir.join(format!("{name}-plain.tiff")),
+                dir.join(format!("{name}-pre.tiff")),
+            );
+            convert(&out, Some(&export), destination);
+            convert(&plain, None, destination);
+            assert_eq!(std::fs::read(&out).unwrap(), std::fs::read(&plain).unwrap());
+            let pages = read_pre_encode(&export);
+            assert_eq!(summary(&pages), [pair(buffer, space)], "{name}");
+            let written = read_f32_tiff(&out).2;
+            let exported = f32s(&pages[0]);
+            assert_eq!(written.len(), exported.len(), "{name}");
+            assert!(
+                written
+                    .iter()
+                    .zip(&exported)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "{name}: the export must be the written pixels"
+            );
+        }
+
+        // SDR: the export is linear; through the shipped transfer and quantizer it is
+        // the written codes.
+        let (sdr, export) = (dir.join("sdr.tiff"), dir.join("sdr-pre.tiff"));
+        convert(&sdr, Some(&export), &["--gamut", "adobe-rgb"]);
+        let pages = read_pre_encode(&export);
+        assert_eq!(summary(&pages), [pair("sdr-linear", "adobe-rgb")]);
+        let linear =
+            LinearImage::new(pages[0].width, pages[0].height, f32s(&pages[0]), None).unwrap();
+        let (encoded, icc) =
+            color::encode_display_linear(linear, DestinationGamut::AdobeRgb).unwrap();
+        let again = dir.join("sdr-again.tiff");
+        let (staged, ..) = encode::encode_u16(&encoded, &icc, &again).unwrap();
+        staged::commit_all(vec![staged]).unwrap();
+        assert_eq!(read_u16_tiff(&again), read_u16_tiff(&sdr));
+
+        // PQ: the export is the linear BT.2020 hand-off, the same buffer the linear
+        // TIFF writes.
+        let (pq, export) = (dir.join("pq.tiff"), dir.join("pq-pre.tiff"));
+        convert(
+            &pq,
+            Some(&export),
+            &["--range", "hdr", "--transfer", "pq", "--gamut", "bt2020"],
+        );
+        let pages = read_pre_encode(&export);
+        assert_eq!(summary(&pages), [pair("hdr-linear", "bt2020")]);
+        assert_eq!(
+            f32s(&pages[0]),
+            f32s(&read_pre_encode(&dir.join("linear-pre.tiff"))[0])
+        );
+
+        // Gain map: both renditions, then the half-resolution map codes.
+        let (jpeg, export) = (dir.join("gain.jpg"), dir.join("gain-pre.tiff"));
+        convert(
+            &jpeg,
+            Some(&export),
+            &[
+                "--range",
+                "hdr",
+                "--transfer",
+                "native",
+                "--gamut",
+                "srgb",
+                "--container",
+                "jpeg",
+            ],
+        );
+        let pages = read_pre_encode(&export);
+        assert_eq!(
+            summary(&pages),
+            [
+                pair("sdr-linear", "srgb"),
+                pair("hdr-linear", "srgb"),
+                pair("gain-map-codes", "log2-gain-window"),
+            ]
+        );
+        let (w, h) = (pages[0].width, pages[0].height);
+        assert_eq!((pages[1].width, pages[1].height), (w, h));
+        assert_eq!(
+            (pages[2].width, pages[2].height),
+            (w.div_ceil(2), h.div_ceil(2))
+        );
+        assert!(matches!(pages[2].samples, DecodingResult::U8(_)));
+        // The HDR rendition is the one the linear sRGB TIFF writes.
+        let (linear, export_linear) = (dir.join("srgb.tiff"), dir.join("srgb-pre.tiff"));
+        convert(
+            &linear,
+            Some(&export_linear),
+            &["--range", "hdr", "--transfer", "linear", "--gamut", "srgb"],
+        );
+        assert_eq!(f32s(&pages[1]), f32s(&read_pre_encode(&export_linear)[0]));
+        assert_ne!(f32s(&pages[0]), f32s(&pages[1]));
+
+        // On the encoders that transform after the export, the output is unchanged too.
+        for (exported, destination) in [
+            (&sdr, &["--gamut", "adobe-rgb"][..]),
+            (
+                &pq,
+                &["--range", "hdr", "--transfer", "pq", "--gamut", "bt2020"][..],
+            ),
+            (
+                &jpeg,
+                &["--range", "hdr", "--gamut", "srgb", "--container", "jpeg"][..],
+            ),
+        ] {
+            let plain = dir.join(format!(
+                "plain-{}",
+                exported.file_name().unwrap().to_str().unwrap()
+            ));
+            convert(&plain, None, destination);
+            assert_eq!(
+                std::fs::read(exported).unwrap(),
+                std::fs::read(&plain).unwrap(),
+                "{destination:?}"
+            );
+        }
     }
 }

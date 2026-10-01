@@ -140,7 +140,6 @@ impl LinearHdr {
     }
 
     /// Borrow the finite, non-negative, reference-white-relative pixels.
-    #[cfg(test)]
     pub fn image(&self) -> &LinearImage {
         &self.image
     }

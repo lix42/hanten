@@ -27,7 +27,7 @@ pub enum StageKind {
     FitRange,
     FitGamut,
     /// The destination's transfer: the display curve and ICC profile, the Rec.2100
-    /// signal, or the gain map.
+    /// signal, or the gain map — and the `--export-pre-encode` file.
     Destination,
     /// Writing the container, and the `--export-film-rgb` file.
     Encode,

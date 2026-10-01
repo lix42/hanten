@@ -72,10 +72,11 @@ jobs:
         uses: astral-sh/setup-uv@v10.1.0
 
       - name: Install analysis dependencies
-        # `nctool metrics` reads output pixels and needs numpy/tifffile; the rest
-        # of the toolkit is stdlib-only. A venv, not `pip install --user`: both
-        # runner images ship an externally-managed interpreter (PEP 668), which
-        # refuses a --user install outright, and a venv is also the workflow
+        # `nctool metrics` and `acceptance` read output pixels and need
+        # numpy/tifffile/Pillow; the rest of the toolkit is stdlib-only. A venv,
+        # not `pip install --user`: both runner images ship an externally-managed
+        # interpreter (PEP 668), which refuses a --user install outright, and a
+        # venv is also the workflow
         # scripts/analysis/README.md documents locally — one shape, not two.
         #
         # `--python 3.12` is stated rather than inherited. `uv venv` otherwise

@@ -25,6 +25,10 @@ needs no real scans and no human eyes.
 
 ## Open questions
 
+Answered 2026-10-01 (`docs/progress/analysis.md`): the decoders are numpy code written
+from the standards plus Pillow's libjpeg, so CI needs nothing new; the buffer comes
+from `convert --export-pre-encode`; HDR float is bit-exact and PQ/HLG TIFF 1 code.
+
 - Which independent decoders, and how CI gets them: an ICC/transfer decoder for TIFF,
   an ISO 21496-1 gain-map decoder (libultrahdr
   reads ISO; Apple ImageIO is macOS-only and stays the manual oracle).

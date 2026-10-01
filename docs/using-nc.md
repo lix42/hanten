@@ -1296,6 +1296,21 @@ untagged. Measure it with `nctool metrics --space film-rgb`, whose `channels` bl
 compares field for field with a film master's measured with `--channels`. The report names it in
 `film_rgb_exported`. Through the pinned 3×3 it is the film master to the bit.
 
+**`--export-pre-encode PATH`** (`convert` only, beside any destination) also writes
+what the destination's encoder receives — the linear rendition before any transfer,
+and a gain map's codes before its JPEG — as an untagged TIFF with one page per buffer. Each page's `ImageDescription` is a JSON
+object naming its `buffer` and `space`:
+
+| Destination | Pages |
+|---|---|
+| `--film-master` | `film-master` (ACEScg, as written) |
+| SDR TIFF | `sdr-linear` (linear, in the destination gamut, 1.0 = display white) |
+| HDR linear, PQ or HLG | `hdr-linear` (linear, 1.0 = the 203 cd/m² reference white, clamped to the peak) |
+| gain-map JPEG | `sdr-linear`, `hdr-linear`, then `gain-map-codes` (the 8-bit, half-resolution map before its JPEG) |
+
+The report names it in `pre_encode_exported`. It is the reference `nctool acceptance`
+checks an independent decode of the output against; the output itself is unchanged.
+
 **The gain-map JPEG** renders one graded image twice — an SDR base and an HDR
 rendition clamped to the 1000 cd/m² peak — and stores the per-channel ratio between
 them as a half-resolution, three-channel gain map. It carries **ISO 21496-1 metadata
@@ -1729,6 +1744,7 @@ These are **`convert` only** — every other command exits 2 if given one:
 | `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance event (JSONL, `schema_version` 11), one per run — failed runs included, once the command line parses. `outcome.status` is `success` or `failure`; a failure names its `stage` (a stage, or `setup` / `preflight` / `finalize`), `error_kind` (`usage`, `decode`, …, or `strict` for a `--strict` promotion) and `exit_code`, and carries only what the run reached — never the error message. `timing_ms` has one field per completed stage, `conversion.params_hash` is the report's, and a finished frame's `outcome.clipped` / `non_finite` counts come with their denominator, `outcome.total_samples`. Also `NC_TELEMETRY_LOG`. |
 | `--seed N` | Reserved; nothing is stochastic today |
 | `--export-film-rgb PATH` | The decode before the 3×3, untagged f32 TIFF ([§8](#8-destinations)) |
+| `--export-pre-encode PATH` | The buffers the destination's encoder receives, untagged TIFF pages ([§8](#8-destinations)) |
 
 > **Caveat on `--max-memory`:** the budget also caps the TIFF read buffers, so a
 > small-but-passing budget can turn a decodable file into an exit-3 decode failure.
