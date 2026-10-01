@@ -50,13 +50,20 @@
 //! **The roll's exposure** (`nf-calibration/roll-exposure`) lifts an under-exposed roll,
 //! which the white rule cannot: it pins mid-grey and only moves contrast. It is one
 //! neutral gain for the whole roll (`roll.exposure`, added to scene correction's), so a
-//! frame darker than its roll stays dark. Each frame's level is the log-average of its
+//! frame darker than its roll stays dark, beyond a bounded lift. Each frame's level is the log-average of its
 //! luma in ACEScg ([`frame_level`]); the roll's exposure brings the median frame level to
 //! [`LEVEL_TARGET_STOPS`], within [`EXPOSURE_BOUND_EV`] ([`roll_exposure`]). A median over
 //! frames, so one night scene cannot set it — the failure that retired per-frame auto
 //! white balance. **The white is measured at exposure 0**: re-placing it after the
 //! exposure was not better in review, and a small exposure could push one frame over the
 //! cap and move the roll's slope by a third.
+//!
+//! **A frame's lift** (`nf-calibration/frame-level-trim`) is a small per-frame exposure on
+//! top of the roll's, stored as a delta in `roll.frames` ([`frame_lift`]). It is keyed on
+//! where the frame's white renders after the roll's exposure: a low-key frame is lifted, a
+//! bright one is not, and nothing is darkened. Not on the white alone, which re-does the
+//! roll's exposure on a thin roll (evidence: `docs/progress/nf-calibration.md`,
+//! `## frame-level-trim`).
 
 use serde::Serialize;
 
@@ -120,6 +127,18 @@ pub const LEVEL_TARGET_STOPS: f32 = -0.6;
 /// The most a measured roll exposure moves, either way, in EV. The ten rolls reviewed
 /// measured +0.02 to +1.74.
 pub const EXPOSURE_BOUND_EV: f32 = 2.0;
+
+/// The most a frame's lift adds, in EV: the step review compared (a target 0.3 stop
+/// brighter); nothing larger was tested.
+pub const LIFT_BOUND_EV: f32 = 0.3;
+
+/// A frame whose rendered white (its white plus the roll's exposure, in scene stops) is
+/// at or under this gets the whole [`LIFT_BOUND_EV`].
+pub const LIFT_FULL_STOPS: f32 = 0.9;
+
+/// A frame whose rendered white is at or over this gets no lift; between the two the lift
+/// falls linearly.
+pub const LIFT_NONE_STOPS: f32 = 1.5;
 
 /// The leader measurement the guard reads, **written fresh** — the retiring
 /// leader-`Dmax` anchor is not reused (`nf-retire/dmax-machinery`).
@@ -325,6 +344,14 @@ pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
     })
 }
 
+/// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`frame_white`], scene
+/// stops) and the roll's exposure as applied, so the key is where the white renders.
+pub fn frame_lift(white_stops: f32, roll_ev: f32) -> f32 {
+    let rendered = white_stops + roll_ev;
+    let t = (LIFT_NONE_STOPS - rendered) / (LIFT_NONE_STOPS - LIFT_FULL_STOPS);
+    LIFT_BOUND_EV * t.clamp(0.0, 1.0)
+}
+
 /// The median of the leader's brightest channel over its centre half, in the same
 /// film-RGB measure as [`frame_white`] — what a frame's saturation distance is measured
 /// against; `None` when no pixel is usable. The caller refuses that only after
@@ -523,6 +550,19 @@ mod tests {
         let bright = roll_exposure(&[Some(3.0)]).unwrap();
         assert_eq!((bright.ev, bright.bounded), (-EXPOSURE_BOUND_EV, true));
         assert!(roll_exposure(&[None, None]).is_err());
+    }
+
+    #[test]
+    fn a_frame_lift_follows_its_rendered_white_and_never_darkens() {
+        // Keyed on white + roll exposure: the same white lifts less on a lifted roll.
+        assert_eq!(frame_lift(-1.5, 0.0), LIFT_BOUND_EV);
+        assert_eq!(frame_lift(LIFT_FULL_STOPS - 1.0, 1.0), LIFT_BOUND_EV);
+        assert_eq!(frame_lift(LIFT_NONE_STOPS, 0.0), 0.0);
+        assert_eq!(frame_lift(4.0, 1.5), 0.0);
+        let mid = frame_lift((LIFT_FULL_STOPS + LIFT_NONE_STOPS) / 2.0 - 0.5, 0.5);
+        assert!((mid - LIFT_BOUND_EV / 2.0).abs() < 1e-6, "{mid}");
+        // A night frame (white far under) is held at the bound.
+        assert_eq!(frame_lift(-8.0, 2.0), LIFT_BOUND_EV);
     }
 
     #[test]

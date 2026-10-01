@@ -213,25 +213,49 @@ pub struct RollSection {
     /// The roll's exposure in EV, a neutral gain added to `scene_correction.exposure`
     /// (`roll_white::roll_exposure`).
     pub exposure: Option<f32>,
-    /// The frames whose own white differs from the roll's (one clamped to the cap),
-    /// keyed by **file name** so the recipe still applies after the scans move.
-    /// [`Recipe::for_frame`] applies an entry; a `roll --frames` manifest's `params`
-    /// beat it.
+    /// This frame's own exposure in EV, added to `exposure` while [`Self::frame_lift`] is
+    /// on — where [`Recipe::for_frame`] moves a `frames` entry's `exposure`.
+    pub frame_exposure: Option<f32>,
+    /// Whether `frame_exposure` applies: the opt-out, which leaves the measured values
+    /// in the recipe. Unset (`null`) is on, so a measured file layered last states
+    /// nothing here and never undoes an earlier `"off"`.
+    pub frame_lift: Option<FrameLift>,
+    /// The frames with their own values — a white clamped to the cap, a lift
+    /// (`roll_white::frame_lift`) — keyed by **file name** so the recipe still applies
+    /// after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
+    /// manifest's `params` beat it.
     pub frames: BTreeMap<String, FrameRoll>,
 }
 
-/// One frame's own roll values ([`RollSection::frames`]).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// One frame's own roll values ([`RollSection::frames`]); each unset one is the roll's.
+/// Written with its nulls, like [`RollSection`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct FrameRoll {
     /// The frame's white, in place of the roll's `white_stops`.
-    pub white_stops: f32,
+    pub white_stops: Option<f32>,
+    /// The frame's exposure in EV, added to the roll's (`roll.frame_exposure`).
+    pub exposure: Option<f32>,
+}
+
+/// `roll.frame_lift`, `--frame-lift`: whether a frame's own exposure applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameLift {
+    On,
+    Off,
 }
 
 impl RollSection {
     /// The slope the roll's white renders at, if it has one.
     pub fn slope(&self) -> Option<f32> {
         self.white_stops.map(roll_white::slope_for)
+    }
+
+    /// The frame's own exposure as it applies: `None` under `--frame-lift off`.
+    pub fn applied_frame_exposure(&self) -> Option<f32> {
+        self.frame_exposure
+            .filter(|_| self.frame_lift != Some(FrameLift::Off))
     }
 }
 
@@ -367,12 +391,17 @@ pub struct RollReport {
     pub slope: Option<f32>,
     /// The section's exposure, as stated.
     pub exposure: Option<f32>,
+    /// This frame's own exposure (its `roll.frames` lift), as stated.
+    pub frame_exposure: Option<f32>,
     /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
     /// Whether the look's base slope is the roll's.
     pub slope_applied: bool,
     /// Whether the exposure reached scene correction.
     pub exposure_applied: bool,
+    /// Whether the frame's exposure reached scene correction (not under
+    /// `--frame-lift off` either).
+    pub frame_exposure_applied: bool,
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
@@ -845,6 +874,12 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(ev) = args.roll.roll_exposure {
         r.roll.exposure = Some(ev);
     }
+    if let Some(ev) = args.roll.roll_frame_exposure {
+        r.roll.frame_exposure = Some(ev);
+    }
+    if let Some(lift) = args.roll.frame_lift {
+        r.roll.frame_lift = Some(lift);
+    }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
     if let Some(gains) = args.scene.white_balance {
@@ -1105,20 +1140,32 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             knob_name(names, "roll", "--roll-white", "white_stops")
         )));
     }
-    if let Some(ev) = p.exposure
-        && let Err(SceneFault::Exposure(_)) = (SceneCorrectionParams {
-            exposure: ev,
-            ..SceneCorrectionParams::default()
-        })
-        .check()
-    {
-        return Err(NcError::Usage(format!(
-            "{} must be finite, with a gain 2^EV that is a normal f32 (roughly -126 to \
-             +127 stops), got {ev}",
-            knob_name(names, "roll", "--roll-exposure", "exposure")
-        )));
+    if let Some(ev) = p.exposure {
+        exposure_fault(ev, &knob_name(names, "roll", "--roll-exposure", "exposure"))?;
+    }
+    if let Some(ev) = p.frame_exposure {
+        exposure_fault(
+            ev,
+            &knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
+        )?;
     }
     Ok(())
+}
+
+/// A stated exposure `ev`, named `name`: scene correction's rule on its own.
+fn exposure_fault(ev: f32, name: &str) -> Result<()> {
+    match (SceneCorrectionParams {
+        exposure: ev,
+        ..SceneCorrectionParams::default()
+    })
+    .check()
+    {
+        Err(SceneFault::Exposure(_)) => Err(NcError::Usage(format!(
+            "{name} must be finite, with a gain 2^EV that is a normal f32 (roughly -126 to \
+             +127 stops), got {ev}"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// `roll.frames`' rules, each entry named as itself: a file-name key, and a white
@@ -1139,7 +1186,18 @@ pub fn validate_roll_frames(
                 "recipe `roll.frames` keys are file names, not paths: got {name:?}"
             )));
         }
-        let stops = frame.white_stops;
+        if *frame == FrameRoll::default() {
+            return Err(NcError::Usage(format!(
+                "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops` or \
+                 an `exposure`, or drop the entry"
+            )));
+        }
+        if let Some(ev) = frame.exposure {
+            exposure_fault(ev, &format!("recipe `roll.frames.\"{name}\".exposure`"))?;
+        }
+        let Some(stops) = frame.white_stops else {
+            continue;
+        };
         if !(stops.is_finite() && stops > 0.0) {
             return Err(NcError::Usage(format!(
                 "recipe `roll.frames.\"{name}\".white_stops` must be finite and positive — \
@@ -1173,20 +1231,30 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
     // A gain no longer finite, a gain whose product with the exposure's is not a normal
     // f32, or two exposures whose sum is not.
     let roll = &r.roll;
-    if roll.white_balance.is_none() && roll.exposure.is_none() {
+    let frame = roll.applied_frame_exposure();
+    if roll.white_balance.is_none() && roll.exposure.is_none() && frame.is_none() {
         return Ok(());
     }
+    // Every exposure the stage sums, each named.
+    let exposures = [
+        roll.exposure
+            .map(|_| knob_name(names, "roll", "--roll-exposure", "exposure")),
+        frame.map(|_| knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure")),
+        Some(name("--exposure", "exposure")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" plus ");
     let (channel, gain) = match r.resolved_scene_correction().check() {
         Ok(()) => return Ok(()),
         Err(SceneFault::WhiteBalance { channel, value }) => (channel, value),
         Err(SceneFault::Combined { channel, gain }) => (channel, gain),
-        // The sum of two exposures, each checked on its own already.
+        // The sum of the exposures, each checked on its own already.
         Err(SceneFault::Exposure(ev)) => {
             return Err(NcError::Usage(format!(
-                "{} plus {} is {ev} EV, whose gain 2^EV is not a normal f32 (roughly -126 \
-                 to +127 stops). Move the exposure toward 0",
-                knob_name(names, "roll", "--roll-exposure", "exposure"),
-                name("--exposure", "exposure")
+                "{exposures} is {ev} EV, whose gain 2^EV is not a normal f32 (roughly -126 \
+                 to +127 stops). Move the exposure toward 0"
             )));
         }
     };
@@ -1198,16 +1266,8 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
         ),
         None => name("--white-balance", "white_balance"),
     };
-    let exposure = match roll.exposure {
-        Some(_) => format!(
-            "{} plus {}",
-            knob_name(names, "roll", "--roll-exposure", "exposure"),
-            name("--exposure", "exposure")
-        ),
-        None => name("--exposure", "exposure"),
-    };
     Err(NcError::Usage(format!(
-        "{white_balance} times the exposure gain from {exposure} is {gain:e} on channel \
+        "{white_balance} times the exposure gain from {exposures} is {gain:e} on channel \
          {channel}, which is not a normal f32 — every sample of that channel would render as \
          0 or inf. Move the white balance or the exposure toward neutral"
     )))
@@ -1604,14 +1664,19 @@ impl Recipe {
     }
 
     /// This recipe as `input` renders it: the frame's [`RollSection::frames`] entry, if
-    /// any, moves into `roll.white_stops`. `convert` and every `roll` frame go through
+    /// any, moves into `roll.white_stops` and `roll.frame_exposure`. `convert` and every `roll` frame go through
     /// it, so the two stay byte-identical. The entry is removed, not copied, so a flag
     /// that then beats it is what a `--dump-params` replay renders; the other entries
     /// stay for [`validate`].
     pub fn for_frame(mut self, input: &Path) -> Self {
         let name = input.file_name().and_then(|n| n.to_str());
         if let Some(frame) = name.and_then(|n| self.roll.frames.remove(n)) {
-            self.roll.white_stops = Some(frame.white_stops);
+            if let Some(stops) = frame.white_stops {
+                self.roll.white_stops = Some(stops);
+            }
+            if let Some(ev) = frame.exposure {
+                self.roll.frame_exposure = Some(ev);
+            }
         }
         self
     }
@@ -1632,7 +1697,7 @@ impl Recipe {
     }
 
     /// Scene correction as the stage receives it: the applied roll's gains multiplied
-    /// into the stated white balance, and its exposure added to the stated one — each
+    /// into the stated white balance, and its exposure and the frame's added to the stated one — each
     /// the identity unless the user set it, so a roll's values alone reach the stage
     /// exactly. Both renderings start the white balance and the exposure at the identity.
     pub fn resolved_scene_correction(&self) -> SceneCorrectionParams {
@@ -1647,7 +1712,10 @@ impl Recipe {
         };
         SceneCorrectionParams {
             white_balance: WhiteBalance::Explicit(white_balance),
-            exposure: roll.exposure.map_or(exposure, |ev| ev + exposure),
+            exposure: [roll.exposure, roll.applied_frame_exposure()]
+                .into_iter()
+                .flatten()
+                .fold(exposure, |sum, ev| ev + sum),
         }
     }
 
@@ -1696,16 +1764,20 @@ impl Recipe {
         let r = &self.roll;
         let applies = rendered && self.base().applies_roll;
         // Other frames' `frames` entries are not this frame's measurement.
-        (r.white_balance.is_some() || r.white_stops.is_some() || r.exposure.is_some()).then(|| {
-            RollReport {
-                white_balance: r.white_balance,
-                white_stops: r.white_stops,
-                slope: r.slope(),
-                exposure: r.exposure,
-                white_balance_applied: applies && r.white_balance.is_some(),
-                slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
-                exposure_applied: applies && r.exposure.is_some(),
-            }
+        (r.white_balance.is_some()
+            || r.white_stops.is_some()
+            || r.exposure.is_some()
+            || r.frame_exposure.is_some())
+        .then(|| RollReport {
+            white_balance: r.white_balance,
+            white_stops: r.white_stops,
+            slope: r.slope(),
+            exposure: r.exposure,
+            frame_exposure: r.frame_exposure,
+            white_balance_applied: applies && r.white_balance.is_some(),
+            slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
+            exposure_applied: applies && r.exposure.is_some(),
+            frame_exposure_applied: applies && r.applied_frame_exposure().is_some(),
         })
     }
 
@@ -1802,10 +1874,15 @@ impl Recipe {
         {
             warnings.push(format!(
                 "the recipe's `scene_correction.exposure` {stated} adds to the roll's \
-                 exposure, `roll.exposure` {roll}: the exposure applied is {} EV. A stated \
+                 exposure, `roll.exposure` {roll}{}: the exposure applied is {} EV. A stated \
                  exposure is an adjustment on top of the roll's measurement; if it is one \
                  chosen by hand before the roll's was measured, drop it",
-                roll + stated
+                self.roll
+                    .applied_frame_exposure()
+                    .map_or(String::new(), |ev| format!(
+                        ", and this frame's, `roll.frame_exposure` {ev}"
+                    )),
+                self.resolved_scene_correction().exposure
             ));
         }
         warnings
@@ -2142,7 +2219,8 @@ mod tests {
         );
         assert_eq!(
             json["roll"],
-            serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null, "frames": {}})
+            serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null,
+                "frame_exposure": null, "frame_lift": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -2713,6 +2791,11 @@ mod tests {
 
     /// `convert` with `extra`, merged over the recipe `json`.
     fn merged(json: &str, extra: &[&str]) -> Recipe {
+        merge(parse(json).unwrap(), &cli_flags(extra))
+    }
+
+    /// `convert`'s conversion flags from `extra`.
+    fn cli_flags(extra: &[&str]) -> crate::cli::ConversionFlags {
         use crate::cli::{Cli, Command};
         use clap::Parser;
         let argv = ["hanten", "convert", "in.tif", "-o", "out"]
@@ -2722,7 +2805,7 @@ mod tests {
         let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
             unreachable!()
         };
-        merge(parse(json).unwrap(), &args.knobs)
+        args.knobs
     }
 
     #[test]
@@ -2757,6 +2840,78 @@ mod tests {
         );
         validate(&r, KnobNames::FlagAndKey).unwrap();
         assert_eq!(r.resolved_scene_correction().exposure, 100.0);
+    }
+
+    #[test]
+    fn a_frames_lift_adds_to_the_roll_unless_turned_off_or_left_out() {
+        let roll = r#"{"recipe_version": 3, "roll": {"exposure": 1.0,
+            "frames": {"a.tif": {"white_stops": null, "exposure": 0.25}}}}"#;
+        let frame = |extra: &[&str]| {
+            let r = parse(roll).unwrap().for_frame(Path::new("/scans/a.tif"));
+            merge(r, &cli_flags(extra))
+        };
+        // `for_frame` moves the entry's lift into `roll.frame_exposure`, as it moves a white.
+        let r = frame(&[]);
+        assert_eq!(r.roll.frame_exposure, Some(0.25));
+        assert!(r.roll.frames.is_empty());
+        assert_eq!(r.resolved_scene_correction().exposure, 1.25);
+        let report = r.roll_report(true).unwrap();
+        assert!(report.frame_exposure_applied, "{report:?}");
+        // Another frame is not lifted.
+        let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
+        assert_eq!(other.resolved_scene_correction().exposure, 1.0);
+        // Off keeps the value and drops it from the sum; `direct` leaves the roll out.
+        let off = frame(&["--frame-lift", "off"]);
+        assert_eq!(off.roll.frame_exposure, Some(0.25));
+        assert_eq!(off.resolved_scene_correction().exposure, 1.0);
+        assert!(!off.roll_report(true).unwrap().frame_exposure_applied);
+        let direct = frame(&["--rendering", "direct"]);
+        assert_eq!(direct.resolved_scene_correction().exposure, 0.0);
+    }
+
+    #[test]
+    fn a_frames_lift_is_checked_by_its_own_name_then_in_the_sum() {
+        let err = |json: &str, extra: &[&str]| {
+            let r = merged(json, extra);
+            validate(&r, KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string()
+        };
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 1e9}}}}"#,
+            &[],
+        );
+        assert!(
+            msg.starts_with("recipe `roll.frames.\"a.tif\".exposure` must be finite"),
+            "{msg}"
+        );
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {}}}}"#,
+            &[],
+        );
+        assert!(
+            msg.starts_with("recipe `roll.frames.\"a.tif\"` states nothing"),
+            "{msg}"
+        );
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"exposure": 100, "frame_exposure": 20}}"#,
+            &["--exposure", "10"],
+        );
+        assert!(
+            msg.starts_with(
+                "--roll-exposure (recipe `roll.exposure`) plus --roll-frame-exposure (recipe \
+                 `roll.frame_exposure`) plus --exposure (recipe `scene_correction.exposure`) \
+                 is 130 EV"
+            ),
+            "{msg}"
+        );
+        // Off, the lift leaves the sum, and the same values are usable.
+        let r = merged(
+            r#"{"recipe_version": 3, "roll": {"exposure": 100, "frame_exposure": 20}}"#,
+            &["--exposure", "10", "--frame-lift", "off"],
+        );
+        validate(&r, KnobNames::FlagAndKey).unwrap();
     }
 
     #[test]
@@ -3230,6 +3385,7 @@ mod tests {
                 white_stops: Some(1.8),
                 exposure: Some(0.7),
                 frames: BTreeMap::new(),
+                ..RollSection::default()
             }
         );
         let r = merged(
@@ -3686,6 +3842,14 @@ mod tests {
             }),
             ("--roll-exposure", &["--roll-exposure", "-0.4"], |r| {
                 r.roll.exposure == Some(-0.4)
+            }),
+            (
+                "--roll-frame-exposure",
+                &["--roll-frame-exposure", "0.2"],
+                |r| r.roll.frame_exposure == Some(0.2),
+            ),
+            ("--frame-lift", &["--frame-lift", "off"], |r| {
+                r.roll.frame_lift == Some(FrameLift::Off)
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3

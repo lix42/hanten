@@ -50,7 +50,9 @@ pub fn merge_json(base: &mut Value, overlay: &Value) {
 }
 
 /// The recipe's maps, by path. Their keys are data (a frame's file name), not enum
-/// tags, so two one-entry tables must union rather than read as a variant switch.
+/// tags, so two one-entry tables must union rather than read as a variant switch; and
+/// their entries are structs of optional fields, so `{"white_stops": …}` and
+/// `{"exposure": …}` for one file merge too.
 const MAPS: &[&[&str]] = &[&["roll", "frames"]];
 
 /// [`merge_json`] at `path` from the document root.
@@ -59,7 +61,10 @@ fn merge_at<'a>(base: &mut Value, overlay: &'a Value, path: &mut Vec<&'a str>) {
         return;
     }
     let is_map = MAPS.contains(&path.as_slice());
-    if !is_map && is_variant_switch(base, overlay) {
+    let is_entry = path
+        .split_last()
+        .is_some_and(|(_, parent)| MAPS.contains(&parent));
+    if !is_map && !is_entry && is_variant_switch(base, overlay) {
         *base = overlay.clone();
         return;
     }
@@ -242,9 +247,21 @@ mod tests {
             .roll
             .frames
             .iter()
-            .map(|(k, v)| (k.as_str(), v.white_stops))
+            .map(|(k, v)| (k.as_str(), v.white_stops.unwrap()))
             .collect();
         assert_eq!(stops, [("a.tif", 1.6), ("b.tif", 1.8)]);
+    }
+
+    #[test]
+    fn one_files_clamp_and_lift_from_two_layers_merge() {
+        // Each entry has one key, and the keys differ: the variant-switch shape, which
+        // would drop the clamp. An entry is a struct, so its fields merge.
+        let clamp =
+            json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 2.0}}}});
+        let lift = json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 0.2}}}});
+        let r = compose([&clamp, &lift]).unwrap();
+        let entry = r.roll.frames["a.tif"];
+        assert_eq!((entry.white_stops, entry.exposure), (Some(2.0), Some(0.2)));
     }
 
     #[test]

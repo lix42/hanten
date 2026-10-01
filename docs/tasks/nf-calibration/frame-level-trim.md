@@ -3,9 +3,9 @@
 ## Goal
 
 A small, bounded exposure trim per frame around the roll's measured exposure, so a
-low-key frame renders a little brighter and a bright frame a little darker than one
-exposure for the whole roll allows. The roll's exposure stays the anchor, and the recipe
-and report show what each frame got.
+low-key frame renders a little brighter than one exposure for the whole roll allows (the
+review found bright frames want no trim, so it only lifts). The roll's exposure stays the
+anchor, and the recipe and report show what each frame got.
 
 ## Design
 
@@ -24,16 +24,18 @@ What is known:
   (`nf-scene-correction/roll-white-balance`). A bound is what keeps the trim from doing
   the same.
 
-Open:
+Settled 2026-09-30 by two review rounds (details in `docs/progress/nf-calibration.md`,
+`## frame-level-trim`):
 
-- **What keys it**: the frame's level (log-average luma) against the roll's median, its
-  white, or both. Round 2's split followed the frame white.
-- **The bound**, and whether the trim is on by default or opt-in.
-- **Where it lives**: `roll.frames` entries written by `measure-roll`, beside the clamps,
-  or a rule applied at render time from a measured per-frame value. Either way, a
-  `roll.frames` exposure has to be pinned as a total or as a delta on the roll's, which
-  `thin-frame-lift` also has to settle. Settle it once for both.
-- **Colour.** Whether a trimmed low-key frame shows a cast that one roll exposure hid.
+- **The key** is where the frame's white renders after the roll's exposure. The white
+  alone re-did the roll's exposure on thin rolls; the level against the roll's median
+  split its verdicts evenly.
+- **A lift only**, up to +0.3 EV: bright frames wanted no trim, not a darker one.
+- **On by default**, with two opt-outs: one when measuring, one when rendering, so a
+  preview can turn it off without re-measuring.
+- **Where it lives:** `roll.frames` entries, as a **delta** on `roll.exposure`, which
+  binds `thin-frame-lift` too.
+- **Colour:** no cast reported on the lifted frames.
 
 ## How to Verify
 

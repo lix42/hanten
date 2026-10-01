@@ -1985,9 +1985,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Opt-in lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame far
   thinner than its roll gets a solved exposure and a steeper slope, bounded, written to
   `roll.frames`; more grain is the accepted price, and it is off by default
-- [ ] [A per-frame level trim](tasks/nf-calibration/frame-level-trim.md) — a small,
-  bounded exposure trim per frame around the roll's, so low-key frames render a little
-  brighter and bright ones a little darker
+- [x] [A per-frame level trim](tasks/nf-calibration/frame-level-trim.md) — a small,
+  bounded lift per frame on top of the roll's exposure, so low-key frames render a little
+  brighter; bright ones are left alone. On by default, with an opt-out
 - [x] [Exposure buckets within a roll](tasks/nf-calibration/exposure-buckets.md) —
   **closed—not needed 2026-10-01**: no split of the 09-28 roll moves its exposure more
   than 0.24 EV (0.05 at the half), so a group measures what the roll does; the residual

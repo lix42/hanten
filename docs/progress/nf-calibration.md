@@ -56,9 +56,16 @@ ACEScg luma to −0.6 scene stops from mid-grey (±2 EV), added to
 `scene_correction.exposure` under `default`. The decode still lets film speed show
 through; the roll's level is set after it. The white stays measured at exposure 0, so a
 lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.02 to
-+1.74 EV on ten rolls. A per-frame trim is `frame-level-trim`. Exposure groups within a
-roll were closed as not needed (`exposure-buckets`, 2026-10-01): no split of 09-28 moves
-its exposure more than 0.24 EV.
++1.74 EV on ten rolls. Exposure groups within a roll were closed as not needed
+(`exposure-buckets`, 2026-10-01): no split of 09-28 moves its exposure more than 0.24 EV.
+
+**`frame-level-trim` is done (2026-10-01): a low-key frame gets a small lift** on top of
+the roll's exposure, 0 to +0.3 EV, keyed on where its white renders after that exposure;
+bright frames are never darkened. `measure-roll` writes it as a **delta** in
+`roll.frames."<file>".exposure`, which `convert`/`roll` move into `roll.frame_exposure`.
+On by default; off at measurement (`--no-frame-lift`) or at render (`--frame-lift off`,
+`roll.frame_lift`, `null` = on) without re-measuring. Review: the lift was better on 72 of
+103 lifted frames, worse on 7.
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -722,14 +729,132 @@ frames; the look's default contrast is `no-roll-defaults`'.
   09-20 1886, 07-15 989, and the dark rolls' darkest frames) and lost on bright ones.
   That is a small per-frame trim on every frame, broader than this task's opt-in lift for
   frames far thinner than their roll. The roll's measured exposure on 09-28 is +1.39.
+- 2026-10-01: from `frame-level-trim` (see its section). A `roll.frames` entry's `exposure`
+  is a **delta** on `roll.exposure`, moved by `for_frame` into `roll.frame_exposure` and
+  gated by `roll.frame_lift` / `--frame-lift`. Every frame this task targets (1983, 1984,
+  2000, 2005, 1992) already gets that task's full +0.3 EV lift, so this solve's exposure
+  should replace it in the entry, not add to it. Open here: whether the switch also turns
+  off this task's slope, or the slope gets its own; exposure off with the slope kept
+  renders neither picture.
 
 ## frame-level-trim
 
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** done
+**Updated:** 2026-10-01
 
 - 2026-09-29: filed (user) from `roll-exposure`'s round 2, which split by frame. Goal: a
   small, bounded per-frame exposure trim around the roll's measured exposure.
+- 2026-09-30: **started.** Decisions (user): a `roll.frames` exposure is a **delta** on
+  `roll.exposure` (it adds, as a manifest exposure already does, and keeps its meaning when
+  the roll is re-measured), which binds `thin-frame-lift` too; on by default or opt-in is
+  decided after a run over every roll in the archive.
+  - **Round 2's split does not follow frame white alone.** 989 (white +1.45) wanted the
+    brighter target; neither the level against the roll median nor the white against the
+    roll's white separates the named frames (1627, 1742 and 1883 sit 1.2–1.4 stops under
+    their roll's median level). Round 2's other verdicts were never recorded.
+  - **The evidence is one-sided**: bright frames preferred −0.6 over both −0.3 and −0.8,
+    so they want no trim, not a darker one. The trim is a lift only, 0 to +0.3 EV.
+  - **Round 1** (`../temp/frame-level-trim/`, 28 frames on 9 rolls; inputs the
+    `roll-exposure` implementation's `measure-roll` reports). Two ramps, +0.3 in full at
+    or under a threshold, none at or over a second: **A** on the frame's white at exposure
+    0 (+0.3 → +0.9), **B** on the *rendered* white, frame white + roll exposure (+0.9 →
+    +1.5). Verdicts (user):
+    - Lift beats no lift on all ten frames both keys lift, the night frame 1641 and the
+      dark evening 1696 included; no zero-lift frame changed.
+    - Where they disagree, **B wins**: 2006 preferred B's +0.14 over A's +0.30; 1627,
+      1731, 1735 preferred B's lift (+0.21–0.28) where A gave ~0. B lost on 1742 (+0.21,
+      worse than none). A's +0.3 on thin-roll typical frames 1654 and 2001 (B 0) was
+      "different, no preference" — A re-does the roll's exposure on a thin roll (it lifts
+      10 of 11 frames on 09-11).
+    - Both missed 1800 (A +0.22, B +0.19; none preferred), whose level sits 0.40 over
+      its roll's median. A guard on that would touch 35 of the 103 frames B lifts on the
+      ten rolls, so it is not added on one verdict.
+    - B lifts 103 of 178 frames (09-18: 30 of 35). Round 1 tested no lift above +0.3.
+- 2026-09-30: **archive run: B is on by default, with an opt-out** (user). Every frame of
+  the ten rolls, no lift vs B (`review-archive.json`; tally `scripts/archive_verdicts.py`).
+  Of the 103 lifted frames: lift better 72, no lift better 7, different but neither
+  better 11, no visible difference 13. No roll looked too bright as a roll (09-18: 24 of
+  30 better). No cast was reported.
+  - Five of the seven losses sit 0.38–0.77 stop over their roll's median level (1719,
+    1720, 1800, 1813, 1896), but over +0.3 the verdicts split 7 better / 5 worse, so a
+    level guard would trade wins for losses. Not added.
+  - Margin frames are noisy across rounds: 1658 and 1709 won in round 1 and scored
+    worse / neither here; 1742 lost in round 1 and scored neither.
+- 2026-09-30: **implemented.** Opt-out at both ends (user: a future GUI previews and
+  turns it off without re-measuring).
+  - `roll_white::frame_lift` (`LIFT_BOUND_EV` 0.3, `LIFT_FULL_STOPS` +0.9,
+    `LIFT_NONE_STOPS` +1.5), from the frame's white and the roll's exposure as applied
+    (after its ±2 EV bound).
+  - `roll.frames` entries are `{"white_stops", "exposure"}`, either `null`; an entry
+    stating neither is refused. **`for_frame` moves the entry's `exposure` into a new key,
+    `roll.frame_exposure`** (`--roll-frame-exposure`), as it moves a white into
+    `roll.white_stops`. This departs from the plan, which kept the entry: the moved key
+    replays through `--dump-params`, gives a lifted frame a flag form, and the report
+    still names the roll's and the frame's exposure apart.
+  - `roll.frame_lift` / `--frame-lift on|off` (default `on`) gates `roll.frame_exposure`;
+    off keeps the value. Both keys are frame-local, so a manifest can turn one frame
+    off. `measure-roll --no-frame-lift` writes no lifts and still reports `lift_ev`.
+  - Report: `measure-roll` gains `frames[].lift_ev`, `frames[].flag` (a clamped or
+    lifted frame's own `convert` flags) and `frame_lift`; `chain.roll` gains
+    `frame_exposure` / `frame_exposure_applied`. A low-key frame converted by
+    `reuse.flag` alone now renders without its lift.
+  - The drift gate's v8 `recipe` fingerprint was refreshed in place: the two keys are
+    `null` / `"on"` by default, and `"on"` applies only a stated value, so no default
+    pixel moved.
+  - **Verified:** unit tests (the ramp, `for_frame`, off, `direct`, validation naming);
+    a binary test (night / ordinary / bright frames on one roll: the bound holds, the
+    bright frame is not lifted, and `--no-frame-lift`, `--frame-lift off` and
+    `roll.frame_lift` off render byte-identically). Re-measured the ten archive rolls:
+    103 of 178 frames lifted, identical to the reviewed key (max difference 0.0000 EV).
+    Existing tests that compared `reuse.flag` with `--out` now use the frame's own flag,
+    or `--no-frame-lift` where they test the clamp alone.
+- 2026-10-01: `/code-review high`, 10 findings. Fixed:
+  - **A `roll.frames` entry merges field by field across `--params` layers**
+    (`compose::MAPS` covers entries, not only the map): a one-key clamp and a one-key
+    lift for one file read as an enum variant switch, and the later layer dropped the
+    clamp.
+  - **`--frame-lift off` is never refused** under `direct` or the film master (it asks
+    for nothing); `on` still is, and the film-master wording now names a typed
+    `--film-master`.
+  - **`roll` refuses `roll.frame_exposure` for the whole roll**, typed or in the shared
+    recipe (a `convert --dump-params` file carries one frame's): it lifted every frame,
+    bright ones included. The remedy names `roll.frames`, a manifest's `params`, or
+    `--exposure`.
+  - The manifest's `roll.frames` refusal names `roll.frame_exposure` too.
+  - `frames[].flag` is present only where a frame differs from `reuse.flag` (not for a
+    clamped frame when the roll's white is the cap), computed in its own pass
+    (`frame_flags`) rather than in `measured_roll_white`.
+  - Module-doc evidence moved here; a stale "two exposures" comment.
+  Skipped: no leftover warning for a recipe `scene_correction.exposure` beside a
+  `roll.frame_exposure` with no `roll.exposure`. Only a hand-written recipe has that
+  shape, and `measure-roll` always writes the roll's exposure.
+- 2026-10-01: ship review (`ship:diff-reviewer`; the Codex pass failed, out of credits).
+  **`roll.frame_lift` is `Option`, `null` = on.** As a plain `"on"` it was stated in
+  every `measure-roll` file, and that file layered last (the guide's advice) silently
+  undid an earlier `"off"` layer — the GUI's toggle. A choice is never written by a
+  measurement. The v8 `recipe` fingerprint was refreshed again (`4bf83227c15ff890` →
+  `8c73f0c339cab87e`); no default pixel moved.
+- 2026-10-01: **done.** Landed: `roll_white::frame_lift` (0 to +0.3 EV, keyed on the
+  frame's white plus the roll's exposure: full at or under +0.9 stop, none at or over
+  +1.5); `roll.frames` entries `{"white_stops", "exposure"}` merging field by field;
+  `roll.frame_exposure` / `--roll-frame-exposure` (a delta on `roll.exposure`, where
+  `for_frame` moves an entry's lift); `roll.frame_lift` / `--frame-lift on|off`
+  (`null` = on); `measure-roll --no-frame-lift`; `roll` refuses a shared
+  `roll.frame_exposure`. Verified: unit and binary tests (the bound, the three opt-out
+  forms byte-identical, an off layer before the measured file, the presence rules), the
+  ten archive rolls reproducing the reviewed lifts exactly (103 of 178), two review
+  rounds with the user, two code reviews. **For dependents:**
+  - A frame's exposure in `roll.frames` is a **delta**; `thin-frame-lift` should
+    replace this lift in the entry, not add to it, and must decide whether
+    `--frame-lift off` also turns off its slope (its section, 2026-10-01).
+  - The lift keys on the roll's exposure as applied, so any later per-group exposure
+    would move it with the group (`exposure-buckets` closed without one).
+  - Pasting `reuse.flag` on a lifted frame renders it without its lift; its own
+    `frames[].flag` carries it.
+  - No lift above +0.3 was ever reviewed.
+- 2026-10-01: rebased onto `no-roll-defaults` (#218), which added the v9 row and left v8
+  as history. The in-place refresh moved to the v9 row (`214ecf6c86cbc179` →
+  `601475237e7a5941`); v8 keeps its own value.
 
 ## exposure-buckets
 
