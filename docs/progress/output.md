@@ -925,9 +925,9 @@ enough to blow highlights when borrowed.
   set is now built from plain values (`iso::fields`), which `project` feeds.
 - 2026-10-01: **Closed — narrowed claim.** Items 1 and 3 were already done by
   `io::iso_gain_map` (MP Type `050000`, `APP0 JFIF` first in both images), and
-  libultrahdr is gone. Item 2 settled without Exif: the file is not a strict DC-007
-  Baseline MP File (§4.2.1, §5.1), no reader tested needs Exif, and nothing claimed
-  strict conformance. Recorded in `io::iso_gain_map`'s module doc and design-spec §9.
+  libultrahdr is gone. Item 2 settled without Exif: the base is not the DC-007
+  baseline ISO 21496-1 C.4.3 asks for (DC-007 §4.2.1, §5.1), and no reader tested
+  needs one. Recorded in `io::iso_gain_map`'s module doc and design-spec §9.
 
 
 ## gain-map-dialect-activation

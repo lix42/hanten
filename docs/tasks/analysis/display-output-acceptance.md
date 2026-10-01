@@ -47,13 +47,17 @@ For representative colour and HDR frames:
 6. **Determinism** — repeated runs meet each encoder's documented contract:
    byte-identical where promised, else decoded pixels within the pinned codec bounds
    and identical semantic metadata.
-7. **Cross-encoding consistency** — matched SDR, HDR, gain-map and film-master outputs
+7. **Film-rendering fidelity** — representative stocks, lenses, development processes
+   and scanners keep their intended differences through NC film RGB v1 and across the
+   encodings. Acceptance compares encodings of the same render, not against a
+   physically neutral scene.
+8. **Cross-encoding consistency** — matched SDR, HDR, gain-map and film-master outputs
    preserve hue and relative exposure within each destination's declared tone and
    gamut policy; clipping and gamut compression are measured and reported.
-8. **Master/display agreement on mid-grey** — fit range holds `f(0.18) = 0.18`; the
+9. **Master/display agreement on mid-grey** — fit range holds `f(0.18) = 0.18`; the
    display operator carries the tonal character by design, so no wider tonal match is
    required.
-9. **Interoperability** — `analysis/viewer-interoperability`'s rubric passes.
+10. **Interoperability** — `analysis/viewer-interoperability`'s rubric passes.
 
 ### Automated oracles
 

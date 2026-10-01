@@ -661,7 +661,8 @@ What other epics need to know about `analysis`:
 - 2026-10-01: **Re-scoped and split.** The matrix named the retired presets, the
   Ultra HDR v1 / dual-dialect oracle, the sigmoid / exponential / `simple` rows and the
   `print.*` keys. It is now every ready `destination::ROWS` row under `default`, plus
-  `direct` and the film master; row 9 shrinks to mid-grey agreement. This task keeps
+  `direct` and the film master; the master/display tonal row shrinks to mid-grey
+  agreement. This task keeps
   the gate's specification (the oracles, and the reference-white normalization
   `nctool metrics` cites) and the real-scan run. Split out:
   `analysis/display-acceptance-harness` (the harness and oracles on fixtures, after

@@ -26,8 +26,8 @@
 //! is `0`.
 //!
 //! No Exif: with none present and an ICC profile embedded, the ICC governs the base's
-//! colour space (C.4.4). So the file is not a strict DC-007 Baseline MP File, which
-//! §4.2.1 and §5.1 build on Exif; no reader tested needs it. Whoever adds Exif must
+//! colour space (C.4.4). So the base is not the Exif-based DC-007 baseline that C.4.3
+//! asks for (DC-007 §4.2.1, §5.1); no reader tested needs one. Whoever adds Exif must
 //! write `ColorSpace = Uncalibrated`, never `1`, which forces an sRGB reading of the
 //! Display P3 base.
 //!

@@ -4,11 +4,12 @@
 > `io::iso_gain_map` (`nf-destinations/gain-map-destination`), types the gain map
 > `050000` and writes `APP0 JFIF` first in both images, so items 1 and 3 are done, and
 > libultrahdr is gone. Item 2 is settled as a **narrowed claim**: the file carries no
-> Exif, so it is not a strict DC-007 Baseline MP File (§4.2.1, §5.1); no reader
-> tested needs Exif, and nothing claims strict conformance. Recorded in
-> `io::iso_gain_map`'s module doc and design-spec §9. Adding Exif later needs the
-> constraints below and the macOS decoder oracle. What follows is the plan as it
-> stood, kept as decision history.
+> Exif, so its base is not the DC-007 baseline ISO 21496-1 C.4.3 asks for (DC-007
+> §4.2.1, §5.1); no reader tested needs one. Recorded in `io::iso_gain_map`'s module
+> doc and design-spec §9. Adding Exif later: `ColorSpace = Uncalibrated`, a deliberate
+> change to the `Exif\0\0` assertion in `io::iso_gain_map`'s tests, and a re-run of
+> the macOS decoder oracle. The `package()` and tripwire-test notes below are history.
+> What follows is the plan as it stood, kept as decision history.
 
 ## Goal
 

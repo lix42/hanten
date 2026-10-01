@@ -10,8 +10,8 @@
 No validation-passing recipe may produce a degenerate image silently, and no user
 value may reach an internal-invariant error. Three parts:
 
-1. **Every reachable degenerate value is a named usage error** (exit 2), never an
-   internal error. *(doable without real scans)*
+1. **No user value reaches an internal error**: each becomes a usage error (exit 2)
+   naming the knob. *(doable without real scans)*
 2. **A threshold-free collapse warning**: an output channel that quantizes entirely to
    `0` raises a report warning (`--strict` promotes). *(doable without real scans)*
 3. **A tuned near-black collapse warning** with a real-scan false-positive guard.
@@ -54,6 +54,8 @@ The report's `output_stats.mean` reads `[0, 0, 0]` on the all-black rows, and ev
 - **Part 1.** Validate the resolved value, not a proxy: the film base graded through
   decode → scene correction → look must be a finite, positive, normal luminance, and
   the message names the knobs that can move it (the `validate_whole_slope` pattern).
+  Not per-knob `is_normal()` refusals: individually legal factors can multiply to
+  zero, and a per-knob rule rejects legitimate extreme pushes.
   Then decide whether generous magnitude bounds on `reconstruction.offset`, `scale`
   and `linearization` are still needed once that rule exists. A negative offset is
   legal.

@@ -1635,8 +1635,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   8-bit SDR base in Display P3 or sRGB, and a half-resolution **per-channel** gain map
   to the HDR rendition, described by **ISO 21496-1 metadata only**, in a Multi-Picture
   Format container nc writes itself; the gain map's MP Type is `050000`. It carries no
-  Exif, so it is not a strict CIPA DC-007 Baseline MP File (§4.2.1, §5.1); no reader
-  tested needs one. The Ultra HDR v1 XMP dialect cannot describe a per-channel map and
+  Exif, so its base is not the CIPA DC-007 baseline ISO 21496-1 C.4.3 asks for
+  (DC-007 §4.2.1, §5.1); no reader tested needs one. The Ultra HDR v1 XMP dialect cannot describe a per-channel map and
   is not written, so neither is libultrahdr used. Every APP segment sits before `SOF0`, where readers stop looking.
   The gain is taken against the base **as stored**, since that is what a decoder
   multiplies (`pipeline::gain_ratio`). Adobe RGB has no gain-map row. Apple ImageIO

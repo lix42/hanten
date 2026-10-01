@@ -141,3 +141,10 @@ frame and patch, is in the archive at `/Volumes/blackbox/full-assets`.
 The triage table's unused-crates row is done: `kamadak-exif` and `palette` removed,
 `image` a JPEG-only dev-dependency, and CI now runs `cargo machete`. See
 `progress/core.md`, `## dependency-hygiene`.
+
+## Density-safety evidence moved (2026-10-01)
+
+`algo/density-safety-bounds` was re-scoped for the new chain. Its task file now holds
+evidence re-measured on the current binary; the removed chain's evidence the status
+table above cites (the 2026-07-27 `render_print` underflow) is in the task file's git
+history and in `progress/algo.md`'s `density-safety-bounds` section.
