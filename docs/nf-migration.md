@@ -87,10 +87,11 @@ half of `gamma`; `scale` as one global value; `Dmax` off the path. **Not** which
 values — that is `nf-calibration`.
 
 ### `nf-scene-correction`
-White balance and exposure on scene-referred values, and a home and a name for what
-`linear_range` does today. The black point is not split: its one job, placing black,
-is fit range's display black, and there is no scene-side flare/fog term to remove
-(`flare-removal`, closed 2026-09-26).
+White balance and exposure on scene-referred values. `linear_range` retired rather
+than moved (`levels-knob`): its gain is exposure and its black is display black. The
+black point is not split: its one job, placing black, is fit range's display black,
+and there is no scene-side flare/fog term to remove (`flare-removal`, closed
+2026-09-26).
 
 ### `nf-look`
 The stage itself — where it sits, its recipe section, its report fields — plus the

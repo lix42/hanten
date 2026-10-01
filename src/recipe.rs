@@ -410,8 +410,9 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
          `scene_correction.exposure`; the display tone is fit range, whose one \
          operator is reinhard and whose headroom is `fit_range.headroom_stops`; the \
          black point's surviving half is display black, `fit_range.display_black` \
-         (where the film base renders); and `linear_range` has no home yet \
-         (`nf-scene-correction/levels-knob`)",
+         (where the film base renders); and `linear_range`, the levels remap, \
+         retired: its gain is `scene_correction.exposure` and its black is \
+         `fit_range.display_black`",
 )];
 
 /// The removed chain's `output` keys: a destination is its axes here.
@@ -2382,6 +2383,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("calibration.dmax") && err.contains("reference-free"));
+        // The levels remap retired rather than moved: the message says so and names
+        // the two knobs that cover it.
+        let err = check(
+            r#"{"recipe_version": 3, "print": {"linear_range": [0.1, 0.9]}}"#,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("`linear_range`, the levels remap, retired")
+                && err.contains("scene_correction.exposure")
+                && err.contains("fit_range.display_black"),
+            "{err}"
+        );
+        assert!(!err.contains("no home"), "{err}");
         // Overlays get the same diagnosis.
         let err = check(r#"{"print": {"print_exposure": 1}}"#, false).unwrap_err();
         assert!(err.contains("`print`"), "{err}");

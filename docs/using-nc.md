@@ -445,8 +445,8 @@ usage: recipe print.json: `print` is a section of the removed chain's recipe: wh
        `scene_correction.exposure`; the display tone is fit range, whose one operator
        is reinhard and whose headroom is `fit_range.headroom_stops`; the black point's
        surviving half is display black, `fit_range.display_black` (where the film
-       base renders); and `linear_range` has no home yet
-       (`nf-scene-correction/levels-knob`). Drop it
+       base renders); and `linear_range`, the levels remap, retired: its gain is
+       `scene_correction.exposure` and its black is `fit_range.display_black`. Drop it
 ```
 
 The same holds for `reconstruction.density` (its `scale` and `offset` are
@@ -710,7 +710,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | `--print-exposure` | `--exposure`, scene correction (below) |
 | `--black-point` | display black, `--display-black` (below); a scene-side flare/fog subtraction was judged not needed (`nf-scene-correction/flare-removal`) |
 | `--auto-wb` | none per frame: `hanten measure-roll` measures the roll's white balance once (below) |
-| `--linear-range` | an affine levels remap with no home yet (`nf-scene-correction/levels-knob`); refused even at its old default `0,1` |
+| `--linear-range` | retired: its gain is `--exposure` and its black `--display-black` (`nf-scene-correction/levels-knob`); refused even at its old default `0,1` |
 | `--display-tone`, `--highlight-compress` | fit range's one operator; its parameter is `--display-tone-headroom` |
 
 ### The rendering — `default` or `direct`
