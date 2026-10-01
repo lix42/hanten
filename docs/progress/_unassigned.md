@@ -148,3 +148,10 @@ The triage table's unused-crates row is done: `kamadak-exif` and `palette` remov
 evidence re-measured on the current binary; the removed chain's evidence the status
 table above cites (the 2026-07-27 `render_print` underflow) is in the task file's git
 history and in `progress/algo.md`'s `density-safety-bounds` section.
+
+## `algo/density-safety-bounds` closed (2026-10-01)
+
+The status table's density-safety row is done: no recipe value reaches fit range's
+internal errors, and a channel written black everywhere warns. The tuned near-black
+warning is `algo/near-black-collapse-warning`. See `progress/algo.md`,
+`## density-safety-bounds`.

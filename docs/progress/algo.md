@@ -551,7 +551,7 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
 
 ## density-safety-bounds
 
-**Status:** not started
+**Status:** done (2026-10-01)
 **Updated:** 2026-10-01
 
 - Goal: Close the gap where a validation-passing density recipe can silently produce a degenerate (e.g. finite all-black) image, via bounded `density_scale`/`density_offset`/`density_gamma` ranges at the CLI `validate` boundary plus a post-render degenerate-output warning.
@@ -578,6 +578,45 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
   error (exit 1) instead of a usage error. The task is now three parts: named usage
   errors for every such value, a threshold-free all-zero-channel warning, and the
   tuned collapse warning on real scans. The tables are in the task file.
+- 2026-10-01: **Parts 1 and 2 done; part 3 split** to `algo/near-black-collapse-warning`.
+  - **Part 1 is a probe, not per-knob bounds** (`recipe::validate_render`, run by
+    `convert` and `roll` after `validate_shared`, and for every `roll.frames` entry).
+    Nine pixels — the film base and the corners of the reachable scan range, each
+    channel at `SCAN_FLOOR` or 1 — go through the real decode, ACEScg map, scene
+    correction and look (`chain::graded_pixels`). A non-finite sample, or a base whose
+    graded luminance is not positive and finite while display black is on, is a usage
+    error. The remedy re-probes with each stated knob reset to its default and names
+    those that alone render, else all of them. Every route in the sweep now exits 2
+    naming the knob; no internal error was left reachable from a recipe value.
+  - **Why not bounds:** the densest reachable sample is a zero sample floored to
+    `SCAN_FLOOR`, which real scans have in the holder; the fixture has none, so
+    `--density-scale=10` rendered on it while overflowing on any scan with a holder.
+    The probe refuses it; a bound would have had to pick a number. A base read from a
+    region is taken at 1, where that sample decodes densest — over-refusing by under a
+    decade of the 38 f32 holds.
+  - **The limit is tight.** On a synthetic scan with true zero samples (base 0.95),
+    `--density-offset` 9.9 renders and 9.91 is refused, on SDR, gain-map and PQ alike,
+    with no internal error anywhere in between — fit range's third backstop ("produced a
+    non-finite sample") was not reached.
+  - **Not in `measure-roll`**, which renders nothing; its own failures are unchanged.
+  - **An interaction found by the binary test:** under `MEASURED`'s contrast,
+    `--exposure=-100` drives the base to 0 through the look's power, so it is refused,
+    while with a measured roll white (slope ≈ 0.99) it renders black and warns.
+  - **Part 2** reads a per-channel maximum the encoders now keep beside the mean
+    (`OutputStats::max`, `serde(skip)` — not a report field) and warns when a channel
+    has no written sample above 0. It misses near-black that never reaches 0: HDR float
+    keeps tiny values and PQ never encodes 0 (PQ(0) ≈ 7e-7). That is part 3's.
+  - No default render moved: no `pipeline_version` bump, all goldens unchanged.
+
+
+## near-black-collapse-warning
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: Split out of `density-safety-bounds` as its part 3, the only part that
+  needs real scans: a near-black warning with a false-positive guard tuned on every
+  real frame. What part 2 misses is listed in the task file.
 
 
 ## reference-anchored-sigmoid

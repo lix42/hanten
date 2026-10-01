@@ -741,6 +741,17 @@ impl EncodeReport {
 pub struct OutputStats {
     /// Mean written sample value per channel `[r, g, b]`. Zero for an empty image.
     pub mean: [f64; 3],
+    /// Largest finite written sample per channel, in the mean's units — the black-channel
+    /// warning's input, not a report field. Zero for an empty image.
+    #[serde(skip)]
+    pub max: [f64; 3],
+}
+
+impl OutputStats {
+    /// The channels with no written sample above 0: the frame renders black there.
+    pub fn black_channels(&self) -> Vec<usize> {
+        (0..3).filter(|&c| self.max[c] <= 0.0).collect()
+    }
 }
 
 /// What the encode stage produced: the loss accounting the orchestrator turns into

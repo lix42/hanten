@@ -5,6 +5,12 @@
 > `print_exposure`, the sigmoid bounds); that version is in git. The gap it named
 > survives the flip, measured below.
 
+> **Done 2026-10-01 — parts 1 and 2.** Part 1 is `recipe::validate_render`, a probe of
+> the film base and the reachable scan range through the real decode and grade; part 2
+> is the black-channel warning at the encode. Part 3 moved to
+> [`algo/near-black-collapse-warning`](near-black-collapse-warning.md). The open
+> questions are answered below.
+
 ## Goal
 
 No validation-passing recipe may produce a degenerate image silently, and no user
@@ -70,8 +76,11 @@ The report's `output_stats.mean` reads `[0, 0, 0]` on the all-black rows, and ev
 ## Open questions
 
 - Does part 1 make the magnitude bounds unnecessary, or are they still wanted for
-  their messages?
+  their messages? **Unnecessary**: the probe refuses every value that reaches an
+  internal error, naming it, and a bound would refuse values that render.
 - Does the warning apply to the film master, whose output is unclamped float?
+  **Yes**: it reads the written samples of every encoder, and a film master whose
+  decode underflows to 0 warns.
 
 ## How to Verify
 
