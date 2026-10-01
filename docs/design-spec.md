@@ -321,7 +321,7 @@ decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 →
 | **look** | creative and optional: contrast, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
 | **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place display black (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
 | **fit gamut** | change primaries into the destination's gamut and move out-of-gamut colour to its boundary, keeping hue | `pipeline::fit_gamut` |
-| **encode** | transfer function, quantization, counting clamped and non-finite samples | `pipeline::color`, `io::encode`, `io::avif`, `io::jpeg` |
+| **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere | `pipeline::color`, `io::encode`, `io::avif`, `io::jpeg` |
 | **package** | container, ICC profile or CICP, metadata; for the gain map, the map itself | `io::*`, `pipeline::gain_ratio`, `pipeline::gain_encode`, `io::iso_gain_map` |
 
 **The order is carried by the types.** Each boundary is a type only the stage before
@@ -1445,6 +1445,16 @@ missing-exposure warning.
 
 The report's `chain.decode` states every resolved parameter and the derived `anchor`.
 
+**Whether the values combine into a render** is one more value rule
+(`recipe::validate_render`, on `convert` and `roll`, every `roll.frames` entry
+included), since legal values can multiply to zero or overflow. The film base and the
+corners of the reachable scan range (each channel at the scan floor or at 1) run through
+the decode, scene correction and the look; a sample that overflows f32, or a base that
+grades to a luminance display black cannot place black against, is a usage error naming
+each stated knob whose default alone would render. A base read from a region is taken
+at 1. A combination that renders but writes a channel as 0 everywhere is a warning at
+the encode instead.
+
 ### Rendering (`rendering`)
 - `--rendering default|direct` ⇒ `rendering` (default `"default"`) — the base every
   stage knob starts from (§6, `crate::rendering`). A knob written `null` is unstated and
@@ -1717,8 +1727,8 @@ alias, on flags and recipe keys alike. The reference build
 ### Global
 - `--params <json>`, `--dump-params <json>`
 - `--report json|none`, `--report-file <path>`
-- `--strict` — promote report warnings (clipping, non-finite samples, a
-  non-uniform film-base area or region, …) to a failing exit (see §11); on `convert`, `roll`, `measure-base` and `measure-roll`
+- `--strict` — promote report warnings (clipping, non-finite samples, a channel
+  written black everywhere, a non-uniform film-base area or region, …) to a failing exit (see §11); on `convert`, `roll`, `measure-base` and `measure-roll`
 - `--max-memory <bytes>` — peak-memory budget for the run (`8GiB`, `512MB`, or raw
   bytes). Every command that decodes a scan (`convert`, `roll`, `inspect`,
   `measure-base`, `measure-roll`) estimates its peak allocation from a **metadata-only header probe

@@ -41,9 +41,14 @@ use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams, LINEARIZATION};
+use crate::algo::fixed::{
+    self, AnchorRule, DENSITY_OFFSET, DENSITY_SCALE, DecodeFault, DecodeParams, LINEARIZATION,
+    MID_ABOVE_BASE, SCAN_FLOOR,
+};
 use crate::destination::{self, Change, DisplayAxes, Fault, OutputSection, Resolved};
-use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
+use crate::pipeline::chain::{self, ChainParams, DisplayTarget, SharedParams};
+use crate::pipeline::colorimetry::dot;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::{
     DisplayBlack, DisplayBlackFault, DisplayPeak, MAX_DISPLAY_BLACK_STOPS,
@@ -54,8 +59,11 @@ use crate::pipeline::look::{
 };
 use crate::pipeline::roll_white;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
+use crate::pipeline::working_space::map_nc_film_rgb_v1;
 use crate::rendering::{Base, Rendering};
-use crate::types::{FilmBaseSource, InputParams, MeasureParams, NcError, Result};
+use crate::types::{
+    FilmBase, FilmBaseSource, InputParams, LinearImage, MeasureParams, NcError, Result,
+};
 
 /// The document version this build writes.
 pub const RECIPE_VERSION: u32 = 3;
@@ -1216,6 +1224,251 @@ pub fn validate_roll_frames(
         )?;
     }
     Ok(())
+}
+
+/// Whether `r`'s values combine into a render: every sample a scan can hold stays finite
+/// through the decode, scene correction and the look, and the film base grades to a
+/// positive luminance for display black. Fit range refuses either as a wiring bug.
+/// Run by `convert` and `roll` (not `measure-roll`, which renders nothing) after
+/// `cli::validate_shared`, for `r` and each `roll.frames` entry; `own` is the entry
+/// `r`'s frame took, so its fault is named as the entry.
+///
+/// **A probe, not a bound per knob** — legal values can multiply to zero or overflow:
+/// the film base and the corners of the reachable scan range (each channel at the scan
+/// floor or 1) through the real stages, which are monotone per channel. A base read
+/// from a region is taken at 1, where the densest sample decodes densest.
+pub fn validate_render(
+    r: &Recipe,
+    own: Option<(&str, &FrameRoll)>,
+    names: KnobNames,
+) -> Result<()> {
+    if r.output == OutputSection::FilmMaster {
+        return Ok(());
+    }
+    render_fault_message(r, own, None, names)?;
+    for (name, entry) in &r.roll.frames {
+        let frame = r.clone().for_frame(Path::new(name));
+        render_fault_message(&frame, Some((name, entry)), Some(name), names)?;
+    }
+    Ok(())
+}
+
+/// What stops a recipe rendering ([`validate_render`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RenderFault {
+    /// The film base grades to this luminance, not a positive, finite one.
+    Base(f32),
+    /// The densest reachable sample renders non-finite.
+    Overflow,
+}
+
+fn render_fault(r: &Recipe) -> Result<Option<RenderFault>> {
+    let base = match r.calibration.film_base {
+        Some(FilmBaseSource::Explicit(b)) => b,
+        _ => [1.0; 3],
+    };
+    let mut probe = base.to_vec();
+    for corner in 0..8 {
+        probe.extend((0..3).map(|c| {
+            if corner >> c & 1 == 1 {
+                SCAN_FLOOR
+            } else {
+                1.0
+            }
+        }));
+    }
+    let film_base = FilmBase {
+        r: base[0],
+        g: base[1],
+        b: base[2],
+    };
+    let (film, _) = fixed::decode(
+        &LinearImage::new(9, 1, probe, None)?,
+        &film_base,
+        &r.reconstruction,
+    )?;
+    let graded = chain::graded_pixels(map_nc_film_rgb_v1(film), &r.shared_params())?;
+    if r.resolved_fit_range().1 != DisplayBlack::Off {
+        let luminance = dot([graded.rgb[0], graded.rgb[1], graded.rgb[2]], ACESCG_LUMA);
+        if !(luminance.is_finite() && luminance > 0.0) {
+            return Ok(Some(RenderFault::Base(luminance)));
+        }
+    }
+    Ok(graded
+        .rgb
+        .iter()
+        .any(|v| !v.is_finite())
+        .then_some(RenderFault::Overflow))
+}
+
+/// A knob the probe reads: whether a recipe states it, and how to reset it.
+struct ProbeKnob {
+    section: &'static str,
+    flag: &'static str,
+    key: &'static str,
+    stated: fn(&Recipe) -> bool,
+    reset: fn(&mut Recipe),
+}
+
+const PROBE_KNOBS: [ProbeKnob; 12] = [
+    ProbeKnob {
+        section: "reconstruction",
+        flag: "--density-offset",
+        key: "offset",
+        stated: |r| r.reconstruction.offset != DENSITY_OFFSET,
+        reset: |r| r.reconstruction.offset = DENSITY_OFFSET,
+    },
+    ProbeKnob {
+        section: "reconstruction",
+        flag: "--density-scale",
+        key: "scale",
+        stated: |r| r.reconstruction.scale != DENSITY_SCALE,
+        reset: |r| r.reconstruction.scale = DENSITY_SCALE,
+    },
+    ProbeKnob {
+        section: "reconstruction",
+        flag: "--density-gamma",
+        key: "linearization",
+        stated: |r| r.reconstruction.linearization != LINEARIZATION,
+        reset: |r| r.reconstruction.linearization = LINEARIZATION,
+    },
+    ProbeKnob {
+        section: "reconstruction",
+        flag: "--anchor-mid-offset",
+        key: "anchor",
+        stated: |r| r.reconstruction.anchor != AnchorRule::MidAboveBase(MID_ABOVE_BASE),
+        reset: |r| r.reconstruction.anchor = AnchorRule::MidAboveBase(MID_ABOVE_BASE),
+    },
+    ProbeKnob {
+        section: "look",
+        flag: "--contrast",
+        key: "contrast",
+        stated: |r| r.look.contrast != 1.0,
+        reset: |r| r.look.contrast = 1.0,
+    },
+    ProbeKnob {
+        section: "look",
+        flag: "--channel-grade",
+        key: "channel_grade",
+        stated: |r| r.look.channel_grade != IDENTITY_CHANNEL_GRADE,
+        reset: |r| r.look.channel_grade = IDENTITY_CHANNEL_GRADE,
+    },
+    ProbeKnob {
+        section: "roll",
+        flag: "--roll-white",
+        key: "white_stops",
+        stated: |r| r.roll.white_stops.is_some(),
+        reset: |r| r.roll.white_stops = None,
+    },
+    ProbeKnob {
+        section: "scene_correction",
+        flag: "--exposure",
+        key: "exposure",
+        stated: |r| r.scene_correction.exposure != 0.0,
+        reset: |r| r.scene_correction.exposure = 0.0,
+    },
+    ProbeKnob {
+        section: "roll",
+        flag: "--roll-exposure",
+        key: "exposure",
+        stated: |r| r.roll.exposure.is_some(),
+        reset: |r| r.roll.exposure = None,
+    },
+    ProbeKnob {
+        section: "roll",
+        flag: "--roll-frame-exposure",
+        key: "frame_exposure",
+        stated: |r| r.roll.frame_exposure.is_some(),
+        reset: |r| r.roll.frame_exposure = None,
+    },
+    ProbeKnob {
+        section: "scene_correction",
+        flag: "--white-balance",
+        key: "white_balance",
+        stated: |r| r.scene_correction.white_balance != WhiteBalance::Explicit([1.0; 3]),
+        reset: |r| r.scene_correction.white_balance = WhiteBalance::Explicit([1.0; 3]),
+    },
+    ProbeKnob {
+        section: "roll",
+        flag: "--roll-white-balance",
+        key: "white_balance",
+        stated: |r| r.roll.white_balance.is_some(),
+        reset: |r| r.roll.white_balance = None,
+    },
+];
+
+/// [`render_fault`] as a usage error: the fault, and the stated knobs whose default
+/// alone clears it — else every stated knob the probe reads.
+fn render_fault_message(
+    r: &Recipe,
+    own: Option<(&str, &FrameRoll)>,
+    entry: Option<&str>,
+    names: KnobNames,
+) -> Result<()> {
+    let Some(fault) = render_fault(r)? else {
+        return Ok(());
+    };
+    // The frame's entry, when `r`'s white or frame exposure came from it (a flag beats it).
+    let name = |k: &ProbeKnob| match (own, k.section, k.key) {
+        (Some((frame, e)), "roll", "white_stops")
+            if e.white_stops.is_some() && e.white_stops == r.roll.white_stops =>
+        {
+            format!("recipe `roll.frames.\"{frame}\".white_stops`")
+        }
+        (Some((frame, e)), "roll", "frame_exposure")
+            if e.exposure.is_some() && e.exposure == r.roll.frame_exposure =>
+        {
+            format!("recipe `roll.frames.\"{frame}\".exposure`")
+        }
+        _ => knob_name(names, k.section, k.flag, k.key),
+    };
+    let stated: Vec<&ProbeKnob> = PROBE_KNOBS.iter().filter(|k| (k.stated)(r)).collect();
+    let mut clears = Vec::new();
+    for k in &stated {
+        let mut reset = r.clone();
+        (k.reset)(&mut reset);
+        if render_fault(&reset)?.is_none() {
+            clears.push(name(k));
+        }
+    }
+    let remedy = match clears.as_slice() {
+        [] if stated.is_empty() => String::new(),
+        [] => format!(
+            " It renders with {} at their defaults",
+            stated
+                .iter()
+                .map(|k| name(k))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        ),
+        [one] => format!(" It renders with {one} at its default"),
+        some => format!(
+            " It renders with any one of {} at its default",
+            some.join(", ")
+        ),
+    };
+    let frame = entry.map_or(String::new(), |e| format!("recipe `roll.frames.\"{e}\"`: "));
+    let fault = match fault {
+        RenderFault::Base(luminance) => format!(
+            "the film base renders to luminance {} after the decode, scene correction and \
+             the look, and display black needs a positive, finite one to place black \
+             against.",
+            if luminance == 0.0 {
+                "0".into()
+            } else {
+                format!("{luminance:e}")
+            }
+        ),
+        RenderFault::Overflow => format!(
+            "the densest sample a scan can hold (a zero sample, read at the scan floor) \
+             overflows f32 in the decode, scene correction or the look{}.",
+            match r.calibration.film_base {
+                Some(FilmBaseSource::Explicit(_)) => "",
+                _ => ", with a film base read from a region taken at 1, where it decodes densest",
+            }
+        ),
+    };
+    Err(NcError::Usage(format!("{frame}{fault}{remedy}")))
 }
 
 /// Scene correction's value rules ([`SceneCorrectionParams::check`]), rendered as a
@@ -3938,5 +4191,173 @@ mod tests {
             // Falsifiability: the default does not already satisfy the check.
             assert!(!landed(&Recipe::default()), "{flag}'s check is vacuous");
         }
+    }
+
+    /// `validate_render`'s message for `convert` with `extra` over an explicit base, or
+    /// `None` when the recipe renders.
+    fn render_err(json: &str, extra: &[&str]) -> Option<String> {
+        let mut flags = vec!["--film-base", "0.9,0.55,0.42"];
+        flags.extend(extra);
+        let r = merged(json, &flags);
+        validate(&r, KnobNames::FlagAndKey).unwrap();
+        validate_render(&r, None, KnobNames::FlagAndKey)
+            .err()
+            .map(|e| e.message().to_string())
+    }
+
+    const V3: &str = r#"{"recipe_version": 3}"#;
+
+    #[test]
+    fn a_film_base_that_grades_to_nothing_is_refused_naming_the_knob() {
+        for (flag, value, key) in [
+            ("--density-offset", "-30,-30,-30", "reconstruction.offset"),
+            ("--density-offset", "1e6,1e6,1e6", "reconstruction.offset"),
+            ("--density-gamma", "100", "reconstruction.linearization"),
+            ("--anchor-mid-offset", "30", "reconstruction.anchor"),
+            ("--contrast", "100", "look.contrast"),
+            ("--roll-white", "0.001", "roll.white_stops"),
+        ] {
+            let err = render_err(V3, &[&format!("{flag}={value}")]).expect(flag);
+            assert!(
+                err.starts_with("the film base renders to luminance"),
+                "{flag}: {err}"
+            );
+            assert!(
+                err.ends_with(&format!(
+                    "It renders with {flag} (recipe `{key}`) at its default"
+                )),
+                "{flag}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sample_that_overflows_is_refused_naming_the_knob() {
+        let err = render_err(V3, &["--density-scale", "100,100,100"]).unwrap();
+        assert!(
+            err.starts_with("the densest sample a scan can hold"),
+            "{err}"
+        );
+        assert!(
+            err.contains("--density-scale (recipe `reconstruction.scale`)"),
+            "{err}"
+        );
+        // The region clause belongs to a base read from a region only.
+        assert!(!err.contains("region"), "{err}");
+        // Display black off reads no base, but the overflow is still the render's.
+        let err = render_err(
+            V3,
+            &["--display-black", "off", "--density-offset=1e6,1e6,1e6"],
+        )
+        .unwrap();
+        assert!(err.starts_with("the densest sample"), "{err}");
+    }
+
+    #[test]
+    fn a_base_from_a_region_is_probed_at_one() {
+        let r = merged(
+            V3,
+            &[
+                "--base-region",
+                "0,0,10,10",
+                "--density-scale",
+                "100,100,100",
+            ],
+        );
+        let err = validate_render(&r, None, KnobNames::FlagAndKey).unwrap_err();
+        assert!(
+            err.message().contains("read from a region taken at 1"),
+            "{}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn the_remedy_names_each_knob_that_clears_the_fault_alone() {
+        // Either alone at its default renders.
+        let err = render_err(
+            V3,
+            &["--density-scale=2.5,2.5,2.5", "--density-offset=5,5,5"],
+        )
+        .unwrap();
+        assert!(
+            err.ends_with(
+                "It renders with any one of --density-offset (recipe `reconstruction.offset`), \
+                 --density-scale (recipe `reconstruction.scale`) at its default"
+            ),
+            "{err}"
+        );
+        // Neither alone renders: both are named, together.
+        let err = render_err(V3, &["--density-offset=-20,-20,-20", "--contrast", "60"]).unwrap();
+        assert!(
+            err.ends_with(
+                "It renders with --density-offset (recipe `reconstruction.offset`) and \
+                 --contrast (recipe `look.contrast`) at their defaults"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_rendering_recipe_and_the_film_master_pass() {
+        assert_eq!(render_err(V3, &[]), None);
+        // Extreme but rendering: black output, which the encoder warns about.
+        assert_eq!(render_err(V3, &["--exposure=-100"]), None);
+        assert_eq!(
+            render_err(
+                V3,
+                &["--display-black", "off", "--density-offset=-30,-30,-30"]
+            ),
+            None
+        );
+        // The film master runs no rendering stage.
+        assert_eq!(
+            render_err(V3, &["--film-master", "--density-scale", "100,100,100"]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_roll_entry_is_named_as_itself() {
+        let json = r#"{"recipe_version": 3,
+            "roll": {"white_stops": 2.5, "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
+        let err = render_err(json, &[]).unwrap();
+        assert!(
+            err.starts_with(r#"recipe `roll.frames."b.tif"`: the film base"#),
+            "{err}"
+        );
+        assert!(
+            err.ends_with(
+                r#"It renders with recipe `roll.frames."b.tif".white_stops` at its default"#
+            ),
+            "{err}"
+        );
+        assert!(!err.contains("--roll-white"), "{err}");
+        // `convert` of that frame: the entry moved into `roll.white_stops`, and is still
+        // named as the entry; a flag that beats it is named as the flag.
+        let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
+        let own = stated
+            .roll
+            .frames
+            .get_key_value("b.tif")
+            .map(|(n, e)| (n.as_str(), e));
+        let frame = stated.clone().for_frame(Path::new("b.tif"));
+        let err = validate_render(&frame, own, KnobNames::FlagAndKey).unwrap_err();
+        assert!(
+            err.message()
+                .ends_with(r#"recipe `roll.frames."b.tif".white_stops` at its default"#),
+            "{}",
+            err.message()
+        );
+        let mut beaten = frame;
+        beaten.roll.frames.clear();
+        beaten.roll.white_stops = Some(0.002);
+        let err = validate_render(&beaten, own, KnobNames::FlagAndKey).unwrap_err();
+        assert!(
+            err.message()
+                .ends_with("--roll-white (recipe `roll.white_stops`) at its default"),
+            "{}",
+            err.message()
+        );
     }
 }

@@ -63,6 +63,7 @@ pub(crate) fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
         clipped_low: u64,
         clipped_high: u64,
         sums: [u64; 3],
+        max: [u8; 3],
     }
     let mut bytes = vec![0_u8; rgb.len()];
     let band = bytes
@@ -84,6 +85,7 @@ pub(crate) fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
                     (value * u8::MAX as f32).round() as u8
                 };
                 band.sums[index % 3] += u64::from(byte);
+                band.max[index % 3] = band.max[index % 3].max(byte);
                 *o = byte;
             }
             band
@@ -97,6 +99,7 @@ pub(crate) fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
                 a.sums[1] + b.sums[1],
                 a.sums[2] + b.sums[2],
             ],
+            max: std::array::from_fn(|c| a.max[c].max(b.max[c])),
         });
     let loss = EncodeReport {
         total_samples: rgb.len() as u64,
@@ -116,7 +119,8 @@ pub(crate) fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
             sums[2] as f64 / pixels as f64 / u8::MAX as f64,
         ]
     };
-    (bytes, loss, OutputStats { mean })
+    let max = band.max.map(|m| f64::from(m) / u8::MAX as f64);
+    (bytes, loss, OutputStats { mean, max })
 }
 
 #[cfg(test)]
@@ -131,6 +135,8 @@ mod tests {
         assert_eq!(loss.clipped_high, 1);
         assert_eq!(loss.non_finite, 1);
         assert_eq!(stats.mean[0], 0.5);
+        // Blue holds a non-finite and a 0, both written as 0.
+        assert_eq!(stats.max, [1.0, 1.0, 0.0]);
     }
 
     #[test]

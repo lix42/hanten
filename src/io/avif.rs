@@ -385,14 +385,16 @@ fn quantize_to_ycbcr(
         ..EncodeReport::default()
     };
     let mut sums = [0_f64; 3];
+    let mut max = [0_f64; 3];
 
     for px in chunks {
         // Statistics are taken on the encoded R'G'B' signal, not on the written
         // Y'CbCr codes: `OutputStats` is defined per R/G/B channel, and Y'CbCr has
         // no such channels, so reporting chroma under `mean[1]` would mislead.
-        for (sum, &channel) in sums.iter_mut().zip(px.iter()) {
+        for (c, &channel) in px.iter().enumerate() {
             if channel.is_finite() {
-                *sum += f64::from(channel);
+                sums[c] += f64::from(channel);
+                max[c] = max[c].max(f64::from(channel));
             }
         }
         let ycbcr = apply_matrix(BT2020_NCL_RGB_TO_YCBCR, *px);
@@ -414,6 +416,7 @@ fn quantize_to_ycbcr(
     let divisor = pixels as f64;
     let stats = OutputStats {
         mean: sums.map(|sum| sum / divisor),
+        max,
     };
     Ok((planes, loss, stats))
 }

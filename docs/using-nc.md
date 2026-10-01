@@ -14,7 +14,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > (`nf-calibration/no-roll-defaults`, the look's fallback slope) the sections that slope
 > reaches were re-run: §6's `reconstruction.contrast` refusal, §7's rendering table,
 > no-roll warning, look report and fit-range report. At `nf-calibration/frame-level-trim`
-> the roll section's examples (§5, §7) were re-run. The staleness signal is
+> the roll section's examples (§5, §7) were re-run. At `algo/density-safety-bounds`
+> (`pipeline_version` 9) §10's examples and §12's new entries were re-run. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -1630,6 +1631,13 @@ Clipping is reported, never silent:
 Every encoder counts this, not just the TIFF ones — the gain-map JPEG and the
 AVIF paths build the same report when they quantize.
 
+A channel written as 0 everywhere is in range, so no loss counter sees it; it warns on
+its own (`--exposure=-100` on a fixture, with the roll stated):
+
+```json
+["no written sample is above 0 in the red, green and blue channels: the frame renders black there"]
+```
+
 Fit range compresses the scene against its headroom, so on both test fixtures **a
 default render does not clip**. A clip warning therefore means something pushed samples
 past fit range's reach — most often **exposure** (`--exposure 12` clips 100% of a frame)
@@ -1761,6 +1769,20 @@ roll has none, a region of unexposed film on another frame (`--base-region`).
 **"base-region … is not uniform (worst per-channel relative spread …)"**
 Your rectangle mixes unexposed film with image content. Check the coordinates, or run
 `measure-base` on a genuinely unexposed frame.
+
+**"the film base renders to luminance 0 after the decode, scene correction and the look …"**
+**"the densest sample a scan can hold … overflows f32 …"**
+The stated values do not combine into a render, though each is legal alone: the film
+base would grade to nothing display black can place black against, or the densest
+sample a scan can hold (a zero sample) would overflow. Checked before anything is
+decoded, on `convert` and `roll`, every `roll.frames` entry included. The message ends
+with each knob whose default alone would render:
+
+```text
+usage: the film base renders to luminance 0 after the decode, scene correction and the look, and display black needs a positive, finite one to place black against. It renders with --contrast (recipe `look.contrast`) at its default
+```
+
+A base read from a region is checked as if it were 1, and the message says so.
 
 **Heavy clipping in the report**
 Fit range does not clip ordinary content at its default headroom, so something pushed

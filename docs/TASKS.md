@@ -243,6 +243,7 @@ graph TD
     algo/exponential-anchor-placement
     algo/dmax-white-anchor
     algo/density-safety-bounds
+    algo/near-black-collapse-warning
     algo/auto-neutral-wb
     algo/regional-color-balance
     algo/bw-support
@@ -465,6 +466,7 @@ graph TD
   algo/density --> algo/regional-color-balance
   algo/density --> algo/density-safety-bounds
   core/pipeline-orchestration --> algo/density-safety-bounds
+  algo/density-safety-bounds --> algo/near-black-collapse-warning
   algo/density --> algo/bw-support
   core/pipeline-orchestration --> algo/bw-support
   algo/dmax-white-anchor --> algo/bw-support
@@ -887,6 +889,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   own tone and exposure.
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP; re-scoped 2026-10-01): `algo/density`, `core/pipeline-orchestration`
+- `algo/near-black-collapse-warning` (post-MVP; split from `algo/density-safety-bounds` 2026-10-01, **needs real scans**): `algo/density-safety-bounds`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/regional-color-balance` (post-MVP): `algo/density`
 - `algo/bw-support` (post-MVP): `algo/density`, `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `io/gray-primary-decode`
@@ -1493,12 +1496,14 @@ the design now in `docs/design-spec.md` (§6–§7):
   **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
 - [ ] [Black & white negative support (mono color model)](tasks/algo/bw-support.md)
-- [ ] [Density safety bounds](tasks/algo/density-safety-bounds.md) — *re-scoped
-  2026-10-01* for the new chain: `--density-offset=-5,…`, `--exposure=-100` and a tiny
-  white-balance gain still render all black with no warning, and extreme decode values
-  reach an internal error in fit range. Make every such value a named usage error, warn
-  when an output channel is entirely 0, then tune a near-black collapse warning on real
-  scans.
+- [x] [Density safety bounds](tasks/algo/density-safety-bounds.md) — **done 2026-10-01**:
+  a value no longer reaches fit range's internal errors — `recipe::validate_render` probes
+  the film base and the reachable scan range through the real decode and grade, and
+  refuses (exit 2) naming each knob whose default alone would render; a channel written
+  as 0 everywhere warns at the encode. Part 3 is the task below.
+- [ ] [Near-black collapse warning](tasks/algo/near-black-collapse-warning.md) — warn on a
+  render that collapses to near-black without a channel reaching exactly 0, with a
+  false-positive guard tuned on real scans
 
 ### color — [progress](progress/color.md)
 > `pipeline/color.rs`, `pipeline/working_space.rs`, and
