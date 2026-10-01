@@ -500,9 +500,10 @@ PYTHONPATH=scripts/analysis python3 -m nctool compare run \
 PYTHONPATH=scripts/analysis python3 -m nctool compare diff before.json after.json
 ```
 
-Cases come from `benchmark.json`. The default `fixtures` set is self-contained:
-the committed fixtures through every ready destination (all four axes stated), the
-film master, `--rendering direct` and the product default, on both input formats.
+Cases come from `benchmark.json`. The default `fixtures` set is self-contained: the
+HDRi fixture through every ready destination (all four axes stated), the film master,
+`--rendering direct` and the product default, and the HDR 48-bit fixture (the other
+input format) through the default and the film master.
 Two runs of one build over it diff to zero, and CI checks exactly that. The `rolls`
 set resolves real scans and checksums through the asset manifest.
 

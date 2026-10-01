@@ -1018,7 +1018,10 @@ class TestResolveCases(unittest.TestCase):
                 ({"destination": {"argz": []}}, "unknown key(s) argz"),
                 ({"preset": []}, "`preset` must be an object"),
                 ({"preset": {"args": "--x"}}, "`preset`.args must be a list"),
-                ({"destination": {"recipe": "no/such.json"}}, "recipe not found")):
+                ({"destination": {"recipe": "no/such.json"}}, "recipe not found"),
+                ({"destination": {"recipe": os.path.join(
+                    compare.repo_root(), "scripts/real-scan-verify/recipes/Ektar.json")}},
+                 "must be a repo-relative path")):
             with self.subTest(case=case):
                 bench = {"schema_version": compare.BENCHMARK_SCHEMA, "sets": {"s": {
                     "root": "repo", "cases": [dict(name="c", input=fixture, **case)]}}}
@@ -1070,11 +1073,23 @@ class TestShippedBenchmark(unittest.TestCase):
                     self.assertIsNone(err)
                     self.assertTrue(all(os.path.isfile(c["input"]) for c in cases))
                 else:
-                    # Needs the assets to resolve; the shape is still checked.
-                    self.assertIn("needs the asset manifest", err)
-                    for case in spec["cases"]:
-                        self.assertIn("roll", case)
-                        self.assertIn("frame", case)
+                    # Resolved against a stand-in asset root holding every frame it
+                    # names, so its keys and blocks are validated without the scans.
+                    with tempfile.TemporaryDirectory() as root:
+                        rolls: dict = {}
+                        for case in spec["cases"]:
+                            rel = os.path.join("rolls", case["roll"], f"{case['frame']}.tif")
+                            os.makedirs(os.path.dirname(os.path.join(root, rel)),
+                                        exist_ok=True)
+                            open(os.path.join(root, rel), "wb").close()
+                            rolls.setdefault(case["roll"], {"frames": []})["frames"].append(
+                                {"file": rel})
+                        with open(os.path.join(root, "manifest.json"), "w",
+                                  encoding="utf-8") as fh:
+                            json.dump({"rolls": rolls}, fh)
+                        cases, err = compare.resolve_cases(bench, set_name, root)
+                    self.assertIsNone(err)
+                    self.assertEqual(len(cases), len(spec["cases"]))
 
     def test_no_preset_block_renders_without_the_reference_config(self):
         # The reference build is pinned to `--preset sigmoid-knees`; a preset block

@@ -385,6 +385,25 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   `destination::tests::every_ready_row_has_a_benchmark_case`, so a row turning ready
   (the SDR JPEG) needs a case, and a preset block if the reference wrote it.
 
+### 2026-10-01 — code-review fixes
+
+- **The default-pairing test pinned nothing new.** It repeated
+  `nothing_stated_is_the_display_p3_sdr_tiff` and never read `benchmark.json`. It is
+  replaced by `every_benchmark_preset_block_writes_its_cases_destination`: each
+  fixtures preset block's `--output-preset` must write the destination its case's
+  `destination` block resolves to, from a table of the reference's (frozen) presets.
+  Falsified: `hdri-default` paired with `compatibility` reds it.
+- **The `rolls` set's keys and blocks were never validated in CI**: resolving stopped
+  at the missing asset manifest. The shipped-benchmark test now resolves it against a
+  stand-in asset root, so a misspelt block key reds it.
+- An absolute `recipe` path is refused, as its message already said.
+- `INTERFACES` now lives in `manifest`, beside `output_interface`, which returns it.
+- The README no longer claims every destination runs on both input formats.
+- **Kept: `default` beside `hdri-sdr-native-display-p3-tiff`.** They render the same
+  thing today, but `default` follows the product default when it moves; the preset
+  test then forces its reference pairing to move too. The cost is one 502×462 render
+  per run.
+
 ## film-rgb-export
 
 **Status:** done (2026-09-30)

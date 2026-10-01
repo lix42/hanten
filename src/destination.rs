@@ -1507,20 +1507,74 @@ mod tests {
         assert_eq!(cases.into_keys().collect::<BTreeSet<_>>(), ready);
     }
 
-    /// The `default` cases pair the unset destination with the reference's
-    /// `display-p3` preset; a default that moves within the 16-bit TIFF would keep the
-    /// depth and read as a pipeline change. Move this with their preset block.
+    /// Every fixtures case's `preset` block names the reference preset that writes the
+    /// destination its `destination` block resolves to, so a reference-vs-HEAD diff
+    /// compares pipelines, not destinations. The reference's presets are frozen.
     #[test]
-    fn the_benchmark_default_cases_pair_with_the_default_destination() {
-        let r = resolve(&DisplayAxes::default(), &STD).unwrap();
-        assert_eq!(
-            (r.range, r.transfer, r.gamut, r.container),
+    fn every_benchmark_preset_block_writes_its_cases_destination() {
+        const REFERENCE: [(&str, Option<[&str; 4]>); 9] = [
+            ("display-p3", Some(["sdr", "native", "display-p3", "tiff"])),
+            ("compatibility", Some(["sdr", "native", "srgb", "tiff"])),
+            ("hdr-linear-tiff", Some(["hdr", "linear", "bt2020", "tiff"])),
+            ("hdr-pq-tiff", Some(["hdr", "pq", "bt2020", "tiff"])),
+            ("hdr-hlg-tiff", Some(["hdr", "hlg", "bt2020", "tiff"])),
+            ("hdr-pq", Some(["hdr", "pq", "bt2020", "avif"])),
+            ("hdr-hlg", Some(["hdr", "hlg", "bt2020", "avif"])),
             (
-                Range::Sdr,
-                Transfer::Native,
-                Gamut::DisplayP3,
-                Container::Tiff
-            )
-        );
+                "gain-map-hdr",
+                Some(["hdr", "native", "display-p3", "jpeg"]),
+            ),
+            ("film-master", None),
+        ];
+        fn stated<A: Axis>(args: &[&str]) -> Option<A> {
+            let i = args.iter().position(|a| *a == A::FLAG)?;
+            A::ALL
+                .iter()
+                .copied()
+                .find(|v| Some(&v.name()) == args.get(i + 1))
+        }
+        let bench: serde_json::Value =
+            serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
+        let mut checked = 0;
+        for case in bench["sets"]["fixtures"]["cases"].as_array().unwrap() {
+            let Some(preset) = case["preset"]["args"].as_array() else {
+                continue;
+            };
+            let name = case["name"].as_str().unwrap();
+            let preset: Vec<&str> = preset.iter().map(|a| a.as_str().unwrap()).collect();
+            let i = preset.iter().position(|a| *a == "--output-preset").unwrap();
+            let (_, writes) = REFERENCE
+                .iter()
+                .find(|(p, _)| *p == preset[i + 1])
+                .unwrap_or_else(|| panic!("{name}: no reference preset {}", preset[i + 1]));
+            let args: Vec<&str> = case["destination"]["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap())
+                .collect();
+            assert!(
+                !args.contains(&"--rendering"),
+                "{name}: the reference has no rendering"
+            );
+            let resolves = (!args.contains(&"--film-master")).then(|| {
+                let axes = DisplayAxes {
+                    range: stated(&args),
+                    transfer: stated(&args),
+                    gamut: stated(&args),
+                    container: stated(&args),
+                };
+                let r = resolve(&axes, &STD).unwrap();
+                [
+                    r.range.name(),
+                    r.transfer.name(),
+                    r.gamut.name(),
+                    r.container.name(),
+                ]
+            });
+            assert_eq!(resolves, *writes, "{name}");
+            checked += 1;
+        }
+        assert!(checked > 0);
     }
 }

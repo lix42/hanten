@@ -134,9 +134,8 @@ CASE_KEYS = ("name", "input", "roll", "frame", "args", "output_ext", "destinatio
              "preset")
 BLOCK_KEYS = ("args", "recipe")
 
-# The output interfaces a build can speak (`manifest.output_interface`), which are
-# also the names of a case's blocks.
-INTERFACES = ("destination", "preset")
+# The output interfaces a build can speak, which are also the names of a case's blocks.
+INTERFACES = _manifest.INTERFACES
 
 # Fields whose equality decides `identical` — see the module docstring on why
 # timings are excluded. Every one must be *present* on every frame: `None == None`
@@ -330,7 +329,7 @@ def _resolve_block(block, name: str, iface: str) -> tuple[dict | None, str | Non
         return None, f"{where}.args must be a list of strings"
     recipe = block.get("recipe")
     if recipe is not None:
-        if not isinstance(recipe, str) or not recipe:
+        if not isinstance(recipe, str) or not recipe or os.path.isabs(recipe):
             return None, f"{where}.recipe must be a repo-relative path"
         recipe = os.path.join(repo_root(), recipe)
         if not os.path.isfile(recipe):
