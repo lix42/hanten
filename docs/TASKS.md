@@ -1656,9 +1656,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   Records of an older local schema are dropped, not uploaded (user, 2026-10-01).
   No pixel, recipe or fingerprint change. The live endpoint, macOS and Windows are
   checked by the two follow-ups below.
-- [ ] [Check the uploader against the live endpoint and on macOS](tasks/telemetry/upload-live-check.md)
-  — this container's proxy refuses the Worker's host and has no Mac: run the real
-  flow on a Mac against production once, and add the release to `allowed_releases`.
+- [x] [Check the uploader against the live endpoint and on macOS](tasks/telemetry/upload-live-check.md)
+  — run the real flow on a Mac against production once. Checked 2026-10-01: it
+  works, and the macOS test run exposed a drain hand-off race, now fixed;
+  `0.1.0` was already in `allowed_releases`.
 - [ ] [Run the uploader's tests on Windows](tasks/telemetry/upload-windows.md) —
   **low priority** (user, 2026-10-01). Only a compile check covers Windows today.
 - [ ] [Sanitized panic telemetry](tasks/telemetry/panic-hook.md) — publish

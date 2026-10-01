@@ -51,59 +51,87 @@ fn backoff(failures: u32) -> Duration {
     Duration::from_secs((minutes * 60).min(6 * 3600))
 }
 
-/// Passes per drain. A helper that finds the drain lock busy exits, leaving any
-/// event appended since the holder rotated to it; the holder's next pass takes it.
-const PASSES: usize = 3;
-
 /// Drain the queue `captured` names. I/O failures end the drain and are reported;
-/// none is ever raised to a conversion. The status is written once, under the
-/// drain lock.
+/// none is ever raised to a conversion.
+///
+/// A background helper that finds the drain lock busy exits, so every holder looks
+/// at the queue again *after* releasing it and drains once more if it refilled: an
+/// event appended while the lock was held is then taken by whoever released last.
 pub fn drain(store: &Store, captured: &Consent, endpoint: &Endpoint, trigger: Trigger) -> Report {
     let mut report = Report::default();
     let queue = Queue::of(captured);
-    let wait = match trigger {
+    let mut wait = match trigger {
         Trigger::Background => Some(Duration::ZERO),
         Trigger::Flush => None,
     };
-    let _drain = match queue.drain_lock(wait) {
-        Ok(Some(held)) => held,
-        Ok(None) => {
-            report.stopped = Some("another upload is draining this queue".into());
-            return report;
-        }
-        Err(e) => {
-            report.error = Some(format!("io: {e}"));
-            return report;
-        }
-    };
-    let mut status = queue.read_status();
-    for _ in 0..PASSES {
-        if let Err(e) = pass(
-            store,
-            captured,
-            endpoint,
-            trigger,
-            &queue,
-            &mut status,
-            &mut report,
-        ) {
-            report.error = Some(format!("io: {e}"));
-            status.last_error = Some(LastError {
-                at_ms: now_unix_millis(),
-                kind: "io".into(),
-            });
-            break;
-        }
+    let mut first = true;
+    loop {
+        let held = match queue.drain_lock(wait) {
+            Ok(Some(held)) => held,
+            // A drainer re-checks after its own release; a consent change starts a
+            // helper of its own.
+            Ok(None) if !first => return report,
+            Ok(None) => {
+                report.stopped = Some("another upload is draining this queue".into());
+                return report;
+            }
+            Err(e) => {
+                report.error = Some(format!("io: {e}"));
+                return report;
+            }
+        };
+        locked_pass(store, captured, endpoint, trigger, &queue, &mut report);
+        hold_for_diagnosis();
+        drop(held);
         let refilled = durable::regular_or_missing(&queue.file)
             .ok()
             .flatten()
             .is_some_and(|m| m.len() > 0);
         if report.error.is_some() || report.stopped.is_some() || !refilled {
-            break;
+            return report;
         }
+        first = false;
+        wait = Some(Duration::ZERO);
+    }
+}
+
+/// One pass under the drain lock, its status written once.
+fn locked_pass(
+    store: &Store,
+    captured: &Consent,
+    endpoint: &Endpoint,
+    trigger: Trigger,
+    queue: &Queue,
+    report: &mut Report,
+) {
+    let mut status = queue.read_status();
+    if let Err(e) = pass(
+        store,
+        captured,
+        endpoint,
+        trigger,
+        queue,
+        &mut status,
+        report,
+    ) {
+        report.error = Some(format!("io: {e}"));
+        status.last_error = Some(LastError {
+            at_ms: now_unix_millis(),
+            kind: "io".into(),
+        });
     }
     let _ = queue.write_status(&status);
-    report
+}
+
+/// Diagnostic `NC_TELEMETRY_DRAIN_HOLD_MS`: keep the drain lock that long after a
+/// pass, so a test can append while it is held.
+fn hold_for_diagnosis() {
+    if let Some(ms) = std::env::var("NC_TELEMETRY_DRAIN_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
 }
 
 /// Rotate, project, enforce the limits, then send every batch.

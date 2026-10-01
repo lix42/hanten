@@ -1249,6 +1249,9 @@ What other epics need to know about `analysis`:
   for: the gain-map oracle holds about ten full-frame float64 arrays (≈4–5 GB at
   18.7 MP), and the cross-platform margins are reasoned, not observed — this ran on
   aarch64 only, so the first Linux CI run is the check.
+- 2026-10-01 (cross-reference): the `a_refused_convert_is_a_parse_failure_event`
+  timeouts were a drain hand-off race in the uploader, fixed by
+  `telemetry/upload-live-check` (see `progress/telemetry.md`).
 
 
 ## viewer-interoperability

@@ -55,6 +55,10 @@ value in for `?1`):
 | refuse a release for good (a bad build, fabrications) | `INSERT INTO blocked_releases (nc_version) VALUES ('0.1.1')`  |
 | see volume against the ceilings, and the quarantine   | `queries/operations.sql`                                      |
 
+`0001_init.sql` lists `0.1.0`, the crate's version since development began, so
+development runs are analysed while `Cargo.toml` says `0.1.0`; an event carries no
+dev marker. Before a release ships as `0.1.0`, delete those events.
+
 The kill switch stops storage, not billing: the Worker still answers each request.
 To stop requests reaching it at all, deploy with `"workers_dev": false`.
 

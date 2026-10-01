@@ -64,10 +64,13 @@ What other epics need to know about `telemetry` (refreshed 2026-10-01):
   the whole corpus, so a contract change must pass both suites. Its README is the
   runbook: the kill switch and release lists are D1 rows. Add a release to
   `allowed_releases` when it ships; until then its events are accepted but held in
-  quarantine, and `queries/promote_release.sql` moves them once it is listed. It is
-  live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` (recorded in the contract README).
+  quarantine, and `queries/promote_release.sql` moves them once it is listed.
+  `0.1.0` is listed by the first migration, so every dev build's events are analysed
+  until the version moves (user, 2026-10-01); the README says what to delete before a
+  `0.1.0` release. The Worker is live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` (recorded in the contract README).
 - **Upload is live in the client** (`telemetry/upload`): `hanten telemetry enable`
   selects one queue, every `convert` appends there and a detached helper uploads.
+  Checked live on macOS (`telemetry/upload-live-check`).
   Tests that run the binary must set `NC_TELEMETRY=0` (as `tests/pipeline.rs` does)
   or give it its own `XDG_CONFIG_HOME`, or a developer's own consent collects their
   test runs (unit tests are safe: `Store::locate` is `None` under `cfg(test)`).
@@ -578,3 +581,76 @@ What shipped, and the parts the open tasks build on:
 
 - Goal: capture consented Rust panics through an isolated spool with only
   sanitized `nc` function/module frames and unchanged normal panic behavior.
+
+## upload-live-check
+**Status:** done
+**Updated:** 2026-10-01
+
+- Goal: run the uploader end to end on a Mac against the production Worker.
+
+### 2026-10-01 — checked on macOS (arm64, APFS, release build `58d2420`)
+- **Isolation:** every run used a throwaway `HOME` with `XDG_*` unset, so no real
+  consent or queue was touched. Network ran inside Claude Code's sandbox, which
+  allowed the Worker's host.
+- **Live end to end:** `enable`, then two `convert`s: the first with
+  `NC_TELEMETRY_HELPER=0`, so its upload bytes could be previewed; the second
+  launched the detached helper, which uploaded both events within a second, `status` showed `last_success_ms` with no error,
+  and a later `flush` sent nothing. Resending the `preview` bytes with `curl` got
+  `duplicate` from the Worker.
+- **The events landed in `events`, not quarantine:** `0001_init.sql` already lists
+  `0.1.0`, which the task file did not know. The user kept it listed (task file's
+  Decisions). The four test events (two here, two from the proxy runs below) were
+  deleted from D1 afterwards; D1 then held no
+  event and the storage count was 0.
+- **TLS:** rustls with bundled roots works directly and through `HTTPS_PROXY` (a
+  local CONNECT proxy logged the Worker's host). A dead proxy fails soft: `network`,
+  the batch is kept, and the next flush without the proxy drains it.
+- **`status` keeps `last_error` after a later success**, beside the newer
+  `last_success_ms`, with `consecutive_failures` back to 0. Kept as history (user).
+- **Paths:** consent `~/.config/nc/telemetry-consent.json` (0600) plus its gate and
+  request lease; queue `~/.local/share/nc/telemetry.jsonl`. Not `~/Library`; kept
+  (user): CLI tools commonly use XDG paths, and consent sits beside the queue.
+- **The helper survives Ctrl-C and the terminal closing**, mid-request: `convert`
+  inside `script` (a real pty), with a loopback endpoint holding the request for 3 s.
+  SIGINT to the foreground process group, and SIGHUP from closing the pty, each
+  killed the foreground `sleep` (the control) but not the helper (its own process
+  group), which finished the upload and recorded success. Gotcha: a job started with
+  `&` from a non-interactive script inherits SIGINT ignored, so the first attempt
+  proved nothing. Restore default dispositions (`perl -e '$SIG{INT}="DEFAULT"; exec
+  @ARGV'`) and check that the control dies.
+- **Timeout:** an endpoint holding 6 s succeeds; one holding 12 s fails `timeout` at
+  10.1 s and keeps the batch. One earlier run timed out about 4 s after the endpoint
+  logged the request. The likely cause is a fake endpoint that started late (a
+  connection in the listen backlog counts toward the 10 s), but this was not proven.
+- **APFS durability:** every durable step (consent publish, rotation, batch write and
+  delete) ran without error. `std`'s `sync_all` is `fcntl(F_FULLFSYNC)` on Apple,
+  for directory handles too. That a write survives a power cut is assumed, not tested.
+
+### 2026-10-01 — the drain hand-off race (found by the macOS gate run)
+- **`a_refused_convert_is_a_parse_failure_event` failed 4 runs in 5 on macOS** with
+  `main`'s code. Cause: a drainer decided the queue was empty, then wrote its status
+  while still holding the drain lock. An event appended in that gap launched a
+  helper that found the lock busy and exited, so the event waited for the next
+  `convert`. The status write is `F_FULLFSYNC` on Apple (milliseconds), which is
+  why macOS hits it and Linux CI rarely does. A 300 ms sleep in that gap made it
+  fail 3 runs in 3.
+- **Fix:** every drainer re-checks the queue after *releasing* the lock and drains
+  again if it refilled, re-taking the lock without waiting; if that fails, the new
+  holder makes the same check after its own release. This replaces the fixed three
+  passes, which only covered events appended before the holder's last check.
+- **Test:** `an_event_queued_while_another_helper_drains_is_uploaded` holds the
+  enable helper's lock with the new diagnostic `NC_TELEMETRY_DRAIN_HOLD_MS`, so the
+  race happens every time. It fails on the old drain (with the same hold patched
+  in) and passes on the fix. The upload suite then passed 5 runs in 5, and the
+  formerly flaky test 10 in 10 on its own.
+
+### 2026-10-01 — done
+- The uploader works end to end on macOS against production: live upload, dedup,
+  TLS directly and through a proxy, the helper surviving Ctrl-C and terminal close.
+  The one defect found, the drain hand-off race, is fixed with a deterministic test.
+- Review: the diff reviewer found nothing at the bar; its notes changed one comment
+  and dropped a weak assertion. The Codex review did not run (its workspace was out
+  of credits).
+- For dependents: `0.1.0` is analysed, not quarantined (delete dev events before a
+  `0.1.0` release, per the Worker README); `status` keeps `last_error` as history;
+  a drainer must re-check the queue after releasing the drain lock.

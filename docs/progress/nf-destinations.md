@@ -277,6 +277,9 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
     at 18.66 MP; the 74.65 MP `largest.tif` is not in `../nc-assets` or the archive.
   - The gain map's 5 B/px JPEG staging is a content assumption; a writer that pre-sized
     the assembled buffer (or streamed the JPEGs to the file) would let it be counted.
+- 2026-10-01 (cross-reference): the `a_refused_convert_is_a_parse_failure_event`
+  timeouts were a drain hand-off race in the uploader, fixed by
+  `telemetry/upload-live-check` (see `progress/telemetry.md`).
 
 ## default-destination
 
