@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
@@ -27,7 +27,7 @@ use tiff::tags::Tag;
 use crate::types::{GammaFact, LinearImage, NcError, Result};
 
 /// Which SilverFast variant a file turned out to be.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SilverFastFormat {
     /// 48-bit RGB, no IR plane (single IFD).

@@ -751,7 +751,8 @@ pub fn render_pair(image: AcesCgImage, film_base: AcesCgImage, shared: &SharedPa
 
 A single binary (`hanten`) with subcommands. The agent-facing surface is
 optimized for scripting: flags for everything, JSON in/out, stable exit codes,
-no interactive prompts.
+no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
+`--yes` skips).
 
 ### Subcommands
 
@@ -762,6 +763,7 @@ no interactive prompts.
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
 | `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, and the input and decode sections it measured under when stated — that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
 | `hanten params`  | Print the full default parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
@@ -1785,7 +1787,18 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   stage it ended in and its error kind and exit code — never the error's text. A
   `--strict` promotion is a failure of kind `strict`. A run that fails before the
   write-target guard writes its event only if the sink is clear of the input and
-  every output it knew of. A command line clap rejects writes none.
+  every output it knew of. A command line clap rejects writes none, except under
+  upload consent (below).
+- **Upload (`hanten telemetry`, opt-in, persistent).** `hanten telemetry enable`
+  shows the upload field manifest and, once confirmed, selects one queue (the log
+  above, or `--queue PATH`). From then on every `convert` — a refused command line
+  too, as a `parse` failure — appends its event there, and a detached helper
+  uploads its privacy projection (`contracts/telemetry/upload-v1/`) after the run's
+  outcome is fixed. `disable`, `purge`, `status`, `preview` and `flush` manage it;
+  `NC_TELEMETRY=0` turns it off for one process. Records of an older local schema
+  are dropped, not uploaded. The endpoint is fixed at build time
+  (`NC_TELEMETRY_ENDPOINT`; `none` builds a binary that uploads nothing). Its
+  consent, locks and queue rules are `docs/telemetry-strategy.md`.
 - **Best-effort:** a telemetry failure is warned on stderr and never changes the
   exit code (`--strict` does not promote it) — the one deliberate deviation from
   the fail-loudly rule, since telemetry is non-critical observability. A
@@ -1795,8 +1808,8 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   usage error (a config mistake, caught up front — an odd log path must never
   silently append into the scan).
 
-**Telemetry event shape (`schema_version` 11, serialize-only JSON).** Designed for
-a future background uploader (§12, `telemetry/upload`) to drain and ship. A success:
+**Telemetry event shape (`schema_version` 11).** The uploader reads queued events
+back to project them (`telemetry::spool`). A success:
 ```json
 {
   "schema_version": 11,
@@ -1842,7 +1855,8 @@ A failure carries only what the run reached — here a scan refused right after 
 ```
 `event_id` is 128 random bits, new for every event: the upload's deduplication key,
 never a correlation across events. `stage` is a `crate::stage::StageKind` name, or
-`setup` (recipe, validation, output path, the write-target guard), `preflight` (a
+`parse` (a command line clap refused; written only under upload consent), `setup`
+(recipe, validation, output path, the write-target guard), `preflight` (a
 frame's checks before its first stage) or `finalize` (the report and the `--strict`
 gate, where every success ends); a check between two stages belongs to the one before
 it. `error_kind` is `none` exactly for a success, else `usage`, `decode`,
@@ -1887,7 +1901,14 @@ src/
 ├── types.rs             # LinearImage, FilmBase, shared params and errors
 ├── version.rs           # build identity, pipeline_version, the drift gate, params hash
 ├── telemetry.rs         # opt-in JSONL record (never perturbs output)
-│   └── upload.rs        #   the privacy-minimized upload projection
+│   ├── upload.rs        #   the privacy-minimized upload projection
+│   ├── consent.rs       #   persistent upload consent and its locks
+│   ├── spool.rs         #   the upload queue: rotation, batches, quarantine, caps
+│   ├── drain.rs         #   one upload pass under the request lease
+│   ├── net.rs           #   the endpoint and one HTTPS request
+│   ├── managed.rs       #   per-`convert` collection and the detached helper
+│   ├── maintenance.rs   #   `hanten telemetry …` (and the lock order)
+│   └── durable.rs       #   crash-safe, no-follow files and cross-process locks
 ├── algo/
 │   ├── mod.rs           # FilmRgbImage, the typed reconstruction output
 │   └── fixed.rs         # the fixed decode
@@ -2061,6 +2082,8 @@ shipped or retired item keeps its number and shrinks to one line.
     `hanten convert` (outcome + image + per-stage timing + run context) written
     to a local JSONL log and/or one-off file (`--telemetry` / `--telemetry-file`,
     `NC_TELEMETRY_LOG`; see §9), best-effort and byte-identical-output-preserving.
+    **Upload has shipped** (`telemetry/upload`, `hanten telemetry`, §9); panic
+    reporting (`telemetry/panic-hook`) has not.
     The `telemetry/strategy` spike is **complete**; its approved
     [design note](telemetry-strategy.md) fixes the remaining shape. The client
     keeps custom JSON (no embedded OTel SDK/Collector) and sends a separately

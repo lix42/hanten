@@ -541,7 +541,7 @@ pub enum FilmBaseSource {
 /// Where a report's film base came from: a stated [`FilmBaseSource`], or the
 /// effective-area measurement (`film_base::measure_area`), which a recipe cannot
 /// state. Serializes as `"effective_area"` / `{"region":[…]}` / `{"explicit":[…]}`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilmBaseProvenance {
     /// The median over the effective area (`report.effective_area`).

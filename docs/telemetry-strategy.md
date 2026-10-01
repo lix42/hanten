@@ -1,6 +1,6 @@
 # Telemetry strategy
 
-**Status:** approved 2026-07-23; amended 2026-09-27, 2026-09-28 and 2026-09-30 (see Amendments)
+**Status:** approved 2026-07-23; amended 2026-09-27, 2026-09-28, 2026-09-30 and 2026-10-01 (see Amendments)
 
 ## Amendments
 
@@ -39,6 +39,29 @@
   `auto` search retired), and a block the run never reached is absent rather than
   `unknown` — so `image.format`, `image.ir_present`, `outcome.non_finite` and
   `conversion.*` have no `unknown` member.
+
+**2026-10-01** (at `telemetry/upload`, user decisions):
+
+- **Lines of another local schema are dropped** and only counted locally — neither
+  uploaded, quarantined nor kept aside. The "import local-v1" passages below are
+  withdrawn with the 2026-09-27 amendment.
+- **The endpoint is a build-time setting** (`NC_TELEMETRY_ENDPOINT`, default the
+  live Worker; `none` uploads nothing, `file:<path>` writes request bodies to a file);
+  the same variable at run time overrides it for diagnosis.
+- Windows is compile-checked only, with its tests a low-priority follow-up
+  (`telemetry/upload-windows`); the live endpoint and macOS are checked in
+  `telemetry/upload-live-check`. The panic-ready files are recognized but projected
+  only once `telemetry/panic-hook` lands.
+- **Spool names and reconcile, as built** (`telemetry::spool`'s module doc is
+  authoritative): batches are `batch-<raw id>-<n>.json`, temps
+  `.<final name>.<random>.tmp`. Reconcile discards our temps rather than completing
+  them (each one's source still exists), and a batch is validated when it is read
+  to send: a body that does not parse is quarantined whole, a read error keeps it.
+  Re-projecting a raw file skips events its earlier batches hold. Lines of a newer
+  local schema are quarantined, not dropped.
+- **Uncounted drops:** an append refused at the cap or skipped because a lock
+  stayed busy (a `convert` never waits long) is not counted in `status`; only
+  drain-time drops are.
 
 **2026-09-30** (at `telemetry/ingestion-service`, user-approved):
 

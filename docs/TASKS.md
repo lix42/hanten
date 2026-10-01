@@ -294,6 +294,8 @@ graph TD
     telemetry/upload-schema
     telemetry/ingestion-service
     telemetry/upload
+    telemetry/upload-live-check
+    telemetry/upload-windows
     telemetry/panic-hook
   end
   subgraph analysis
@@ -451,6 +453,8 @@ graph TD
   telemetry/upload-schema --> telemetry/upload
   telemetry/ingestion-service --> telemetry/upload
   telemetry/upload --> telemetry/panic-hook
+  telemetry/upload --> telemetry/upload-live-check
+  telemetry/upload --> telemetry/upload-windows
   algo/dmax-white-anchor --> analysis/real-scan-verification
   film-base/dmax-reference --> analysis/real-scan-verification
   algo/density --> algo/dmax-white-anchor
@@ -973,6 +977,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/ingestion-service` (post-MVP, **low priority**): `telemetry/upload-schema`
 - `telemetry/upload` (post-MVP): `telemetry/upload-schema`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
+- `telemetry/upload-live-check` (post-MVP): `telemetry/upload`
+- `telemetry/upload-windows` (post-MVP, **low priority**): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
 - `analysis/display-output-acceptance` (post-MVP; re-scoped and split 2026-10-01): `output/presets`, `analysis/real-scan-verification`, `nf-core/default-flip`, `analysis/display-acceptance-harness`, `analysis/viewer-interoperability`
   — `output/presets` is history: its presets retired with the flip; the default it accepts is
@@ -1627,11 +1633,21 @@ the design now in `docs/design-spec.md` (§6–§7):
   advisory performance/failure queries. **Done 2026-09-30**:
   `services/telemetry-ingest/`, live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` on the owner's paid
   Cloudflare account (strategy amendment), deployed by a manual workflow from `main`.
-- [ ] [Background telemetry upload](tasks/telemetry/upload.md) — ship the local
-  consent-selected active JSONL through generation-bound collection/request
-  leases and its private spool, durable recovery, detached helpers, retries,
-  non-stranding retarget, lock-stable inactive purge, caps, and maintenance
-  commands.
+- [x] [Background telemetry upload](tasks/telemetry/upload.md) — **done 2026-10-01.**
+  `hanten telemetry enable|disable|status|preview|flush|purge`: persistent consent
+  selects one queue; every `convert` (and a refused one, as a `parse` failure)
+  appends its event there and a detached `upload-once` helper sends it over HTTPS
+  (`ureq`) to the build-time endpoint (`NC_TELEMETRY_ENDPOINT`, default the live
+  Worker; `none` or `file:<path>`). Leases, spool, crash-safe batches, retries,
+  quarantine, 25 MiB/30-day caps, retarget and purge as the strategy specifies.
+  Records of an older local schema are dropped, not uploaded (user, 2026-10-01).
+  No pixel, recipe or fingerprint change. The live endpoint, macOS and Windows are
+  checked by the two follow-ups below.
+- [ ] [Check the uploader against the live endpoint and on macOS](tasks/telemetry/upload-live-check.md)
+  — this container's proxy refuses the Worker's host and has no Mac: run the real
+  flow on a Mac against production once, and add the release to `allowed_releases`.
+- [ ] [Run the uploader's tests on Windows](tasks/telemetry/upload-windows.md) —
+  **low priority** (user, 2026-10-01). Only a compile check covers Windows today.
 - [ ] [Sanitized panic telemetry](tasks/telemetry/panic-hook.md) — publish
   persistent-managed-consent panic events as isolated atomic ready files with
   only capped, normalized `nc` function/module frames; no per-run hook, shared

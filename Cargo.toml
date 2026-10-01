@@ -31,6 +31,9 @@ roxmltree = "0.21.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tiff = "0.11.3"
+# The telemetry uploader's HTTPS client (`telemetry::net`): blocking, no async
+# runtime, rustls with bundled webpki roots so no system TLS library is linked.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 # Validates the telemetry upload corpus against its JSON Schema

@@ -192,10 +192,11 @@ fn run_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
     spawn(args, envs)
 }
 
-/// Spawn `nc` verbatim — the one place that runs the binary.
+/// Spawn `nc` verbatim — the one place that runs the binary. `NC_TELEMETRY=0` keeps
+/// the machine's own upload consent, if any, out of every test.
 fn spawn(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
     let mut cmd = Command::new(NC);
-    cmd.args(args);
+    cmd.args(args).env("NC_TELEMETRY", "0");
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -213,6 +214,7 @@ fn run_stdin(args: &[&str], input: &str) -> (i32, String, String) {
     use std::process::Stdio;
     let mut child = Command::new(NC)
         .args(args)
+        .env("NC_TELEMETRY", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

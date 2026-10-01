@@ -6,6 +6,14 @@ Record explicitly consented Rust panics as minimal, privacy-safe telemetry event
 without changing normal panic output/termination or claiming general native crash
 coverage.
 
+**Amended 2026-10-01** (at `telemetry/upload`): the uploader recognizes
+`panic-ready-*.json` and `.panic-*.tmp` in the spool (counts, caps, purges them, and
+a retarget refuses while one exists) but neither projects nor removes them. This
+task adds the panic projection and its consumption in `telemetry::spool` /
+`telemetry::drain`, including the shared panic fixture's journey through
+acknowledgement, retry and quarantine. `telemetry::managed::Snapshot` is held for
+`run_convert`'s scope today; the hook needs it for the process's remaining life.
+
 ## Design
 
 Install a best-effort panic hook only when invocation-start persistent managed

@@ -100,6 +100,51 @@ pub enum Command {
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
+    /// Manage opt-in upload of anonymous `convert` telemetry: enable, disable, status,
+    /// preview, flush, purge.
+    Telemetry(TelemetryArgs),
+}
+
+/// `hanten telemetry` options.
+#[derive(Args, Debug)]
+pub struct TelemetryArgs {
+    #[command(subcommand)]
+    pub command: TelemetryCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TelemetryCommand {
+    /// Show what is uploaded and, once confirmed, upload every `convert`'s event from
+    /// now on, plus the current-schema events already in the selected queue.
+    Enable {
+        /// The queue (a JSONL log) to collect into and upload from [default:
+        /// NC_TELEMETRY_LOG, else the platform data dir's nc/telemetry.jsonl].
+        #[arg(long, value_name = "PATH")]
+        queue: Option<PathBuf>,
+        /// Confirm without a prompt (required when stdin is not a terminal).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Stop collecting and uploading. Waits for an upload in flight; keeps the queue.
+    Disable,
+    /// Print consent, queue size and the last upload outcome as JSON.
+    Status,
+    /// Print the request bodies that would be uploaded now, one per line, unsent.
+    Preview,
+    /// Upload the queue now, in the foreground, and print what happened as JSON.
+    Flush,
+    /// Delete every queued record of the selected queue. Only while disabled.
+    Purge {
+        /// Confirm without a prompt (required when stdin is not a terminal).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// The detached upload helper.
+    #[command(hide = true)]
+    UploadOnce {
+        #[arg(long)]
+        generation: String,
+    },
 }
 
 /// `hanten params` options.
@@ -2331,7 +2376,20 @@ pub fn run() -> Result<()> {
     // Install once at startup so any lcms2 runtime fault in `pipeline::color`
     // surfaces instead of being silently swallowed by the default no-op handler.
     install_cms_error_handler();
-    let cli = Cli::parse();
+    let started = Instant::now();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A refused `convert` is a usage failure in `parse`, recorded only under
+            // persistent consent and without reading any argument text.
+            if e.use_stderr()
+                && std::env::args_os().nth(1).as_deref() == Some(OsStr::new("convert"))
+            {
+                telemetry::managed::record_parse_failure(started);
+            }
+            e.exit()
+        }
+    };
     match cli.command {
         Command::Params(args) => run_params(&args),
         Command::Convert(args) => run_convert(args),
@@ -2346,6 +2404,21 @@ pub fn run() -> Result<()> {
                 .into(),
         )),
         Command::MeasureRoll(args) => run_measure_roll(args),
+        Command::Telemetry(args) => run_telemetry(args),
+    }
+}
+
+/// `hanten telemetry …` (`telemetry::maintenance`).
+fn run_telemetry(args: TelemetryArgs) -> Result<()> {
+    use telemetry::maintenance as m;
+    match args.command {
+        TelemetryCommand::Enable { queue, yes } => m::enable(queue.as_deref(), yes),
+        TelemetryCommand::Disable => m::disable(),
+        TelemetryCommand::Status => m::status(),
+        TelemetryCommand::Preview => m::preview(),
+        TelemetryCommand::Flush => m::flush(),
+        TelemetryCommand::Purge { yes } => m::purge(yes),
+        TelemetryCommand::UploadOnce { generation } => m::upload_once(&generation),
     }
 }
 
@@ -4055,6 +4128,9 @@ fn render_frame(
 /// Telemetry (opt-in) is emitted here, once the run's outcome is fixed: a success
 /// event, or a failure event carrying what [`ConvertAttempt`] had learned.
 fn run_convert(args: ConvertArgs) -> Result<()> {
+    // Persistent consent, captured before anything runs and held to the end. Ahead
+    // of the clock, so its bounded lock waits never count as the run's time.
+    let managed = telemetry::managed::begin();
     let started = Instant::now();
     let log = Log::new(&args.report);
     // Read once, so the guarded and the written log path are the same.
@@ -4065,7 +4141,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     };
     let mut attempt = ConvertAttempt::default();
     let result = convert_attempt(&args, &log, started, telemetry_log.as_deref(), &mut attempt);
-    if telemetry_requested(&args) {
+    if telemetry_requested(&args) || managed.is_some() {
         emit_telemetry(
             &args,
             &log,
@@ -4073,7 +4149,12 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             &attempt,
             result.as_ref().err(),
             telemetry_log.as_deref(),
+            managed.as_ref(),
         );
+    }
+    // Last, once the outcome, report and event are fixed.
+    if let Some(managed) = &managed {
+        managed.launch_helper();
     }
     result
 }
@@ -6727,7 +6808,9 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
 
 /// Build this run's telemetry event — a success, or a failure from what `attempt`
 /// had learned — and write it to the requested sink(s): the persistent JSONL log
-/// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`).
+/// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`), and the
+/// consented upload queue when `managed` holds a snapshot. The managed append is
+/// silent but for a `-v` line: no warning the user did not ask for this run.
 /// `telemetry_log` is the log path resolved once, so the guarded and the written
 /// path are the same. Best-effort — every failure is warned on stderr (a closed
 /// stdout pipe is the reader leaving, not a failure) and swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
@@ -6742,27 +6825,33 @@ fn emit_telemetry(
     attempt: &ConvertAttempt,
     error: Option<&NcError>,
     telemetry_log: Option<&Path>,
+    managed: Option<&telemetry::managed::Snapshot>,
 ) {
+    let requested = telemetry_requested(args);
     // A telemetry write failure warns but never fails the run. Unlike ordinary
     // warnings, these are deliberately kept out of `report.warnings` (so
     // `--strict` can't promote them), which means the report can't carry them
     // either — so they must show even under `--quiet` (the `non_finite` precedent):
     // an opted-in feature failing silently would defeat the opt-in. The
     // successful-write notices stay `log.info` (visible only under `-v`).
-    let warn = |msg: String| log.warn_always(&msg);
+    let warn = |msg: String| {
+        if requested {
+            log.warn_always(&msg)
+        }
+    };
 
     // A run that failed before the write-target guard has not proven its sinks safe:
     // write only if none lands on a file the run read or might have written. The
     // output is the resolved path once known, else `-o` as typed or completed with
     // any suffix; `--export-ir` the recipe's once merged, else the flag's.
-    if !attempt.guarded {
-        let output = attempt.output.as_deref().unwrap_or(&args.output);
-        let export_ir = attempt.export_ir.as_deref().or(args
-            .knobs
-            .input_opts
+    let output = attempt.output.as_deref().unwrap_or(&args.output);
+    let export_ir =
+        attempt
             .export_ir
             .as_deref()
-            .map(Path::new));
+            .or(args.knobs.input_opts.export_ir.as_deref().map(Path::new));
+    let mut explicit = requested;
+    if requested && !attempt.guarded {
         let collision =
             telemetry_sink_collision(args, output, export_ir, telemetry_log).or_else(|| {
                 let completed = [telemetry_file_target(args), telemetry_log];
@@ -6775,8 +6864,14 @@ fn emit_telemetry(
             });
         if let Some(msg) = collision {
             warn(format!("telemetry: no event written: {msg}"));
-            return;
+            explicit = false;
         }
+    }
+    // The consented queue gets the event only where it cannot land on the run's files.
+    let managed =
+        managed.filter(|m| managed_queue_clear(args, attempt, output, export_ir, m.queue()));
+    if !explicit && managed.is_none() {
+        return;
     }
     let Some(event_id) = telemetry::EventId::random() else {
         warn("telemetry: no event written: the system random source failed".into());
@@ -6833,10 +6928,33 @@ fn emit_telemetry(
         }
     };
 
+    let managed_wrote = managed.is_some_and(|m| {
+        let wrote = m.append(&line).is_ok();
+        if wrote {
+            log.info(format_args!(
+                "telemetry: queued for upload in {}",
+                m.queue().display()
+            ));
+        }
+        wrote
+    });
+    if !explicit {
+        return;
+    }
+
     if args.telemetry {
         match telemetry_log {
+            // The consented queue already has this event.
+            Some(path)
+                if managed_wrote
+                    && managed.is_some_and(|m| {
+                        telemetry::consent::normalize_queue(path).is_ok_and(|p| p == m.queue())
+                    }) =>
+            {
+                log.info(format_args!("telemetry: appended to {}", path.display()));
+            }
             Some(path) => {
-                if let Err(e) = telemetry::append_jsonl(path, &line) {
+                if let Err(e) = telemetry::managed::append_explicit(path, &line) {
                     warn(format!(
                         "telemetry: could not append to {}: {e}",
                         path.display()
@@ -6867,12 +6985,37 @@ fn emit_telemetry(
                 }
                 Err(e) => warn(format!("telemetry: could not write to stdout: {e}")),
             }
+        } else if telemetry::managed::is_selected_queue(Path::new(target)) {
+            // Overwriting it would erase every queued record.
+            warn(format!(
+                "telemetry: not written: --telemetry-file {target} is the upload queue"
+            ));
         } else if let Err(e) = telemetry::write_oneoff(Path::new(target), &line) {
             warn(format!("telemetry: could not write {target}: {e}"));
         } else {
             log.info(format_args!("telemetry: wrote {target}"));
         }
     }
+}
+
+/// Whether the consented upload queue lands on none of the run's files: the input,
+/// a `--params` recipe, an output, or the one-off `--telemetry-file`.
+fn managed_queue_clear(
+    args: &ConvertArgs,
+    attempt: &ConvertAttempt,
+    output: &Path,
+    export_ir: Option<&Path>,
+    queue: &Path,
+) -> bool {
+    let key = collision_key(queue);
+    let mut others: Vec<&Path> = write_targets(args, output, export_ir, None)
+        .into_iter()
+        .map(|(_, p)| p)
+        .collect();
+    others.push(&args.input);
+    others.extend(recipe_files(&args.recipe_in).map(PathBuf::as_path));
+    let completed = attempt.output.is_none() && completes(queue, &args.output);
+    !completed && !others.iter().any(|p| keys_collide(&key, &collision_key(p)))
 }
 
 /// Where a telemetry sink would land on a file it must not overwrite — the input,
@@ -6929,7 +7072,7 @@ fn conversion_info(recipe: &Recipe, destination: recipe::Destination) -> telemet
             .film_base
             .as_ref()
             .map_or(FilmBaseProvenance::EffectiveArea, FilmBaseProvenance::from),
-        output_depth: primary_depth(destination),
+        output_depth: primary_depth(destination).into(),
     }
 }
 

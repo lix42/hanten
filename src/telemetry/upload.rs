@@ -24,11 +24,10 @@ use crate::io::decode::SilverFastFormat;
 use crate::types::FilmBaseProvenance;
 
 /// The request envelope's `upload_schema_version`.
-// Consumer: `telemetry/upload` (the uploader's request envelope).
-#[allow(dead_code)]
 pub const UPLOAD_SCHEMA_VERSION: u32 = 1;
 
-/// Why a local event has no upload form. The uploader quarantines it.
+/// Why a local event has no upload form. The uploader drops a line of another
+/// schema version and quarantines the rest (`telemetry::spool::project`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotUploadable {
     /// Not the local schema this build projects ([`SCHEMA_VERSION`]).
@@ -153,13 +152,11 @@ pub struct Conversion {
 
 /// Project a local event to its upload form. Pure: the same event always projects to
 /// the same upload event.
-// Consumer: `telemetry/upload` (the uploader projects queued events).
-#[allow(dead_code)]
 pub fn to_upload_event(event: &TelemetryEvent) -> Result<UploadEvent, NotUploadable> {
     if event.schema_version != SCHEMA_VERSION {
         return Err(NotUploadable::SchemaVersion);
     }
-    if !is_release_version(event.nc_version) {
+    if !is_release_version(&event.nc_version) {
         return Err(NotUploadable::NcVersion);
     }
     if !outcome_is_consistent(event) {
@@ -177,14 +174,14 @@ pub fn to_upload_event(event: &TelemetryEvent) -> Result<UploadEvent, NotUploada
             ir_exported: event.timing_ms.ir_export.is_some(),
         }),
     };
-    let (os, arch) = platform(event.target);
+    let (os, arch) = platform(&event.target);
     let o = &event.outcome;
     Ok(UploadEvent {
         source_schema_version: SCHEMA_VERSION,
         event_id: event.event_id,
         event_day: event_day(event.timestamp_ms),
         event_name: event.event,
-        nc_version: event.nc_version.to_owned(),
+        nc_version: event.nc_version.to_string(),
         platform: Platform {
             os,
             arch,

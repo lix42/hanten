@@ -4,9 +4,10 @@
 //! one event — success or failure, with the stage it ended in, image facts,
 //! per-stage timings and a compact conversion summary, each only as far as the run
 //! got — and emits it as JSON to a persistent append-only JSONL log and/or a
-//! one-off file (design-spec §8/§9). The JSONL log is the queue a future uploader
-//! (`telemetry/upload`) drains; this module only *produces* the event, writes
-//! the local sink(s) and, in [`upload`], projects an event to its upload form.
+//! one-off file (design-spec §8/§9). This module *produces* the event and writes
+//! the local sink(s); [`upload`] projects an event to its upload form, and the
+//! opt-in uploader drains a consent-selected log ([`consent`], [`spool`],
+//! [`drain`], [`managed`]; `docs/telemetry-strategy.md`).
 //!
 //! Two deliberate design boundaries:
 //!
@@ -27,18 +28,26 @@
 //! and the crate version + target triple are compile-time constants baked into the
 //! binary. The sink writers are the only I/O.
 
+use std::borrow::Cow;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::destination::OutputSection;
 use crate::io::decode::{DecodeInfo, SilverFastFormat};
 use crate::stage::{StageClock, StageKind};
 use crate::types::{EncodeReport, FilmBaseProvenance, NcError, Result};
 
+pub mod consent;
+pub mod drain;
+pub mod durable;
+pub mod maintenance;
+pub mod managed;
+pub mod net;
+pub mod spool;
 pub mod upload;
 
 /// Telemetry event schema version. Bump on any change to [`TelemetryEvent`]'s
@@ -175,8 +184,7 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 }
 
 // ---------------------------------------------------------------------------
-// Event schema (serialize-only — nothing deserializes a telemetry event here;
-// the upload projection is [`upload`])
+// Event schema (the uploader reads queued events back: `spool`)
 // ---------------------------------------------------------------------------
 
 /// One telemetry event for a single `hanten convert` run that got past argument
@@ -187,7 +195,8 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 /// `conversion` before the destination resolved, a stage's timing before it
 /// completed. The keys that are always present — `cpu_count`, `image.input_bytes`,
 /// `image.output_bytes` — serialize an unknown value as JSON `null`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelemetryEvent {
     /// Event schema version ([`SCHEMA_VERSION`]) for server forward-compat.
     pub schema_version: u32,
@@ -199,9 +208,9 @@ pub struct TelemetryEvent {
     /// Wall-clock time the event was built, UNIX epoch milliseconds.
     pub timestamp_ms: u64,
     /// `nc` crate version (`CARGO_PKG_VERSION`).
-    pub nc_version: &'static str,
+    pub nc_version: Cow<'static, str>,
     /// Compile target triple (captured by `build.rs` into `NC_TARGET`).
-    pub target: &'static str,
+    pub target: Cow<'static, str>,
     /// Available parallelism; `None` when the platform can't report it.
     pub cpu_count: Option<u32>,
     /// Where the run ended: the failed stage, or `finalize` for a success.
@@ -226,30 +235,59 @@ impl EventId {
         getrandom::fill(&mut bytes).ok()?;
         Some(Self(bytes))
     }
+
+    /// The 32 lowercase hex characters of the wire form.
+    pub fn hex(&self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut hex = String::with_capacity(32);
+        for b in self.0 {
+            hex.push(char::from(HEX[usize::from(b >> 4)]));
+            hex.push(char::from(HEX[usize::from(b & 0xf)]));
+        }
+        hex
+    }
+
+    /// Parse exactly 32 lowercase hex characters.
+    pub fn parse(s: &str) -> Option<Self> {
+        let digit = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            _ => None,
+        };
+        let s = s.as_bytes();
+        if s.len() != 32 {
+            return None;
+        }
+        let mut bytes = [0u8; 16];
+        for (i, pair) in s.chunks(2).enumerate() {
+            bytes[i] = (digit(pair[0])? << 4) | digit(pair[1])?;
+        }
+        Some(Self(bytes))
+    }
 }
 
 impl Serialize for EventId {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = [0u8; 32];
-        for (i, b) in self.0.iter().enumerate() {
-            hex[2 * i] = HEX[usize::from(b >> 4)];
-            hex[2 * i + 1] = HEX[usize::from(b & 0xf)];
-        }
-        // Every byte is an ASCII hex digit.
-        s.serialize_str(std::str::from_utf8(&hex).expect("ASCII"))
+        s.serialize_str(&self.hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for EventId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = Cow::<str>::deserialize(d)?;
+        Self::parse(&s).ok_or_else(|| serde::de::Error::custom("not 32 lowercase hex characters"))
     }
 }
 
 /// The event discriminator. A panic event joins it with `telemetry/panic-hook`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
     Conversion,
 }
 
 /// The command an event describes; telemetry covers `convert` only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandKind {
     Convert,
@@ -259,10 +297,8 @@ pub enum CommandKind {
 /// Serialized as one flat string, so a `StageKind` rename moves it too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventStage {
-    /// Argument parsing. Reserved: recorded only under persistent consent, since
-    /// before parsing nc cannot know `--telemetry`.
-    // Consumer: `telemetry/upload`'s parse-failure event.
-    #[allow(dead_code)]
+    /// Argument parsing. Recorded only under persistent consent, since before
+    /// parsing nc cannot know `--telemetry`.
     Parse,
     /// Recipe load, merge and validation, output resolution, the write-target guard.
     Setup,
@@ -285,8 +321,23 @@ impl Serialize for EventStage {
     }
 }
 
+impl<'de> Deserialize<'de> for EventStage {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = Cow::<str>::deserialize(d)?;
+        Ok(match &*s {
+            "parse" => EventStage::Parse,
+            "setup" => EventStage::Setup,
+            "preflight" => EventStage::Preflight,
+            "finalize" => EventStage::Finalize,
+            other => EventStage::Stage(StageKind::deserialize(
+                serde::de::value::StrDeserializer::<D::Error>::new(other),
+            )?),
+        })
+    }
+}
+
 /// How a run ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeStatus {
     Success,
@@ -295,7 +346,7 @@ pub enum OutcomeStatus {
 
 /// A failure's category: the [`NcError`] variant, or `strict` for a `--strict`
 /// promotion. Never the error's text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     None,
@@ -336,7 +387,8 @@ pub enum Outcome {
 }
 
 /// Image facts (from the decoder plus the on-disk file sizes).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImageInfo {
     /// SilverFast variant (`"hdr"` / `"hdri"`).
     pub format: SilverFastFormat,
@@ -366,7 +418,8 @@ pub struct ImageInfo {
 /// `scene_correction` and `look` include the film base's one-pixel grade. The four
 /// chain stages are absent for the film master, and `ir_export` without `--export-ir`.
 /// `encode` includes the `--export-film-rgb` write.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimingInfo {
     pub total: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -444,7 +497,8 @@ impl StageClock for StageTimer {
 /// Compact conversion summary. A full `params_hash` (over the effective recipe
 /// JSON) lets the server dedup / group by exact parameters without the event
 /// carrying the whole recipe; a few high-signal knobs ride alongside it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionInfo {
     /// The destination written, every axis resolved (the recipe's `output` shape).
     /// Recorded because it is the single biggest determinant of what the written pixels
@@ -458,11 +512,12 @@ pub struct ConversionInfo {
     pub film_base_source: FilmBaseProvenance,
     /// The primary image's sample depth as written (`u8` / `u10` / `u16` / `f32`),
     /// fixed by the destination's encoding.
-    pub output_depth: &'static str,
+    pub output_depth: Cow<'static, str>,
 }
 
 /// How the run ended, and the quality signals a server watches for regressions.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutcomeInfo {
     pub status: OutcomeStatus,
     /// `none` exactly when `status` is `success`.
@@ -536,8 +591,8 @@ pub fn build_event(inputs: EventInputs<'_>) -> TelemetryEvent {
         event: EventName::Conversion,
         command: CommandKind::Convert,
         timestamp_ms: inputs.timestamp_ms,
-        nc_version: env!("CARGO_PKG_VERSION"),
-        target: env!("NC_TARGET"),
+        nc_version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
+        target: Cow::Borrowed(env!("NC_TARGET")),
         cpu_count: inputs.cpu_count,
         stage,
         image: inputs.image.map(|facts| {
@@ -686,7 +741,7 @@ mod tests {
             destination: sdr_p3_tiff(),
             params_hash: "deadbeef".into(),
             film_base_source: FilmBaseProvenance::Region([0, 0, 40, 30]),
-            output_depth: "u16",
+            output_depth: "u16".into(),
         }
     }
 
@@ -1037,7 +1092,7 @@ mod tests {
                 destination: sdr_p3_tiff(),
                 params_hash: "0123456789abcdef".into(),
                 film_base_source: FilmBaseProvenance::Explicit([0.5, 0.25, 0.125]),
-                output_depth: "u16",
+                output_depth: "u16".into(),
             }),
             loss: Some(EncodeReport {
                 total_samples: 10,
@@ -1048,8 +1103,8 @@ mod tests {
             warnings: 1,
             ..success_inputs(&info)
         });
-        full.nc_version = "9.9.9";
-        full.target = "test-triple";
+        full.nc_version = "9.9.9".into();
+        full.target = "test-triple".into();
         let expected_full = concat!(
             r#"{"schema_version":11,"event_id":"0123456789abcdeffedcba9876543210","#,
             r#""event":"conversion","command":"convert","timestamp_ms":1700000000000,"#,
@@ -1086,13 +1141,13 @@ mod tests {
                 destination: OutputSection::FilmMaster,
                 params_hash: "0".into(),
                 film_base_source: FilmBaseProvenance::Region([1, 2, 3, 4]),
-                output_depth: "f32",
+                output_depth: "f32".into(),
             }),
             loss: None,
             warnings: 0,
         });
-        minimal.nc_version = "9.9.9";
-        minimal.target = "test-triple";
+        minimal.nc_version = "9.9.9".into();
+        minimal.target = "test-triple".into();
         let expected_minimal = concat!(
             r#"{"schema_version":11,"event_id":"00000000000000000000000000000000","#,
             r#""event":"conversion","command":"convert","timestamp_ms":0,"#,

@@ -8,12 +8,12 @@
 //! Stages stay clock-free. The orchestrator times them by handing the chain a
 //! [`StageClock`]; tests pass `Untimed`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::Result;
 
 /// One stage of a conversion, in run order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKind {
     /// Reading the scan (`io::decode`).
