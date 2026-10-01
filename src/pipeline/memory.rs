@@ -152,6 +152,18 @@
 //! | `--new-flow --rendering direct --range sdr` (Adobe RGB) 18.66 MP | 0.950 GB | 0.795 GB | +19.5% |
 //! | `measure-roll`, one 16.43 MP frame (explicit base) | 0.739 GB | 0.606 GB | +22.0% |
 //! | `measure-roll`, one 18.66 MP frame (explicit base) | 0.821 GB | 0.685 GB | +19.7% |
+//! | SDR TIFF 5.83 MP (explicit base) | 0.389 GB | 0.256 GB | +51.8% |
+//! | linear float TIFF 5.83 MP (explicit base) | 0.349 GB | 0.221 GB | +57.8% |
+//! | PQ TIFF 5.83 MP (explicit base) | 0.389 GB | 0.256 GB | +51.8% |
+//! | PQ TIFF 18.66 MP (explicit base) | 0.950 GB | 0.795 GB | +19.4% |
+//! | HLG TIFF 5.83 MP (explicit base) | 0.389 GB | 0.256 GB | +51.8% |
+//! | HLG TIFF 18.66 MP (explicit base) | 0.950 GB | 0.795 GB | +19.4% |
+//! | `--film-master` 5.83 MP (explicit base) | 0.349 GB | 0.221 GB | +57.8% |
+//! | `--film-master` 18.66 MP (explicit base) | 0.821 GB | 0.683 GB | +20.2% |
+//! | gain-map JPEG 5.83 MP (explicit base) | 0.543 GB | 0.362 GB | +50.0% |
+//! | gain-map JPEG 16.51 MP (explicit base) | 1.293 GB | 1.016 GB | +27.2% |
+//! | gain-map JPEG 18.66 MP (explicit base) | 1.443 GB | 1.153 GB | +25.1% |
+//! | gain-map JPEG `--exposure 3` 18.66 MP (explicit base) | 1.443 GB | 1.158 GB | +24.7% |
 //!
 //! The two `measure-roll` rows (2026-09-23) calibrate [`RunProfile::MeasureRoll`]: its
 //! enumerated buffers are 0.87x of measured at both sizes, so the allowance covers
@@ -168,10 +180,10 @@
 //! paths since retired (`film-base/holder-masked-measurement`); they stay as
 //! calibration points for the rectangle sizes they gathered.
 //!
-//! No Ultra HDR run with `--export-ir` has been measured. Its optional export
-//! therefore retains the TIFF model's conservative 2 B/px u16 staging term;
-//! tests pin that structural increment without claiming it as a calibrated RSS
-//! observation.
+//! `--export-ir` measured no higher than the same run without it on the SDR TIFF and the
+//! gain map. [`RunProfile::U16Tiff`] and [`RunProfile::GainMapJpeg`] still count its
+//! 2 B/px u16 staging, the conservative end of the retention rule;
+//! [`RunProfile::F32Tiff`] counts none (the f32 plane is written verbatim), unmeasured.
 //!
 //! The five TIFF-HDR rows share one number per frame size because all three presets
 //! peak at the **render** phase, which is identical across them (they share
@@ -209,6 +221,18 @@
 //! the sRGB SDR TIFF and the sRGB-based gain map each peaked within 1 MB of the row
 //! sharing their profile.
 //!
+//! The last twelve rows (2026-10-01, `nf-destinations/memory-profiles`) come from every
+//! destination measured on four HDRi frames, 5.83 to 18.66 MP (no larger scan was on
+//! hand); the 7.11 and 16.51 MP peaks, in `docs/progress/nf-destinations.md`, lie within
+//! 6 MB of the lines fitted through the table's two sizes (the SDR and float TIFFs'
+//! 18.66 MP points are their PQ and film-master twins'). The PQ and HLG TIFFs peaked
+//! within 0.25 MB of the SDR TIFF, and the film master within 0.25 MB of the linear
+//! float TIFF — run-to-run noise — so each shares its arm by measurement: 42.0 B/px +
+//! 11 MB for [`RunProfile::U16Tiff`], 36.0 B/px + 11 MB for [`RunProfile::F32Tiff`],
+//! against 38 and 32 B/px accounted. The gain map measured 61.7 B/px + 3 MB against 61
+//! accounted; pushing the 16.51 and 18.66 MP frames +3 or +5 EV moved its peak by at
+//! most 10 MB.
+//!
 //! The `hdr-pq` and `hdr-hlg` rows are the removed AVIF destination's: the `hdr-pq`
 //! pair fitted its codec staging, and `docs/design/avif-removal.md` keeps that fit
 //! for anyone restoring it.
@@ -217,9 +241,12 @@
 //! in the tests are single observations, which is why the assertions are
 //! `estimate >= measured` rather than equality.
 //!
-//! Measured overhead over the *accounted* buffers peaked at **12.9%** on the
-//! no-sampling rows, which is why [`ALLOWANCE_PERCENT`] sits above it rather than
-//! at it.
+//! Measured peaks grow at most **13.3%** faster per pixel than the *accounted* buffers
+//! ([`RunProfile::F32Tiff`]: 36.0–36.25 vs 32 B/px across its two pairs), which is why
+//! [`ALLOWANCE_PERCENT`] sits above that rather than at it. A whole peak runs further
+//! over its accounted buffers on a small frame (18.5% on the 5.83 MP film master — the
+//! table's margin column compares the *estimate* instead); [`ALLOWANCE_FIXED_BYTES`]
+//! carries that.
 //!
 //! For the pre-fix three-image render peak (3.808 GB on the same 74.65 MP frame)
 //! and the rest of the before/after set, see `docs/progress/io.md`
@@ -275,10 +302,10 @@ const WORKING_CHANNELS: u64 = 3;
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// Proportional part of the allowance added to the accounted buffers, in percent.
-/// Set above the **12.9%** worst measured overhead (see the module doc's
-/// calibration table) so the estimate keeps a real margin — 2.1 percentage points
-/// — rather than tracking one machine's allocator exactly: the gate must err
-/// toward rejecting, never toward an OOM.
+/// Set above the worst measured per-pixel overhead, **13.3%** (see the module doc's
+/// calibration section), so the estimate keeps a real margin rather than tracking one
+/// machine's allocator exactly: the gate must err toward rejecting, never toward an
+/// OOM. A small frame's larger relative overhead falls to [`ALLOWANCE_FIXED_BYTES`].
 const ALLOWANCE_PERCENT: u64 = 15;
 
 /// Fixed part of the allowance: the binary, static data, lcms2 profiles and
@@ -316,10 +343,9 @@ pub enum RunProfile {
     /// It holds the decoded image (kept for `--export-ir`), the decode's one output
     /// buffer carrying a cloned IR plane, a chain that moves that buffer through every
     /// boundary and transforms it in place, and a 3x2 B quantize buffer with `tiff`
-    /// streaming strips. Its peak is the **encode** phase. Measured for the SDR
-    /// destination, in Display P3 and in Adobe RGB (see the module doc's calibration
-    /// table); the coded HDR TIFF shares it by the same buffer count and is **not yet
-    /// measured** (`nf-destinations/memory-profiles`).
+    /// streaming strips. Its peak is the **encode** phase. Measured for the SDR TIFF
+    /// in every gamut and for the PQ and HLG TIFFs (the module doc's calibration
+    /// table).
     ///
     /// **One branch only.** A gain-map pair (`chain::render_pair`) copies the graded
     /// image and holds two working buffers through fit range and fit gamut, so it has
@@ -330,10 +356,8 @@ pub enum RunProfile {
     },
     /// Into a **32-bit float TIFF**: the linear HDR destination, or the film master.
     /// [`U16Tiff`](Self::U16Tiff)'s buffers with no quantize buffer — f32 is written
-    /// verbatim. **Measured for the linear HDR destination** on two frame sizes (the
-    /// module doc's calibration table, `nf-destinations/direct-preset`); the film master
-    /// shares it by buffer count and is not yet measured
-    /// (`nf-destinations/memory-profiles`).
+    /// verbatim. Measured for the linear HDR TIFF in every gamut and for the film
+    /// master (the module doc's calibration table).
     F32Tiff {
         /// Carried for the uniform shape; an f32 IR plane is written verbatim from
         /// the decoded image, so it stages nothing.
@@ -345,8 +369,8 @@ pub enum RunProfile {
     /// splits off — then the full-resolution f32 gains. The HDR rendition and the gains
     /// are dropped as soon as the next buffer is built from them, but freed pages stay
     /// resident, so they are summed, not competed. Encode adds the u8 base, the
-    /// half-resolution map, both JPEGs and the assembled file. **Provisional**:
-    /// counted, not measured (`nf-destinations/memory-profiles`).
+    /// half-resolution map and both JPEGs, the JPEGs at a fitted size. Measured (the
+    /// module doc's calibration table).
     GainMapJpeg {
         /// Whether a u16 IR TIFF is staged before the primary.
         export_ir: bool,
@@ -710,12 +734,16 @@ pub fn estimate_peak(
         RunProfile::GainMapJpeg { export_ir } => {
             // Render: decoded + the chain's image-shaped buffer + the RGB-only split
             // copy + the f32 gains.
-            let rgb32 = mul(pixels, WORKING_CHANNELS * F32_BYTES)?;
             let render = sum(mul(image, 2)?, mul(rgb32, 2)?)?;
-            // Encode: all of that retained, plus 3 B/px of u8 base, 0.75 B/px of u8
-            // map, both JPEGs and the assembled file (each smaller than the raw bytes
-            // it holds) — 12 B/px covers them loosely — and the optional u16 IR plane.
-            let byte_staging = mul(pixels, 12)?;
+            // Encode: all of that retained, plus the u8 base (3 B/px), the u8 map
+            // (0.75), the gain-map JPEG, and the base JPEG that `assemble` grows in
+            // place, plus the optional u16 IR plane. The base JPEG's doubling growth and
+            // that final copy make it up to ~3x its length under the retention rule.
+            // The 5 B/px is a content assumption fitted to measured JPEGs (at most
+            // 0.55 B/px: a thin grainy frame pushed +5 EV), not an enumeration; the
+            // allowance (~10 B/px at 74.65 MP, less the measured ~0.7 overhead) covers a
+            // base JPEG up to about 2–3 B/px.
+            let byte_staging = mul(pixels, 5)?;
             let ir_export = if export_ir && shape.ir_present {
                 mul(pixels, 2)?
             } else {
@@ -1203,6 +1231,14 @@ mod tests {
                 335_829_888,
                 520_422_086,
             ),
+            // 18.66 MP gain map: encode 61 B/px.
+            (
+                standard,
+                RunProfile::GainMapJpeg { export_ir: false },
+                SamplePlan::none(),
+                1_138_090_176,
+                1_443_021_419,
+            ),
         ] {
             let e = estimate_peak(&shape, profile, sampling).unwrap();
             assert_eq!(e.accounted_bytes, accounted, "{profile:?}");
@@ -1228,6 +1264,20 @@ mod tests {
         let standard = shape(5184, 3599, true); // a roll frame, 18.66 MP HDRi
         let export_ir_u16 = RunProfile::U16Tiff { export_ir: true };
         let hdr_out = RunProfile::F32Tiff { export_ir: false };
+        // The current chain's destinations (`nf-destinations/memory-profiles`): a PQ
+        // TIFF, the film master and the gain map (the 18.66 MP one at `--exposure 3`).
+        let small = shape(1890, 3083, true); // 5.83 MP HDRi
+        let large = shape(5184, 3600, true); // 18.66 MP HDRi
+        let gain_map = RunProfile::GainMapJpeg { export_ir: false };
+        let current = [
+            (small, convert_u16(), 256_163_840u64),
+            (large, convert_u16(), 795_246_592),
+            (small, hdr_out, 220_987_392),
+            (large, hdr_out, 683_081_728),
+            (small, gain_map, 361_906_176),
+            (large, gain_map, 1_157_562_368),
+        ]
+        .map(|(shape, profile, measured)| (shape, profile, SamplePlan::none(), measured));
         let cases: [(ImageShape, RunProfile, SamplePlan, u64); 6] = [
             (
                 big(),
@@ -1246,7 +1296,7 @@ mod tests {
                 328_286_208,
             ),
         ];
-        for (shape, profile, sampling, measured) in cases {
+        for (shape, profile, sampling, measured) in cases.into_iter().chain(current) {
             let e = estimate_peak(&shape, profile, sampling).unwrap();
             assert!(
                 e.estimated_peak_bytes >= measured,

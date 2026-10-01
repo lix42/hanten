@@ -1966,9 +1966,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   as little as possible (HDR float TIFF by default, Adobe RGB when SDR; roll section
   unapplied) for an editor and, stated SDR, the calibration loop; `default` is our code plus the roll's measurements. Re-planned
   2026-09-27
-- [ ] [A memory profile per
-  destination](tasks/nf-destinations/memory-profiles.md) — a `RunProfile` per
-  destination; sharing an arm is measured, not assumed
+- [x] [A memory profile per
+  destination](tasks/nf-destinations/memory-profiles.md) — **done 2026-10-01.** Every
+  destination measured on four frames (5.83–18.66 MP): PQ/HLG share `U16Tiff`, the film
+  master `F32Tiff`; the gain map's staging cut from 12 to a fitted 5 B/px
 - [x] [Which destination the default
   resolves](tasks/nf-destinations/default-destination.md) — **done 2026-09-29, absorbed
   by `nf-core/default-flip`**: `pipeline_version` 8 moved chain and container in one
@@ -1981,7 +1982,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   half-resolution, per-channel gain map, ISO 21496-1 metadata only, in an MPF container
   nc writes (`io::iso_gain_map`, no libultrahdr; gain map typed `050000`). A flat map is
   `chain.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three
-  distinct channel entries; `NewFlowGainMapJpeg` is provisional
+  distinct channel entries; its memory arm (now `GainMapJpeg`) was measured by
+  `memory-profiles`
 - [x] [Easy destination
   rows](tasks/nf-destinations/easy-destination-rows.md) — **done 2026-09-30.** The linear
   float HDR TIFF in Display P3, Adobe RGB, sRGB and BT.2020 (`--transfer linear` alone
