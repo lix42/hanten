@@ -2510,14 +2510,12 @@ fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool) -> Result<()> 
         (
             "--clip-low",
             args.simple.clip_low.is_some(),
-            "nothing yet: the affine levels remap that replaced it has no home \
-             (`nf-scene-correction/levels-knob`)",
+            "--display-black (recipe `fit_range.display_black`), which places black",
         ),
         (
             "--clip-high",
             args.simple.clip_high.is_some(),
-            "nothing yet: the affine levels remap that replaced it has no home \
-             (`nf-scene-correction/levels-knob`)",
+            "--exposure (recipe `scene_correction.exposure`), which sets brightness",
         ),
     ] {
         if present {
@@ -2562,9 +2560,10 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
     }
     if flags.linear_range.is_some() {
         return Some(
-            "--linear-range was removed with the print stage: the affine levels remap has \
-             no home yet (`nf-scene-correction/levels-knob`, which may retire it). Drop the \
-             flag."
+            "--linear-range was removed with the print stage: the levels remap retired, \
+             since its gain is `--exposure` (recipe `scene_correction.exposure`) and its \
+             black is `--display-black` (recipe `fit_range.display_black`). There is no \
+             alias."
                 .into(),
         );
     }
@@ -7125,7 +7124,12 @@ mod tests {
             (
                 vec!["--linear-range", "0,1"],
                 "--linear-range was removed",
-                None,
+                Some("--exposure"),
+            ),
+            (
+                vec!["--linear-range", "0.1,0.9"],
+                "--linear-range was removed",
+                Some("--display-black"),
             ),
             (
                 vec!["--output-preset", "display-p3"],
@@ -7174,7 +7178,16 @@ mod tests {
                 Some("--gamut"),
             ),
             (vec!["--bigtiff", "on"], "--bigtiff was removed", None),
-            (vec!["--clip-low", "0.1"], "--clip-low was removed", None),
+            (
+                vec!["--clip-low", "0.1"],
+                "--clip-low was removed",
+                Some("--display-black"),
+            ),
+            (
+                vec!["--clip-high", "0.9"],
+                "--clip-high was removed",
+                Some("--exposure"),
+            ),
             (
                 vec!["--invert-white-balance", "1,1,1"],
                 "--invert-white-balance was removed",
@@ -7189,8 +7202,10 @@ mod tests {
                 assert!(msg.contains(flag), "{argv:?}: {msg}");
                 assert!(is_convert_flag(flag), "{flag} is not a flag");
             }
-            // The removed chain's vocabulary is not advice any more.
+            // The removed chain's vocabulary is not advice any more, nor is a closed
+            // task.
             assert!(!msg.contains("--new-flow"), "{argv:?}: {msg}");
+            assert!(!msg.contains("levels-knob"), "{argv:?}: {msg}");
             assert!(
                 !msg.contains("  "),
                 "{argv:?}: a sentence is missing: {msg}"

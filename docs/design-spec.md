@@ -1675,9 +1675,10 @@ alias, on flags and recipe keys alike. The reference build
 - **The print stage and the presets** (`nf-core/default-flip`): `--output-preset` and
   `output.preset` (→ the four axes or `--film-master`), `--print-exposure` (→
   `--exposure`), `--black-point` (→ `--display-black`), `--auto-wb` (→ `measure-roll`
-  and `--roll-white-balance`), `--linear-range` (levels are `nf-scene-correction/levels-knob`'s
-  open question), the whole `print` section, `--new-flow`, and the sidecar. Earlier
-  still, `--output-hdr` and `--output-sdr`, the names before the presets. Earlier:
+  and `--roll-white-balance`), `--linear-range` (retired: its gain is `--exposure`,
+  its black `--display-black` — `nf-scene-correction/levels-knob`), the whole `print`
+  section, `--new-flow`, and the sidecar. Earlier still, `--output-hdr` and
+  `--output-sdr`, the names before the presets. Earlier:
   `--out-depth`, `--output-profile`, `--bigtiff` with the `legacy` and `custom` presets
   (`nf-retire/legacy-custom`), and `--display-tone` / `--highlight-compress` with the
   bounded display tones (`nf-retire/display-tones`).
@@ -2126,8 +2127,6 @@ Each names the task that owns it, or says it has none.
   that it is optional and in rendering, not which stage. No task yet.
 - **Other outputs the old chain had** (ProPhoto, arbitrary ICC paths): keep or drop.
   No task yet.
-- **A home and a name for the levels remap**, or its retirement
-  (`nf-scene-correction/levels-knob`).
 - **The rendering without a roll measurement**: the fallback slope (`2.0 / 1.8` today;
   measured rolls give 2.23–2.97 as a whole slope) and the other fallbacks
   (`nf-calibration/no-roll-defaults`).

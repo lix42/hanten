@@ -39,6 +39,12 @@ photograph, and scanner veil is a highlight question. Placing black is fit range
 `--display-black`. So this stage produces no negative channels, and display black's
 film-base reference has no scene subtraction to account for.
 
+**`linear_range` retired, with no successor (`levels-knob`, 2026-09-30).** Its gain is
+`--exposure` and its black is `--display-black`. Its refusals (`--linear-range`, the
+`print` section, `simple`'s `--clip-low` / `--clip-high`) now name those two knobs. A
+lifted black (a faded look) is the one thing it could do that nothing does now. If anyone
+wants it, it is a look control.
+
 ## stage
 
 **Status:** done
@@ -129,10 +135,36 @@ film-base reference has no scene subtraction to account for.
 
 ## levels-knob
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-19: created with the new-flow plan. Goal: a home and a name for `linear_range`.
+- 2026-09-30: **retired (user).** The removed chain's `linear_range` was one scalar
+  pair applied after the black point, `(x − low) / (high − low)`. Taken apart, every part
+  but a lifted black is covered by another knob:
+  - the gain `1 / (high − low)` is `--exposure`, `log2(1 / (high − low))` stops;
+  - `low > 0` subtracts a black. `flare-removal` found no pedestal to remove, and
+    display black places black by luminance rather than by a per-channel subtraction;
+  - placing white with `high` is the look's contrast and the roll's white rule. A
+    levels move there also shifts mid-grey, which the anchor is there to hold;
+  - `low < 0` lifts black. Nothing does this, since display black never lifts. It is
+    a creative look and not a correction, so it is noted here and not filed.
+
+  The task's case for keeping it, a user with a measured range, does not hold: values
+  at the fixed decode are not something a user measures outside the tool. Since
+  `nf-core/default-flip` already refused the flag and the `print` section, the change
+  is only wording: `--linear-range`, the `print` section's message, and `simple`'s
+  `--clip-low` (→ `--display-black`) and `--clip-high` (→ `--exposure`), which pointed
+  at this task too, now say what replaced them. The old default `0,1` is still refused,
+  like the rest of the `print` section. Pixels don't change, so there is no fingerprint
+  row.
+- 2026-09-30 (done): verified through the binary. All four refusals (the three flags
+  and a recipe `print.linear_range`) exit 2 and name their replacement, and
+  `docs/using-nc.md`'s example matches the output word for word. Unit and pipeline
+  tests check that each remedy is a visible `convert` flag and that no message
+  mentions this task any more. Review: the diff reviewer found only a self-contradiction
+  in this entry, now fixed; Codex was skipped because its workspace was out of credits.
+  Nothing depends on this task.
 
 ## roll-white-balance
 

@@ -8370,19 +8370,15 @@ fn hanten_params_writes_the_recipe_convert_reads() {
 #[test]
 fn the_removed_print_controls_are_refused_with_where_they_went() {
     // The print family, driven through the binary one flag at a time. Each names where
-    // its knob went — a flag that carries it now, or the task that may give it a home —
-    // so the refusal tells a user more than that it is gone. One of these is the
-    // documented **default** (`--linear-range 0,1`) and is still refused: there is no
-    // `print` section left for a flag to reset.
+    // its knob went, so the refusal tells a user more than that it is gone. One of these
+    // is the documented **default** (`--linear-range 0,1`) and is still refused: there is
+    // no `print` section left for a flag to reset.
     let tmp = TempDir::new("removed-print");
     let fixture_path = fixture("hdr-48bit.tif").display().to_string();
     let cases: &[(&[&str], &str)] = &[
         (&["--print-exposure", "1"], "`--exposure`"),
         (&["--black-point", "0.01"], "`--display-black`"),
-        (
-            &["--linear-range", "0,1"],
-            "nf-scene-correction/levels-knob",
-        ),
+        (&["--linear-range", "0,1"], "`--display-black`"),
         (&["--auto-wb", "percentile"], "hanten measure-roll"),
     ];
     for (i, (extra, expect)) in cases.iter().enumerate() {

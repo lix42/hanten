@@ -1789,9 +1789,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   2026-09-26**: base fog is already in the measured film base, lens glare is part of
   the photograph, and scanner veil is a highlight question; `--display-black` does
   the black point's one job
-- [ ] [A home and a name for
+- [x] [A home and a name for
   `linear_range`](tasks/nf-scene-correction/levels-knob.md) — `linear_range`
-  is a levels remap, not fit range — decide whether it survives and where
+  is a levels remap, not fit range — decide whether it survives and where.
+  **Retired 2026-09-30**: its gain is `--exposure` and its black `--display-black`,
+  and the refusals now name those two
 - [x] [A roll-level white
   balance](tasks/nf-scene-correction/roll-white-balance.md) — measured once per
   roll from its own top percentile, removing the roll-constant cast and keeping
