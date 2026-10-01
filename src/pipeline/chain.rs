@@ -1008,7 +1008,12 @@ mod tests {
                 exposure: 0.25,
             },
             look: LookParams {
-                section: LookSection::default(),
+                // Pinned, so moving the fallback slope does not move the contract
+                // tests' grid onto the HDR cube's faces.
+                section: LookSection {
+                    slope: 2.0 / 1.8,
+                    ..LookSection::default()
+                },
                 linearization: crate::algo::fixed::LINEARIZATION,
             },
             headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,

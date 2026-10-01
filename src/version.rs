@@ -56,7 +56,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 5 | the same gain again, `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** (2026-09-16, `io/scanner-density-calibration`). Calibrated from **31 hand-marked neutral patches** over five rolls instead of from the tone-scale slope: each roll's median nulling scale, averaged with equal weight per roll, gives green 0.837 and blue 0.733. Blue is the half that holds — every roll wants 0.68–0.78, so v4's `0.860`, taken from the manufacturers' published per-channel structure, overcorrects on this scanner. Green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with a change of developer), so `0.84` is a deliberate compromise fitting neither group exactly. Shipped on a visual verdict over five rolls with an NLP reference beside them, where it beat v4 on every frame but one — `2026-07-15-Ektar100/991` reads green-yellow, which is the overshoot the July patches predict. Every default pixel moves, and colour more than tone. Evidence: `docs/progress/algo.md` (2026-09-16). |
 /// | 6 | the default density curve sigmoid → **exponential at the fixed decode's configuration** (2026-09-23, `nf-retire/sigmoid-and-simple`): contrast 2.0, mid-grey pinned 0.62 density above the film base (`mid-at-base-offset`), the same `[1, 0.84, 0.73]` gain. It is `algo::fixed`'s decode on the current chain, bit-identically (`the_fixed_decode_matches_the_equivalent_legacy_configuration`), so the two chains now render the same default reconstruction. The sigmoid's toe and shoulder were a rendering fused into the decode; the default anchor no longer reads the roll's reference density. Every default pixel moves, highlights most (nothing is compressed at white any more). `simple` retired in the same change, which moves no default pixel. |
 /// | 7 | the default display tone `shoulder` → **extended Reinhard at 6 stops of headroom** (2026-09-24, `nf-retire/display-tones`), fit range's operator. `shoulder` and `none` retired with `highlight_compress`; the headroom moved to `fit_range.headroom_stops`. Every default display pixel moves — the whole curve is compressed rather than only the top, with mid-grey held at 0.18 — while `render` and `base` are unmoved, since the gate stops before the display stages. Evidence: `docs/progress/nf-retire.md`. |
-/// | 8 | **current** — the chain flip (2026-09-27, `nf-core/default-flip`): the staged rendering chain (design-spec §6) is the only one. The default render is the fixed decode at the linearization **1.8** (not the bundled 2.0) → scene correction (neutral) → the look (contrast 2.0/1.8, highlight desaturation 0.8) → fit range (extended Reinhard at 6 stops, display black 6 stops below mid-grey) → fit gamut into Display P3, written as an **SDR Display P3 16-bit TIFF** where v7 wrote a gain-map JPEG — a container change as well as a render one. `render` now hashes the fixed decode (refreshed by `nf-verification/fingerprints` to reach the ACEScg mapping, over a new vector, with no pixel moved), and `recipe` the recipe document that replaced the old one (`crate::recipe`), so both moved; `base` did not. Evidence: `docs/reports/default-flip.md`. |
+/// | 8 | the chain flip (2026-09-27, `nf-core/default-flip`): the staged rendering chain (design-spec §6) is the only one. The default render is the fixed decode at the linearization **1.8** (not the bundled 2.0) → scene correction (neutral) → the look (contrast 2.0/1.8, highlight desaturation 0.8) → fit range (extended Reinhard at 6 stops, display black 6 stops below mid-grey) → fit gamut into Display P3, written as an **SDR Display P3 16-bit TIFF** where v7 wrote a gain-map JPEG — a container change as well as a render one. `render` now hashes the fixed decode (refreshed by `nf-verification/fingerprints` to reach the ACEScg mapping, over a new vector, with no pixel moved), and `recipe` the recipe document that replaced the old one (`crate::recipe`), so both moved; `base` did not. Evidence: `docs/reports/default-flip.md`. |
+/// | 9 | **current** — the look's fallback slope `2.0/1.8` → **`slope_for(1.75)` ≈ 1.414** (2026-09-30, `nf-calibration/no-roll-defaults`): a render without a roll white is placed as if the roll's white were 1.75 scene stops above mid-grey (whole contrast 2.54), where the bundled decode's contrast 2.0 placed it at +2.23, above the white rule's cap. Every default pixel off mid-grey moves; a run with a roll white does not. `render` and `base` are unmoved; `recipe` now also hashes the `default` rendering's base (`crate::rendering`), which holds the fallback. `direct`'s pinned slope moved to the same value. Evidence: `docs/progress/nf-calibration.md` (2026-09-30). |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -123,7 +124,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// test fails until the fingerprints **and** this constant are updated together.
 /// Read `PipelineFingerprint` for exactly which stages those are — the gate is not
 /// whole-pipeline coverage and must not be described as if it were.
-pub const PIPELINE_VERSION: u32 = 8;
+pub const PIPELINE_VERSION: u32 = 9;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -363,6 +364,22 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // `c596525d9284f59c`): `roll.exposure` arrived, `null` by default, so no default
         // pixel moved.
         recipe: "e9cf2eb90d49d086",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v9 bump took the constant over.
+        behavior: "SDR Display P3 16-bit TIFF default output; the fixed decode (linearization \
+                   1.8, mid-grey 0.62 density above the film base, neutral-patch-calibrated \
+                   per-channel density gain); look contrast 2.0/1.8 with highlight \
+                   desaturation; extended-Reinhard fit range at 6 stops with display black 6 \
+                   stops below mid-grey; radial gamut map into Display P3; no auto white \
+                   balance",
+    },
+    // v9 — the look's fallback slope moved (2026-09-30). `render` and `base` are unchanged;
+    // `recipe` also hashes the `default` rendering's base from this row on, so the v8 row's
+    // `recipe` is history under the old definition.
+    PipelineFingerprint {
+        pipeline_version: 9,
+        render: "f51d3397c7364160",
+        base: "01c5acccc36a3388",
+        recipe: "214ecf6c86cbc179",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -397,7 +414,8 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   over the same scan, which chose a band of this region at the same percentile:
 ///   the bits, and so every recorded `base`, are unchanged.)
 /// - `recipe` — [`stable_hash`] over the canonical JSON of `recipe::Recipe::default()`
-///   (v1–v7: the removed chain's config). This is the default *configuration*: it
+///   (v1–v7: the removed chain's config), then, from v9, the `default` rendering's base
+///   (`crate::rendering`), which holds the values the document leaves unset. This is the default *configuration*: it
 ///   covers default **values** the other two cannot see — every rendering stage's
 ///   defaults, the destination (`output`), `calibration.film_base`, the `input`
 ///   defaults. It is the *only* fingerprint that moves when a rendering stage's default
@@ -506,8 +524,8 @@ pub struct PipelineFingerprint {
 /// The v1 row records the outcome; read it before amending anything here.
 pub const PIPELINE_BEHAVIOR: &str = "SDR Display P3 16-bit TIFF default output; the fixed \
      decode (linearization 1.8, mid-grey 0.62 density above the film base, \
-     neutral-patch-calibrated per-channel density gain); look contrast 2.0/1.8 with \
-     highlight desaturation; extended-Reinhard fit range at 6 stops with display black 6 \
+     neutral-patch-calibrated per-channel density gain); look slope placing a white \
+     1.75 stops above mid-grey when no roll white is given, with highlight desaturation; extended-Reinhard fit range at 6 stops with display black 6 \
      stops below mid-grey; radial gamut map into Display P3; no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it
@@ -644,8 +662,11 @@ pub fn stable_hash(text: &str) -> String {
 pub(crate) mod drift_gate {
     use super::*;
     use crate::algo::fixed::{self, DecodeParams};
+    use crate::destination::Axis;
+    use crate::pipeline::fit_range::DisplayBlack;
     use crate::pipeline::{film_base, working_space};
     use crate::recipe::Recipe;
+    use crate::rendering::{Base, Rendering};
     use crate::types::{FilmBase, FilmBaseSource, LinearImage};
 
     /// Format an `f32` as its raw bit pattern in hex — no decimal formatting, so
@@ -743,8 +764,38 @@ pub(crate) mod drift_gate {
     /// The default *configuration*'s fingerprint input: the default recipe document —
     /// exactly the bytes `--dump-params` writes for an untouched default run
     /// (`hanten params` prints the same text with a trailing newline).
+    /// Then the `default` rendering's base, which holds the values the document leaves
+    /// unset (the fallback slope, and each stage knob written `null`).
     fn recipe_fingerprint_text() -> String {
-        serde_json::to_string_pretty(&Recipe::default()).expect("the default recipe must serialize")
+        recipe_fingerprint_text_with(&Rendering::Default.base())
+    }
+
+    fn recipe_fingerprint_text_with(base: &Base) -> String {
+        let recipe = serde_json::to_string_pretty(&Recipe::default())
+            .expect("the default recipe must serialize");
+        let d = &base.highlight_desaturation;
+        let black = match base.display_black {
+            DisplayBlack::Off => "off".to_string(),
+            DisplayBlack::StopsBelowMid(s) => hex(s),
+        };
+        let a = &base.axes;
+        let linear = a.linear_gamut.map_or("none", Axis::name);
+        format!(
+            "{recipe}\nroll {} slope {} desaturation {} {} {} {} headroom {} black {black} \
+             axes {} {} {} {} {linear} {}",
+            base.applies_roll,
+            hex(base.slope),
+            hex(d.strength),
+            hex(d.start_stops),
+            hex(d.band[0]),
+            hex(d.band[1]),
+            hex(base.headroom_stops),
+            a.range.name(),
+            a.transfer.name(),
+            a.gamut.name(),
+            a.container.name(),
+            a.container_first,
+        )
     }
 
     /// The recorded row for [`PIPELINE_VERSION`], or a panic naming exactly what to
@@ -917,8 +968,21 @@ pub(crate) mod drift_gate {
             "a different film-base source must move the base fingerprint"
         );
 
+        // (c) a default the recipe document leaves unset: the `default` rendering's
+        // fallback slope, which the document never states.
+        let perturbed_rendering = Base {
+            slope: 1.5,
+            ..Rendering::Default.base()
+        };
+        assert_ne!(
+            stable_hash(&recipe_fingerprint_text_with(&perturbed_rendering)),
+            row.recipe,
+            "a moved fallback slope must move the recipe fingerprint"
+        );
+
         // And the unperturbed defaults DO match the row — so the assertions above
         // failed for the perturbation, not because the formatter never matches.
+        assert_eq!(stable_hash(&recipe_fingerprint_text()), row.recipe);
         assert_eq!(
             stable_hash(&render_fingerprint_text(&DecodeParams::default())),
             row.render

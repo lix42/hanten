@@ -8,9 +8,12 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, at `038e7a3`
-> (`nf-docs/using-nc`: every command and quoted message below re-run on
-> `tests/fixtures/`, except the few marked as from a real roll or scan). The staleness signal is
+> **Verified against:** `hanten 0.1.0`. Every command and quoted message was re-run on
+> `tests/fixtures/` at `pipeline_version 8`, `038e7a3` (`nf-docs/using-nc`), except the few
+> marked as from a real roll or scan. At `pipeline_version 9`
+> (`nf-calibration/no-roll-defaults`, the look's fallback slope) the sections that slope
+> reaches were re-run: §6's `reconstruction.contrast` refusal, §7's rendering table,
+> no-roll warning, look report and fit-range report. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -368,7 +371,7 @@ fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, headroom
 and display black are 0.8, 6 and 6 under `default`. The look's `contrast` is a
-multiplier, so its default `1.0` keeps the base slope: the roll's, else 2.0/1.8 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
+multiplier, so its default `1.0` keeps the base slope: the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
 
@@ -587,8 +590,8 @@ The report states what the decode ran, in `chain.decode` (`anchor`,
 
 `--density-gamma` is the film's **linearization** — undoing the negative's ≈0.55
 density per decade — and the look's slope (§7) is how contrasty the picture is. With no
-roll white, `1.8 × 2.0/1.8` renders a neutral where the single slope of 2.0 that
-earlier builds bundled the two into did. To change how contrasty a picture is, change
+roll white, the whole slope is `1.8 × 1.414 ≈ 2.54`, steeper than the single slope of
+2.0 that earlier builds bundled the two into. To change how contrasty a picture is, change
 `--contrast`; `--density-gamma` is a calibration and moves with `--density-scale`,
 never alone. A recipe stating the pre-split `reconstruction.contrast` is refused with
 the value that keeps it:
@@ -597,7 +600,7 @@ the value that keeps it:
 usage: recipe old.json: `reconstruction.contrast` split in two: the decode's slope is
        now `reconstruction.linearization`, the film's linearization, and how contrasty
        the picture is is the look's `look.contrast`. Drop the key; to keep a stated 2
-       as the whole slope, write `look.contrast` 1 (over the fallback slope 1.1111112)
+       as the whole slope, write `look.contrast` 0.78597355 (over the fallback slope 1.413675)
        and leave `reconstruction.linearization` at its default 1.8
 ```
 
@@ -720,7 +723,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | | `default` | `direct` |
 |---|---|---|
 | the roll's measurements (`roll`) | applied | left out, and reported so (`chain.roll.*_applied: false`) |
-| white balance / base slope | the roll's; without them neutral / 2.0/1.8, and a warning | neutral / 2.0/1.8 |
+| white balance / base slope | the roll's; without them neutral / ≈1.414, and a warning | neutral / ≈1.414, pinned |
 | highlight desaturation | 0.8 | off |
 | display black / headroom | 6 / 6 | 6 / 6, pinned |
 | destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
@@ -751,7 +754,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   `measure-roll`:
 
   ```text
-  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) and exposure (`roll.exposure`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
+  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.413675 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) and exposure (`roll.exposure`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
   ```
 
   A typed `--white-balance` or `--contrast` is a choice — even `--white-balance 1,1,1` or
@@ -865,12 +868,12 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 - **Contrast is the slope, pivoted at mid-grey**, on each ACEScg channel: mid-grey
   stays put and each stop away from it becomes `slope` stops, where slope 1 reproduces
   the scene's own contrast. The slope is a **base** times `--contrast`: the roll's
-  (`roll.white_stops`, below), else the fallback `2.0/1.8`, and under `direct` its
-  pinned `2.0/1.8`. So `--contrast 1.2` is 20% more than the roll's, on every roll —
+  (`roll.white_stops`, below), else the fallback ≈1.414 — the slope a roll whose white
+  sat 1.75 stops above mid-grey would get — and under `direct` its pinned ≈1.414. So `--contrast 1.2` is 20% more than the roll's, on every roll —
   the way to carry one taste across rolls. A neutral stays neutral; saturated colour
   shifts slightly against the pre-split single slope, which acted before the NC film
   RGB 3×3 rather than after it. It runs after scene correction, so `--exposure 1` at
-  slope 1.11 moves the picture 1.11 stops: exposure is in stops of the reconstructed
+  slope 1.41 moves the picture 1.41 stops: exposure is in stops of the reconstructed
   scene.
 - **The grade is for crossover** — a cast that differs between shadows and
   highlights, which one set of white-balance gains cannot remove. Each of red and blue
@@ -890,7 +893,7 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
       | jq -c '{look: .chain.look, stage: .chain.stages[1]}'
-  {"look":{"contrast":1.0,"base_slope":1.1111112,"base_from":"fallback","slope":1.1111112,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
+  {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","slope":1.413675,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
   ```
 
   `base_from` is `roll`, `fallback` or `direct`, and `slope` is `base_slope` ×
@@ -929,14 +932,14 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
   "display_black": {
     "setting": 6.0,
     "curve": "log-shift-to-mid-grey-v1",
-    "film_base_stops": 3.8510852,
-    "shift_stops": -2.1489148
+    "film_base_stops": 4.9630156,
+    "shift_stops": -1.0369847
   }
 }
 ```
 
 At `0` the operator reads `"identity"`: reinhard passes the scene through unchanged,
-and everything above display white clips at the encode (32% of the samples on
+and everything above display white clips at the encode (36% of the samples on
 `tests/fixtures/hdr-48bit.tif`, against none at the default). Display black still runs
 at `0` unless it is off, so the stage list names its curve then. A pixel with a
 non-finite channel is refused (exit 1, naming the pixel) rather than passed to the
@@ -951,9 +954,9 @@ on a representative frame.
 Display black is where the film base — the darkest thing on the film, since
 nothing below its threshold is recorded — lands on the display, in stops below
 mid-grey. Without it black lands wherever the look's contrast leaves it: at the
-default contrast the base renders 3.85 stops under mid-grey (above), which reads as a
-pale, lifted black. At the default `6` (about L\* 2.5) it is moved down by the 2.15
-stops `shift_stops` reports.
+default contrast the base renders 4.96 stops under mid-grey (above), which reads as a
+lifted black. At the default `6` (about L\* 2.5) it is moved down by the 1.04 stops
+`shift_stops` reports.
 
 - **Nothing is measured from the image.** Where the base renders is computed from the
   film base you gave and the frame's own decode, white balance, exposure and contrast,
@@ -969,9 +972,9 @@ stops `shift_stops` reports.
   report shows `"curve": "identity"` and `"shift_stops": 0.0`. `off` leaves black
   wherever the grade puts it.
 - **A base near mid-grey is warned about.** Only a strong `--exposure` gets it there:
-  at the default contrast the warning starts at about `--exposure 1.75`. Closer than 2
+  at the default contrast the warning starts at about `--exposure 2.15`. Closer than 2
   stops under mid-grey, the whole shift is squeezed into that narrow band and crushes
-  the shadows; at or above mid-grey (about `--exposure 3.75`) black cannot place it and
+  the shadows; at or above mid-grey (about `--exposure 3.7`) black cannot place it and
   is skipped. Either way the report warns, naming
   `--exposure` and `--display-black off` as the remedies.
 - **Not the removed `--black-point`**, a subtraction on every channel that crushed

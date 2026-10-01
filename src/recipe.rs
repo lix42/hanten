@@ -1966,7 +1966,7 @@ mod tests {
                 );
             }
         }
-        // Both forms are reached: the fallback's own default converts exactly.
+        // Both forms are reached: the value earlier builds wrote converts exactly.
         let err = check(
             r#"{"recipe_version": 2, "look": {"contrast": 1.1111112}}"#,
             true,
@@ -2590,11 +2590,11 @@ mod tests {
         for (json, multiplier) in [
             (
                 r#"{"recipe_version": 3, "reconstruction": {"contrast": 2.0}}"#,
-                1.0,
+                2.0 / (LINEARIZATION * DEFAULT_SLOPE),
             ),
             (
                 r#"{"recipe_version": 3, "reconstruction": {"contrast": 3.6}}"#,
-                1.8,
+                3.6 / (LINEARIZATION * DEFAULT_SLOPE),
             ),
             (
                 r#"{"recipe_version": 3, "roll": {"white_stops": 1.6},

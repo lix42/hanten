@@ -60,7 +60,6 @@
 
 use serde::Serialize;
 
-use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::white_balance::{
@@ -100,6 +99,12 @@ pub const WHITE_CAP_STOPS: f32 = 2.0;
 /// an underexposed roll's white only this far (its level is the roll's exposure's).
 /// Chosen by review over +1.0 (contrast 4.45, worst on nearly every frame) and +2.0.
 pub const WHITE_FLOOR_STOPS: f32 = 1.5;
+
+/// The white a render without a roll measurement is placed as if the roll had, in scene
+/// stops above mid-grey: the `default` rendering's fallback slope
+/// ([`crate::pipeline::look::DEFAULT_SLOPE`]). Chosen by review over +2.23 (the bundled
+/// decode's contrast, above the cap) and the floor (`nf-calibration/no-roll-defaults`).
+pub const FALLBACK_WHITE_STOPS: f32 = 1.75;
 
 /// How close to the leader, in scene stops, a frame's white may come before the frame
 /// warns as near film saturation. A placeholder, owned by
@@ -344,9 +349,13 @@ pub fn scene_stops(level: f32) -> f32 {
 /// The slope that renders a white `white_stops` above mid-grey at diffuse white,
 /// mid-grey pinned: the look maps `MID_GREY · 2^w` to `MID_GREY · 2^(k·w)`. Scene stops
 /// already include the decode's linearization, so it does not enter here.
-pub fn slope_for(white_stops: f32) -> f32 {
-    (DIFFUSE_WHITE / MID_GREY).log2() / white_stops
+pub const fn slope_for(white_stops: f32) -> f32 {
+    WHITE_OVER_MID_STOPS / white_stops
 }
+
+/// `log2(DIFFUSE_WHITE / MID_GREY)`, written out so [`slope_for`] needs no libm and can
+/// define a constant (`tests::white_over_mid_is_the_log_of_the_ratio`).
+const WHITE_OVER_MID_STOPS: f32 = 2.473_931;
 
 /// Which limit set the roll's white.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -454,6 +463,7 @@ pub fn roll_gains(pool: &[f32]) -> Result<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algo::fixed::DIFFUSE_WHITE;
 
     /// An interleaved buffer of `n` copies of `px`.
     fn field(px: [f32; 3], n: usize) -> Vec<f32> {
@@ -686,6 +696,13 @@ mod tests {
         assert_eq!(w.roles, [FrameRole::Unmeasured, FrameRole::SetsRoll]);
         let err = place_roll_white(&[None, None]).unwrap_err();
         assert!(err.message().contains("usable pixel"), "{err}");
+    }
+
+    #[test]
+    fn white_over_mid_is_the_log_of_the_ratio() {
+        // In f64, so the check does not rest on this target's `log2f`.
+        let exact = (f64::from(DIFFUSE_WHITE) / f64::from(MID_GREY)).log2() as f32;
+        assert_eq!(WHITE_OVER_MID_STOPS.to_bits(), exact.to_bits());
     }
 
     #[test]

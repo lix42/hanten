@@ -941,10 +941,11 @@ const LOOK_CONTRAST_FILM: [f32; 12] = [
     0.18, 0.18, 0.18, 0.01, 0.012, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2,
 ];
 
-/// The contrast alone, at its default, over the default linearization.
+/// The contrast alone, at a pinned slope (the fallback until
+/// `nf-calibration/no-roll-defaults`), so a retuned default needs no recapture.
 fn look_contrast_params() -> LookParams {
     let mut params = LookParams::off();
-    params.section.slope = look::DEFAULT_SLOPE;
+    params.section.slope = 2.0 / 1.8;
     params
 }
 

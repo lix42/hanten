@@ -89,8 +89,8 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 
 /// Mid-grey's density above the film base — the decode's one anchor constant.
 ///
-/// A **convention, not a per-stock value**: stocks measure 0.542–0.699, ≈1.06 stops
-/// at the default total contrast 2.0, and choosing per stock would be per-stock
+/// A **convention, not a per-stock value**: stocks measure 0.542–0.699, ≈0.94 scene
+/// stops, and choosing per stock would be per-stock
 /// exposure normalization inside a decode declared stock-agnostic. A fixed value lets film speed show
 /// through the decode, which is the faithful behaviour; a roll's level is set after it, by
 /// its measured exposure (`roll.exposure`, a neutral gain; `nf-calibration/roll-exposure`).
@@ -111,16 +111,14 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// Where diffuse white sits in the **graded** image — the look's output, which every
 /// stage from the look on reads.
 ///
-/// At the look's default contrast the chain renders a neutral exactly where the bundled
-/// decode did ([`BUNDLED_CONTRAST`]), whose anchor `10^(2.0 · (D′ − A))` is `1.0` at
-/// `D′ = A` and lands ≈0.08 stop from the datasheets' diffuse white
-/// (`tests::the_anchor_is_the_documented_number`) — so `1.0` **is** diffuse white there,
-/// to that tolerance. **Not at the decode's own output**: at the linearization alone the
-/// anchor sits higher (`A = d + 0.745/1.8`) and the datasheets' white decodes to ≈0.80,
-/// a third of a stop under; the look's contrast, pivoted at mid, is what lifts it. A
-/// stronger look contrast lifts it further, which is what print contrast does. A
-/// convention rather than a measurement of a frame: scene correction's exposure moves
-/// the picture, not this number.
+/// A convention, not a measurement: the look's slope places a roll's white here
+/// (`pipeline::roll_white::slope_for`), and without a roll measurement a white
+/// [`FALLBACK_WHITE_STOPS`](crate::pipeline::roll_white::FALLBACK_WHITE_STOPS) up. Against
+/// the datasheets' diffuse white: at the bundled contrast 2.0 it lands ≈0.08 stop from
+/// `1.0` (`tests::the_anchor_is_the_documented_number`); at the linearization alone it
+/// decodes a third of a stop under; a stronger look contrast lifts it above, which is
+/// what print contrast does. Scene correction's exposure moves the picture, not this
+/// number.
 ///
 /// **The one definition every rendering stage keys on.** It is scene-referred and
 /// common to both display branches, which is why fit range's HDR lift starts here and
@@ -152,9 +150,10 @@ pub const LINEARIZATION: f32 = 1.8;
 /// The single `gamma` nc shipped before the split: linearization and print contrast
 /// bundled into one number.
 ///
-/// The look's default contrast is defined from it — `BUNDLED_CONTRAST / LINEARIZATION`
-/// — so the default renders a neutral where the bundled decode did.
-pub const BUNDLED_CONTRAST: f32 = 2.0;
+/// The tests that pin the split against it (the look's default contrast was this over
+/// the linearization until `nf-calibration/no-roll-defaults`).
+#[cfg(test)]
+pub(crate) const BUNDLED_CONTRAST: f32 = 2.0;
 
 /// The per-channel density calibration — **one global value**, never varied per
 /// stock, roll or frame. What one value cannot reach is a rendering correction, not

@@ -786,8 +786,8 @@ pub struct SceneCorrectionOverrides {
 pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
-    /// the roll's slope (`--roll-white`), else the fallback ≈ 1.11 (`direct`: its pinned
-    /// ≈ 1.11). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
+    /// the roll's slope (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
+    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
     /// mid-grey; slope 1 reproduces the scene's own contrast. Runs after scene
     /// correction, so an `--exposure` is expanded with the rest of the picture.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
