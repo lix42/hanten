@@ -1,6 +1,6 @@
 """`python -m nctool` entry point.
 
-Five command groups: `manifest` (generate / validate / roles), `compare`
+Five command groups: `manifest` (generate / validate / roles / patches), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
 converted image, whatever produced it), and `review` (render a described matrix
@@ -20,6 +20,7 @@ import sys
 from . import compare as _compare
 from . import manifest as _manifest
 from . import metrics as _metrics
+from . import patches as _patches
 from . import review as _review
 from . import roll as _roll
 
@@ -54,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="when the nc binary is not found, build a DEGRADED "
                           "exiftool-only manifest (format/ir_present become "
                           "placeholders) instead of failing loudly (exit 2)")
+    gen.add_argument("--drop-patches", action="store_true",
+                     help="write the manifest even though frames gone from disk take "
+                          "their patches with them (refused by default)")
+    gen.add_argument("--carry-from", metavar="MANIFEST",
+                     help="another manifest.json (the archive's) to take a frame's role "
+                          "and patches from when the existing manifest has no entry for "
+                          "it — a frame restored from the archive; same bytes only")
     gen.set_defaults(func=_manifest.cmd_generate)
 
     val = msub.add_parser("validate",
@@ -67,6 +75,27 @@ def build_parser() -> argparse.ArgumentParser:
                                "real-scan harness")
     _add_root(rol)
     rol.set_defaults(func=_manifest.cmd_roles)
+
+    pat = msub.add_parser("patches", help="edit frames' patch rectangles")
+    psub = pat.add_subparsers(dest="patches_cmd", required=True)
+    pimp = psub.add_parser("import",
+                           help="fold the review app's Copy all text into the manifest, "
+                                "replacing each listed frame's patches from --source")
+    _add_root(pimp)
+    pimp.add_argument("notes", help="the Copy all text (a file, or - for stdin)")
+    pimp.add_argument("--review", required=True,
+                      help="the review set's review.json (maps headings to image ids)")
+    pimp.add_argument("--roll", help="roll name from manifest.json (default: resolve "
+                                     "each frame across every roll; ambiguity is refused)")
+    pimp.add_argument("--source", required=True,
+                      help="where and when the patches were marked, e.g. "
+                           "'portra0928-dark-patches 2026-09-30'")
+    pimp.add_argument("--kind", choices=_patches.KINDS, default="unknown",
+                      help="the kind of a patch whose label has no W:/G:/C: prefix "
+                           "(default unknown)")
+    pimp.add_argument("--dry-run", action="store_true",
+                      help="report what would change; do not write manifest.json")
+    pimp.set_defaults(func=_patches.cmd_import)
 
     # --- compare: the conversion-versioning comparison harness ---------------
     cmp_ = sub.add_parser("compare",
