@@ -390,6 +390,7 @@ graph TD
     nf-calibration/thin-frame-lift
     nf-calibration/frame-level-trim
     nf-calibration/exposure-buckets
+    nf-calibration/taste-vs-quality
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -648,6 +649,8 @@ graph TD
   nf-calibration/roll-white-rule --> nf-calibration/thin-frame-lift
   nf-calibration/roll-exposure --> nf-calibration/frame-level-trim
   nf-calibration/roll-exposure --> nf-calibration/exposure-buckets
+  nf-calibration/thin-frame-lift --> nf-calibration/taste-vs-quality
+  nf-calibration/frame-level-trim --> nf-calibration/taste-vs-quality
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1266,6 +1269,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/exposure-buckets` (new flow, **closed—not needed**; the dep below is decision history): `nf-calibration/roll-exposure`
   — filed 2026-09-29: a group of frames exposed apart from the rest (09-28's battery
   change) is a roll in miniature, measured by the same rule
+- `nf-calibration/taste-vs-quality` (new flow): `nf-calibration/thin-frame-lift`, `nf-calibration/frame-level-trim`
+  — filed 2026-10-01: thin-frame-lift's round 2 was a matter of taste; the lifts it and
+  frame-level-trim add are preferences, unlike the corrections, and need to read as such
 
 ## Tasks
 
@@ -1908,7 +1914,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   `--film-stock` leaves with the curve
 - [x] [Spike: opt-in bounded scene-range
   mapping](tasks/nf-look/scene-range-mapping.md) — **closed 2026-09-29, folded into
-  `nf-calibration/thin-frame-lift`**, which solves the per-frame exposure and slope; the
+  `nf-calibration/thin-frame-lift`**, which sets a bounded per-frame exposure and slope; the
   roll-level solve is `nf-calibration/roll-exposure`
 - [x] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — **done
   2026-09-29: a multiplier on the base slope** (the roll's, the fallback
@@ -2042,9 +2048,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
   frames, so an under-exposed roll renders at a normal level; darker frames stay dark
-- [ ] [Opt-in lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame far
-  thinner than its roll gets a solved exposure and a steeper slope, bounded, written to
-  `roll.frames`; more grain is the accepted price, and it is off by default
+- [x] [A bounded lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame
+  far thinner than its roll gets a steeper slope and more exposure that raise its white a
+  stop with the film base held, bounded, written to `roll.frames` by `measure-roll` (on by
+  default; `--no-thin-lift` turns it off); a flat frame gets no lift of either kind
 - [x] [A per-frame level trim](tasks/nf-calibration/frame-level-trim.md) — a small,
   bounded lift per frame on top of the roll's exposure, so low-key frames render a little
   brighter; bright ones are left alone. On by default, with an opt-out
@@ -2052,6 +2059,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   **closed—not needed 2026-10-01**: no split of the 09-28 roll moves its exposure more
   than 0.24 EV (0.05 at the half), so a group measures what the roll does; the residual
   is per frame, `frame-level-trim`'s
+- [ ] [Separate taste from quality in the automatic
+  adjustments](tasks/nf-calibration/taste-vs-quality.md) — classify each automatic
+  adjustment as a correction or a preference, give every preference one documented off
+  switch, and record what a GUI needs to preview and toggle them
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the

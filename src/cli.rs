@@ -343,11 +343,18 @@ pub struct MeasureRollArgs {
     pub film_base: Option<[f32; 3]>,
     #[command(flatten)]
     pub measure: MeasureOverrides,
-    /// Write no per-frame lift: every frame renders at the roll's exposure. Each frame's
-    /// lift is still reported (`frames[].lift_ev`); `convert --frame-lift off` turns
-    /// written lifts off without re-measuring.
+    /// Write no per-frame lift, small or thin: every frame renders at the roll's exposure
+    /// and slope. Each frame's lift is still reported (`frames[].lift_ev`,
+    /// `frames[].thin_lift`); `convert --frame-lift off` turns written lifts off without
+    /// re-measuring.
     #[arg(long)]
     pub no_frame_lift: bool,
+    /// Write no thin-frame lift: a thin frame — its white low after the roll's exposure,
+    /// its shadows on the film base — keeps its small lift instead of the steeper slope
+    /// and more exposure that raise its white a stop with the base held. Still reported
+    /// (`frames[].thin_lift`).
+    #[arg(long)]
+    pub no_thin_lift: bool,
     /// Treat warnings (a capped holder march, decode notes) as a hard error, and
     /// refuse to measure without `--leader`.
     #[arg(long)]
@@ -561,14 +568,15 @@ pub struct DestinationOverrides {
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`,
-    /// `--roll-frame-exposure`, `--frame-lift on`), which only a rendering applies —
+    /// `--roll-frame-exposure`, `--roll-frame-slope`, `--frame-lift on`), which only a
+    /// rendering applies —
     /// refused under a recipe's film master too. A recipe's `roll` section is spared, since
     /// a measurement is not a stage asked for, and so is `--frame-lift off`.
     #[arg(
         long = "film-master",
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
-            "roll_exposure", "roll_frame_exposure",
+            "roll_exposure", "roll_frame_exposure", "roll_frame_slope",
         ]
     )]
     pub film_master: bool,
@@ -792,7 +800,8 @@ pub struct RollOverrides {
     /// The roll's white, in scene stops above mid-grey, as `hanten measure-roll`
     /// measured it (recipe key `roll.white_stops`). The look renders it at diffuse white
     /// with mid-grey pinned — a slope of `log2(1/0.18) / STOPS` — which `--contrast`
-    /// multiplies.
+    /// multiplies, unless the frame has its own (`--roll-frame-slope`). It drops a
+    /// frame's thin lift (slope and exposure).
     #[arg(long, value_name = "STOPS")]
     pub roll_white: Option<f32>,
     /// The roll's exposure in EV, as `hanten measure-roll` measured it (recipe key
@@ -805,9 +814,14 @@ pub struct RollOverrides {
     /// measure-roll` gives a low-key frame.
     #[arg(long, value_name = "EV", allow_hyphen_values = true)]
     pub roll_frame_exposure: Option<f32>,
-    /// Whether a frame's own exposure applies: `on` (the default) or `off`, which
-    /// renders every frame at the roll's exposure and keeps the measured lifts in the
-    /// recipe (recipe key `roll.frame_lift`).
+    /// This frame's own slope, in place of the one `--roll-white` places (recipe key
+    /// `roll.frame_slope`; a `roll.frames` entry's `slope`): the steeper slope `hanten
+    /// measure-roll` gives a thin frame. `--contrast` multiplies it.
+    #[arg(long, value_name = "SLOPE")]
+    pub roll_frame_slope: Option<f32>,
+    /// Whether a frame's own exposure and slope apply: `on` (the default) or `off`, which
+    /// renders every frame at the roll's exposure and slope and keeps the measured lifts
+    /// in the recipe (recipe key `roll.frame_lift`).
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub frame_lift: Option<recipe::FrameLift>,
 }
@@ -820,6 +834,7 @@ impl RollOverrides {
             ("--roll-white", self.roll_white.is_some()),
             ("--roll-exposure", self.roll_exposure.is_some()),
             ("--roll-frame-exposure", self.roll_frame_exposure.is_some()),
+            ("--roll-frame-slope", self.roll_frame_slope.is_some()),
             // `off` asks for nothing, so no branch refuses it.
             (
                 "--frame-lift on",
@@ -860,7 +875,7 @@ pub struct SceneCorrectionOverrides {
 pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
-    /// the roll's slope (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
+    /// the frame's slope (`--roll-frame-slope`), else the roll's (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
     /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
     /// mid-grey; slope 1 reproduces the scene's own contrast. Runs after scene
     /// correction, so an `--exposure` is expanded with the rest of the picture.
@@ -4262,8 +4277,7 @@ fn convert_attempt(
         .input
         .file_name()
         .and_then(|n| n.to_str())
-        .and_then(|n| stated_roll.frames.get_key_value(n))
-        .map(|(n, e)| (n.as_str(), e));
+        .map(|n| (n, &stated_roll));
     recipe::validate_render(&recipe, own, KnobNames::FlagAndKey)?;
 
     // The path nc actually writes: `-o out` under the default becomes `out.tiff`.
@@ -4811,8 +4825,12 @@ fn reject_roll_unsupported_input(r: &Recipe) -> Result<()> {
 /// shared sections, whose missing-base rule is the least specific diagnosis there is.
 /// A frame's `context` prefixes a stage rule's message and it names the key alone, since
 /// the fault is in its manifest entry; the roll's recipe (`None`) names flag and key
-/// unprefixed, as on `convert`.
-fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
+/// unprefixed, as on `convert`. `own` is [`recipe::validate_render`]'s.
+fn validate_roll_recipe(
+    r: &Recipe,
+    frame_context: Option<&str>,
+    own: Option<(&str, &recipe::RollSection)>,
+) -> Result<()> {
     reject_roll_unsupported(r)?;
     reject_roll_unsupported_input(r)?;
     let names = match frame_context {
@@ -4827,7 +4845,7 @@ fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
     };
     recipe::validate(r, names).map_err(in_context)?;
     validate_shared(r)?;
-    recipe::validate_render(r, None, names).map_err(in_context)
+    recipe::validate_render(r, own, names).map_err(in_context)
 }
 
 /// A value every frame of a roll shares ([`ROLL_WIDE`]).
@@ -5024,7 +5042,7 @@ fn resolve_frames(
                 )));
             }
             for mf in manifest.frames {
-                let own = own(&mf.input);
+                let mut own = own(&mf.input);
                 let (recipe, overrides) = match mf.params {
                     Some(ov) => {
                         // A per-frame override carrying a removed key gets the same
@@ -5037,8 +5055,16 @@ fn resolve_frames(
                             return Err(NcError::Usage(format!(
                                 "{context}: `roll.frames` names frames, so it belongs in the \
                                  shared recipe; state this frame's own white as \
-                                 `roll.white_stops` and its lift as `roll.frame_exposure` here"
+                                 `roll.white_stops` and its lift as `roll.frame_exposure` \
+                                 (and `roll.frame_slope`) here"
                             )));
+                        }
+                        // Its white beats the frame slope beneath it, as a typed one does.
+                        if ov
+                            .pointer("/roll/white_stops")
+                            .is_some_and(|v| !v.is_null())
+                        {
+                            own.roll.drop_thin_lift();
                         }
                         // This frame's recipe as JSON, so the partial override
                         // deep-merges onto it and deserializes back with
@@ -5065,7 +5091,8 @@ fn resolve_frames(
                                  roll's value"
                             )));
                         }
-                        validate_roll_recipe(&r, Some(&context))?;
+                        let name = mf.input.file_name().and_then(|n| n.to_str());
+                        validate_roll_recipe(&r, Some(&context), name.map(|n| (n, &stated.roll)))?;
                         for msg in roll_wide_breaks(&mf.input, &r, shared)? {
                             log.warn(&msg);
                             roll_warnings.push(msg);
@@ -5253,24 +5280,37 @@ fn frame_report_err(
     }
 }
 
-/// `roll`: a `roll.frame_exposure` in the shared recipe or typed lifts every frame alike,
-/// the bright ones too — one frame's lift (a `convert --dump-params` file carries it) or
-/// a whole-roll adjustment in the wrong key. Spared under `direct` and the film master,
-/// which apply no roll value; not under `--frame-lift off`, which a manifest can undo.
-fn reject_a_shared_frame_exposure(args: &ConversionFlags, shared: &Recipe) -> Result<()> {
-    if shared.roll.frame_exposure.is_none() || !shared.applies_roll_to_scene_correction() {
+/// `roll`: a `roll.frame_exposure` or `roll.frame_slope` in the shared recipe or typed
+/// lifts every frame alike, the bright ones too — one frame's lift (a `convert
+/// --dump-params` file carries it) or a whole-roll adjustment in the wrong key. Spared
+/// under `direct` and the film master, which apply no roll value; not under `--frame-lift
+/// off`, which a manifest can undo.
+fn reject_a_shared_frame_lift(args: &ConversionFlags, shared: &Recipe) -> Result<()> {
+    if !shared.applies_roll_to_scene_correction() {
         return Ok(());
     }
-    let name = if args.roll.roll_frame_exposure.is_some() {
-        "--roll-frame-exposure"
+    let (name, what, whole) = if shared.roll.frame_exposure.is_some() {
+        let name = if args.roll.roll_frame_exposure.is_some() {
+            "--roll-frame-exposure"
+        } else {
+            "the recipe's `roll.frame_exposure`"
+        };
+        (name, "exposure", "--exposure")
+    } else if shared.roll.frame_slope.is_some() {
+        let name = if args.roll.roll_frame_slope.is_some() {
+            "--roll-frame-slope"
+        } else {
+            "the recipe's `roll.frame_slope`"
+        };
+        (name, "slope", "--contrast")
     } else {
-        "the recipe's `roll.frame_exposure`"
+        return Ok(());
     };
     Err(NcError::Usage(format!(
-        "{name} is one frame's own exposure, and on `roll` it would lift every frame \
+        "{name} is one frame's own {what}, and on `roll` it would lift every frame \
          alike. State each frame's in the shared recipe's `roll.frames` (as `hanten \
-         measure-roll --out` writes it) or as `roll.frame_exposure` in a --frames \
-         manifest's `params`; to move the whole roll, use --exposure"
+         measure-roll --out` writes it) or as `roll.frame_{what}` in a --frames \
+         manifest's `params`; to move the whole roll, use {whole}"
     )))
 }
 
@@ -5295,14 +5335,14 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let stated = loaded.recipe;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
-    reject_a_shared_frame_exposure(&args.knobs, &shared)?;
+    reject_a_shared_frame_lift(&args.knobs, &shared)?;
 
     // Validated once up front so a broken recipe fails loudly before any frame is
     // touched. Roll-specific rejections run first and the missing-base rule last
     // (`validate_roll_recipe`): a recipe that is both baseless and roll-invalid should
     // surface the roll problem first, or the user adds a base only to meet a second
     // error.
-    validate_roll_recipe(&shared, None)?;
+    validate_roll_recipe(&shared, None, None)?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
     // every frame. Only an *explicit* base delivers that: a region re-reads `Dmin`
@@ -6038,6 +6078,8 @@ struct MeasureRollReport {
     exposure: MeasuredRollExposure,
     /// Each frame's lift (`nf-calibration/frame-level-trim`).
     frame_lift: MeasuredFrameLift,
+    /// The thin-frame lift (`nf-calibration/thin-frame-lift`).
+    thin_lift: MeasuredThinLift,
     /// The gains, the white and the exposure in the forms a user freezes them in.
     reuse: RollReuse,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -6080,11 +6122,22 @@ struct MeasuredFrame {
     level_stops: Option<f32>,
     /// The frame's part in the roll's white.
     white_role: roll_white::FrameRole,
+    /// The frame's tonal shape (`roll_white::frame_tones`): its luma's p5–p95 spread and
+    /// the share near the film base; absent when no pixel was usable.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    tones: Option<roll_white::FrameTones>,
+    /// One surface filling the frame (`roll_white::FLAT_SPREAD_STOPS`): it gets no lift.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    flat: bool,
     /// The frame's lift in EV (`roll_white::frame_lift`), from its white and the roll's
-    /// exposure; absent without a white. Measured under `--no-frame-lift` too, which only
-    /// keeps it out of the recipe.
+    /// exposure, 0 on a flat frame; absent without a white. Measured under
+    /// `--no-frame-lift` too, which only keeps it out of the recipe.
     #[serde(skip_serializing_if = "Option::is_none")]
     lift_ev: Option<f32>,
+    /// The thin-frame lift a qualifying frame gets (`roll_white::thin_lift`); measured
+    /// under `--no-thin-lift` too, which only keeps it out of the recipe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thin_lift: Option<roll_white::ThinLift>,
     /// This frame's own `convert` flags, when they differ from `reuse.flag` (a clamped
     /// white or a lift written to the recipe).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -6092,11 +6145,21 @@ struct MeasuredFrame {
     memory: MemoryReport,
 }
 
+/// Which lifts the recipe carries: none under `--no-frame-lift`; a thin frame's in place
+/// of its small one unless `--no-thin-lift`.
+#[derive(Clone, Copy)]
+struct Lifts {
+    small: bool,
+    thin: bool,
+}
+
 impl MeasuredFrame {
-    /// The lift the recipe carries for this frame: none under `--no-frame-lift`, nor a
-    /// zero one.
-    fn written_lift(&self, lift: bool) -> Option<f32> {
-        self.lift_ev.filter(|&ev| lift && ev > 0.0)
+    /// The exposure and slope the recipe carries for this frame — never a zero lift.
+    fn written(&self, lifts: Lifts) -> (Option<f32>, Option<f32>) {
+        match self.thin_lift {
+            Some(t) if lifts.thin => (Some(t.exposure), Some(t.slope)),
+            _ => (self.lift_ev.filter(|&ev| lifts.small && ev > 0.0), None),
+        }
     }
 }
 
@@ -6155,16 +6218,55 @@ struct MeasuredRollExposure {
 }
 
 /// The `convert` flags that freeze `gains`, the white `white_stops`, the exposure `ev`
-/// and a frame's `lift` — `reuse.flag`, and a clamped or lifted frame's own.
-fn reuse_flag(gains: [f32; 3], white_stops: f32, ev: f32, lift: Option<f32>) -> String {
-    let flag = format!(
+/// and a frame's `written` exposure and slope — `reuse.flag`, and a clamped or lifted
+/// frame's own.
+fn reuse_flag(
+    gains: [f32; 3],
+    white_stops: f32,
+    ev: f32,
+    written: (Option<f32>, Option<f32>),
+) -> String {
+    let mut flag = format!(
         "--roll-white-balance {},{},{} --roll-white {white_stops} --roll-exposure {ev}",
         gains[0], gains[1], gains[2]
     );
-    match lift {
-        Some(lift) => format!("{flag} --roll-frame-exposure {lift}"),
-        None => flag,
+    if let Some(lift) = written.0 {
+        flag += &format!(" --roll-frame-exposure {lift}");
     }
+    if let Some(slope) = written.1 {
+        flag += &format!(" --roll-frame-slope {slope}");
+    }
+    flag
+}
+
+/// The thin-frame lift's rule and whether the recipe carries it.
+#[derive(Debug, Serialize)]
+struct MeasuredThinLift {
+    /// False under `--no-thin-lift` or `--no-frame-lift`: each qualifying frame's
+    /// `thin_lift` is then reported, not written.
+    written: bool,
+    /// Frames the recipe gives one.
+    lifted: usize,
+    /// The decoded film base's luma, in scene stops: what the lift holds (about) still —
+    /// `roll_white::thin_lift` says why about.
+    base_stops: f32,
+    /// A frame qualifies at or under this rendered white…
+    white_stops: f32,
+    /// …with at least this share of its luma within `near_base_stops` of the base.
+    base_share: f32,
+    near_base_stops: f32,
+    /// About how far the lift raises the white, in rendered stops, unless the slope bound
+    /// holds it under.
+    lift_stops: f32,
+    slope_bound: f32,
+    /// Thin frames the slope bound holds under `lift_stops` (each `frames[].thin_lift`
+    /// says how far it rises). Disclosed, not warned about, like `white.clamped`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bounded: Vec<PathBuf>,
+    /// Thin frames no thin lift fits — the slope is already at the bound, the white is not
+    /// above the base, or the lift would darken the mid-tones; each keeps its small lift.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unlifted: Vec<PathBuf>,
 }
 
 /// The per-frame lift's rule and whether the recipe carries it.
@@ -6172,13 +6274,15 @@ fn reuse_flag(gains: [f32; 3], white_stops: f32, ev: f32, lift: Option<f32>) -> 
 struct MeasuredFrameLift {
     /// False under `--no-frame-lift`: each frame's `lift_ev` is reported, not written.
     written: bool,
-    /// Frames the recipe lifts.
+    /// Frames the recipe gives the small lift (a thin lift's are `thin_lift.lifted`).
     lifted: usize,
     bound_ev: f32,
     /// A frame whose rendered white (its white plus the roll's exposure) is at or under
     /// this gets the whole bound; at or over `none_stops`, no lift.
     full_stops: f32,
     none_stops: f32,
+    /// A frame whose luma spans fewer stops from p5 to p95 is flat, and gets no lift.
+    flat_spread_stops: f32,
 }
 
 /// The rule's values, provisional (`nf-calibration/roll-white-rule`).
@@ -6306,7 +6410,7 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 slope: cap_slope,
-                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev, None),
+                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev, (None, None)),
             })
             .collect(),
         rule: WhiteRule {
@@ -6326,44 +6430,45 @@ fn frame_flags(
     white: &mut MeasuredRollWhite,
     gains: [f32; 3],
     ev: f32,
-    lift: bool,
+    lifts: Lifts,
 ) {
-    let own_white = |f: &MeasuredFrame| {
-        (f.white_role == roll_white::FrameRole::Clamped
-            && white.bound != roll_white::WhiteBound::Cap)
-            .then_some(roll_white::WHITE_CAP_STOPS)
-    };
     for f in frames.iter_mut() {
-        let clamp = own_white(f);
-        let written = f.written_lift(lift);
-        f.flag = (clamp.is_some() || written.is_some())
+        let clamp = own_white(f, white);
+        let written = f.written(lifts);
+        f.flag = (clamp.is_some() || written != (None, None))
             .then(|| reuse_flag(gains, clamp.unwrap_or(white.stops), ev, written));
     }
     for c in &mut white.clamped {
         let written = frames
             .iter()
             .find(|f| f.input == c.input)
-            .and_then(|f| f.written_lift(lift));
+            .map_or((None, None), |f| f.written(lifts));
         c.flag = reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev, written);
     }
 }
 
-/// The recipe's `roll.frames`: each clamped frame at its own white, the cap, unless the
-/// roll's white is the cap itself; each lifted frame with its lift, when `lift`. Keyed by
-/// file name, which [`refuse_shared_file_names`] made unique.
+/// A clamped frame's own white, the cap — unless the roll's white is the cap itself.
+fn own_white(f: &MeasuredFrame, white: &MeasuredRollWhite) -> Option<f32> {
+    (f.white_role == roll_white::FrameRole::Clamped && white.bound != roll_white::WhiteBound::Cap)
+        .then_some(roll_white::WHITE_CAP_STOPS)
+}
+
+/// The recipe's `roll.frames`: each clamped frame at its own white ([`own_white`]); each
+/// lifted frame with the lifts written ([`MeasuredFrame::written`]). Keyed by file name,
+/// which [`refuse_shared_file_names`] made unique.
 fn frame_table(
     frames: &[MeasuredFrame],
     white: &MeasuredRollWhite,
-    lift: bool,
+    lifts: Lifts,
 ) -> BTreeMap<String, recipe::FrameRoll> {
     frames
         .iter()
         .filter_map(|f| {
-            let clamped = f.white_role == roll_white::FrameRole::Clamped
-                && white.bound != roll_white::WhiteBound::Cap;
+            let (exposure, slope) = f.written(lifts);
             let entry = recipe::FrameRoll {
-                white_stops: clamped.then_some(roll_white::WHITE_CAP_STOPS),
-                exposure: f.written_lift(lift),
+                white_stops: own_white(f, white),
+                exposure,
+                slope,
             };
             let name = f.input.file_name()?.to_str()?.to_owned();
             (entry != recipe::FrameRoll::default()).then_some((name, entry))
@@ -6581,6 +6686,14 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         (None, Some(b)) => b,
         (None, None) => unreachable!("refused above"),
     };
+    // Where every frame's shadows bottom out, in the luma the frames' tones are read in.
+    let base_px =
+        working_space::map_nc_film_rgb_v1(fixed::decode_film_base(&base, &recipe.reconstruction)?);
+    let base_stops = roll_white::base_stops(
+        base_px.rgb()[..3]
+            .try_into()
+            .expect("the decoded base is one pixel"),
+    );
 
     let leader = match &args.leader {
         Some(path) => {
@@ -6665,6 +6778,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         }
         let level = roll_white::frame_level(aces.rgb(), aces.width(), area.region)
             .map_err(|e| e.prefixed(input.display()))?;
+        let tones = roll_white::frame_tones(aces.rgb(), aces.width(), area.region, base_stops)
+            .map_err(|e| e.prefixed(input.display()))?;
         let counts = roll_white::pool_frame(
             aces.rgb(),
             aces.width(),
@@ -6717,7 +6832,10 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             level_stops: level.filter(|_| counts.kept > 0),
             // Placed once every frame is measured, below.
             white_role: roll_white::FrameRole::Unmeasured,
+            tones,
+            flat: tones.is_some_and(|t| t.flat()),
             lift_ev: None,
+            thin_lift: None,
             flag: None,
             memory,
         });
@@ -6747,23 +6865,77 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             ),
         );
     }
-    let lift = !args.no_frame_lift;
+    let lifts = Lifts {
+        small: !args.no_frame_lift,
+        thin: !args.no_frame_lift && !args.no_thin_lift,
+    };
     for f in &mut frames {
-        f.lift_ev = f
-            .white_stops
-            .map(|w| roll_white::frame_lift(w, exposure.ev));
+        let flat = f.flat;
+        f.lift_ev = f.white_stops.map(|w| {
+            if flat {
+                0.0
+            } else {
+                roll_white::frame_lift(w, exposure.ev)
+            }
+        });
     }
     let mut white = measured_roll_white(&mut frames, args.leader.is_some(), gains, exposure.ev)?;
-    frame_flags(&mut frames, &mut white, gains, exposure.ev, lift);
+    // The thin lift starts from the frame's render without it: its own slope (a clamp's,
+    // else the roll's) and the roll's exposure plus its small lift.
+    let (mut thin_bounded, mut thin_unlifted) = (Vec::new(), Vec::new());
+    for f in &mut frames {
+        let (Some(w), Some(tones), Some(lift)) = (f.white_stops, f.tones, f.lift_ev) else {
+            continue;
+        };
+        if !roll_white::thin(w, exposure.ev, &tones) {
+            continue;
+        }
+        let k0 = roll_white::slope_for(own_white(f, &white).unwrap_or(white.stops));
+        f.thin_lift = roll_white::thin_lift(w, base_stops, exposure.ev, k0, exposure.ev + lift);
+        // Disclosed, not warned about: the lift is a taste adjustment, on by default.
+        let name = f.input.display();
+        match f.thin_lift {
+            None => {
+                log.info(format_args!(
+                    "{name}: thin, but no thin lift is possible (slope {k0})"
+                ));
+                thin_unlifted.push(f.input.clone());
+            }
+            Some(t) if t.bounded => {
+                log.info(format_args!(
+                    "{name}: thin lift held by the slope bound {}: its white rises {:.2} stop",
+                    roll_white::THIN_SLOPE_BOUND,
+                    t.lift_stops
+                ));
+                thin_bounded.push(f.input.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    frame_flags(&mut frames, &mut white, gains, exposure.ev, lifts);
+    let thin_written = |f: &&MeasuredFrame| lifts.thin && f.thin_lift.is_some();
     let frame_lift = MeasuredFrameLift {
-        written: lift,
+        written: lifts.small,
         lifted: frames
             .iter()
-            .filter(|f| f.written_lift(lift).is_some())
+            .filter(|f| !thin_written(f) && f.written(lifts).0.is_some())
             .count(),
         bound_ev: roll_white::LIFT_BOUND_EV,
         full_stops: roll_white::LIFT_FULL_STOPS,
         none_stops: roll_white::LIFT_NONE_STOPS,
+        flat_spread_stops: roll_white::FLAT_SPREAD_STOPS,
+    };
+    let thin_lift = MeasuredThinLift {
+        written: lifts.thin,
+        lifted: frames.iter().filter(thin_written).count(),
+        base_stops,
+        white_stops: roll_white::THIN_WHITE_STOPS,
+        base_share: roll_white::THIN_BASE_SHARE,
+        near_base_stops: roll_white::NEAR_BASE_STOPS,
+        lift_stops: roll_white::THIN_LIFT_STOPS,
+        slope_bound: roll_white::THIN_SLOPE_BOUND,
+        bounded: thin_bounded,
+        unlifted: thin_unlifted,
     };
     log.info(format_args!(
         "roll white {:+.2} stops ({:?}), slope {}",
@@ -6788,7 +6960,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             white_balance: Some(gains),
             white_stops: Some(white.stops),
             exposure: Some(exposure.ev),
-            frames: frame_table(&frames, &white, lift),
+            frames: frame_table(&frames, &white, lifts),
             ..recipe::RollSection::default()
         }),
         measure: (recipe.measure != MeasureParams::default()).then(|| recipe.measure.clone()),
@@ -6809,7 +6981,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             pooled: pool.len() / 3,
         },
         reuse: RollReuse {
-            flag: reuse_flag(gains, white.stops, exposure.ev, None),
+            flag: reuse_flag(gains, white.stops, exposure.ev, (None, None)),
         },
         white,
         exposure: MeasuredRollExposure {
@@ -6818,6 +6990,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             bound_ev: roll_white::EXPOSURE_BOUND_EV,
         },
         frame_lift,
+        thin_lift,
         warnings,
         elapsed_ms: elapsed_ms(started),
     };
@@ -8267,6 +8440,7 @@ mod tests {
                         recipe::FrameRoll {
                             white_stops: Some(2.0),
                             exposure: None,
+                            slope: None,
                         },
                     ),
                     (
@@ -8274,6 +8448,7 @@ mod tests {
                         recipe::FrameRoll {
                             white_stops: None,
                             exposure: Some(0.2),
+                            slope: None,
                         },
                     ),
                 ]
@@ -8762,6 +8937,7 @@ mod tests {
         "roll.white_stops",
         // A frame's own lift, and whether it applies: a preview may turn one frame's off.
         "roll.frame_exposure",
+        "roll.frame_slope",
         "roll.frame_lift",
         // Resolved per frame; a manifest stating it is refused, not warned about.
         "roll.frames",

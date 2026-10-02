@@ -227,7 +227,8 @@ Each is owned by the task named; its answer is recorded here.
    in the `roll` section from a frame's **file name** to its own
    `{"white_stops": …}`, so the recipe survives the scans moving. `convert` and every
    `roll` frame apply their input's entry before any flag; a `--frames` manifest's
-   `params` beat it (and may not state the table). `measure-roll --out` refuses two
+   `params` beat it (and may not state the table). A typed `--roll-white` or a manifest's
+   white drops a thin frame's slope and exposure with it. `measure-roll --out` refuses two
    inputs sharing a file name.
 4. ~~`--out` over an existing file~~ **Resolved 2026-09-28: refused (exit 2, before
    anything is decoded) unless `--force`.** `core/profile-authoring` follows the same
