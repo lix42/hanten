@@ -14,6 +14,18 @@ task adds the panic projection and its consumption in `telemetry::spool` /
 acknowledgement, retry and quarantine. `telemetry::managed::Snapshot` is held for
 `run_convert`'s scope today; the hook needs it for the process's remaining life.
 
+## Decisions (2026-10-01, user)
+
+- **One event per process:** the first panic writes it, not "each panic" as the
+  Design says; every panic still runs the previous hook.
+- **The local schema stays 11**; `EventName` gains `panic`.
+- **The panic trigger for the subprocess tests is debug-build only**
+  (`NC_TEST_PANIC`, `NC_TEST_PANIC_GATE`).
+- **The consent text names panic reports**, with the manifest version unchanged.
+
+The rest (frame normalization, link-based publication, temp ageing) is in the
+strategy's 2026-10-01 `panic-hook` amendment.
+
 ## Design
 
 Install a best-effort panic hook only when invocation-start persistent managed

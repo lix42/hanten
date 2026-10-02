@@ -50,8 +50,8 @@ What other epics need to know about `telemetry` (refreshed 2026-10-01):
   downstream: Cloudflare Worker + D1 ingestion, a separately versioned
   privacy-minimized upload projection with an exact field allowlist, persistent
   consent separate from local collection, the lease/spool/drain model, and
-  sanitized function/module-only panic frames. Read it before implementing
-  `panic-hook` or touching the uploader — it went through six review passes on
+  sanitized function/module-only panic frames. Read it before touching the
+  uploader or panic reporting — it went through six review passes on
   race and ownership edge cases, and the task files restate its runtime rules in
   full.
 - **Explicitly rejected by the user:** persistent install identity, uploading
@@ -78,8 +78,12 @@ What other epics need to know about `telemetry` (refreshed 2026-10-01):
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
-  `telemetry::upload::to_upload_event` is the only projection; the local event
-  carries its own `event_id`. Bumping the local schema touches that contract too.
+  `telemetry::upload` holds the only projections (`to_upload_event`,
+  `to_upload_panic`); the local event carries its own `event_id`. Bumping the local
+  schema touches that contract too.
+- **Panic reporting** (`telemetry/panic-hook`): under consent, a `convert`'s first
+  panic leaves one sanitized event in the spool (`telemetry::panic`). A new stage
+  must join `panic::STAGES`; debug builds panic on demand with `NC_TEST_PANIC`.
 - **`telemetry/perf-instrumentation` is parked, not pending** — the criterion
   lab-benchmark approach was superseded by real-world telemetry and survives only
   on the remote branch `origin/prototype/perf-bench-instrumentation` (no local
@@ -576,11 +580,73 @@ What shipped, and the parts the open tasks build on:
   are collected like any other; set `NC_TELEMETRY=0` where that is unwanted.
 
 ## panic-hook
-**Status:** not started
-**Updated:** 2026-07-23
+**Status:** in progress
+**Updated:** 2026-10-01
 
 - Goal: capture consented Rust panics through an isolated spool with only
   sanitized `nc` function/module frames and unchanged normal panic behavior.
+
+### 2026-10-01 — implemented
+- **User decisions** (task file's Decisions; the strategy's `panic-hook`
+  amendment holds the rest): one event per process; local schema stays 11; the
+  panic trigger is debug-build only; the consent text names panic reports, manifest
+  version unchanged.
+- **Landed:** `telemetry::panic` (event, builder, sanitizer, hook, publish),
+  `upload::to_upload_panic`, `Queue::project_panics` and the aged panic-temp
+  reconcile, `managed::keep_for_process` (the snapshot is now a process-lifetime
+  static that installs the hook). The active stage is a process-global atomic set by
+  `StageTimer::time` and at `convert`'s setup / preflight / finalize transitions.
+- **Gotcha: the frames are `hanten::…`.** The binary crate is named `hanten`, so a
+  backtrace never says `nc::`; the sanitizer maps the root (`CARGO_CRATE_NAME`).
+  Verified on a release build of a crate with the same package/bin layout.
+- **Gotcha: most real frames are generic or inherent.** The chain and
+  `cli::convert_frame` take `impl StageClock`, so they print as `f::<…>`, and
+  inherent methods as `<Type>::m`. Dropping them would have left only
+  `convert_attempt`, `run` and `main`. Stripping the argument list and the
+  brackets gives, for a panic in `look` (debug build): `nc::pipeline::chain::grade`,
+  `…::graded_luminance`, `…::render`, `nc::cli::render_one`, `…::render_destination`,
+  `…::render_frame`, `…::convert_frame`, `…::convert_attempt`, `…::run_convert`,
+  `nc::cli::run`, `nc::main`.
+- **Gotcha: a panic hook cannot be rescued.** A panic inside it aborts the process,
+  and `catch_unwind` does not help, so the hook uses only checked operations and
+  ignores every I/O result.
+- **No-replace publish is `hard_link` + unlink**, std-only and portable. It fails on a
+  filesystem without hard links (some network or FAT volumes); the event is then
+  abandoned.
+- **Verified:** unit tests (fixture bytes, sanitizer against a real release
+  backtrace's text and hostile input, caps, stage codes, publish without replace or
+  symlinks, projection = corpus `panic` byte for byte, schema on every stage,
+  the corpus's `panic-frames-*` cases refused by `is_frame`, spool projection, crash
+  re-projection, preview); `tests/telemetry_upload/panic_reporting.rs`, 8 binary
+  tests (no consent / `--telemetry` / `NC_TELEMETRY=0` write nothing, one sanitized
+  event uploads, the user's stderr and exit 101 unchanged, queue lock held, unwritable
+  spool, disable not waiting, purge waiting, six simultaneous processes, a crashed
+  temp discarded), and the shared fixture's retry → acknowledge → 400-quarantine
+  journey. Mutations dropping the hook install or the previous hook's call fail 5
+  and 4 of them. Not verified: Windows (compile only), a hook under `panic = abort`
+  (not set), a panic on a rayon worker thread.
+- The flaky `a_refused_convert_is_a_parse_failure_event` seen at `243ba37` (3 of 5
+  runs) is the drain hand-off race that `upload-live-check` fixed (#234); this work
+  was rebased onto it.
+
+### 2026-10-01 — review round (Codex and nc-reviewer)
+- **Ready files are capped at 64** (`panic::MAX_READY`, ≤ 1 MiB). Nothing bounded
+  them before a drain: a deterministic panic across a batch with no upload (helper
+  off or no endpoint) left one per process. The hook counts them
+  with a lock-free `read_dir` that stops at the cap; racing processes may each add
+  one more.
+- **The hook starts the helper itself.** Unwinding skips `convert`'s
+  `launch_helper`, so a panic event used to wait for the next good run or a
+  `flush`. It skips the consent gate (the hook takes no lock); `upload-once`
+  requires the active generation and the drain re-checks consent before every
+  request.
+- **The drain's post-release re-check also looks for a ready file**, so one
+  published while another drain held the lock is not stranded. It cannot spin: a
+  pass removes every ready file it saw or fails, and a failure ends the loop.
+- **Verified:** `publishing_stops_once_the_spool_holds_the_cap`;
+  `a_panic_starts_the_upload_helper` and
+  `a_panic_published_while_a_helper_drains_is_uploaded` each time out with their fix
+  removed.
 
 ## upload-live-check
 **Status:** done

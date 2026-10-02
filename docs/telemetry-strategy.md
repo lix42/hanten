@@ -63,6 +63,33 @@
   stayed busy (a `convert` never waits long) is not counted in `status`; only
   drain-time drops are.
 
+**2026-10-01** (at `telemetry/panic-hook`, user decisions; `telemetry::panic` is
+authoritative):
+
+- **One panic event per process**, not one per panic: the first panic writes it, and
+  every panic still runs the previous hook. A bug hit on every worker thread counts
+  once, so panic rates do not scale with core count.
+- **The local schema stays 11.** The panic event is its own record in its own file;
+  `event` gained the member `panic`.
+- **Frames are normalized before the grammar is checked.** The binary crate is
+  `hanten`, so its root becomes `nc`; a closure counts as its enclosing function, an
+  inherent method `<Type>::m` as `Type::m`, and generic arguments and hash suffixes
+  are discarded. A trait method and any other frame are dropped.
+- **Publication links rather than renames** (`hard_link` fails on an existing name;
+  `rename` would replace it), then unlinks the temp. A drain removes a panic temp only
+  once it is 10 minutes old, since a live hook may own it; a retarget, which excludes
+  every conversion, removes them all. Ready files project into `batch-panic-<id>-<n>`.
+- **At most 64 ready files** (1 MiB): at the cap a hook abandons its event, since
+  nothing else bounds them until a drain projects them.
+- **The hook starts the upload helper itself**, since unwinding skips the
+  conversion's launch. It takes no consent gate; the helper's drain checks consent
+  before every request, and a drain that released its lock drains again if a ready
+  file appeared meanwhile.
+- **The consent text names panic reports** with manifest version 1 unchanged: the
+  manifest held the panic event from the start.
+- **Panics on demand are debug-build only** (`NC_TEST_PANIC`, `NC_TEST_PANIC_GATE`),
+  so a release binary has no switch that makes it panic.
+
 **2026-09-30** (at `telemetry/ingestion-service`, user-approved):
 
 - **V1 runs on the owner's existing Workers Paid account**, not a dedicated

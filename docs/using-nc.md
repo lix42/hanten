@@ -1834,6 +1834,19 @@ being a local history: point `NC_TELEMETRY_LOG` elsewhere to keep one. The queue
 its hidden sibling spool (`.<name>.nc-telemetry-spool`) are capped at 25 MiB, and
 records expire after 30 days.
 
+**Panic reporting.** If a consented `convert` panics (an internal bug, exit 101),
+it leaves one panic event in the spool before Rust prints its usual message, and a
+background upload starts right away, as after a normal run. The event holds the
+stage the run was in and up to 32 Hanten function names
+(`nc::pipeline::look::apply`, …), never the panic message, a file path, a line
+number or an address. A process reports its first panic only, and nothing is
+recorded while 64 panic events already wait in the spool or on a filesystem without
+hard links (some network or FAT volumes). `--telemetry` alone never reports panics,
+and the panic's stderr and exit code are the same either way.
+This is not crash reporting: a run killed by a signal (a segfault, `kill -9`),
+aborted, stopped by the out-of-memory killer or forced to quit reports nothing. The
+queued count is `panic_ready` in `hanten telemetry status`.
+
 | Command | What it does |
 |---|---|
 | `hanten telemetry status` | JSON on stdout: consent (`never_enabled`, `active`, `inactive`, `unreadable`, or `needs_reconsent` after an upgrade that uploads more fields: `enable` again), the queue and spool paths, what is queued, and upload counters with the last success and last error. |
