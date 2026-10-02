@@ -3765,8 +3765,8 @@ fn render_one(
 ///
 /// The report's chain account is the HDR rendition's — the destination's range — and
 /// the SDR base's fit range rides in `gain_map.base_fit_range`. Each full-frame
-/// buffer is dropped once the map is built (`RunProfile::GainMapJpeg` sums them, since
-/// freed pages stay resident). `export` stages both linear renditions and the map's
+/// buffer is dropped once the map is built (`RunProfile::GainMapJpeg` sums them, under
+/// the memory model's retention rule). `export` stages both linear renditions and the map's
 /// codes, in that order.
 fn render_gain_map(
     aces: AcesCgImage,

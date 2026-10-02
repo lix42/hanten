@@ -166,7 +166,7 @@ Read the module docs before changing these; they hold the traps.
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |
 | AVIF (removed) and how to restore it | `docs/design/avif-removal.md` |
 | colorimetry | `pipeline/colorimetry/`, `docs/colorimetry-maintenance.md` |
-| memory preflight | `pipeline/memory.rs` |
+| memory preflight | `pipeline/memory.rs`; the global allocator (big blocks mapped, unmapped on free) in `allocator.rs` |
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
 | goldens, cross-platform bounds, drift gate | `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs` |

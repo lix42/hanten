@@ -203,3 +203,11 @@ so none of them exercised the film-base phase's sampling (added to the model in 
 same-day review pass). The auto path's interior sample is *derived*: 74.65 MP
 `inspect --auto-base` models at 1.811 GB accounted / 2.22 GB estimated. A `time -l`
 run on that path is the one outstanding calibration point.
+
+## Addendum 2026-10-01 — `io/multi-frame-memory-growth`
+
+"Freed pages stay resident" above was macOS malloc's cache of freed large blocks.
+`src/allocator.rs` now maps blocks of 8 MiB or more directly and unmaps them on free,
+so a full-frame sample no longer reaches render (a 16.55 MP full-frame `--base-region`
+`convert` peaks at the explicit-base figure, 0.641 GB). The model keeps the retained
+terms as an over-count; see `pipeline/memory.rs`.
