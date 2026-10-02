@@ -65,7 +65,18 @@ bright frames are never darkened. `measure-roll` writes it as a **delta** in
 `roll.frames."<file>".exposure`, which `convert`/`roll` move into `roll.frame_exposure`.
 On by default; off at measurement (`--no-frame-lift`) or at render (`--frame-lift off`,
 `roll.frame_lift`, `null` = on) without re-measuring. Review: the lift was better on 72 of
-103 lifted frames, worse on 7.
+103 lifted frames, worse on 7. A **flat** frame (luma p5–p95 under a stop) gets no lift, and
+a thin frame's lift (below; on by default, `--no-thin-lift`) replaces the small one.
+
+**`thin-frame-lift` is done (2026-10-01): a thin frame gets a steeper slope and the
+exposure that holds the film base**, raising its white about a stop (slope bound 2.4), in
+place of the small lift. A frame qualifies when its white renders at or under +0.9 stop
+after the roll's exposure and 30% of its luma sits within a stop of the base, which a
+night scene also meets. Written as `roll.frames."<file>".slope` and `exposure`, moved into
+`roll.frame_slope` (`--roll-frame-slope`; the look's `base_from` is then `frame`). On by
+default, a taste adjustment: `--no-thin-lift` at measurement, `--frame-lift off` at render.
+A typed `--roll-white` or a manifest's `roll.white_stops` drops both halves. Not
+confirmed on an independent roll, and noise unmeasured: `taste-vs-quality` carries both.
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -707,8 +718,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## thin-frame-lift
 
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** done
+**Updated:** 2026-10-01
 
 - 2026-09-29: filed (user) after hand-lifting frames 2005 and 1983 of the 2026-09-28 roll
   with a `roll --frames` manifest. Slope 2.0 and 2.4 (×1.21 and ×1.46 the roll's), with the
@@ -736,6 +747,103 @@ frames; the look's default contrast is `no-roll-defaults`'.
   should replace it in the entry, not add to it. Open here: whether the switch also turns
   off this task's slope, or the slope gets its own; exposure off with the slope kept
   renders neither picture.
+
+- 2026-10-01: **started; the goal changed** (user). A thin frame need not hold a white, so
+  solving its exposure and slope to put its white at diffuse white is wrong: the lift is a
+  bounded fine-tune. Probe (`#[ignore]`d, deleted before the PR; numbers in
+  `../temp/thin-frame-lift/`, per-frame luma percentiles and the share near the base, all
+  178 frames of the ten rolls from the full archive):
+  - **The decoded base is a decode constant**, −3.707 scene stops of luma on every roll
+    (`−linearization · d / log10 2`); the solve needs no per-roll measurement of it.
+  - **No statistic separates an underexposed frame from a night scene.** On the frame's
+    white after the roll's exposure, 2005 (+0.17) and 2000 (+0.21) sit with night 1641
+    (+0.38) and dark evening 1696/1698 (−0.2); on the share of luma within a stop of the
+    base, night frames read higher (1641 0.94) than the thin ones (0.37–0.79).
+  - **The share near the base does separate normal low-key frames**: 09-18's 1797/1798
+    are as dark by white (+0.10/+0.12) but read 0.02/0.03. It also catches 1992, whose
+    white (+0.72) a small bright patch lifts.
+  - **Slope alone darkens a thin frame**: it pivots at mid-grey, and a thin frame's content
+    is below it. The lift is stated as `Δ`, the rise of the frame's white with the base
+    held: `k = k0 + Δ/(W − B)`, `E = k0·(B + E0)/k − B`. Rendered, the base moved ≤ 0.01
+    stop across the arms on every frame.
+- 2026-10-01: **round 1** (`../temp/thin-frame-lift/round1/`; 09-28's 2005, 2000, 1983,
+  1984, 1992 and night 1641, 1696, 1698; arms: today with the +0.3 lift / Δ 0.5 / Δ 1.0).
+  Best (user): Δ 1.0 on 2000, 1983, 1984, 1641, 1698; Δ 0.5 on 2005, 1992, 1696; today on
+  none. **But today is acceptable on all eight; the lift is only a little better.** Δ 1.0
+  clipped 0.30% of 1641's samples (its lights), 0.08% of 1698's.
+- 2026-10-01: **1612** (09-09, added by the user): a fish in the sea, zoomed in — one
+  surface, no spread of brightness, NLP's worst case. Today > Δ 0.5 > Δ 1.0, and the gap is
+  larger than any lift's gain elsewhere. `frame-level-trim`'s archive round had already
+  scored its +0.27 lift worse. **Flat guard:** luma p5–p95 under 1 stop. Over the ten rolls
+  only 1719 (0.59, the same kind of frame, user) and 1612 (0.67) fall under it; every frame
+  a lift helped spans 1.36 or more (p1–p99 separates them as cleanly, 1.08/1.16 vs 1.88).
+  The other five archive losses (1720, 1813, 1896, 1800, 1658) sit among the wins at
+  1.5–2.2, a different cause. **Decided (user): the guard covers both lifts; Δ 1.0.**
+- 2026-10-01: **thresholds**, from the probe: rendered white at or under +0.9 (where the
+  small lift is already full) and a share near the base of at least 0.3. It fires on 14 of
+  178 frames: all eight of round 1 and 1867, 1875 (09-20), 1662 (09-11), 1812 (09-18), 1658
+  (09-11) and 1980 (09-28), which no round has judged. 1658 lost the small lift in the
+  archive round. Slope bound 2.4, the steepest reviewed (2026-09-29, on 2005 and 1983).
+- 2026-10-01: **implemented.**
+  - `roll_white`: `FrameTones` / `frame_tones` (luma p5–p95 spread and the share within
+    `NEAR_BASE_STOPS` of the base, from one sample), `base_stops` (the decoded base pixel),
+    `thin` (`THIN_WHITE_STOPS` 0.9, `THIN_BASE_SHARE` 0.3, never flat), `thin_lift`
+    (`THIN_LIFT_STOPS` 1.0, `THIN_SLOPE_BOUND` 2.4), `FLAT_SPREAD_STOPS` 1.0.
+  - Recipe: a `roll.frames` entry's `slope`, moved by `for_frame` into `roll.frame_slope` /
+    `--roll-frame-slope`; `roll.frame_lift` gates it with the exposure; the look's
+    `base_from` gains `frame`; `chain.roll` gains `frame_slope` / `frame_slope_applied`.
+    `roll` refuses a shared frame slope as it does a shared frame exposure.
+  - `measure-roll --thin-lift` (refused beside `--no-frame-lift`); `frames[]` gains
+    `spread_stops`, `base_share`, `flat`, `thin_lift`; a `thin_lift` section; a bounded
+    frame warns by name. The thin lift starts from the frame's render with its small lift
+    and replaces it in the entry.
+  - **`--out` is not byte-identical without the option**: every file gains
+    `"frame_slope": null` and each entry `"slope": null` (the section writes unset values
+    as nulls on purpose), and flat frames lose their small lift. Values are otherwise
+    unchanged. The v9 `recipe` fingerprint was refreshed in place
+    (`601475237e7a5941` → `50987e7d7708865b`); no default pixel moved.
+  - **Verified:** unit tests (the solve against round 1's 2005, the bound, the tones, the
+    predicate, the recipe slope's path and naming); a binary test (thin, bounded, flat and
+    ordinary frames on one roll: reported without the flag, written with it, the base held
+    within 0.02 stop, `--frame-lift off` byte-identical to the unlifted recipe, both
+    refusals). Re-measured the ten archive rolls with `--thin-lift`
+    (`../temp/thin-frame-lift/reports-impl/`): the 14 probe frames lift, with the slopes and
+    exposures round 1 rendered (2005: 2.052, +0.696); flat 1612 and 1719 only; no frame
+    bound; 101 of 178 frames carry a lift. The guide's real-roll examples re-ran unchanged
+    apart from the new fields.
+- 2026-10-01: **round 2** (`../temp/thin-frame-lift/round2/`; the six frames no round had
+  judged — 1867, 1875, 1662, 1658, 1812, 1980 — today vs the thin lift as implemented; the
+  base held within 0.01 stop and nothing clipped). **No call** (user): a matter of opinion,
+  not fact. Kept, because it is brighter and viewers tend to like bright, **provided the
+  user can turn it off**. The user's framing: separate the tweaks that improve quality (the
+  roll's white balance) from those that are taste (the lifts), and let a future GUI preview
+  and turn off the taste ones.
+- 2026-10-01: **on by default** (user), like the small lift: `--thin-lift` became
+  `--no-thin-lift` (no alias; pre-release), and `--no-frame-lift` turns off both lifts.
+  `measure-roll --out` now writes the thin lift on the 14 archive frames that qualify.
+  Rebased onto `220c9a0` (#231's `{meta, params}` envelope; the new test reads it through
+  `written_recipe`). #234's drain hand-off fix cleared `a_refused_convert_is_a_parse_failure_event`,
+  which had timed out twice on the old base.
+- 2026-10-01: **done** (user: mark done, carry the confirmation round to
+  `taste-vs-quality`). Landed: `roll_white::frame_tones` / `thin` / `thin_lift` and the flat
+  guard; `roll.frame_slope` / `--roll-frame-slope` from a `roll.frames` entry's `slope`,
+  gated by `roll.frame_lift`; `measure-roll` writes the thin lift by default
+  (`--no-thin-lift`), discloses `thin_lift.bounded` / `unlifted` without warning; a typed
+  `--roll-white` or a manifest's `roll.white_stops` drops a frame's thin lift. Review loop
+  (`nc-reviewer` plus a cold reviewer standing in for Codex, out of credits) and the ship
+  review: a stated white silently beaten by an entry's slope (fixed as above), the
+  `--strict` refusal from bound warnings (now disclosures), a darkening guard, the
+  validation probe inheriting this frame's values, and docs. Verified: unit and binary
+  tests, all CI gates, the ten archive rolls (14 thin, 2 flat, 101 of 178 lifted), the
+  guide's real-roll examples re-run. **For dependents:**
+  - The lift is taste, not quality; the open questions about switches and preview are
+    `taste-vs-quality`'s.
+  - Not confirmed on a roll independent of the thresholds; no noise measured at slopes up
+    to 2.11 (2.4 only on 2005 and 1983).
+  - A later `--params` layer cannot unset an earlier entry's `slope` (a `null` states
+    nothing), as for `exposure` and the white.
+  - "Base held" is approximate: the white is read in film RGB, the base as luma before the
+    roll's gains (measured hold ≤ 0.01 stop on the reviewed rolls).
 
 ## frame-level-trim
 
@@ -855,6 +963,12 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-01: rebased onto `no-roll-defaults` (#218), which added the v9 row and left v8
   as history. The in-place refresh moved to the v9 row (`214ecf6c86cbc179` →
   `601475237e7a5941`); v8 keeps its own value.
+
+- 2026-10-01: from `thin-frame-lift` (see its section): **a flat frame gets no lift** —
+  luma p5–p95 under 1 stop (`roll_white::FLAT_SPREAD_STOPS`). Two of the 178 archive
+  frames, 1612 and 1719, both scored "no lift better" in the archive round; no frame the lift
+  helped is under 1.36. `measure-roll --out` drops their lift; the test fixtures that were
+  uniform fields now carry a darker band where they test a lift.
 
 ## exposure-buckets
 
@@ -1092,3 +1206,13 @@ frames; the look's default contrast is `no-roll-defaults`'.
 **Updated:** 2026-09-19
 
 - 2026-09-19: created with the new-flow plan. Goal: what a user would actually run.
+
+## taste-vs-quality
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: filed (user) after `thin-frame-lift`'s round 2, which could not be called:
+  the thin lift is brighter, which viewers tend to like, but whether it is better is
+  opinion. Goal: tell corrections from preferences, and let a user (and a future GUI)
+  preview and turn off the preferences.

@@ -9810,8 +9810,28 @@ fn measure_roll_keeps_a_fully_exposed_frame_out_of_the_white() {
 /// the largest density scale, so above mid-grey it is the brightest channel, and the
 /// frame's white is red's `(d − 0.62) · 1.8 / log10 2` scene stops above mid-grey.
 fn write_uniform_density(path: &Path, base: [f32; 3], d: f32) {
-    let raw = base.map(|b| (b * 10f32.powf(-d) * 65535.0).round() as u16);
-    write_hdri_with_uniform_ir(path, 64, 64, raw, 40_000);
+    write_split_density(path, base, d, d, 0);
+}
+
+/// A picture frame whose white sits at density `d` and whose bottom `rows` of 64 sit at
+/// the thinner density `dark`: a uniform field reads as flat (`roll_white::FrameTones`),
+/// and a flat frame gets no lift.
+fn write_split_density(path: &Path, base: [f32; 3], d: f32, dark: f32, rows: u32) {
+    let raw = |d: f32| base.map(|b| (b * 10f32.powf(-d) * 65535.0).round() as u16);
+    let (w, h) = (64, 64);
+    let pixels: Vec<u16> = (0..h)
+        .flat_map(|y| {
+            let px = raw(if y >= h - rows { dark } else { d });
+            (0..w).flat_map(move |_| px)
+        })
+        .collect();
+    write_hdri(path, w, h, &pixels, &vec![40_000; (w * h) as usize]);
+}
+
+/// A picture frame at density `d` with a fifth of it 0.3 density (about 1.8 stops) thinner
+/// — enough spread that it is not flat.
+fn write_picture_density(path: &Path, base: [f32; 3], d: f32) {
+    write_split_density(path, base, d, d - 0.3, 16);
 }
 
 #[test]
@@ -9954,7 +9974,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(
         written["roll"]["frames"],
         serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"],
-            "exposure": null}}),
+            "exposure": null, "slope": null}}),
         "keyed by file name, the clamped frame only (`--no-frame-lift`): {written}"
     );
     // The input it was decoded under travels too: these scans state no transfer.
@@ -10133,9 +10153,9 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         tmp.path("bright.tif"),
         tmp.path("leader.tif"),
     );
-    write_uniform_density(&night, base, 0.45);
-    write_uniform_density(&mid, base, 0.62);
-    write_uniform_density(&bright, base, 1.1);
+    write_picture_density(&night, base, 0.45);
+    write_picture_density(&mid, base, 0.62);
+    write_picture_density(&bright, base, 1.1);
     write_uniform_density(&leader, base, 1.5);
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     let measure = |out: &Path, extra: &[&str]| {
@@ -10363,6 +10383,185 @@ fn frame_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
 }
 
 #[test]
+fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
+    // `nf-calibration/thin-frame-lift`: a thin frame (white low, a large share on the
+    // base), a thinner one the slope bound holds, a flat one and two ordinary ones. The
+    // lift is written by default and only reported under `--no-thin-lift`; the thin frame
+    // renders with its base where the roll put it, and `--frame-lift off` drops it.
+    let tmp = TempDir::new("measure-roll-thin");
+    let base = [0.9f32, 0.55, 0.42];
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let names = ["thin", "thinnest", "flat", "mid", "bright"];
+    let path = |n: &str| tmp.path(&format!("{n}.tif"));
+    write_split_density(&path("thin"), base, 0.4, 0.04, 28);
+    // Its white within a stop of the base: the slope a full lift asks for passes the
+    // bound. Its dark band just under the base keeps it over a stop wide, so not flat.
+    write_split_density(&path("thinnest"), base, 0.16, -0.05, 28);
+    write_uniform_density(&path("flat"), base, 0.55);
+    write_picture_density(&path("mid"), base, 0.62);
+    write_picture_density(&path("bright"), base, 0.9);
+    let leader = tmp.path("leader.tif");
+    write_uniform_density(&leader, base, 1.5);
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let measure = |out: &Path, extra: &[&str]| {
+        let mut argv = vec!["measure-roll".to_owned(), "--params".to_owned(), s(&recipe)];
+        argv.extend(names.iter().map(|n| s(&path(n))));
+        argv.extend([
+            "--leader".to_owned(),
+            s(&leader),
+            "--out".to_owned(),
+            s(out),
+        ]);
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), written_recipe(out))
+    };
+    let frame = |report: &serde_json::Value, n: &str| {
+        report["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["input"] == s(&path(n)))
+            .unwrap()
+            .clone()
+    };
+
+    // Reported, not written.
+    let plain = tmp.path("plain.json");
+    let (report, written) = measure(&plain, &["--no-thin-lift"]);
+    assert_eq!(report["thin_lift"]["written"], false, "{report}");
+    assert_eq!(report["thin_lift"]["lifted"], 0, "{report}");
+    let thin = frame(&report, "thin")["thin_lift"].clone();
+    assert_eq!(thin["bounded"], false, "{report}");
+    assert!(thin["slope"].as_f64().unwrap() > report["white"]["slope"].as_f64().unwrap());
+    let thinnest = frame(&report, "thinnest")["thin_lift"].clone();
+    assert_eq!(thinnest["bounded"], true, "{report}");
+    for n in ["flat", "mid", "bright"] {
+        assert!(frame(&report, n)["thin_lift"].is_null(), "{n}: {report}");
+    }
+    assert_eq!(frame(&report, "flat")["flat"], true, "{report}");
+    assert_eq!(
+        frame(&report, "flat")["lift_ev"],
+        0.0,
+        "a flat frame is not lifted"
+    );
+    let frames = &written["roll"]["frames"];
+    assert!(frames.get("flat.tif").is_none(), "{written}");
+    assert!(frames["thin.tif"]["slope"].is_null(), "{written}");
+    assert!(
+        frames["thin.tif"]["exposure"].as_f64().unwrap() > 0.0,
+        "{written}"
+    );
+
+    // Written by default: the thin lift in place of the small one; every other entry
+    // unchanged. A bounded lift is disclosed, not warned about, so `--strict` passes.
+    let lifted = tmp.path("lifted.json");
+    let (report_l, written_l) = measure(&lifted, &["--strict"]);
+    assert_eq!(report_l["thin_lift"]["written"], true, "{report_l}");
+    assert_eq!(report_l["thin_lift"]["lifted"], 2, "{report_l}");
+    let entry = &written_l["roll"]["frames"]["thin.tif"];
+    assert_eq!(entry["slope"], thin["slope"], "{written_l}");
+    assert_eq!(entry["exposure"], thin["exposure"], "{written_l}");
+    assert_eq!(
+        written_l["roll"]["frames"]["thinnest.tif"]["slope"].as_f64(),
+        report_l["thin_lift"]["slope_bound"].as_f64(),
+    );
+    for n in ["mid.tif", "bright.tif"] {
+        assert_eq!(written_l["roll"]["frames"][n], frames[n], "{n}");
+    }
+    assert_eq!(
+        report_l["thin_lift"]["bounded"],
+        serde_json::json!([s(&path("thinnest"))]),
+        "{report_l}"
+    );
+    assert!(report_l["warnings"].is_null(), "{report_l}");
+    assert!(
+        frame(&report_l, "thin")["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!(
+                "--roll-frame-slope {}",
+                thin["slope"].as_f64().unwrap() as f32
+            )),
+        "{report_l}"
+    );
+
+    // The thin frame renders on its own slope with its base held still.
+    let convert = |name: &str, extra: &[&str]| {
+        let output = tmp.path(name);
+        let mut argv = vec![
+            "convert".to_owned(),
+            s(&path("thin")),
+            "-o".to_owned(),
+            s(&output),
+        ];
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{err}");
+        (std::fs::read(&output).unwrap(), json(&stdout))
+    };
+    let (small, small_report) = convert("small.tiff", &["--params", &s(&plain)]);
+    let (steep, steep_report) = convert("steep.tiff", &["--params", &s(&lifted)]);
+    assert_ne!(small, steep, "not vacuous");
+    assert_eq!(
+        steep_report["chain"]["look"]["base_from"], "frame",
+        "{steep_report}"
+    );
+    assert_eq!(steep_report["chain"]["roll"]["frame_slope_applied"], true);
+    let base_stops = |r: &serde_json::Value| {
+        r["chain"]["fit_range"]["display_black"]["film_base_stops"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(
+        (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.02,
+        "the base held: {} vs {}",
+        base_stops(&steep_report),
+        base_stops(&small_report)
+    );
+    // `--no-frame-lift` writes neither lift; off at render drops both halves of a written
+    // one: the roll's slope and exposure alone.
+    let unlifted = tmp.path("unlifted.json");
+    let (report_u, written_u) = measure(&unlifted, &["--no-frame-lift"]);
+    assert_eq!(report_u["thin_lift"]["written"], false, "{report_u}");
+    assert!(
+        written_u["roll"]["frames"].get("thin.tif").is_none(),
+        "{written_u}"
+    );
+    let (off, off_report) = convert(
+        "off.tiff",
+        &["--params", &s(&lifted), "--frame-lift", "off"],
+    );
+    let (never, _) = convert("never.tiff", &["--params", &s(&unlifted)]);
+    assert_eq!(off, never, "`--frame-lift off` drops the slope too");
+    assert_eq!(
+        off_report["chain"]["look"]["base_from"], "roll",
+        "{off_report}"
+    );
+
+    // On `roll`, one frame's slope would steepen every frame.
+    let (code, _, err) = run(&[
+        "roll",
+        &s(&path("thin")),
+        &s(&path("mid")),
+        "--params",
+        &s(&plain),
+        "--roll-frame-slope",
+        "2.0",
+        "-o",
+        &s(&tmp.path("rolled")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-slope is one frame's own slope"),
+        "{err}"
+    );
+}
+
+#[test]
 fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
     // `measure-roll --unexposed` then `roll --params` renders what the route it replaces
     // rendered: `measure-base` on the same frame, `measure-roll` over that base,
@@ -10382,8 +10581,8 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
         tmp.path("leader.tif"),
     );
     write_uniform_density(&blank, base, 0.0);
-    write_uniform_density(&dim, base, 0.904);
-    write_uniform_density(&bright, base, 1.122);
+    write_picture_density(&dim, base, 0.904);
+    write_picture_density(&bright, base, 1.122);
     write_uniform_density(&leader, base, 1.5);
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     let frames = [s(&dim), s(&bright)];
@@ -12739,6 +12938,119 @@ fn a_frames_override_beats_a_roll_flag() {
         report["warnings"].as_array().is_none_or(Vec::is_empty),
         "{report}"
     );
+}
+
+#[test]
+fn a_stated_white_drops_a_frames_thin_lift() {
+    // A frame's thin lift (`roll.frames` slope and the exposure solved with it) is beaten
+    // whole by a white stated over it: typed on `convert`, or in a `roll --frames`
+    // manifest's `params`. The frame renders as if it had no entry.
+    let tmp = TempDir::new("white-beats-thin-lift");
+    let roll = |frames: &str| {
+        format!(
+            r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                "roll": {{"white_stops": 1.5, "exposure": 1.0, "frames": {frames}}}}}"#
+        )
+    };
+    let lifted = write_file(
+        &tmp.path("lifted.json"),
+        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.7, "slope": 2.0}}"#),
+    );
+    let plain = write_file(&tmp.path("plain.json"), &roll("{}"));
+    let small = write_file(
+        &tmp.path("small.json"),
+        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.7}}"#),
+    );
+    let input = fixture("hdri-64bit.tif");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let convert = |name: &str, args: &[&str]| {
+        let output = tmp.path(name);
+        let mut argv = vec!["convert".to_owned(), s(&input), "-o".to_owned(), s(&output)];
+        argv.extend(args.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{err}");
+        (std::fs::read(&output).unwrap(), json(&stdout))
+    };
+    let (beaten, report) = convert(
+        "beaten.tiff",
+        &["--params", &s(&lifted), "--roll-white", "1.9"],
+    );
+    let (control, control_report) = convert(
+        "control.tiff",
+        &["--params", &s(&plain), "--roll-white", "1.9"],
+    );
+    let chain = &report["chain"];
+    assert_eq!(chain["look"]["base_from"], "roll", "{report}");
+    assert_eq!(
+        chain["roll"]["slope"], control_report["chain"]["roll"]["slope"],
+        "{report}"
+    );
+    assert!(chain["roll"]["frame_slope"].is_null(), "{report}");
+    assert!(chain["roll"]["frame_exposure"].is_null(), "{report}");
+    assert_eq!(beaten, control, "the stated white, the roll's exposure");
+    // Not vacuous: unbeaten, the frame renders on its own slope.
+    let (own, own_report) = convert("own.tiff", &["--params", &s(&lifted)]);
+    assert_eq!(own_report["chain"]["look"]["base_from"], "frame");
+    assert_ne!(own, control);
+    // A frame slope typed beside the white is kept; a small lift alone keeps its exposure.
+    let (_, typed) = convert(
+        "typed.tiff",
+        &[
+            "--params",
+            &s(&lifted),
+            "--roll-white",
+            "1.9",
+            "--roll-frame-slope",
+            "2.2",
+        ],
+    );
+    assert_eq!(typed["chain"]["look"]["base_from"], "frame", "{typed}");
+    let (_, kept) = convert(
+        "kept.tiff",
+        &["--params", &s(&small), "--roll-white", "1.9"],
+    );
+    assert_eq!(
+        kept["chain"]["roll"]["frame_exposure_applied"], true,
+        "{kept}"
+    );
+
+    // A `roll --frames` manifest's white beats the entry the same way; its own frame
+    // slope, stated beside the white, is kept.
+    let roll_with = |name: &str, params: &str| {
+        let manifest = write_file(
+            &tmp.path(&format!("{name}.json")),
+            &format!(
+                r#"{{"frames": [{{"input": "{}", "params": {params}}}]}}"#,
+                s(&input)
+            ),
+        );
+        let out_dir = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            "roll",
+            "--frames",
+            &s(&manifest),
+            "--params",
+            &s(&lifted),
+            "--out-dir",
+            &s(&out_dir),
+        ]);
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)["frames"][0]["chain"].clone()
+    };
+    let chain = roll_with("manifest", r#"{"roll": {"white_stops": 1.9}}"#);
+    assert_eq!(chain["look"]["base_from"], "roll", "{chain}");
+    assert_eq!(
+        chain["roll"]["slope"],
+        control_report["chain"]["roll"]["slope"]
+    );
+    assert!(chain["roll"]["frame_exposure"].is_null(), "{chain}");
+    let chain = roll_with(
+        "manifest-slope",
+        r#"{"roll": {"white_stops": 1.9, "frame_slope": 2.2}}"#,
+    );
+    assert_eq!(chain["look"]["base_from"], "frame", "{chain}");
+    assert_eq!(chain["roll"]["frame_slope"], 2.2, "{chain}");
 }
 
 #[test]

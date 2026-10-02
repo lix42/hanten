@@ -1,101 +1,52 @@
-# Opt-in lift for a thin frame
+# A bounded lift for a thin frame
 
 ## Goal
 
-An **opt-in** way to render a frame far thinner than its roll as a full print. The roll's
-exposure leaves such a frame dark, which is the default and stays so. With the option, a
-per-frame exposure and a steeper slope are solved so the frame's white reaches diffuse
-white. This trades more grain for a usable print, within bounds, and the recipe and report
-show what was applied.
+A bounded fine-tune for a frame far thinner than its roll, **on by default with an
+off switch** (decided 2026-10-01: it is taste, not quality, and viewers tend to prefer
+bright). The roll's exposure alone leaves such a frame dark. The frame gets a steeper slope and more exposure that raise its white a bounded amount with the
+film base held where the roll renders it. It is **not** solved to put the white at diffuse
+white: a thin frame need not hold a white at all (user, 2026-10-01). More grain is the
+price, within a bound, and the recipe and report show what was applied.
 
 It also owns the question `nf-look/scene-range-mapping` asked, which was folded in
-2026-09-29: whether a frame's own measured range should set its render as a per-frame opt-in.
+2026-09-29: whether a frame's own measured range should set its render as a per-frame
+opt-in. Answer: no, beyond this bounded lift, and a **flat** frame (one surface filling
+it) gets no lift at all, the small default one included.
 
 ## Design
 
-What is known:
+Settled (2026-10-01; evidence in the progress log):
 
-- **Exposure alone cannot do it.** A thin frame's recorded range, from the base to its
-  white, is short: on the 2026-09-28 roll the base sits about 3.5 scene stops under
-  mid-grey, and the thinnest frames' whites about 1.1 stops under it. Enough exposure to
-  bring that white to diffuse white also brings the base within 2 stops of mid-grey,
-  where display black warns and crushes the shadows. So the lift needs **exposure and a
-  steeper slope together**: the slope spreads the short range, and the exposure is
-  solved from it.
-- **Grain rises with the slope.** The user accepts that as the price, within a bound.
-- **Evidence, 2026-09-29** (`nc-assets` roll `2026-09-28-Portra400-dark`: roll exposure +1.4 EV, slope 1.649;
-  frames 2005 and 1983, whites −1.23 and −1.06). Hand-solved pairs put each white at
-  diffuse white. Each exposure below is the frame's **total**, replacing the roll's +1.4
-  (a manifest `params` exposure replaces the flag). With a measured `roll.exposure`, a
-  manifest `scene_correction.exposure` adds to it, so as manifest values these totals
-  would double-count:
-  - slope 2.0 (about ×1.21 the roll's): exposure +2.47 and +2.30. The base landed 2.2 and
-    2.6 stops under mid-grey.
-  - slope 2.4 (about ×1.46 the roll's): exposure +2.26 and +2.09. The base landed 3.2 and
-    3.6 stops under mid-grey.
-
-  Nothing clipped, and display black never warned. **The user's verdict:** grain at 2.4 is
-  "definitely fine", and 2.0 is acceptable but not necessary. 2.0's white is fine; 2.4's is
-  a little dark but acceptable. The base prediction from the report's display-black numbers
-  was within 0.15 stop on all four renders, so the solve can be computed rather than
-  searched.
-- **It is opt-in and visible.** It uses the machinery the clamps use: `measure-roll`
-  already measures each frame's white and knows the base, and would write the solved values
-  as `roll.frames` entries, where they can be read and deleted. Without the option, nothing
-  changes.
-- **Two existing knobs, no new operator.** The measurement resolves exposure and slope,
-  so the render path is the same whether the lift fires or not. The statistics are the
-  ones `measure-roll` already reads over the effective area, never a second pass over the
-  same pixels.
-- **A measured noise budget exists, and it points the other way.** Round 2026-09-25
-  (`anchor-comparison`, a lone dark frame treated as a roll of one): the user preferred
-  whole contrast 2.97 over 4.45. Delivered noise was 1.75× the scan's floor at 2.97, and
-  5.4× at the contrast an unbounded solve asks for. Slope 2.4 is whole contrast 4.32, which
-  passed on 2005 and 1983 with an exposure lift beside it. That round had no exposure lift,
-  and neither round measured noise on these renders.
+- **The lift**: the frame's white rises `Δ` = 1 stop (chosen over 0.5 by review) with the
+  base held: slope `k0 + Δ/(white − base)`, exposure solved to keep `k·(base + e)`; the
+  slope is bounded at 2.4, and a frame the bound holds is reported by name. It replaces
+  `frame-level-trim`'s small lift in the entry. Delta, not total.
+- **Which frames**: rendered white at or under +0.9 stop and at least 30% of the luma within
+  a stop of the base. No statistic separates an underexposed frame from a night scene;
+  review preferred the lift on night frames too.
+- **Flat guard**: p5–p95 luma spread under 1 stop gets no lift, for both lifts. Two such
+  frames in ten rolls (1612, 1719), both worse lifted.
+- **Keys**: written by `measure-roll` unless `--no-thin-lift` (or `--no-frame-lift`); a
+  `roll.frames` entry's `slope` (a slope, not a
+  white: it is chosen), moved to `roll.frame_slope` / `--roll-frame-slope`;
+  `--frame-lift off` turns off both halves.
+- **Scope**: thin frames only; dense or flat frames get no per-frame range mapping.
 
 Open:
 
-- **The bounds.** At least ×1.46 on the slope is acceptable by that review. The exposure
-  bound, and whether the slope bound should be written against the roll's slope (a
-  multiplier) or as an absolute slope.
-- **The white target.** At the steeper slope, whether to aim a little above diffuse white:
-  2.4's white read slightly dark. `roll-white-rule` also saw a target 0.15 stop above
-  diffuse white look "a little better" in some SDR cases.
-- **Which frames qualify.** A threshold below the roll (in stops under the roll's
-  exposure-corrected white), and what a frame that needs more than the bounds allow gets.
-  It could be lifted to the bound and reported, or left alone.
-- **How to pick the slope and exposure within the bounds.** The minimum slope that keeps
-  the base clear of display black's warning, or a fixed ratio.
-- **Colour.** Lifted, 1983 grew bluer (written blue 0.52 against red and green about
-  0.30). The user judged this to be the scene, not a toe cast. So no cast appeared on
-  these frames, but a thinner frame on another roll could still show one.
-- **Total or delta: settled, delta** (`frame-level-trim`, 2026-09-30): a `roll.frames`
-  entry's `exposure` adds to `roll.exposure` (on 2005: +0.86 over the roll, not +2.26).
-- **Coexisting with `frame-level-trim`'s lift.** Every frame this task targets already
-  gets that lift's full +0.3 EV. The solve places the white itself, so its exposure should
-  **replace** the small lift in the entry, not add to it. Open: whether `--frame-lift off`
-  / `roll.frame_lift` also turns off this task's slope, or the slope has its own switch.
-  Exposure off with the slope kept renders neither picture.
-- **Scope beyond thin frames.** The folded spike asked about any frame's own range,
-  NLP-style (`docs/design-update.md` Appendix D), where a frame filled by one surface
-  visibly fails. The appendix treats that collapse as an observation to explain, not as
-  evidence, and no stage has been identified as losing the detail. Decide whether a dense
-  or flat frame is in scope. If one is, locate the mechanism before choosing a guard.
-- **Keys and flags.** How the option is spelled on `measure-roll`, and how a lifted frame's
-  entry is marked in `roll.frames`, so it reads as a choice, not a measurement.
+- **The confirmation round** on a roll not used to choose the values. 09-11 and 09-13
+  carried night frames into round 1, so they are not independent.
+- **Noise was not measured**; grain was judged by eye only. Slope 2.4 passed review on
+  two frames (2005, 1983); written slopes on the archive reach 2.11.
 
 ## How to Verify
 
-- The success criterion, stated before any render: the lift beats the roll's render on the
-  frames it fires on, and changes no other frame. "Sometimes better" with no rule for when
-  has not concluded.
-- On the 2026-09-28 roll, the option lifts 1983, 1984, 2000 and 2005 (and 1992 if it
-  qualifies) to renders comparable with the hand-solved slope-2.4 pairs, and leaves every
-  other frame's entry untouched.
-- Without the option, `measure-roll --out` writes byte-identically to the build before this
-  task (after `roll-exposure`).
-- A frame that the bounds stop from being fully lifted is reported by name.
+- The lift beats or matches the roll's render on the frames it fires on and changes no
+  other frame's entry; a flat frame loses its small lift.
+- Under `--no-thin-lift`, `measure-roll --out` writes the same values as before this
+  task, except the new `null` keys and the flat frames' dropped lifts.
+- A frame that the bound stops from being fully lifted is reported by name.
 - A review round on at least one more roll with thin frames confirms the bounds.
 
 ## Dependencies

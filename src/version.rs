@@ -390,8 +390,9 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // Refreshed in place by `nf-calibration/frame-level-trim` (was `214ecf6c86cbc179`):
         // `roll.frame_exposure` and `roll.frame_lift` arrived, both `null` by default (an
         // unset lift switch is on, and applies only a stated frame exposure); no default
-        // pixel moved.
-        recipe: "601475237e7a5941",
+        // pixel moved. Again by `nf-calibration/thin-frame-lift` (was `601475237e7a5941`):
+        // `roll.frame_slope`, `null` by default and applied only when stated.
+        recipe: "50987e7d7708865b",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
