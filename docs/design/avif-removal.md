@@ -124,7 +124,7 @@ point.
   16). Outside them the file is a valid general-brand AVIF, and the report says why.
   libaom writes `seq_level_idx` 31 ("maximum parameters") for a 74.6 MP scan.
 - **CICP** is `9/16/9` for PQ and `9/18/9` for HLG, full range. `clli` is written
-  for PQ only; HLG is display-referred.
+  for PQ only; HLG is a relative signal.
 - **Pinned encoder settings**, part of the byte-determinism contract rather than
   knobs: `cpu-used` 6, constant quality `cq_level` 8, tiling off, row-mt on with **8**
   threads. libaom's row-mt output was identical for every thread count from 2

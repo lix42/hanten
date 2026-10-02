@@ -1603,10 +1603,13 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Sequential encode slows after a wide rayon fan-out](tasks/output/post-fanout-encode-slowdown.md) —
   `film-master`'s f32 TIFF write measured 96 → 150–192 ms after the parallel stages landed,
   back to ~117 ms with `RAYON_NUM_THREADS=4`; cause unknown, not yet reproduced on Linux
-- [ ] [Content-light levels per CTA-861.3](tasks/output/content-light-levels.md) — the HDR
-  TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measure
+- [x] [Content-light levels per CTA-861.3](tasks/output/content-light-levels.md) — the HDR
+  TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measured
   luminance, not each pixel's max(R, G, B): 391 vs 578 cd/m² on the scan fixture. Found
-  by `analysis/display-acceptance-harness`; no pixel changes
+  by `analysis/display-acceptance-harness`; no pixel changes. **Done 2026-10-01.** Both
+  are now the peak and mean of each pixel's largest channel in the stored primaries, so
+  they differ by gamut; names kept; the warning keeps MaxCLL as its trigger.
+  `nctool acceptance` gained a `content_light` check holding the definition
 
 ### telemetry — [progress](progress/telemetry.md)
 > `src/telemetry.rs` and the opt-in upload stack (schema, ingestion service,

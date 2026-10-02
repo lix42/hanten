@@ -905,9 +905,40 @@ def _checks(output: str, pre: dict, facts: dict, man: dict, patches: dict | None
         return [_check("pre_encode", False, expected=PAGES[facts["encoding"]], found=pages)]
     spec = man["encodings"][facts["encoding"]]
     try:
-        return ORACLES[facts["encoding"]](output, pre, facts, spec, patches)
+        checks = ORACLES[facts["encoding"]](output, pre, facts, spec, patches)
+        if facts["encoding"] in CONTENT_LIGHT_BLOCK:
+            checks.append(content_light_check(pre, facts))
+        return checks
     except DECODE_FAULTS as e:
         return [_check("decode", False, error=f"{type(e).__name__}: {e}")]
+
+
+# The report block that states each HDR TIFF's content-light levels.
+CONTENT_LIGHT_BLOCK = {"hdr-linear-tiff": "hdr_linear_tiff",
+                       "hdr-pq-tiff": "hdr_coded_tiff", "hdr-hlg-tiff": "hdr_coded_tiff"}
+
+
+def content_light_check(pre: dict, facts: dict) -> dict:
+    """The report's MaxCLL / MaxFALL against CTA-861.3 on the canonical buffer: each
+    pixel's largest linear component in cd/m², its peak and its frame mean. HLG is a
+    relative signal, so its report states neither."""
+    np = _np()
+    name = CONTENT_LIGHT_BLOCK[facts["encoding"]]
+    block = facts["report"].get(name)
+    if not isinstance(block, dict):
+        return _check("content_light", False, fails=[f"the report has no `{name}` block"])
+    found = {k: block.get(k) for k in ("max_cll_nits", "max_fall_nits")}
+    if facts["transfer"] == "hlg":
+        fails = [f"{k} = {block[k]!r} on a relative (HLG) signal" for k in found
+                 if k in block]
+        return _check("content_light", not fails, found=found, fails=fails)
+    max_rgb = pre["hdr-linear"].reshape(-1, 3).max(axis=1).astype(np.float64)
+    max_rgb *= facts["hdr"]["reference_white_nits"]
+    expected = dict(max_cll_nits=float(max_rgb.max()), max_fall_nits=float(max_rgb.mean()))
+    # The report rounds to whole nits; only its summation order differs from numpy's.
+    fails = [f"{k} = {found[k]!r}, CTA-861.3 gives {v:.3f}" for k, v in expected.items()
+             if type(found[k]) is not int or not abs(found[k] - v) <= 0.5 + 1e-6]
+    return _check("content_light", not fails, expected=expected, found=found, fails=fails)
 
 
 def rerun_hashes(nc: str, case: dict, workdir: str) -> dict:

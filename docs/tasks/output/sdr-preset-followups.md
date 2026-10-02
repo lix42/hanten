@@ -12,15 +12,10 @@ What remains here are the carried-over findings below.
 
 ## Carried-over review findings
 
-- **The SDR-range warning is luminance-only, so it can misfire on saturated colour**
-  (`pipeline/hdr.rs`, `sdr_range_warning`). MaxCLL is a luminance measure, so a
-  rendered BT.2020 blue near `[0, 0, 4]` sits around 48 nits of luminance while its
-  blue channel uses substantial per-channel headroom that no SDR-range signal can
-  carry without clipping or shifting the colour. The warning would then claim the
-  whole signal is SDR-range and `--strict` would fail valid HDR colour-volume content.
-  Fix by also checking the rendered per-channel peak, or by narrowing the claim to
-  "no *luminance* headroom"; the latter is the smaller change and matches what MaxCLL
-  witnesses.
+- ~~**The SDR-range warning is luminance-only, so it can misfire on saturated
+  colour.**~~ Resolved by `output/content-light-levels` (2026-10-01): MaxCLL is now
+  CTA-861.3's per-pixel max(R, G, B), and the warning keeps it as its trigger, so a
+  saturated channel above reference white silences it.
 - **The telemetry record's preset enum has outrun its schema version.** `OutputPreset`
   has twelve variants, ten added after the record last bumped for a preset reason. Is
   *adding* an enum member a wire-shape change (the module's rustdoc rule, read

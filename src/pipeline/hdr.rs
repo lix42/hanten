@@ -41,38 +41,28 @@ pub enum HdrTransfer {
 
 /// Measured content-light levels for one rendered frame, in cd/m².
 ///
-/// **Measured, not policy.** CTA-861.3 defines these as properties of *this content*: MaxCLL is the brightest pixel
-/// and MaxFALL the frame average. Displays tone-map from them, so a dark frame
-/// has to report a low peak; nothing here may be derived from the renderer's
-/// 1000-nit mastering ceiling or its 203-nit reference white.
+/// CTA-861.3 defines both from each pixel's **largest linear component** in the
+/// stored primaries, not its luminance: a saturated highlight counts at its
+/// brightest channel. So the same picture measures differently in each gamut.
+/// Measured, not policy: nothing here may come from the 1000-nit peak or the
+/// 203-nit reference white.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ContentLightLevel {
-    /// Brightest per-pixel luminance in the frame, as whole cd/m².
+    /// MaxCLL: the frame's largest per-pixel max(R, G, B), as whole cd/m².
     pub max_cll_nits: u16,
-    /// Frame-average per-pixel luminance, as whole cd/m².
+    /// MaxFALL: the frame mean of per-pixel max(R, G, B), as whole cd/m².
     pub max_fall_nits: u16,
 }
 
 /// Warn when a single-rendition HDR container would carry a signal that never rises
 /// above SDR reference white.
 ///
-/// Every HDR destination advertises `target_peak_nits: 1000` in its report, and the
-/// container's own signalling (CICP transfer 16/18, the PQ `clli` box) says "HDR".
-/// If the rendered frame's brightest pixel measures at or below the 203-nit
-/// reference white, all of that is true of the *file* and none of it is true of the
-/// *picture*: the result is an HDR wrapper around an SDR-range signal, which costs
-/// bit depth and compatibility and buys nothing. CLAUDE.md's fail-loudly rule puts
-/// that in the report rather than leaving it to be discovered with `exiftool`.
-///
-/// The measurement is [`ContentLightLevel::max_cll_nits`], reused exactly as
-/// measured for the `clli` box — the same number the artifact advertises, so the
-/// warning and the file can never disagree, and no second pass over the frame is
-/// needed. It is whole nits by the time it reaches here, which is why the
-/// comparison is `<=` against a rounded 203 rather than a float epsilon dance: a
-/// frame peaking at 203.4 nits is not meaningfully HDR either.
-///
-/// `None` for a frame with real highlights — that is the falsifiable half, and the
-/// reason this takes the measurement rather than the destination.
+/// Every HDR destination advertises the 1000-nit peak, but a frame whose MaxCLL is at
+/// or below the 203-nit reference white is an HDR wrapper around an SDR-range signal.
+/// The trigger is MaxCLL, a channel maximum: a saturated highlight below white in
+/// luminance still silences it, since an SDR container of the same gamut cannot hold
+/// that channel either — so the verdict can differ by gamut. `<=` against the rounded
+/// 203 is deliberate — merely reaching white is not HDR content.
 pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
     let reference_white = REFERENCE_WHITE_NITS.round() as u16;
     let exposure = "`--exposure` (recipe `scene_correction.exposure`)";
@@ -80,10 +70,10 @@ pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
                `output.display.range`)";
     (content_light.max_cll_nits <= reference_white).then(|| {
         format!(
-            "HDR output carries an SDR-range signal: the brightest pixel measures {} nits, \
-             at or below the {reference_white}-nit reference white, so nothing in this frame \
-             uses the {:.0}-nit headroom the container and report advertise. Two common \
-             causes: the render is placed too dark for this roll — raise {exposure} — or \
+            "HDR output carries an SDR-range signal: the brightest channel of any pixel is \
+             {} nits, at or below the {reference_white}-nit reference white, so nothing in \
+             this frame uses the {:.0}-nit headroom the container and report advertise. \
+             Two common causes: the render is placed too dark for this roll — raise {exposure} — or \
              the frame's content genuinely never rises above reference white, in which \
              case {sdr} delivers the same picture in a more compatible container.",
             content_light.max_cll_nits, TARGET_PEAK_NITS,
@@ -128,7 +118,7 @@ pub struct LinearHdr {
     gamut: DestinationGamut,
     metadata: LinearHdrMetadata,
     /// Measured here, where the pixels are still reference-white-relative linear
-    /// luminance, and carried forward — after the transfer they are nonlinear
+    /// light, and carried forward — after the transfer they are nonlinear
     /// codes that no longer state cd/m² directly.
     content_light: ContentLightLevel,
 }
@@ -169,7 +159,7 @@ impl LinearHdr {
     /// silently add ~12 B/px that `pipeline::memory` does not model.
     ///
     /// [`ContentLightLevel`] comes out too: it was measured while these pixels
-    /// were still reference-white-relative *linear* luminance, and the linear TIFF
+    /// were still reference-white-relative *linear* light, and the linear TIFF
     /// reports it rather than re-deriving it.
     pub(crate) fn into_parts(self) -> (LinearImage, LinearHdrMetadata, ContentLightLevel) {
         (self.image, self.metadata, self.content_light)
@@ -298,26 +288,23 @@ pub fn linear_labels(gamut: DestinationGamut) -> LinearLabels {
     }
 }
 
-/// MaxCLL/MaxFALL of reference-white-relative linear pixels, weighted by the
-/// primaries' own `luma`.
+/// [`ContentLightLevel`] of reference-white-relative linear pixels.
 ///
-/// Reductions over the rendered frame. The `f64` sum depends on its order, so it stays
-/// one sequential pass in pixel order (the rule `pipeline::pixels` exists to keep); the
-/// max is order-free but rides along. Gamut mapping is luminance-preserving, so this is
-/// each pixel's rendered luminance whether or not it was moved to the cube boundary.
-fn measure_content_light(rgb: &[f32], luma: [f32; 3]) -> ContentLightLevel {
-    let mut peak_luminance = 0.0_f32;
-    let mut luminance_sum = 0.0_f64;
-    for rendered in rgb.as_chunks::<3>().0 {
-        let luminance = dot(*rendered, luma).max(0.0);
-        peak_luminance = peak_luminance.max(luminance);
-        luminance_sum += f64::from(luminance);
+/// The `f64` sum depends on its order, so it stays one sequential pass in pixel order
+/// (the rule `pipeline::pixels` exists to keep); the max rides along.
+fn measure_content_light(rgb: &[f32]) -> ContentLightLevel {
+    let mut peak = 0.0_f32;
+    let mut sum = 0.0_f64;
+    for &[r, g, b] in rgb.as_chunks::<3>().0 {
+        let max_rgb = r.max(g).max(b).max(0.0);
+        peak = peak.max(max_rgb);
+        sum += f64::from(max_rgb);
     }
     ContentLightLevel {
-        max_cll_nits: whole_nits(f64::from(peak_luminance)),
+        max_cll_nits: whole_nits(f64::from(peak)),
         max_fall_nits: match rgb.len() / 3 {
             0 => 0,
-            count => whole_nits(luminance_sum / count as f64),
+            count => whole_nits(sum / count as f64),
         },
     }
 }
@@ -379,7 +366,7 @@ pub fn from_new_chain(
 ) -> Result<(LinearHdr, PeakClamp)> {
     image.ir = None;
     let clamp = clamp_to_peak(&mut image.rgb)?;
-    let content_light = measure_content_light(&image.rgb, gamut.luma());
+    let content_light = measure_content_light(&image.rgb);
     Ok((
         LinearHdr {
             image,
@@ -457,13 +444,13 @@ pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<R
     Ok(RenderedHdr { image, metadata })
 }
 
-/// Reference-white-relative luminance as whole cd/m², the unit `clli` codes.
+/// A reference-white-relative linear value as whole cd/m².
 ///
 /// Saturates at `u16::MAX` rather than wrapping. The renderer's own range bound
 /// keeps every rendered value at or under the 1000-nit peak, so the saturation is
 /// a guard on the type, not a reachable clamp.
-fn whole_nits(relative_luminance: f64) -> u16 {
-    let nits = relative_luminance * f64::from(REFERENCE_WHITE_NITS);
+fn whole_nits(relative: f64) -> u16 {
+    let nits = relative * f64::from(REFERENCE_WHITE_NITS);
     if !nits.is_finite() {
         return 0;
     }
@@ -814,8 +801,8 @@ mod tests {
 
     #[test]
     fn content_light_is_measured_from_the_frame_in_absolute_nits() {
-        // Black, reference white, and the mastering peak in one row: rendered
-        // luminance is 0, 1 and LINEAR_HEADROOM relative to reference white, so the
+        // Black, reference white, and the mastering peak in one row, all neutral:
+        // 0, 1 and LINEAR_HEADROOM relative to reference white, so the
         // measurement must read 0, 203 and 1000 cd/m² — and the frame average is the
         // mean of those three, 401.
         let measured = linear(&[
@@ -851,6 +838,24 @@ mod tests {
     }
 
     #[test]
+    fn content_light_is_each_pixels_largest_channel_not_its_luminance() {
+        // CTA-861.3: a red at twice reference white is a 406-nit pixel, though its
+        // BT.2020 luminance is ~122 nits.
+        let red = [2.0, 0.1, 0.1];
+        assert!(dot(red, BT2020_LUMA) * REFERENCE_WHITE_NITS < 125.0);
+        assert_eq!(linear(&red).content_light.max_cll_nits, 406);
+        // MaxFALL is the mean of the per-pixel maxima: (2.0 + 0.5) / 2 x 203 = 253.75.
+        let frame = linear(&[2.0, 0.1, 0.1, 0.1, 0.5, 0.2]).content_light;
+        assert_eq!(
+            frame,
+            ContentLightLevel {
+                max_cll_nits: 406,
+                max_fall_nits: 254
+            }
+        );
+    }
+
+    #[test]
     fn sdr_range_warning_fires_on_the_measurement_not_on_the_destination() {
         // A frame rendered exactly at reference white uses none of the headroom: the
         // container says 1000 nits, the picture says 203. `<=` is deliberate — a
@@ -881,6 +886,11 @@ mod tests {
         .content_light();
         assert!(bright.max_cll_nits > REFERENCE_WHITE_NITS as u16);
         assert_eq!(sdr_range_warning(bright), None);
+        // A saturated channel above white is above-SDR content even when the pixel's
+        // luminance is below white.
+        let saturated = [1.5, 0.2, 0.2];
+        assert!(dot(saturated, BT2020_LUMA) < 1.0);
+        assert_eq!(sdr_range_warning(linear(&saturated).content_light()), None);
 
         // The transfer encode carries the same measurement, so PQ and HLG renditions
         // reach the identical verdict from the identical number.
@@ -1010,14 +1020,8 @@ mod tests {
             "the IR plane is not an HDR channel"
         );
         // Measured on what is stored: the clamped pixels, not the chain's output.
-        assert_eq!(
-            hdr.content_light(),
-            measure_content_light(&clamped, BT2020_LUMA)
-        );
-        assert_ne!(
-            hdr.content_light(),
-            measure_content_light(&rgb, BT2020_LUMA)
-        );
+        assert_eq!(hdr.content_light(), measure_content_light(&clamped));
+        assert_ne!(hdr.content_light(), measure_content_light(&rgb));
         let m = hdr.metadata();
         assert_eq!((m.tone_curve, m.gamut_mapping), ("reinhard", "radial"));
         assert_eq!(m.linear_headroom, LINEAR_HEADROOM);

@@ -359,6 +359,55 @@ class OraclesOnRealOutput(unittest.TestCase):
         out = acceptance.check_output(output or run["output"], pre, run["report"], self.man)
         return {c["check"]: c for c in out}
 
+    def test_content_light_is_each_pixels_largest_channel(self):
+        # A pure red one reference white above the frame's own peak: CTA-861.3 counts
+        # its red channel, which becomes MaxCLL; its luminance is about a quarter of it.
+        peak = self.checks("pq")["content_light"]["expected"]["max_cll_nits"] / 203 + 1
+
+        def red(buffer, data):
+            if buffer == "hdr-linear":
+                data[3, 3] = (peak, 0.0, 0.0)
+        got = self.pre_checks("pq", self.rewrite_pre("pq", "red", red))["content_light"]
+        self.assertFalse(got["passed"])
+        self.assertAlmostEqual(got["expected"]["max_cll_nits"], peak * 203, places=2)
+
+    def report_checks(self, name, edit):
+        """`name`'s content_light check against a copy of its report with `edit`."""
+        run = self.runs[name]
+        report = json.loads(json.dumps(run["report"]))
+        edit(report)
+        out = acceptance.check_output(run["output"], run["pre_encode"], report, self.man)
+        return {c["check"]: c for c in out}["content_light"]
+
+    def test_a_misreported_content_light_fails(self):
+        for name, block, field, value in (
+                ("linear-p3", "hdr_linear_tiff", "max_fall_nits", None),
+                ("pq", "hdr_coded_tiff", "max_cll_nits", None),
+                ("pq", "hdr_coded_tiff", "max_cll_nits", "578"),
+                ("hlg", "hdr_coded_tiff", "max_cll_nits", 203)):
+            def edit(report):
+                stated = report[block].get(field)
+                report[block][field] = value if value is not None else stated + 1
+            with self.subTest(name=name, value=value):
+                got = self.report_checks(name, edit)
+                self.assertFalse(got["passed"])
+                self.assertIn(field, got["fails"][0])
+
+    def test_hlg_fields_must_be_omitted_and_values_must_be_numbers(self):
+        # A `null` is not an omission, and a JSON boolean is not a nit count.
+        for name, value in (("hlg", None), ("pq", True)):
+            with self.subTest(name):
+                got = self.report_checks(name, lambda report: report["hdr_coded_tiff"]
+                                         .__setitem__("max_cll_nits", value))
+                self.assertFalse(got["passed"])
+
+    def test_a_missing_report_block_fails_even_for_hlg(self):
+        for name, block in (("hlg", "hdr_coded_tiff"), ("linear-p3", "hdr_linear_tiff")):
+            with self.subTest(name):
+                got = self.report_checks(name, lambda report: report.pop(block))
+                self.assertFalse(got["passed"])
+                self.assertIn(block, got["fails"][0])
+
     def test_an_ulp_below_zero_is_legitimate_but_a_negative_sample_is_not(self):
         # nc's `gain_ratio::between` documents ~-1e-17 as fit gamut's tie, clamped.
         def at(value):

@@ -17,7 +17,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > the roll section's examples (§5, §7) were re-run. At `algo/density-safety-bounds`
 > (`pipeline_version` 9) §10's examples and §12's new entries were re-run, and at
 > `output/drop-avif` §2's build prerequisites and §8's destination examples. At
-> `core/recipe-replay-fidelity` the recipe files §4, §5 and §10 show were re-run. The staleness signal is
+> `core/recipe-replay-fidelity` the recipe files §4, §5 and §10 show were re-run, and at
+> `output/content-light-levels` §8's HDR destination examples. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -1357,11 +1358,19 @@ TIFF, whose `pixel_contract`, `linear_domain` and embedded profile name its gamu
 a `roll` report, on each frame):
 
 ```console
-$ hanten convert scan.tif -o out --film-base … --transfer pq | jq -c '.hdr_coded_tiff | {reference_white_nits,target_peak_nits,tone_curve,cicp}'
-{"reference_white_nits":203.0,"target_peak_nits":1000.0,"tone_curve":"reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","cicp":[9,16,0]}
+$ hanten convert scan.tif -o out --film-base … --transfer pq | jq -c '.hdr_coded_tiff | {reference_white_nits,target_peak_nits,tone_curve,cicp,max_cll_nits,max_fall_nits}'
+{"reference_white_nits":203.0,"target_peak_nits":1000.0,"tone_curve":"reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","cicp":[9,16,0],"max_cll_nits":608,"max_fall_nits":167}
 ```
 
-A TIFF whose brightest pixel stays at or below reference white is warned
+`max_cll_nits` and `max_fall_nits` are the frame's measured MaxCLL and MaxFALL as
+CTA-861.3 defines them: the peak and the mean of each pixel's **largest** linear
+channel in cd/m², not its luminance, so a saturated highlight counts at its brightest
+channel. They are measured in the file's own primaries, so one frame's values differ
+by gamut. The HLG TIFF omits them: HLG is a relative signal whose
+peak the display decides. Builds before
+`output/content-light-levels` reported luminance under the same names.
+
+A TIFF whose MaxCLL is at or below reference white is warned
 about (`HDR output carries an SDR-range signal`), naming `--exposure` and `--range sdr`
 as the remedies. The gain-map JPEG is not: an SDR-range frame makes a **flat** gain
 map, which `chain.gain_map.flat` states and which is a correct file (it displays as
@@ -1374,7 +1383,7 @@ it, since `chain.fit_range` is the HDR rendition's:
 ```console
 $ hanten convert tests/fixtures/hdr-48bit.tif -o out --film-base 0.9,0.55,0.42 --range hdr \
     | jq -c '.chain.gain_map | {min, max, flat, width, height}'
-{"min":[0.9999999,1.0,1.0],"max":[1.9145154,1.9127859,1.9116272],"flat":false,"width":251,"height":231}
+{"min":[0.9435548,0.9725493,1.0],"max":[3.0689256,3.0031552,2.95945],"flat":false,"width":251,"height":231}
 ```
 
 ### You do not have to name the container

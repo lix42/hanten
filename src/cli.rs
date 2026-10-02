@@ -1051,8 +1051,8 @@ pub struct HdrLinearTiffResult {
     pub tone_curve: &'static str,
     pub gamut_mapping: &'static str,
     pub linear_domain: &'static str,
-    /// This frame's **measured** light levels in cd/m² — peak and frame-average
-    /// pixel luminance, not the mastering policy above.
+    /// This frame's **measured** CTA-861.3 MaxCLL / MaxFALL in cd/m²
+    /// ([`hdr::ContentLightLevel`]), not the mastering policy above.
     pub max_cll_nits: u16,
     pub max_fall_nits: u16,
     /// Plain statement of what the file alone does and does not communicate.
@@ -1091,12 +1091,12 @@ pub struct HdrCodedTiffResult {
     /// Which display tone curve produced these pixels, straight from the renderer's
     /// own metadata — the same identifier `hdr_linear_tiff` reports.
     pub tone_curve: &'static str,
-    /// This frame's **measured** peak and average light levels in cd/m², for PQ.
+    /// This frame's **measured** CTA-861.3 MaxCLL / MaxFALL in cd/m²
+    /// ([`hdr::ContentLightLevel`]).
     ///
-    /// Present only for PQ: the values are absolute luminance, which HLG — being
-    /// display-referred — cannot state. TIFF has no CTA-861.3 (`clli`) equivalent, so
-    /// these fields are the only place a consumer tone-mapping this image learns its
-    /// actual peak.
+    /// PQ only: they are absolute light levels, which HLG — a relative signal whose
+    /// peak the display decides — cannot state. TIFF has no content-light tag, so
+    /// this is the only place a consumer learns the image's actual peak.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cll_nits: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3395,7 +3395,7 @@ fn report_hdr_coded_tiff(
         reference_white_nits: metadata.linear.reference_white_nits,
         target_peak_nits: metadata.linear.target_peak_nits,
         tone_curve: metadata.linear.tone_curve,
-        // PQ only: HLG is display-referred, so absolute content-light values would
+        // PQ only: HLG is a relative signal, so absolute content-light values would
         // be a false claim rather than a missing one.
         max_cll_nits: match metadata.transfer {
             hdr::HdrTransfer::Pq => Some(metadata.content_light.max_cll_nits),

@@ -284,8 +284,7 @@ pub struct HdrLinearTiffSummary {
     pub icc_bytes: usize,
     /// The renderer's resolved linear policy, carried through for the report.
     pub linear: LinearHdrMetadata,
-    /// This frame's measured light levels (taken while the samples were still
-    /// linear luminance).
+    /// This frame's measured CTA-861.3 content light ([`ContentLightLevel`]).
     pub content_light: ContentLightLevel,
 }
 
