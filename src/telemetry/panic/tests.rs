@@ -216,7 +216,6 @@ fn every_stage_and_phase_survives_the_active_stage_code() {
     for stage in phases.into_iter().chain(stages) {
         assert_eq!(decode(encode(stage)), PanicStage::At(stage), "{stage:?}");
     }
-    assert_eq!(STAGES, StageKind::ALL);
     for unknown in [0, 5, 15, 26, u8::MAX] {
         assert_eq!(decode(unknown), PanicStage::Unknown, "{unknown}");
     }

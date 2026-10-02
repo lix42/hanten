@@ -82,8 +82,8 @@ What other epics need to know about `telemetry` (refreshed 2026-10-01):
   `to_upload_panic`); the local event carries its own `event_id`. Bumping the local
   schema touches that contract too.
 - **Panic reporting** (`telemetry/panic-hook`): under consent, a `convert`'s first
-  panic leaves one sanitized event in the spool (`telemetry::panic`). A new stage
-  must join `panic::STAGES`; debug builds panic on demand with `NC_TEST_PANIC`.
+  panic leaves one sanitized event in the spool (`telemetry::panic`); debug builds
+  panic on demand with `NC_TEST_PANIC`.
 - **`telemetry/perf-instrumentation` is parked, not pending** — the criterion
   lab-benchmark approach was superseded by real-world telemetry and survives only
   on the remote branch `origin/prototype/perf-bench-instrumentation` (no local
@@ -580,7 +580,7 @@ What shipped, and the parts the open tasks build on:
   are collected like any other; set `NC_TELEMETRY=0` where that is unwanted.
 
 ## panic-hook
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-01
 
 - Goal: capture consented Rust panics through an isolated spool with only
@@ -647,6 +647,21 @@ What shipped, and the parts the open tasks build on:
   `a_panic_starts_the_upload_helper` and
   `a_panic_published_while_a_helper_drains_is_uploaded` each time out with their fix
   removed.
+
+### 2026-10-01 — done (ship review)
+- **`preview` skips an event a batch already holds**, raw or panic, as the drain
+  does. After a crash between a projection and its source's delete it used to
+  show the event twice, against using-nc's "exactly as sent".
+- **The hook checks the cap before capturing**, so at 64 ready files a panic no
+  longer pays for symbolication. The stage code is `16 +` the `StageKind`
+  discriminant, and `StageKind::ALL` is no longer test-only.
+- **Left open:** the consent manifest grew a panic line with `MANIFEST_VERSION` kept
+  at 1 (user decision), so existing consents are not asked again; a crash between a
+  panic quarantine and the ready files' delete quarantines them twice (local
+  only); Windows and a real rayon-worker panic are unverified
+  (`telemetry/upload-windows` carries the Windows half);
+  `a_panic_published_while_a_helper_drains_is_uploaded` waits about 2.5 s for the
+  panicking debug run, the likeliest CI flake.
 
 ## upload-live-check
 **Status:** done

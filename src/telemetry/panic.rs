@@ -269,41 +269,14 @@ fn active() -> PanicStage {
     decode(ACTIVE.load(Ordering::Relaxed))
 }
 
-const STAGES: [StageKind; 10] = [
-    StageKind::Decode,
-    StageKind::FilmBase,
-    StageKind::Reconstruction,
-    StageKind::SceneCorrection,
-    StageKind::Look,
-    StageKind::FitRange,
-    StageKind::FitGamut,
-    StageKind::Destination,
-    StageKind::Encode,
-    StageKind::IrExport,
-];
-
+/// A stage is `16 +` its index in [`StageKind::ALL`], which is its discriminant.
 fn encode(stage: EventStage) -> u8 {
     match stage {
         EventStage::Parse => 1,
         EventStage::Setup => 2,
         EventStage::Preflight => 3,
         EventStage::Finalize => 4,
-        EventStage::Stage(kind) => {
-            // Exhaustive, so a new stage must join `STAGES`.
-            let i = match kind {
-                StageKind::Decode => 0,
-                StageKind::FilmBase => 1,
-                StageKind::Reconstruction => 2,
-                StageKind::SceneCorrection => 3,
-                StageKind::Look => 4,
-                StageKind::FitRange => 5,
-                StageKind::FitGamut => 6,
-                StageKind::Destination => 7,
-                StageKind::Encode => 8,
-                StageKind::IrExport => 9,
-            };
-            16 + i
-        }
+        EventStage::Stage(kind) => 16 + kind as u8,
     }
 }
 
@@ -313,7 +286,7 @@ fn decode(code: u8) -> PanicStage {
         2 => EventStage::Setup,
         3 => EventStage::Preflight,
         4 => EventStage::Finalize,
-        16.. => match STAGES.get(usize::from(code - 16)) {
+        16.. => match StageKind::ALL.get(usize::from(code - 16)) {
             Some(kind) => EventStage::Stage(*kind),
             None => return PanicStage::Unknown,
         },
@@ -336,6 +309,10 @@ pub fn install(spool: PathBuf, generation: String) {
 /// Capture, sanitize and publish one event, then start the helper. The payload is
 /// never read.
 fn report(spool: &Path, generation: &str) {
+    // Refuse at the cap before the costly capture; `publish` checks again.
+    if matches!(ready_count(spool), Ok(n) if n >= MAX_READY) {
+        return;
+    }
     let backtrace = std::backtrace::Backtrace::force_capture().to_string();
     let frames = sanitize(&backtrace, env!("CARGO_CRATE_NAME"));
     drop(backtrace);

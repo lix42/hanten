@@ -235,6 +235,10 @@ fn reprojecting_after_a_crash_rewrites_nothing() {
     let first = fs::read(queue.spool.join(&batch)).unwrap();
     // The crash: the raw file is back, as if its deletion never happened.
     fs::write(queue.spool.join(&raw), kept).unwrap();
+    assert_eq!(
+        queue.preview(NOW_MS).unwrap(),
+        [queue.read_batch(&batch).unwrap()]
+    );
     queue.project_raw(&raw, NOW_MS, &mut status).unwrap();
     let batches: Vec<_> = queue
         .entries()
@@ -619,6 +623,7 @@ fn reprojecting_panics_after_a_crash_sends_each_once() {
         .unwrap();
     // A crash before the delete: the ready file is back beside its batch.
     fs::write(queue.spool.join(&name), &bytes).unwrap();
+    assert_eq!(queue.preview(NOW_MS).unwrap(), panic_batches(&queue));
     queue
         .project_panics(NOW_MS, &mut Status::default())
         .unwrap();

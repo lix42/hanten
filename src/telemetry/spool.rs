@@ -630,13 +630,21 @@ impl Queue {
 
     /// The request bodies a drain would send now, in order, without writing
     /// anything: pending batches as stored, then the projection of each raw file and
-    /// of the queue file's complete lines.
+    /// of the queue file's complete lines. Like the drain, it skips an event a batch
+    /// already holds (a crash between a projection and its source's delete).
     pub fn preview(&self, now_ms: u64) -> io::Result<Vec<String>> {
         let entries = self.entries()?;
         let mut bodies = Vec::new();
+        let mut batched = std::collections::HashSet::new();
         for e in entries.iter().filter(|e| e.kind == Kind::Batch) {
-            bodies.push(self.read_batch(&e.name)?);
+            let body = self.read_batch(&e.name)?;
+            batched.extend(batch_ids(body.as_bytes()).unwrap_or_default());
+            bodies.push(body);
         }
+        let unsent = |mut events: Vec<String>| {
+            events.retain(|e| event_id(e).is_none_or(|id| !batched.contains(&id)));
+            events
+        };
         let mut sources = Vec::new();
         for e in entries.iter().filter(|e| e.kind == Kind::Raw) {
             sources.push(durable::read_capped(
@@ -652,7 +660,7 @@ impl Queue {
             sources.push(live);
         }
         for bytes in sources {
-            bodies.extend(chunk(&project(&bytes, now_ms).events).0);
+            bodies.extend(chunk(&unsent(project(&bytes, now_ms).events)).0);
         }
         let mut panics = Projected::default();
         for e in entries.iter().filter(|e| e.kind == Kind::PanicReady) {
@@ -662,7 +670,7 @@ impl Queue {
                 Err(e) => return Err(e),
             }
         }
-        bodies.extend(chunk(&panics.events).0);
+        bodies.extend(chunk(&unsent(panics.events)).0);
         Ok(bodies)
     }
 }
