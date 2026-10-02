@@ -9,26 +9,27 @@ and a whole roll can peak several times higher with nothing warning.
 ## Known
 
 - **Measured on Gold200 (macOS/aarch64, peak RSS):** one frame of `measure-roll`
-  0.61 GB, 35 frames 2.3–2.8 GB. `roll --new-flow` grows the same way: 0.70 GB for one
-  frame, 1.30 GB for five. (`src/pipeline/memory.rs`'s calibration notes;
-  `docs/progress/nf-scene-correction.md`, `roll-white-balance`.)
-- **The cause is frame sizes, not a leak.** The same frame five times stays flat
-  (0.62 GB). Frames of one roll differ by a few pixels (4894–4948 wide), and the
-  allocator cannot reuse a freed full-frame buffer for a slightly larger one, so each
-  new size adds resident pages.
-- The per-frame model itself is calibrated and sound for one frame; what it cannot see
-  is the run.
+  0.61 GB, 35 frames 2.3–3.4 GB; `roll` 0.70 GB for one frame, 2.70 GB for 35.
+  (`src/pipeline/memory.rs`'s calibration notes; `docs/progress/nf-scene-correction.md`,
+  `roll-white-balance`.)
+- **The cause is frame sizes, not a leak.** The same frame twice stays flat; a smaller
+  frame then a larger one grows, the reverse does not. macOS malloc keeps freed large
+  blocks resident for reuse (`vmmap`: `MALLOC_LARGE (empty)`), and a block cannot serve
+  the next, slightly larger frame. `malloc_zone_pressure_relief` releases none of it.
+- The per-frame model itself is calibrated and sound for one frame; what it could not
+  see is the run.
 
-## Open questions
+## Answered (2026-10-01)
 
-- **Remedy in the allocation or in the gate?** Reusing the run's buffers across
-  frames, sized once for the largest frame, would bound the growth where it arises. A
-  roll-level preflight (the largest frame's peak plus a measured growth term) would at
-  least make the gate honest. Returning freed pages to the OS is platform-dependent.
-- **Does Linux behave the same?** Only macOS was measured; CI and many users are on
-  Linux, whose allocator returns large blocks differently.
-- **How it relates to `io/streaming-tiled-io`**, which would shrink every per-frame
-  buffer and may make this moot — or not, if its tiles vary in size the same way.
+- **Remedy in the allocation or in the gate?** The allocation: a global allocator
+  (`src/allocator.rs`) maps blocks of 8 MiB or more directly and unmaps them on free.
+  The gate is unchanged; a run now peaks at its largest frame. Buffer reuse across
+  frames and a roll-level growth term were the alternatives, not taken.
+- **Does Linux behave the same?** glibc already maps blocks over its mmap threshold
+  directly, so the growth was macOS's; `tests/multi_frame_memory.rs` checks both CI
+  platforms.
+- **`io/streaming-tiled-io`:** fixed-size tiles would not have hit this, and tiles
+  under 8 MiB go through malloc, which reuses same-size blocks.
 
 ## How to Verify
 

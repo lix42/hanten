@@ -1379,10 +1379,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   Phase B (expensive, **evaluate-first**): strip/tile decode + streaming encode.
   STEP 0 gate — evaluate from measured peak whether this is needed at all; if data
   is insufficient, collect it first; proceed only if real scans exceed the budget.
-- [ ] [Multi-frame runs outgrow the per-frame memory
-  model](tasks/io/multi-frame-memory-growth.md) — `roll` and `measure-roll` peak at
-  2.3–2.8 GB over 35 frames against 0.6 GB for one, because frames of slightly
-  different sizes cannot reuse each other's freed buffers; the gate sees none of it
+- [x] [Multi-frame runs outgrow the per-frame memory
+  model](tasks/io/multi-frame-memory-growth.md) — macOS malloc kept freed full-frame
+  blocks resident, so a roll's peak climbed with every slightly larger frame; a global
+  allocator now maps big blocks directly, and 35 frames peak at their largest frame
 
 ### film-base — [progress](progress/film-base.md)
 > `pipeline/film_base.rs` and the `hanten measure-base` measurement surface: locating

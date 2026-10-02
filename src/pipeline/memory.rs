@@ -52,15 +52,16 @@
 //!   so neither adds a term.
 //! - **Retention: a freed buffer is still counted at every later peak.** The film-base
 //!   sample is **added into** the render and encode phases rather than competing with
-//!   them, and the IR export buffer is summed with the quantize buffer it precedes.
-//!   This was macOS malloc's behaviour: it kept freed large blocks resident, and a
-//!   full-frame `--base-region` `convert` measured **3.743 GB**, which 50 B/px (32
-//!   render + 6 quantize + 12 retained sample) reproduced to +0.3% where a competing
-//!   phase under-estimated it by 10.2%. [`crate::allocator`] now unmaps blocks of 8 MiB
-//!   or more on free, so a full-frame sample leaves before render (measured); smaller
-//!   blocks and lcms2's own still go through malloc, so the terms are kept — an
-//!   over-count for big samples, the safe side. `decode`'s `u16` read buffer is a genuine alternative (`max`): it is freed
-//!   and the IR buffers are allocated into the space it vacated, within one stage.
+//!   them, and the IR export buffer is summed with the quantize buffer it precedes. This
+//!   was macOS malloc's behaviour: it kept freed large blocks resident, and a full-frame
+//!   `--base-region` `convert` measured **3.743 GB**, which 50 B/px (32 render + 6
+//!   quantize + 12 retained sample) reproduced to +0.3% where a competing phase
+//!   under-estimated it by 10.2%. [`crate::allocator`] now unmaps blocks of 8 MiB or more
+//!   on free, so a full-frame sample leaves before render (measured); smaller blocks and
+//!   lcms2's own still go through malloc, so the terms are kept — an over-count for big
+//!   samples, the safe side. `decode`'s `u16` read buffer is a genuine alternative
+//!   (`max`): it is freed and the IR buffers are allocated into the space it vacated,
+//!   within one stage.
 //! - **`film_base` *does* allocate a full-frame-scale buffer.** It samples
 //!   rectangles, but `film_base::region_channels` materializes each one
 //!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — live
@@ -365,9 +366,8 @@ pub enum RunProfile {
     /// the pair starts) and the RGB-only graded copy it splits off — then the
     /// full-resolution f32 gains. The HDR rendition and the gains are dropped as soon as
     /// the next buffer is built from them, but are summed, not competed (the module
-    /// doc's retention rule). Encode adds the u8 base, the
-    /// half-resolution map and both JPEGs, the JPEGs at a fitted size. Measured (the
-    /// module doc's calibration table).
+    /// doc's retention rule). Encode adds the u8 base, the half-resolution map and both
+    /// JPEGs, the JPEGs at a fitted size. Measured (the module doc's calibration table).
     GainMapJpeg {
         /// Whether a u16 IR TIFF is staged before the primary.
         export_ir: bool,

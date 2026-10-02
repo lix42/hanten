@@ -5,9 +5,10 @@
 //! **Why.** macOS malloc keeps freed large blocks resident for reuse, and the next
 //! frame of a roll is a few pixels larger and cannot reuse them, so a multi-frame
 //! run's resident set climbed with every frame (`vmmap`: `MALLOC_LARGE (empty)`) —
-//! the numbers are in `pipeline::memory`. `malloc_zone_pressure_relief` releases
-//! none of it. glibc maps blocks over its mmap threshold (at most 32 MiB) directly
-//! already, so on Linux this changes only the 8–32 MiB band.
+//! the numbers are in `docs/progress/io.md` (`multi-frame-memory-growth`).
+//! `malloc_zone_pressure_relief` releases none of it. glibc maps blocks over its mmap
+//! threshold (at most 32 MiB) directly already, so on Linux this changes only the
+//! 8–32 MiB band.
 //!
 //! **Cost:** no freed big block is reused, so each faults in fresh zeroed pages. Only
 //! `measure-roll`, the lightest per frame, shows it in wall time (measured in

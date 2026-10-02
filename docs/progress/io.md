@@ -69,8 +69,14 @@ What other epics need to know about `io`:
   The `12·s` sampling term rides into every later phase (the retention rule — an
   over-count since `crate::allocator`, kept as the safe side). Anything that adds a
   full-frame buffer to a stage **must** update the model by hand — no test compares
-  it against the code — or the gate silently under-approves. A new preset adds and calibrates its own profile across **two**
-  frame sizes before activation.
+  it against the code — or the gate silently under-approves. A new preset adds and
+  calibrates its own profile across **two** frame sizes before activation.
+- **The process allocator maps big blocks directly** (`src/allocator.rs`,
+  `io/multi-frame-memory-growth`, 2026-10-01): blocks of 8 MiB or more go to
+  `mmap`/`munmap`, the rest to `System`, so a freed full-frame buffer leaves the
+  resident set at once and a multi-frame run peaks at its largest frame — the
+  per-frame gate bounds the run. Nothing calls it; it is `#[global_allocator]` in
+  `main.rs`. Cost: fresh pages fault in for every big allocation.
 - **`color::to_output` consumes and returns the image** — it transforms the very
   buffers it was handed. Real peak on the 74.65 MP scan: 3.808 GB → 3.146 GB,
   byte-identical output. Don't reintroduce a stage-local copy of a full image
@@ -579,7 +585,7 @@ pre-change binary: byte-identical primary, sidecar differing only in
 
 ## multi-frame-memory-growth
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-01
 
 - 2026-09-24: filed from `nf-scene-correction/roll-white-balance`, which measured it while
@@ -633,3 +639,11 @@ pre-change binary: byte-identical primary, sidecar differing only in
     test binary would compile with its unused helpers under `dead_code`.
   - **`io/streaming-tiled-io`:** tiles of a fixed size would not have hit this; tiles
     under 8 MiB go through malloc, which reuses same-size blocks.
+- 2026-10-01 (**closed**): landed as the allocator above, after a review round and a
+  rebase onto `telemetry/upload-live-check`'s drain fix (the one test that had been
+  failing locally). Verified: every CI gate on macOS, the 35-frame before/after table,
+  byte-identical `convert` and gain-map output, and `tests/multi_frame_memory.rs`
+  failing without the allocator. Not yet seen: the Linux run of that test, which is
+  CI's. For a dependent task: the model's retention terms now over-count big blocks,
+  and the calibration table predates the allocator — refit both together if the model
+  is ever tightened.

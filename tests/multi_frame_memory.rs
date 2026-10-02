@@ -48,8 +48,10 @@ impl Drop for Scratch {
     }
 }
 
-/// One run: the largest per-frame estimate in its report, and its own peak RSS in
-/// bytes. Reaped with `wait4`, so no other child's peak can leak into the reading.
+/// One run: the largest per-frame estimate in its report, and its peak RSS in bytes.
+/// Reaped with `wait4`, so no other child's peak leaks in; on Linux the reading also
+/// covers the test process's own peak (`posix_spawn` shares its memory until exec),
+/// which stays far below a run's.
 struct Run {
     estimate: u64,
     peak: u64,
@@ -62,6 +64,7 @@ fn run(args: &[&OsStr], stderr_file: &Path) -> Run {
     )]
     let mut child = Command::new(NC)
         .args(args)
+        .env("NC_TELEMETRY", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(stderr_file).unwrap())
