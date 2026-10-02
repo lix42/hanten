@@ -7,7 +7,8 @@
 //! one-off file (design-spec §8/§9). This module *produces* the event and writes
 //! the local sink(s); [`upload`] projects an event to its upload form, and the
 //! opt-in uploader drains a consent-selected log ([`consent`], [`spool`],
-//! [`drain`], [`managed`]; `docs/telemetry-strategy.md`).
+//! [`drain`], [`managed`]; `docs/telemetry-strategy.md`). Under that consent,
+//! [`panic`](mod@panic) reports a `convert`'s first panic as its own event.
 //!
 //! Two deliberate design boundaries:
 //!
@@ -47,6 +48,7 @@ pub mod durable;
 pub mod maintenance;
 pub mod managed;
 pub mod net;
+pub mod panic;
 pub mod spool;
 pub mod upload;
 
@@ -121,6 +123,11 @@ pub mod upload;
 /// v11: `outcome.total_samples` (`telemetry/upload-schema`), the denominator of
 /// `clipped` / `non_finite` — a gain map counts both renditions, so the image's
 /// dimensions are not it. Present exactly when `clipped` is.
+///
+/// Still v11 after `telemetry/panic-hook`: `event` gained `panic`, a member added
+/// as above, for [`panic::PanicEvent`] — its own record in its own file, with the
+/// same version. This event's shape is unchanged, and a queue line naming `panic`
+/// has no upload form.
 pub const SCHEMA_VERSION: u32 = 11;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
@@ -279,11 +286,13 @@ impl<'de> Deserialize<'de> for EventId {
     }
 }
 
-/// The event discriminator. A panic event joins it with `telemetry/panic-hook`.
+/// The event discriminator: a [`TelemetryEvent`] is a `conversion`, a
+/// [`panic::PanicEvent`] a `panic`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
     Conversion,
+    Panic,
 }
 
 /// The command an event describes; telemetry covers `convert` only.
@@ -485,6 +494,8 @@ impl StageTimer {
 impl StageClock for StageTimer {
     fn time<T>(&mut self, stage: StageKind, run: impl FnOnce() -> Result<T>) -> Result<T> {
         self.last = Some(stage);
+        panic::enter(EventStage::Stage(stage));
+        panic::test_panic(stage);
         let started = Instant::now();
         let out = run();
         if out.is_ok() {

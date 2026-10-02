@@ -228,8 +228,13 @@ are `docs/telemetry-strategy.md`; the lock order is on `telemetry::maintenance`.
   `NC_TELEMETRY_HELPER=0` starts no helper, so only `flush` uploads;
   `NC_TELEMETRY_DRAIN_HOLD_MS=<ms>` keeps the drain lock that long after each pass.
 - **A background helper that finds the drain lock busy exits**, so every drainer
-  re-checks the queue after releasing it (`telemetry::drain::drain`). Don't drop
-  that re-check: an event appended while the lock is held would wait for the next
-  `convert`.
+  re-checks the queue file and the panic-ready files after releasing it
+  (`telemetry::drain::drain`). Don't drop that re-check: an event written while the
+  lock is held would wait for the next `convert`.
 - **Managed collection is silent** (no stderr) and every wait in a `convert` is
   bounded: a busy lock skips the event rather than delay the run.
+- **Panic reporting** (`telemetry::panic`): under consent, a `convert`'s first panic
+  writes a `panic-ready-<id>.json` into the spool (at most 64 wait there) and starts
+  the helper, whose drain projects it. Debug
+  builds panic on demand with `NC_TEST_PANIC=<stage>` (and `NC_TEST_PANIC_GATE`);
+  its tests are `tests/telemetry_upload/panic_reporting.rs`.

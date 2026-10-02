@@ -2133,8 +2133,9 @@ shipped or retired item keeps its number and shrinks to one line.
     `hanten convert` (outcome + image + per-stage timing + run context) written
     to a local JSONL log and/or one-off file (`--telemetry` / `--telemetry-file`,
     `NC_TELEMETRY_LOG`; see §9), best-effort and byte-identical-output-preserving.
-    **Upload has shipped** (`telemetry/upload`, `hanten telemetry`, §9); panic
-    reporting (`telemetry/panic-hook`) has not.
+    **Upload has shipped** (`telemetry/upload`, `hanten telemetry`, §9), and so
+    has panic reporting (`telemetry/panic-hook`): one sanitized event for a
+    consented `convert` that panics.
     The `telemetry/strategy` spike is **complete**; its approved
     [design note](telemetry-strategy.md) fixes the remaining shape. The client
     keeps custom JSON (no embedded OTel SDK/Collector) and sends a separately

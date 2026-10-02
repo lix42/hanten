@@ -1671,7 +1671,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   `0.1.0` was already in `allowed_releases`.
 - [ ] [Run the uploader's tests on Windows](tasks/telemetry/upload-windows.md) —
   **low priority** (user, 2026-10-01). Only a compile check covers Windows today.
-- [ ] [Sanitized panic telemetry](tasks/telemetry/panic-hook.md) — publish
+- [x] [Sanitized panic telemetry](tasks/telemetry/panic-hook.md) — publish
   persistent-managed-consent panic events as isolated atomic ready files with
   only capped, normalized `nc` function/module frames; no per-run hook, shared
   append stream, payloads, source paths, or native-crash claim.

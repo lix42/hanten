@@ -18,7 +18,7 @@ use super::durable::Mode;
 use super::managed::disabled_by_env;
 use super::net::{self, Acknowledgement, Endpoint, Sent};
 use super::now_unix_millis;
-use super::spool::{self, Kind, LastError, Queue, Status};
+use super::spool::{self, Kind, LastError, PanicWriters, Queue, Status};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
@@ -55,8 +55,10 @@ fn backoff(failures: u32) -> Duration {
 /// none is ever raised to a conversion.
 ///
 /// A background helper that finds the drain lock busy exits, so every holder looks
-/// at the queue again *after* releasing it and drains once more if it refilled: an
-/// event appended while the lock was held is then taken by whoever released last.
+/// at the queue file and the panic-ready files again *after* releasing it and drains
+/// once more if either refilled: an event written while the lock was held is then
+/// taken by whoever released last. A pass consumes every ready file it saw or fails,
+/// and a failure ends the loop.
 pub fn drain(store: &Store, captured: &Consent, endpoint: &Endpoint, trigger: Trigger) -> Report {
     let mut report = Report::default();
     let queue = Queue::of(captured);
@@ -86,7 +88,10 @@ pub fn drain(store: &Store, captured: &Consent, endpoint: &Endpoint, trigger: Tr
         let refilled = durable::regular_or_missing(&queue.file)
             .ok()
             .flatten()
-            .is_some_and(|m| m.len() > 0);
+            .is_some_and(|m| m.len() > 0)
+            || queue
+                .entries()
+                .is_ok_and(|e| e.iter().any(|e| e.kind == Kind::PanicReady));
         if report.error.is_some() || report.stopped.is_some() || !refilled {
             return report;
         }
@@ -152,12 +157,13 @@ fn pass(
         };
         queue.rotate()?;
     }
-    queue.reconcile(status)?;
+    queue.reconcile(status, PanicWriters::MayRun(now))?;
     for e in queue.entries()? {
         if e.kind == Kind::Raw {
             queue.project_raw(&e.name, now_ms, status)?;
         }
     }
+    queue.project_panics(now_ms, status)?;
     queue.enforce_limits(now, status)?;
 
     let batches: Vec<String> = queue

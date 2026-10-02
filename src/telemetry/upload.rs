@@ -1,11 +1,12 @@
 //! The upload projection: the privacy-minimized, separately versioned form of a local
 //! [`TelemetryEvent`] that may cross the network (`telemetry/upload-schema`).
 //!
-//! [`to_upload_event`] makes a conversion's [`UploadEvent`]. It copies the
-//! event ID, keeps enums, and buckets or rounds every exact fact (time to a day, sizes
-//! and counts to buckets, the target triple to an OS and an architecture); the local
-//! record keeps the exact values. Nothing else — no `params_hash`, dimensions, byte
-//! sizes, film-base values or free text — has a field to land in.
+//! [`to_upload_event`] makes a conversion's [`UploadEvent`], [`to_upload_panic`] a
+//! panic's [`UploadPanic`]. Each copies the event ID, keeps enums, and buckets or
+//! rounds every exact fact (time to a day, sizes and counts to buckets, the target
+//! triple to an OS and an architecture); the local record keeps the exact values.
+//! Nothing else — no `params_hash`, dimensions, byte sizes, film-base values or free
+//! text — has a field to land in.
 //!
 //! The wire contract is the checked-in JSON Schema and corpus in
 //! `contracts/telemetry/upload-v1/` (its README states the rules), which the Worker
@@ -15,6 +16,7 @@
 
 use serde::Serialize;
 
+use super::panic::{self, PanicEvent, PanicStage};
 use super::{
     CommandKind, ErrorKind, EventId, EventName, EventStage, OutcomeStatus, SCHEMA_VERSION,
     TelemetryEvent, TimingInfo,
@@ -32,6 +34,8 @@ pub const UPLOAD_SCHEMA_VERSION: u32 = 1;
 pub enum NotUploadable {
     /// Not the local schema this build projects ([`SCHEMA_VERSION`]).
     SchemaVersion,
+    /// The `event` name is not the record's (`panic` on a conversion line).
+    EventName,
     /// `nc_version` is not a SemVer core with an optional prerelease.
     NcVersion,
     /// The destination does not state all four axes of a writable row.
@@ -41,6 +45,8 @@ pub enum NotUploadable {
     /// Status, error kind, exit code, stage and finished-frame facts break the
     /// schema's pairing rules.
     Outcome,
+    /// A panic frame is not a normalized `nc` path, or there are too many.
+    Frames,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -60,6 +66,20 @@ pub struct UploadEvent {
     pub image: Option<Image>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion: Option<Conversion>,
+}
+
+/// A panic's upload form: the envelope fields, its stage and its frames.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UploadPanic {
+    pub source_schema_version: u32,
+    pub event_id: EventId,
+    pub event_day: u16,
+    pub event_name: EventName,
+    pub nc_version: String,
+    pub platform: Platform,
+    pub command: CommandKind,
+    pub stage: PanicStage,
+    pub frames: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -156,6 +176,9 @@ pub fn to_upload_event(event: &TelemetryEvent) -> Result<UploadEvent, NotUploada
     if event.schema_version != SCHEMA_VERSION {
         return Err(NotUploadable::SchemaVersion);
     }
+    if event.event != EventName::Conversion {
+        return Err(NotUploadable::EventName);
+    }
     if !is_release_version(&event.nc_version) {
         return Err(NotUploadable::NcVersion);
     }
@@ -212,6 +235,40 @@ pub fn to_upload_event(event: &TelemetryEvent) -> Result<UploadEvent, NotUploada
             ir_present: i.ir_present,
         }),
         conversion,
+    })
+}
+
+/// Project a local panic event to its upload form. Pure, like [`to_upload_event`]. A
+/// frame the hook could not have written refuses the event, not just the frame:
+/// the file is not one of ours.
+pub fn to_upload_panic(event: &PanicEvent) -> Result<UploadPanic, NotUploadable> {
+    if event.schema_version != SCHEMA_VERSION {
+        return Err(NotUploadable::SchemaVersion);
+    }
+    if event.event != EventName::Panic {
+        return Err(NotUploadable::EventName);
+    }
+    if !is_release_version(&event.nc_version) {
+        return Err(NotUploadable::NcVersion);
+    }
+    if event.frames.len() > panic::MAX_FRAMES || !event.frames.iter().all(|f| panic::is_frame(f)) {
+        return Err(NotUploadable::Frames);
+    }
+    let (os, arch) = platform(&event.target);
+    Ok(UploadPanic {
+        source_schema_version: SCHEMA_VERSION,
+        event_id: event.event_id,
+        event_day: event_day(event.timestamp_ms),
+        event_name: EventName::Panic,
+        nc_version: event.nc_version.to_string(),
+        platform: Platform {
+            os,
+            arch,
+            cpu_bucket: cpu_bucket(event.cpu_count),
+        },
+        command: event.command,
+        stage: event.stage,
+        frames: event.frames.clone(),
     })
 }
 

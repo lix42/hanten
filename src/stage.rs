@@ -35,9 +35,9 @@ pub enum StageKind {
     IrExport,
 }
 
-#[cfg(test)]
 impl StageKind {
-    /// Every stage, in run order; `tests::all_lists_every_variant_in_order` keeps it whole.
+    /// Every stage, in run order and indexed by discriminant;
+    /// `tests::all_lists_every_variant_in_order` keeps it whole.
     pub const ALL: [StageKind; 10] = [
         StageKind::Decode,
         StageKind::FilmBase,

@@ -4146,9 +4146,11 @@ fn render_frame(
 /// Telemetry (opt-in) is emitted here, once the run's outcome is fixed: a success
 /// event, or a failure event carrying what [`ConvertAttempt`] had learned.
 fn run_convert(args: ConvertArgs) -> Result<()> {
-    // Persistent consent, captured before anything runs and held to the end. Ahead
-    // of the clock, so its bounded lock waits never count as the run's time.
-    let managed = telemetry::managed::begin();
+    // Persistent consent, captured before anything runs and held until the process
+    // ends, with the panic hook it installs. Ahead of the clock, so its bounded lock
+    // waits never count as the run's time.
+    telemetry::panic::enter(telemetry::EventStage::Setup);
+    let managed = telemetry::managed::begin().map(telemetry::managed::keep_for_process);
     let started = Instant::now();
     let log = Log::new(&args.report);
     // Read once, so the guarded and the written log path are the same.
@@ -4167,11 +4169,11 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             &attempt,
             result.as_ref().err(),
             telemetry_log.as_deref(),
-            managed.as_ref(),
+            managed,
         );
     }
     // Last, once the outcome, report and event are fixed.
-    if let Some(managed) = &managed {
+    if let Some(managed) = managed {
         managed.launch_helper();
     }
     result
@@ -4403,6 +4405,7 @@ fn convert_attempt(
     // byte-for-byte with `roll`. Operational concerns the two orchestrators layer
     // differently — report emission, `--strict` gating, telemetry — stay out here.
     attempt.phase = ConvertPhase::Frame;
+    telemetry::panic::enter(telemetry::EventStage::Preflight);
     let frame = convert_frame(
         "convert",
         &args.input,
@@ -4450,6 +4453,7 @@ fn convert_attempt(
         warnings: report.warnings.len(),
         total_ms,
     });
+    telemetry::panic::enter(telemetry::EventStage::Finalize);
 
     // Emit the report before the `--strict` gate so the machine-readable record lands
     // even when a warning then fails the run. (A hard I/O error above returns earlier —

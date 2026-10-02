@@ -571,6 +571,13 @@ fn an_off_contract_event_has_no_upload_form() {
         Err(NotUploadable::Outcome),
         "failure kind none"
     );
+    let mut e = full();
+    e.event = EventName::Panic;
+    assert_eq!(
+        to_upload_event(&e),
+        Err(NotUploadable::EventName),
+        "a conversion record named panic"
+    );
 }
 
 #[test]
@@ -735,4 +742,109 @@ fn the_local_panic_fixture_is_the_corpus_panic() {
         (&upload["platform"]["os"], &upload["platform"]["arch"]),
         (&Value::from(os), &Value::from(arch))
     );
+}
+
+fn local_panic() -> PanicEvent {
+    serde_json::from_str(&read("local/panic-ready.json")).unwrap()
+}
+
+#[test]
+fn the_local_panic_fixture_projects_to_the_corpus_panic() {
+    let upload = to_upload_panic(&local_panic()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&upload).unwrap(),
+        corpus_event("panic")
+    );
+    let wire = serde_json::to_string(&upload).unwrap();
+    assert!(
+        read("requests/valid.json").contains(&format!("\"events\":[{wire}]")),
+        "the corpus's bytes, key order included: {wire}"
+    );
+}
+
+#[test]
+fn every_panic_projection_satisfies_the_schema() {
+    let contract = Contract::load();
+    let deepest = format!("nc{}", "::a".repeat(15));
+    let frame_sets = [
+        vec![],
+        vec!["nc".to_owned()],
+        vec![deepest; panic::MAX_FRAMES],
+    ];
+    let stages = [
+        PanicStage::Unknown,
+        PanicStage::At(EventStage::Setup),
+        PanicStage::At(EventStage::Preflight),
+        PanicStage::At(EventStage::Finalize),
+    ]
+    .into_iter()
+    .chain(
+        StageKind::ALL
+            .into_iter()
+            .map(|s| PanicStage::At(EventStage::Stage(s))),
+    );
+    for stage in stages {
+        for frames in &frame_sets {
+            let event = PanicEvent {
+                stage,
+                frames: frames.clone(),
+                ..local_panic()
+            };
+            let body = serde_json::json!({
+                "upload_schema_version": UPLOAD_SCHEMA_VERSION,
+                "events": [to_upload_panic(&event).unwrap()],
+            });
+            assert!(contract.accepts_request(&body), "{stage:?} {frames:?}");
+        }
+    }
+}
+
+#[test]
+fn the_frame_grammar_is_the_schema_s() {
+    // Every frame of a valid request passes `is_frame`; every invalid `panic-frames-*`
+    // case holding a string array has a frame that fails it, or too many.
+    for (name, request) in cases("requests/valid.json", "request") {
+        for event in request["events"].as_array().unwrap() {
+            for f in event["frames"].as_array().into_iter().flatten() {
+                assert!(panic::is_frame(f.as_str().unwrap()), "{name}: {f}");
+            }
+        }
+    }
+    let mut checked = 0;
+    for (name, request) in cases("requests/invalid.json", "request") {
+        let frames = &request["events"][0]["frames"];
+        let (true, Some(frames)) = (name.starts_with("panic-frames-"), frames.as_array()) else {
+            continue;
+        };
+        let refused = frames.len() > panic::MAX_FRAMES
+            || frames
+                .iter()
+                .any(|f| f.as_str().is_none_or(|f| !panic::is_frame(f)));
+        assert!(refused, "{name}");
+        checked += 1;
+    }
+    assert!(checked >= 10, "corpus shrank");
+}
+
+#[test]
+fn an_off_contract_panic_has_no_upload_form() {
+    let mut e = local_panic();
+    e.schema_version = 10;
+    assert_eq!(to_upload_panic(&e), Err(NotUploadable::SchemaVersion));
+    let mut e = local_panic();
+    e.event = EventName::Conversion;
+    assert_eq!(to_upload_panic(&e), Err(NotUploadable::EventName));
+    let mut e = local_panic();
+    e.nc_version = "0.1.0+dirty".into();
+    assert_eq!(to_upload_panic(&e), Err(NotUploadable::NcVersion));
+    let mut e = local_panic();
+    e.frames.push("/Users/alice/src/look.rs:12".into());
+    assert_eq!(
+        to_upload_panic(&e),
+        Err(NotUploadable::Frames),
+        "a bad frame refuses the event rather than being dropped"
+    );
+    let mut e = local_panic();
+    e.frames = vec!["nc::a".into(); panic::MAX_FRAMES + 1];
+    assert_eq!(to_upload_panic(&e), Err(NotUploadable::Frames));
 }

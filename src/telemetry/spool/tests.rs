@@ -235,6 +235,10 @@ fn reprojecting_after_a_crash_rewrites_nothing() {
     let first = fs::read(queue.spool.join(&batch)).unwrap();
     // The crash: the raw file is back, as if its deletion never happened.
     fs::write(queue.spool.join(&raw), kept).unwrap();
+    assert_eq!(
+        queue.preview(NOW_MS).unwrap(),
+        [queue.read_batch(&batch).unwrap()]
+    );
     queue.project_raw(&raw, NOW_MS, &mut status).unwrap();
     let batches: Vec<_> = queue
         .entries()
@@ -256,14 +260,37 @@ fn reconcile_discards_our_temps_and_leaves_other_names() {
     fs::write(queue.spool.join(".panic-abc.tmp"), b"{").unwrap();
     fs::write(queue.spool.join("notes.txt"), b"mine").unwrap();
     let mut status = Status::default();
-    queue.reconcile(&mut status).unwrap();
+    let now = SystemTime::now();
+    queue
+        .reconcile(&mut status, PanicWriters::MayRun(now))
+        .unwrap();
     assert_eq!(status.discarded_temps, 1);
     assert!(!queue.spool.join(".batch-x-0000.json.abc.tmp").exists());
     assert!(
         queue.spool.join(".panic-abc.tmp").exists(),
-        "the panic hook's"
+        "a live hook may be writing it"
     );
     assert!(queue.spool.join("notes.txt").exists());
+    queue
+        .reconcile(&mut status, PanicWriters::MayRun(now + PANIC_TEMP_AGE))
+        .unwrap();
+    assert!(!queue.spool.join(".panic-abc.tmp").exists(), "stale");
+    assert_eq!(status.discarded_temps, 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn with_conversions_excluded_every_panic_temp_is_stale() {
+    let dir = scratch("reconcile-excluded");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    fs::write(queue.spool.join(".panic-abc.tmp"), b"{").unwrap();
+    let mut status = Status::default();
+    queue
+        .reconcile(&mut status, PanicWriters::Excluded)
+        .unwrap();
+    assert!(!queue.spool.join(".panic-abc.tmp").exists());
+    assert!(queue.holdings().unwrap().is_empty());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -483,5 +510,140 @@ fn an_unreadable_raw_file_is_kept_not_dropped() {
     assert!(queue.project_raw(&raw, NOW_MS, &mut status).is_err());
     assert!(path.exists());
     assert_eq!(status.dropped_over_cap, 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A panic-ready file's bytes, as the hook writes them.
+fn panic_bytes(timestamp_ms: u64) -> Vec<u8> {
+    let event = panic::build(
+        EventId::random().unwrap(),
+        timestamp_ms,
+        Some(8),
+        panic::PanicStage::Unknown,
+        vec!["nc::pipeline::look::apply".into(), "nc::main".into()],
+    );
+    panic::ready_bytes(&event).unwrap()
+}
+
+fn write_ready(queue: &Queue, bytes: &[u8]) -> String {
+    let name = format!("panic-ready-{}.json", durable::random_hex().unwrap());
+    fs::write(queue.spool.join(&name), bytes).unwrap();
+    name
+}
+
+fn panic_batches(queue: &Queue) -> Vec<String> {
+    queue
+        .entries()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.name.starts_with(PANIC_BATCH_PREFIX))
+        .map(|e| queue.read_batch(&e.name).unwrap())
+        .collect()
+}
+
+#[test]
+fn panic_ready_files_project_into_panic_batches() {
+    let dir = scratch("panics");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    let ready: Vec<Vec<u8>> = (0..3).map(|_| panic_bytes(NOW_MS)).collect();
+    for bytes in &ready {
+        write_ready(&queue, bytes);
+    }
+    let mut status = Status::default();
+    queue.project_panics(NOW_MS, &mut status).unwrap();
+    assert!(!kinds(&queue).contains(&Kind::PanicReady));
+    let batches = panic_batches(&queue);
+    assert_eq!(batches.len(), 1);
+    let mut want: Vec<String> = ready
+        .iter()
+        .map(|b| {
+            let local: PanicEvent = serde_json::from_slice(b).unwrap();
+            local.event_id.hex()
+        })
+        .collect();
+    let mut got = batch_ids(batches[0].as_bytes()).unwrap();
+    want.sort();
+    got.sort();
+    assert_eq!(got, want);
+    assert_eq!(status, Status::default(), "nothing dropped or quarantined");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bad_panic_files_are_dropped_or_quarantined_never_batched() {
+    let dir = scratch("bad-panics");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    let good: PanicEvent = serde_json::from_slice(&panic_bytes(NOW_MS)).unwrap();
+    let with = |f: &dyn Fn(&mut serde_json::Value)| {
+        let mut v = serde_json::to_value(&good).unwrap();
+        f(&mut v);
+        serde_json::to_vec(&v).unwrap()
+    };
+    write_ready(&queue, b"{\"schema_version\":11,\"event\":\"pan");
+    write_ready(&queue, &with(&|v| v["schema_version"] = 10.into()));
+    write_ready(&queue, &with(&|v| v["schema_version"] = 99.into()));
+    write_ready(
+        &queue,
+        &with(&|v| v["frames"] = serde_json::json!(["/Users/alice"])),
+    );
+    write_ready(
+        &queue,
+        &with(&|v| v["message"] = "boom /Users/alice".into()),
+    );
+    write_ready(&queue, &panic_bytes(NOW_MS - MAX_AGE_MS - 1));
+    write_ready(&queue, &vec![b' '; panic::MAX_BYTES + 1]);
+    let mut status = Status::default();
+    queue.project_panics(NOW_MS, &mut status).unwrap();
+    assert!(panic_batches(&queue).is_empty());
+    assert!(!kinds(&queue).contains(&Kind::PanicReady));
+    assert_eq!(
+        (
+            status.quarantined,
+            status.dropped_other_schema,
+            status.expired,
+            status.dropped_over_cap
+        ),
+        (4, 1, 1, 1),
+        "malformed, newer, bad frame and unknown key; older; expired; oversized"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reprojecting_panics_after_a_crash_sends_each_once() {
+    let dir = scratch("panic-crash");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    let bytes = panic_bytes(NOW_MS);
+    let name = write_ready(&queue, &bytes);
+    queue
+        .project_panics(NOW_MS, &mut Status::default())
+        .unwrap();
+    // A crash before the delete: the ready file is back beside its batch.
+    fs::write(queue.spool.join(&name), &bytes).unwrap();
+    assert_eq!(queue.preview(NOW_MS).unwrap(), panic_batches(&queue));
+    queue
+        .project_panics(NOW_MS, &mut Status::default())
+        .unwrap();
+    assert_eq!(panic_batches(&queue).len(), 1);
+    assert!(!kinds(&queue).contains(&Kind::PanicReady));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn preview_includes_what_panic_projection_writes() {
+    let dir = scratch("panic-preview");
+    let queue = queue_in(&dir);
+    queue.skeleton().unwrap();
+    write_ready(&queue, &panic_bytes(NOW_MS));
+    let before = queue.preview(NOW_MS).unwrap();
+    assert_eq!(before.len(), 1);
+    queue
+        .project_panics(NOW_MS, &mut Status::default())
+        .unwrap();
+    assert_eq!(panic_batches(&queue), before);
+    assert_eq!(queue.preview(NOW_MS).unwrap(), before);
     let _ = fs::remove_dir_all(&dir);
 }
