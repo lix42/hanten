@@ -12,10 +12,10 @@
 //!   **lowest** index — the one the sequential loop produced — and stops the work
 //!   to its right.
 //! - There is no floating-point reduction here. A sum must run in a **fixed
-//!   order** to be reproducible; today `hdr::render_linear`'s MaxFALL sum is one
-//!   sequential pass over the mapped buffer. Fixed index bands with a sequential
-//!   combine would also be reproducible, but they associate the sum differently
-//!   and so can move a rounded nit value — a byte change to `clli`, not a
+//!   order** to be reproducible; today `hdr::measure_content_light`'s MaxFALL sum
+//!   is one sequential pass over the mapped buffer. Fixed index bands with a
+//!   sequential combine would also be reproducible, but they associate the sum
+//!   differently and so can move a reported nit value — an output change, not a
 //!   refactor. Integer counts, `min` and `max` are exact and may be folded in
 //!   parallel wherever they occur.
 //!

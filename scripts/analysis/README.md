@@ -560,7 +560,10 @@ profile parsed by `nctool.icc`, BT.2100 by `nctool.rec2100`, ISO 21496-1 and MPF
 Every case also gets a **metadata** check (the TIFF's layout; the profile's primaries,
 white, TRC and `cicp` against the standard; the gain map's MPF, ISO fields and window
 against the renditions) and a **determinism** check (two runs, byte-identical). A file
-that cannot be read at all is a failed `decode` check, not a crash. The gain map is
+that cannot be read at all is a failed `decode` check, not a crash. An HDR TIFF also
+gets a **content_light** check: its report's `max_cll_nits` / `max_fall_nits` against
+CTA-861.3 on the canonical buffer (the peak and mean of each pixel's largest channel,
+within the half-nit rounding), and their absence for HLG. The gain map is
 gated at the map's resolution because the map is half resolution: no full-resolution
 reconstruction matches the HDR rendition pixel for pixel, so that error is reported
 (`reconstruction`), not gated.

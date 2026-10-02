@@ -1253,6 +1253,13 @@ What other epics need to know about `analysis`:
   timeouts were a drain hand-off race in the uploader, fixed by
   `telemetry/upload-live-check` (see `progress/telemetry.md`).
 
+### 2026-10-01 — cross-reference: the content-light finding is fixed
+
+- The "found, not fixed" MaxCLL / MaxFALL finding above was fixed by
+  `output/content-light-levels`: both are now CTA-861.3's per-pixel max(R, G, B), and
+  the harness gained a `content_light` check on every HDR TIFF case (see that task's
+  section in `progress/output.md`).
+
 
 ## viewer-interoperability
 

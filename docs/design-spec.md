@@ -1696,7 +1696,9 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   `1000/203 ≈ 4.926108`. Because the ICC PCS stops at the media white, no profile can
   state the luminance mapping, so the report's `hdr_linear_tiff` block is
   authoritative for reference white, peak, headroom and the frame's measured
-  content-light levels. The profile carries **no** `cicpTag`: H.273's full-range flag
+  content-light levels — CTA-861.3's MaxCLL and MaxFALL, the peak and frame mean of
+  each pixel's largest linear component in the stored primaries (so they differ by
+  gamut), never luminance. The profile carries **no** `cicpTag`: H.273's full-range flag
   describes a bounded code range, and these samples exceed 1.0 by design. It is not the
   film master (linear ACEScg *before* any rendering).
 - **PQ / HLG TIFF** — the Rec.2100 signal as **full-range 16-bit TIFF code
@@ -1712,7 +1714,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   extended-range A2B (`lutAtoBType`) whose PCS is `Y = L / 203`, unclipped to ≈49.26;
   the HLG profile is scene-referred, since HLG's OOTF is not per-channel separable, and
   the display-referred contract (1000-nit peak, zero black, system gamma 1.2) lives in
-  the report's `hdr_coded_tiff` block.
+  the report's `hdr_coded_tiff` block, which carries the content-light levels for PQ
+  only.
 - **Film master** — the fixed decode's linear ACEScg, unclamped 32-bit float, with the
   ACEScg profile and no output transform (§6).
 

@@ -166,8 +166,10 @@ What other epics need to know about `output`:
   non-negative, reference-white-relative BT.2020 pixels; `encode_transfer` consumes
   them in place and returns opaque Rec.2100 PQ or HLG pixels plus the full-range
   CICP 9/16/9 or 9/18/9 contract. HLG pins the 1000-nit, zero-black reference OOTF
-  with system gamma 1.2. `clli` is **measured** per frame (MaxCLL/MaxFALL from the
-  display-linear pixels), never the 1000/203 policy constants.
+  with system gamma 1.2. MaxCLL/MaxFALL are **measured** per frame, never the
+  1000/203 policy constants, and since 2026-10-01 (`content-light-levels`) as CTA-861.3
+  defines them: each pixel's largest channel in the stored primaries, not luminance, so
+  they differ by gamut. The SDR-range warning triggers on that MaxCLL.
 - **Gain-map math is pinned:** per-channel `(HDR + offset_hdr) / (min(SDR, 1) +
   offset_sdr)` in common linear Display P3 normalized by 203 cd/m². Extrema come
   from actual per-pixel values over independently tone-mapped renditions. No
@@ -1800,7 +1802,7 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## content-light-levels
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-01
 
 - 2026-10-01: filed from `analysis/display-acceptance-harness`, whose AVIF `clli` oracle
@@ -1808,3 +1810,29 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   `hdr::measure_content_light` — MaxCLL 391 vs 578, MaxFALL 51 vs 68 cd/m² on the scan
   fixture. The AVIF box went with `output/drop-avif`; the measure still feeds the HDR
   TIFF reports and the SDR-range warning.
+- 2026-10-01: **done.** `measure_content_light` takes each pixel's largest channel (its
+  `luma` argument is gone); MaxFALL stays one sequential `f64` pass. Decided with the
+  user: the SDR-range warning keeps MaxCLL as its trigger (an SDR container is bounded
+  per channel, so a saturated channel above white is above-SDR content even below white
+  in luminance — this closes `sdr-preset-followups`' misfire finding); `max_cll_nits` /
+  `max_fall_nits` keep their names. The warning now reads "no pixel's brightest channel
+  exceeds N nits" — not "MaxCLL", which the HLG report omits — and its verdict can
+  differ by gamut, as an SDR container of each gamut would.
+  - **The values now depend on the gamut**, since CTA-861.3 measures in the stored
+    primaries. Scan fixture (`hdri-64bit.tif`, benchmark args), MaxCLL / MaxFALL:
+    BT.2020 391/51 → 578/68, Display P3 → 582/68, Adobe RGB → 595/69, sRGB → 606/70
+    (luminance gave 391 in every gamut, gamut mapping being luminance-preserving).
+    Chart: 586/54 → 586/70–73.
+  - **Pinned twice.** `hdr.rs` tests a red at 2× white (406 nits, ~122 of luminance)
+    and a two-pixel MaxFALL. `nctool acceptance` gained a `content_light` check on every
+    HDR TIFF: the report against max(R, G, B) × 203 of the pre-encode `hdr-linear`
+    buffer within ½ nit, and absence for HLG. Against the old binary it failed exactly
+    the 12 non-HLG HDR TIFF cases and nothing else; against the new one all pass.
+  - **No byte moved:** all 30 acceptance cases' output and pre-encode hashes are
+    identical before and after. A per-machine golden gains a `content_light` summary
+    key, so an existing one mismatches once (`--golden G --write-golden G`).
+  - `using-nc.md` §8 re-run: the PQ example now shows the fields; its `chain.gain_map`
+    example had already gone stale before this change (max 1.91 → 3.07) and was
+    corrected. `telemetry_upload`'s `a_refused_convert_is_a_parse_failure_event`
+    timeouts seen here were the uploader's drain race, fixed by
+    `telemetry/upload-live-check` (#234); green after rebasing onto it.

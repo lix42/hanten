@@ -79,7 +79,9 @@ independent of nc:
   each channel differs by at most 1 code value when re-quantized to 16 bits.
 - HDR float TIFF: bit-identical to the canonical buffer (the encoder writes it
   verbatim). PQ/HLG TIFF: BT.2100 of the canonical buffer in binary64, quantized to 16
-  bits, within 1 code.
+  bits, within 1 code. Added by `output/content-light-levels`: each HDR TIFF report's
+  `max_cll_nits` / `max_fall_nits` within half a nit of CTA-861.3 on the canonical
+  buffer, and absent for HLG.
 - Lossy 8-bit JPEG (the gain-map base): compare the independent decode with the
   canonical encoded base using pinned max/RMS error, structural, neutral-ramp and
   saturated-patch bounds. A universal one-code bound is not valid for JPEG. Record the
