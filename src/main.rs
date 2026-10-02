@@ -8,6 +8,7 @@
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 mod algo;
+mod allocator;
 mod cli;
 mod destination;
 // Test-only: the digitized stock tables are the evidence for the fixed decode's
@@ -25,6 +26,9 @@ mod types;
 mod version;
 
 use std::process::ExitCode;
+
+#[global_allocator]
+static GLOBAL: allocator::Allocator = allocator::Allocator;
 
 fn main() -> ExitCode {
     match cli::run() {

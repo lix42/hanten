@@ -66,10 +66,10 @@ What other epics need to know about `io`:
   `UltraHdrV1` / `GainMapHdr`, `HdrAvif`, `HdrLinearTiff`, `HdrCodedTiff` and
   `SdrTiff` — the last four peak at **render**. Which phase peaks is per profile;
   read it off `memory`'s `which_phase_peaks_is_per_profile_and_measured_not_assumed`.
-  The `12·s` sampling term rides into every later phase because freed pages stay
-  resident. Anything that adds a full-frame buffer to a stage **must** update the
-  model by hand — no test compares it against the code — or the gate silently
-  under-approves. A new preset adds and calibrates its own profile across **two**
+  The `12·s` sampling term rides into every later phase (the retention rule — an
+  over-count since `crate::allocator`, kept as the safe side). Anything that adds a
+  full-frame buffer to a stage **must** update the model by hand — no test compares
+  it against the code — or the gate silently under-approves. A new preset adds and calibrates its own profile across **two**
   frame sizes before activation.
 - **`color::to_output` consumes and returns the image** — it transforms the very
   buffers it was handed. Real peak on the 74.65 MP scan: 3.808 GB → 3.146 GB,
@@ -579,12 +579,57 @@ pre-change binary: byte-identical primary, sidecar differing only in
 
 ## multi-frame-memory-growth
 
-**Status:** not started
-**Updated:** 2026-09-24
+**Status:** in progress
+**Updated:** 2026-10-01
 
 - 2026-09-24: filed from `nf-scene-correction/roll-white-balance`, which measured it while
   calibrating `RunProfile::MeasureRoll`. One Gold200 frame peaks at 0.61 GB; 35 frames at
   2.3–2.8 GB; the same frame repeated stays flat, and `roll --new-flow` grows the same way.
   Frames of one roll differ by a few pixels, and the allocator cannot reuse a freed buffer
   for a slightly larger one. macOS only so far.
+- 2026-10-01: **cause found, fixed in the allocator** (user chose the remedy over buffer
+  reuse and a roll-level gate). Measured on the whole 2026-09-18-Gold200 roll (35
+  frames, 4842–4973 x 3271–3392), release build, `/usr/bin/time -l`, macOS/aarch64:
 
+  | run | before | after |
+  |---|---|---|
+  | `measure-roll`, 1 / 5 / 35 frames | 0.61 / 1.55 / 3.36 GB | 0.54 / 0.56 / 0.60 GB |
+  | `roll`, 1 / 5 / 35 frames | 0.70 / 1.50 / 2.70 GB | 0.64 / 0.64 / 0.65 GB |
+  | `convert`, one 16.55 MP frame | 0.707 GB | 0.641 GB, byte-identical output |
+  | `convert --base-region` full frame, same frame | 0.840 GB | 0.641 GB |
+
+  - **Diagnosis.** Order decides it: frame 1774 then the slightly larger 1775 peaks at
+    1.07 GB, the reverse at 0.61 GB. Between frames malloc reports 8–33 MB live while the
+    resident set stays at the high-water mark; `vmmap` on the paused process shows it as
+    `MALLOC_LARGE (empty)`, 1.0 GB resident and dirty in 12 regions — freed full-frame
+    blocks macOS malloc caches for reuse. `MallocLargeCache=0` (undocumented, diagnostic
+    only) flattens it, which confirmed the mechanism.
+  - **What did not work: `malloc_zone_pressure_relief(NULL, 0)` between frames** — the
+    remedy first agreed. It reported 0 bytes released and the peaks did not move.
+  - **The fix: `src/allocator.rs`, a `#[global_allocator]`** that sends blocks of 8 MiB
+    or more (alignment ≤ 4 KiB) to `mmap`/`munmap` and everything else to `System`, on
+    every unix. It is what glibc does above its mmap threshold, so on Linux it should
+    change nothing in kind; that is for CI to confirm.
+  - **Cost.** System time +1.3–1.7 s over 35 frames (fresh pages fault in instead of
+    being reused). `measure-roll` shows it: 2.2 s → 3.4 s wall over 35 frames.
+    `roll` (11–14 s either way) and `convert` (0.37 s either way) are within run-to-run
+    noise; user time unchanged.
+  - **The gate is unchanged.** A run now peaks at its largest frame, which that frame's
+    preflight approved. The model's retention terms (film-base sample, IR export summed
+    with quantize) were calibrated on the old allocator and now over-count, kept as the
+    safe side. Re-fitting them, and the calibration table, is a separate decision. What
+    still accumulates is `measure-roll`'s white-balance pool (`roll_white::pool_frame`,
+    2^17 samples x 12 B ≈ 1.5 MB a frame), inside the allowance for any real roll.
+  - **Guard: `tests/multi_frame_memory.rs`**: 8 synthetic HDRi frames, 2600x1760 growing
+    by 12x4 px, through `measure-roll` and `roll`, each run's own peak read with `wait4`.
+    It must stay under the largest frame's `memory.estimated_peak_bytes` and within
+    64 MiB of that frame run alone. Locally (debug build, ~7 s): `measure-roll` 0.185 GB
+    against 0.311 estimated and 0.165 alone, `roll` 0.215 / 0.344 / 0.195; with the
+    allocator unregistered it fails at 1.11 GB.
+  - **Review round (`/code-review`).** A direct-to-direct `realloc` copied every time;
+    it now shrinks in place (unmapping the tail pages), keeps growth within its last
+    page, and grows with `mremap` on Linux — macOS, without `mremap`, still copies on
+    growth. Declined: moving the HDRi writer into a shared `tests/common`, which each
+    test binary would compile with its unused helpers under `dead_code`.
+  - **`io/streaming-tiled-io`:** tiles of a fixed size would not have hit this; tiles
+    under 8 MiB go through malloc, which reuses same-size blocks.

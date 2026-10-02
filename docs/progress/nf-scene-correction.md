@@ -259,3 +259,7 @@ wants it, it is a look control.
   `--leader` file among the inputs is refused, since its unguarded edges would pool.
   (4) The retired-mode migration message fires only on `gray-world` / `percentile`; any
   other string is left to serde's "unknown variant".
+- 2026-10-01 (cross-reference): the multi-frame memory growth recorded above is **fixed**
+  by `io/multi-frame-memory-growth` — macOS malloc's cache of freed large blocks, not the
+  per-frame model; `src/allocator.rs` maps big blocks directly. 35 Gold200 frames now
+  peak at 0.60 GB (`measure-roll`) and 0.65 GB (`roll`). Numbers in `docs/progress/io.md`.

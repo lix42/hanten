@@ -50,22 +50,17 @@
 //!   `render` counts two. `--export-film-rgb` writes the decode's buffer verbatim
 //!   before the 3×3, and `--export-pre-encode` the buffers the render already holds,
 //!   so neither adds a term.
-//! - **Freed is not gone: one retention rule, applied everywhere.** Peak RSS is a
-//!   high-water mark and the allocator does not return freed pages to the OS, so a
-//!   buffer freed mid-run still occupies the process at every later peak. Hence
-//!   the film-base sample is **added into** the render and encode phases rather
-//!   than competing with them, and the IR export buffer is summed with the
-//!   quantize buffer it precedes. The one place the rule does *not* apply is
-//!   `decode`'s `u16` read buffer, a genuine alternative (`max`): it is freed and
-//!   the IR buffers are allocated into the space it just vacated, within one stage.
-//!
-//!   Retention is measurement-driven, not decorative. A full-frame `--base-region`
-//!   `convert` measures **3.743 GB**, which 50 B/px (32 render + 6 quantize + 12
-//!   retained sample) reproduces to +0.3%; modelling the sample as a *competing*
-//!   phase instead put that run at 38 B/px and **under-estimated it by 10.2%**.
-//!   The IR-export sum is the conservative end of the same rule — there the
-//!   calibration table shows `convert` and `convert --export-ir` peaking at the
-//!   *same* RSS, so summing over-counts by 2 B/px, which this module prefers.
+//! - **Retention: a freed buffer is still counted at every later peak.** The film-base
+//!   sample is **added into** the render and encode phases rather than competing with
+//!   them, and the IR export buffer is summed with the quantize buffer it precedes.
+//!   This was macOS malloc's behaviour: it kept freed large blocks resident, and a
+//!   full-frame `--base-region` `convert` measured **3.743 GB**, which 50 B/px (32
+//!   render + 6 quantize + 12 retained sample) reproduced to +0.3% where a competing
+//!   phase under-estimated it by 10.2%. [`crate::allocator`] now unmaps blocks of 8 MiB
+//!   or more on free, so a full-frame sample leaves before render (measured); smaller
+//!   blocks and lcms2's own still go through malloc, so the terms are kept — an
+//!   over-count for big samples, the safe side. `decode`'s `u16` read buffer is a genuine alternative (`max`): it is freed
+//!   and the IR buffers are allocated into the space it vacated, within one stage.
 //! - **`film_base` *does* allocate a full-frame-scale buffer.** It samples
 //!   rectangles, but `film_base::region_channels` materializes each one
 //!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — live
@@ -168,13 +163,14 @@
 //!
 //! The two `measure-roll` rows (2026-09-23) calibrate [`RunProfile::MeasureRoll`]: its
 //! enumerated buffers are 0.87x of measured at both sizes, so the allowance covers
-//! real overhead. **The model is per frame, and a multi-frame run outgrows it** — on
-//! `roll` as much as here. Frames of one roll differ by a few pixels, the allocator
-//! cannot reuse a freed buffer for a slightly larger one, and peak RSS climbs: 35
-//! frames of one roll measured 2.78 GB against 0.74 GB for one, while the *same* frame
-//! five times stays flat (0.62 GB), and a five-frame `roll` grows the same way (0.70 →
-//! 1.30 GB). The gate still judges each frame alone
-//! (`io/multi-frame-memory-growth`).
+//! real overhead.
+//!
+//! **The model is per frame, and so is the gate.** A multi-frame run peaks near its
+//! largest frame only because [`crate::allocator`] returns each frame's big buffers
+//! to the OS; `tests/multi_frame_memory.rs` holds it to that, and the before/after
+//! numbers are in `docs/progress/io.md` (`multi-frame-memory-growth`). The rows above
+//! predate the allocator, which lowered single-frame peaks too.
+//!
 //! Small frames run looser (+39.4% for the u16 18.66 MP run) because
 //! [`ALLOWANCE_FIXED_BYTES`] stops being negligible — harmless, since they are nowhere
 //! near any plausible budget. The `estimate --grid` and auto-interior rows measured
@@ -366,10 +362,10 @@ pub enum RunProfile {
     },
     /// Into the **gain-map JPEG**: the decoded image, then `chain::render_pair` — the
     /// chain's buffer (image-shaped: the decode's cloned IR plane is dropped only as
-    /// the pair starts, and freed pages stay resident) and the RGB-only graded copy it
-    /// splits off — then the full-resolution f32 gains. The HDR rendition and the gains
-    /// are dropped as soon as the next buffer is built from them, but freed pages stay
-    /// resident, so they are summed, not competed. Encode adds the u8 base, the
+    /// the pair starts) and the RGB-only graded copy it splits off — then the
+    /// full-resolution f32 gains. The HDR rendition and the gains are dropped as soon as
+    /// the next buffer is built from them, but are summed, not competed (the module
+    /// doc's retention rule). Encode adds the u8 base, the
     /// half-resolution map and both JPEGs, the JPEGs at a fitted size. Measured (the
     /// module doc's calibration table).
     GainMapJpeg {
@@ -714,11 +710,8 @@ pub fn estimate_peak(
             }
             OutDepth::F32 => 0,
         };
-        // `sampled` is added to both later phases, not competed against them:
-        // the film-base vectors are freed before the render, but freed pages
-        // stay resident, so they still occupy the process at every later peak.
-        // This is the same retention rule the encode buffers are summed under —
-        // one rule, applied consistently, rather than two ad-hoc choices.
+        // `sampled` is added to both later phases, not competed against them: the
+        // module doc's retention rule, the one the encode buffers are summed under.
         // Measured: a full-frame `--base-region` convert peaks at 50 B/px
         // (32 render + 6 quantize + 12 sampled), and treating the sample as a
         // *competing* phase instead under-estimated that run by 10%.
@@ -1098,8 +1091,8 @@ mod tests {
         assert_eq!(whole.accounted_bytes, whole.film_base_bytes);
 
         // …and it does NOT leave `convert` alone. The sample is freed before the
-        // render, but freed pages stay resident, so it is retained into the later
-        // phases: render 32 + 12, encode 38 + 12 = 50 B/px. Pinned because the
+        // render, but the retention rule keeps it in the later phases: render
+        // 32 + 12, encode 38 + 12 = 50 B/px. Pinned because the
         // first version of this model let the phase merely *compete* with encode
         // and under-estimated a real full-frame-region convert by 10.2%.
         let convert = estimate_peak(&s, convert_u16(), SamplePlan::rect(px)).unwrap();
