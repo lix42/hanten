@@ -13,7 +13,7 @@ the lift is brighter and whether that is better is opinion, not fact.
 
 ## Design
 
-Known:
+Known when filed:
 
 - Today both lifts are turned off together, at render by `--frame-lift off` /
   `roll.frame_lift` and at measurement by `measure-roll --no-frame-lift`;
@@ -22,17 +22,26 @@ Known:
 - Both lifts are on by default. The flat-frame guard (`roll_white::FLAT_SPREAD_STOPS`)
   keeps both off a single-surface frame.
 
-Open:
+Decided 2026-10-02 (user):
 
-- **Where the line falls** for each adjustment, the white rule's cap and floor included.
-- **Whether taste adjustments need one switch or one each.** At render, each lift could be
-  turned off alone, or there could be a single "taste" switch.
-- **What a GUI needs**: a preview with and without each taste adjustment, from a recipe
-  that keeps the measured values while they are off (as `roll.frame_lift` already does).
-- **How the report and recipe mark a taste value**, so it reads as a choice.
-- **Carried over from `thin-frame-lift`** (closed 2026-10-01 without it): a confirmation
-  round on a roll not used to choose its thresholds, and a noise measurement at its
-  slopes. Its round 2 could not be called on taste, which is what this task frames.
+- **The line**: a correction restores what the roll recorded, on every frame alike (white
+  balance, exposure, the white); a guard bounds a measurement or keeps a preference off
+  (the white's cap, floor and clamp; the flat frame); a preference reacts to one frame
+  (both lifts). Design-spec §6, "Corrections and preferences".
+- **One switch each**, not one "taste" switch: `--small-lift` / `roll.small_lift` and
+  `measure-roll --no-small-lift` (small), and `--thin-lift` / `roll.thin_lift` and
+  `--no-thin-lift` (thin). The recipe stores a thin frame's lift as its own pair
+  (`roll.thin_slope`, `roll.thin_exposure`) beside the small lift, so thin off renders the
+  small one.
+- **The old switch is retired, not reused** (user): `--frame-lift`, `roll.frame_lift` and
+  `--no-frame-lift` turned both lifts off, so keeping the name for the small lift alone
+  would change what an old command renders. Each is refused with a migration to both
+  switches; a `null` key is dropped.
+- **`default` applies the preferences that won review**, each marked and switchable; the
+  spec's "no taste" was amended, not the defaults.
+- **Marking**: `chain.roll.taste_applied`, and `"kind": "taste"` on `measure-roll`'s two
+  lift sections.
+- **Carried over** to `thin-lift-confirmation`: the independent roll exists now (09-29).
 
 ## How to Verify
 

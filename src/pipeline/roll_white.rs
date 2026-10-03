@@ -59,7 +59,7 @@
 //! cap and move the roll's slope by a third.
 //!
 //! **A frame's lift** (`nf-calibration/frame-level-trim`) is a small per-frame exposure on
-//! top of the roll's, stored as a delta in `roll.frames` ([`frame_lift`]). It is keyed on
+//! top of the roll's, stored as a delta in `roll.frames` ([`small_lift`]). It is keyed on
 //! where the frame's white renders after the roll's exposure: a low-key frame is lifted, a
 //! bright one is not, and nothing is darkened. Not on the white alone, which re-does the
 //! roll's exposure on a thin roll (evidence: `docs/progress/nf-calibration.md`,
@@ -71,10 +71,10 @@
 //! **A thin frame's lift** (`nf-calibration/thin-frame-lift`, on with an opt-out: taste, not
 //! quality) is a bounded fine-tune, not a placement: a thin frame need not hold a white, so
 //! nothing is solved to reach diffuse white. It raises the frame's white by about
-//! [`THIN_LIFT_STOPS`] with the film base held about where the roll renders it — a steeper
-//! slope ([`thin_lift`], which says why "about") and the exposure that keeps the base still
-//! — in place of the small lift. No statistic separates an underexposed frame from a night
-//! scene; review preferred the lift on both.
+//! [`THIN_LIFT_STOPS`] with the film base held about where its small lift renders it — a
+//! steeper slope ([`thin_lift`], which says why "about") and the exposure that keeps the base
+//! still — in place of the small lift. No statistic separates an underexposed frame from a
+//! night scene; review preferred the lift on both.
 
 use serde::Serialize;
 
@@ -170,7 +170,8 @@ pub const THIN_BASE_SHARE: f32 = 0.3;
 pub const NEAR_BASE_STOPS: f32 = 1.0;
 
 /// How far a thin-frame lift raises the frame's white, in rendered stops, with the film
-/// base held about where the roll renders it ([`thin_lift`]). Chosen by review over 0.5.
+/// base held about where the frame's small lift renders it ([`thin_lift`]). Chosen by
+/// review over 0.5.
 pub const THIN_LIFT_STOPS: f32 = 1.0;
 
 /// The steepest slope a thin-frame lift may reach — grain rises with it. Review passed 2.4
@@ -383,7 +384,7 @@ pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
 
 /// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`frame_white`], scene
 /// stops) and the roll's exposure as applied, so the key is where the white renders.
-pub fn frame_lift(white_stops: f32, roll_ev: f32) -> f32 {
+pub fn small_lift(white_stops: f32, roll_ev: f32) -> f32 {
     let rendered = white_stops + roll_ev;
     let t = (LIFT_NONE_STOPS - rendered) / (LIFT_NONE_STOPS - LIFT_FULL_STOPS);
     LIFT_BOUND_EV * t.clamp(0.0, 1.0)
@@ -471,10 +472,10 @@ pub fn thin(white_stops: f32, roll_ev: f32, tones: &FrameTones) -> bool {
 /// A thin frame's own slope and exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ThinLift {
-    /// The frame's slope: `roll.frame_slope`.
+    /// The frame's slope: `roll.thin_slope`.
     pub slope: f32,
-    /// Its exposure in EV, a delta on the roll's: `roll.frame_exposure`, in place of the
-    /// frame's [`frame_lift`].
+    /// Its exposure in EV, a delta on the roll's: `roll.thin_exposure`, in place of the
+    /// frame's [`small_lift`].
     pub exposure: f32,
     /// How far its white rises, in rendered stops, by [`thin_lift`]'s measure:
     /// [`THIN_LIFT_STOPS`] unless bounded.
@@ -483,9 +484,9 @@ pub struct ThinLift {
     pub bounded: bool,
 }
 
-/// Raise a thin frame's white [`THIN_LIFT_STOPS`] with the film base held where the roll
-/// renders it: from slope `k0` and total exposure `e0` (the roll's plus the frame's
-/// [`frame_lift`]) to slope `k0 + Δ/(white − base)`, capped at [`THIN_SLOPE_BOUND`], and
+/// Raise a thin frame's white about [`THIN_LIFT_STOPS`] with the film base held about where
+/// its small lift renders it: from slope `k0` and total exposure `e0` (the roll's plus the frame's
+/// [`small_lift`]) to slope `k0 + Δ/(white − base)`, capped at [`THIN_SLOPE_BOUND`], and
 /// the exposure that keeps `k·(base + e)` where it was. `None` when no lift is possible:
 /// the white is not above the base, `k0` is already at the bound, or the exposure would
 /// fall under `e0` (a base above mid-grey), darkening the mid-tones the small lift raised.
@@ -719,16 +720,16 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_lift_follows_its_rendered_white_and_never_darkens() {
+    fn a_small_lift_follows_its_rendered_white_and_never_darkens() {
         // Keyed on white + roll exposure: the same white lifts less on a lifted roll.
-        assert_eq!(frame_lift(-1.5, 0.0), LIFT_BOUND_EV);
-        assert_eq!(frame_lift(LIFT_FULL_STOPS - 1.0, 1.0), LIFT_BOUND_EV);
-        assert_eq!(frame_lift(LIFT_NONE_STOPS, 0.0), 0.0);
-        assert_eq!(frame_lift(4.0, 1.5), 0.0);
-        let mid = frame_lift((LIFT_FULL_STOPS + LIFT_NONE_STOPS) / 2.0 - 0.5, 0.5);
+        assert_eq!(small_lift(-1.5, 0.0), LIFT_BOUND_EV);
+        assert_eq!(small_lift(LIFT_FULL_STOPS - 1.0, 1.0), LIFT_BOUND_EV);
+        assert_eq!(small_lift(LIFT_NONE_STOPS, 0.0), 0.0);
+        assert_eq!(small_lift(4.0, 1.5), 0.0);
+        let mid = small_lift((LIFT_FULL_STOPS + LIFT_NONE_STOPS) / 2.0 - 0.5, 0.5);
         assert!((mid - LIFT_BOUND_EV / 2.0).abs() < 1e-6, "{mid}");
         // A night frame (white far under) is held at the bound.
-        assert_eq!(frame_lift(-8.0, 2.0), LIFT_BOUND_EV);
+        assert_eq!(small_lift(-8.0, 2.0), LIFT_BOUND_EV);
     }
 
     #[test]

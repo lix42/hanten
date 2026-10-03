@@ -221,20 +221,25 @@ pub struct RollSection {
     /// The roll's exposure in EV, a neutral gain added to `scene_correction.exposure`
     /// (`roll_white::roll_exposure`).
     pub exposure: Option<f32>,
-    /// This frame's own exposure in EV, added to `exposure` while [`Self::frame_lift`] is
-    /// on — where [`Recipe::for_frame`] moves a `frames` entry's `exposure`.
+    /// This frame's small lift in EV (`roll_white::small_lift`), added to `exposure` while
+    /// [`Self::small_lift`] is on and no thin lift applies — where [`Recipe::for_frame`]
+    /// moves a `frames` entry's `exposure`.
     pub frame_exposure: Option<f32>,
-    /// This frame's own slope, in place of the one `white_stops` places, while
-    /// [`Self::frame_lift`] is on — a thin frame's lift (`roll_white::thin_lift`), where
-    /// [`Recipe::for_frame`] moves a `frames` entry's `slope`. A slope, not a white: it is
-    /// chosen, not measured.
-    pub frame_slope: Option<f32>,
-    /// Whether `frame_exposure` and `frame_slope` apply: the opt-out, which leaves the
-    /// measured values in the recipe. Unset (`null`) is on, so a measured file layered last
-    /// states nothing here and never undoes an earlier `"off"`.
-    pub frame_lift: Option<FrameLift>,
+    /// Whether `frame_exposure` applies: a taste switch (design-spec §6). Unset (`null`) is
+    /// on, so a measured file layered last never undoes an earlier `"off"`.
+    pub small_lift: Option<Lift>,
+    /// A thin frame's own slope (`roll_white::thin_lift`), in place of the one `white_stops`
+    /// places, while [`Self::thin_lift`] is on. A slope, not a white: it is chosen, not
+    /// measured.
+    pub thin_slope: Option<f32>,
+    /// The exposure solved with `thin_slope`, a delta on `exposure` in place of
+    /// `frame_exposure`; it applies only beside `thin_slope`.
+    pub thin_exposure: Option<f32>,
+    /// Whether the thin pair applies: a taste switch like `small_lift`. Off, a thin frame
+    /// renders its small lift.
+    pub thin_lift: Option<Lift>,
     /// The frames with their own values — a white clamped to the cap, a lift
-    /// (`roll_white::frame_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
+    /// (`roll_white::small_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
     /// recipe still applies after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
     /// manifest's `params` beat it.
     pub frames: BTreeMap<String, FrameRoll>,
@@ -247,41 +252,72 @@ pub struct RollSection {
 pub struct FrameRoll {
     /// The frame's white, in place of the roll's `white_stops`.
     pub white_stops: Option<f32>,
-    /// The frame's exposure in EV, added to the roll's (`roll.frame_exposure`).
+    /// The frame's small lift (`roll.frame_exposure`).
     pub exposure: Option<f32>,
-    /// The frame's slope, in place of its white's (`roll.frame_slope`).
-    pub slope: Option<f32>,
+    /// The frame's thin lift (`roll.thin_slope`, `roll.thin_exposure`).
+    pub thin_slope: Option<f32>,
+    pub thin_exposure: Option<f32>,
 }
 
-/// `roll.frame_lift`, `--frame-lift`: whether a frame's own exposure and slope apply.
+/// `roll.small_lift` / `--small-lift` and `roll.thin_lift` / `--thin-lift`: whether a
+/// taste adjustment applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum FrameLift {
+pub enum Lift {
     On,
     Off,
 }
 
 impl RollSection {
-    /// The slope this frame renders at, if the section sets one: its own while the frame
-    /// lift is on, else the one its white places.
+    /// The slope this frame renders at, if the section sets one: its thin slope while that
+    /// applies, else the one its white places.
     pub fn slope(&self) -> Option<f32> {
-        self.applied_frame_slope()
+        self.applied_thin_slope()
             .or(self.white_stops.map(roll_white::slope_for))
     }
 
-    /// The frame's own slope as it applies: `None` under `--frame-lift off`.
-    pub fn applied_frame_slope(&self) -> Option<f32> {
-        self.frame_slope
-            .filter(|_| self.frame_lift != Some(FrameLift::Off))
+    /// The thin slope as it applies: `None` under `--thin-lift off`.
+    pub fn applied_thin_slope(&self) -> Option<f32> {
+        self.thin_slope
+            .filter(|_| self.thin_lift != Some(Lift::Off))
     }
 
-    /// A white stated over this section: it beats a frame slope from an earlier layer, and
-    /// the frame exposure solved with that slope (a thin lift) goes with it. The caller
-    /// then sets any frame slope or exposure stated beside the white.
+    /// The thin exposure as it applies: only beside an applied thin slope.
+    pub fn applied_thin_exposure(&self) -> Option<f32> {
+        self.thin_exposure
+            .filter(|_| self.applied_thin_slope().is_some())
+    }
+
+    /// The small lift as it applies: `None` under `--small-lift off`, or where a thin lift
+    /// replaces it.
+    pub fn applied_small_exposure(&self) -> Option<f32> {
+        self.frame_exposure
+            .filter(|_| self.small_lift != Some(Lift::Off) && self.applied_thin_slope().is_none())
+    }
+
+    /// The frame's own exposure as it applies: the thin lift's, else the small lift's.
+    pub fn applied_frame_exposure(&self) -> Option<f32> {
+        self.applied_thin_exposure()
+            .or(self.applied_small_exposure())
+    }
+
+    /// The taste adjustments that apply, by their switch's key (design-spec §6).
+    pub fn taste_applied(&self) -> Vec<&'static str> {
+        [
+            ("small_lift", self.applied_small_exposure().is_some()),
+            ("thin_lift", self.applied_thin_slope().is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key, on)| on.then_some(key))
+        .collect()
+    }
+
+    /// A white stated over this section: it beats a thin slope from an earlier layer, and
+    /// the exposure solved with that slope goes with it; the small lift stays. The caller
+    /// then sets any thin value stated beside the white.
     pub fn drop_thin_lift(&mut self) {
-        if self.frame_slope.take().is_some() {
-            self.frame_exposure = None;
-        }
+        self.thin_slope = None;
+        self.thin_exposure = None;
     }
 
     /// Undo what [`Recipe::for_frame`] moved in from `entry`, back to the `stated`
@@ -293,15 +329,12 @@ impl RollSection {
         if entry.exposure.is_some() && entry.exposure == self.frame_exposure {
             self.frame_exposure = stated.frame_exposure;
         }
-        if entry.slope.is_some() && entry.slope == self.frame_slope {
-            self.frame_slope = stated.frame_slope;
+        if entry.thin_slope.is_some() && entry.thin_slope == self.thin_slope {
+            self.thin_slope = stated.thin_slope;
         }
-    }
-
-    /// The frame's own exposure as it applies: `None` under `--frame-lift off`.
-    pub fn applied_frame_exposure(&self) -> Option<f32> {
-        self.frame_exposure
-            .filter(|_| self.frame_lift != Some(FrameLift::Off))
+        if entry.thin_exposure.is_some() && entry.thin_exposure == self.thin_exposure {
+            self.thin_exposure = stated.thin_exposure;
+        }
     }
 }
 
@@ -401,8 +434,8 @@ pub enum SlopeBase {
     Fallback,
     /// `direct`, which applies no roll: its pinned [`Base::slope`].
     Direct,
-    /// The applied roll's frame slope, `roll.frame_slope` (a thin frame's lift).
-    Frame,
+    /// The applied roll's thin slope, `roll.thin_slope` (a thin frame's lift).
+    Thin,
 }
 
 /// The look's slope and its parts: `base_slope × contrast` ([`Recipe::resolved_slope`]).
@@ -429,32 +462,36 @@ pub struct LookReport {
 
 /// What the roll section held and what the run applied of it — the report's
 /// `chain.roll`, present whenever the section states a value.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RollReport {
     /// The section's gains, as stated.
     pub white_balance: Option<[f32; 3]>,
     /// The section's white, as stated.
     pub white_stops: Option<f32>,
-    /// The slope the section sets ([`RollSection::slope`]): the frame's own while the
-    /// frame lift is on, else `white_stops`'s ([`roll_white::slope_for`]).
+    /// The slope the section sets ([`RollSection::slope`]): the thin slope while it
+    /// applies, else `white_stops`'s ([`roll_white::slope_for`]).
     pub slope: Option<f32>,
     /// The section's exposure, as stated.
     pub exposure: Option<f32>,
-    /// This frame's own exposure (its `roll.frames` lift), as stated.
+    /// This frame's small lift, as stated.
     pub frame_exposure: Option<f32>,
-    /// This frame's own slope (a thin frame's lift), as stated.
-    pub frame_slope: Option<f32>,
+    /// This frame's thin lift, as stated.
+    pub thin_slope: Option<f32>,
+    pub thin_exposure: Option<f32>,
     /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
     /// Whether the look's base slope is the roll's.
     pub slope_applied: bool,
     /// Whether the exposure reached scene correction.
     pub exposure_applied: bool,
-    /// Whether the frame's exposure reached scene correction (not under
-    /// `--frame-lift off` either).
+    /// Whether the small lift reached scene correction (not under `--small-lift off`, nor
+    /// beside an applied thin lift).
     pub frame_exposure_applied: bool,
-    /// Whether the look's base slope is the frame's own.
-    pub frame_slope_applied: bool,
+    /// Whether the thin lift set the look's base slope and its exposure.
+    pub thin_lift_applied: bool,
+    /// The taste adjustments applied, by their switch's key ([`RollSection::taste_applied`]):
+    /// each is a choice, off by `roll.<key>` `"off"`.
+    pub taste_applied: Vec<&'static str>,
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
@@ -563,6 +600,79 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          (auto|scanner-device|colorimetric)",
     ),
 ];
+
+/// Why `roll.frame_slope` and a `roll.frames` entry's `slope` retired
+/// (`nf-calibration/taste-vs-quality`). Beside a slope the old exposure was the thin
+/// lift's, so the remedy renames both: dropping the slope alone renders a small lift. A
+/// retired `roll.frame_lift` beside it is migrated in the same message, so the remedy
+/// never meets that key's refusal.
+fn thin_pair_moved(
+    body: &serde_json::Value,
+    slope: &str,
+    exposure: &str,
+    renamed: (&str, &str),
+    entries: bool,
+) -> String {
+    let lift = frame_lift_remedy(body).map_or(String::new(), |r| format!(", and {r}"));
+    // A top-level slope rendered beside a frame's entry `exposure` where one took the
+    // top-level exposure's place.
+    let entries = if entries {
+        " (a frame whose `roll.frames` entry states an `exposure` rendered that one: give \
+         the entry the same `thin_slope` and its `exposure` as `thin_exposure`)"
+    } else {
+        ""
+    };
+    format!(
+        "{slope} is not a recipe key any more: a thin frame's lift is its own pair, \
+         `thin_slope` and `thin_exposure`, beside the small lift, so each has its own \
+         switch (`roll.thin_lift`, `roll.small_lift`). To render as before, rename {slope} \
+         to {} and {exposure}, if stated, to {} (beside a slope it was the thin lift's \
+         exposure){entries}{lift}; or re-run `hanten measure-roll --out` for the roll",
+        renamed.0, renamed.1
+    )
+}
+
+/// The remedy for a non-null retired `roll.frame_lift`, which switched both lifts
+/// (`nf-calibration/taste-vs-quality`): both switches now, `None` when the body has none.
+fn frame_lift_remedy(body: &serde_json::Value) -> Option<String> {
+    let value = body.pointer("/roll/frame_lift").filter(|v| !v.is_null())?;
+    Some(match value.as_str() {
+        Some("off") => "replace `roll.frame_lift` \"off\" with `roll.small_lift` \"off\" and \
+                        `roll.thin_lift` \"off\" (it turned both lifts off)"
+            .into(),
+        // Not a no-op: it beat an earlier layer's "off".
+        Some("on") => "replace `roll.frame_lift` \"on\" with `roll.small_lift` \"on\" and \
+                       `roll.thin_lift` \"on\" (it turned both lifts on)"
+            .into(),
+        _ => "drop `roll.frame_lift` and state `roll.small_lift` and `roll.thin_lift`".into(),
+    })
+}
+
+/// Drop the retired keys where an earlier build wrote their default, `null`, which
+/// replays identically: `roll.frame_slope`, `roll.frame_lift` and a `roll.frames` entry's
+/// `slope`. [`check_body`] refuses any other value; every recipe body runs this first.
+/// Returns whether it dropped any.
+pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
+    let Some(roll) = body.get_mut("roll").and_then(|r| r.as_object_mut()) else {
+        return false;
+    };
+    let mut stripped = false;
+    for key in ["frame_slope", "frame_lift"] {
+        if roll.get(key).is_some_and(|v| v.is_null()) {
+            roll.remove(key);
+            stripped = true;
+        }
+    }
+    if let Some(frames) = roll.get_mut("frames").and_then(|f| f.as_object_mut()) {
+        for entry in frames.values_mut().filter_map(|e| e.as_object_mut()) {
+            if entry.get("slope").is_some_and(|v| v.is_null()) {
+                entry.remove("slope");
+                stripped = true;
+            }
+        }
+    }
+    stripped
+}
 
 /// What a migration message converts an old slope against: the base slope a recipe
 /// body gives `look.contrast` under its own rendering and roll, how to name it, and the
@@ -757,6 +867,36 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
             ));
         }
     }
+    if body.pointer("/roll/frame_slope").is_some() {
+        return usage(thin_pair_moved(
+            body,
+            "`roll.frame_slope`",
+            "`roll.frame_exposure`",
+            ("`roll.thin_slope`", "`roll.thin_exposure`"),
+            true,
+        ));
+    }
+    if let Some(name) = body
+        .pointer("/roll/frames")
+        .and_then(|f| f.as_object())
+        .and_then(|f| f.iter().find(|(_, e)| e.get("slope").is_some()))
+        .map(|(name, _)| name)
+    {
+        return usage(thin_pair_moved(
+            body,
+            &format!("`roll.frames.\"{name}\".slope`"),
+            &format!("`roll.frames.\"{name}\".exposure`"),
+            ("`thin_slope`", "`thin_exposure`"),
+            false,
+        ));
+    }
+    if let Some(remedy) = frame_lift_remedy(body) {
+        return usage(format!(
+            "`roll.frame_lift` is not a recipe key any more: it switched both a frame's lifts, \
+             which now each have their own switch, `roll.small_lift` and `roll.thin_lift`. To \
+             render as before, {remedy}"
+        ));
+    }
     for (section, why) in SECTIONS_WITH_NO_COUNTERPART {
         if body.get(section).is_some() {
             return usage(format!(
@@ -941,11 +1081,17 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(ev) = args.roll.roll_frame_exposure {
         r.roll.frame_exposure = Some(ev);
     }
-    if let Some(slope) = args.roll.roll_frame_slope {
-        r.roll.frame_slope = Some(slope);
+    if let Some(lift) = args.roll.small_lift {
+        r.roll.small_lift = Some(lift);
     }
-    if let Some(lift) = args.roll.frame_lift {
-        r.roll.frame_lift = Some(lift);
+    if let Some(slope) = args.roll.roll_thin_slope {
+        r.roll.thin_slope = Some(slope);
+    }
+    if let Some(ev) = args.roll.roll_thin_exposure {
+        r.roll.thin_exposure = Some(ev);
+    }
+    if let Some(lift) = args.roll.thin_lift {
+        r.roll.thin_lift = Some(lift);
     }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
@@ -1093,14 +1239,14 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     }
     let s = r.resolved_slope();
     let white_name = knob_name(names, "roll", "--roll-white", "white_stops");
-    let slope_name = knob_name(names, "roll", "--roll-frame-slope", "frame_slope");
+    let slope_name = knob_name(names, "roll", "--roll-thin-slope", "thin_slope");
     let (base, knob) = match s.base_from {
         SlopeBase::Roll => (
             format!("the roll's slope {} from {white_name}", s.base_slope),
             Some(SlopeKnob::White(&white_name)),
         ),
-        SlopeBase::Frame => (
-            format!("the frame's slope {slope_name} {}", s.base_slope),
+        SlopeBase::Thin => (
+            format!("the frame's thin slope {slope_name} {}", s.base_slope),
             Some(SlopeKnob::Slope(&slope_name)),
         ),
         SlopeBase::Fallback => (format!("the fallback slope {}", s.base_slope), None),
@@ -1237,11 +1383,19 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             &knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
         )?;
     }
-    if let Some(slope) = p.frame_slope {
-        slope_fault(
-            slope,
-            &knob_name(names, "roll", "--roll-frame-slope", "frame_slope"),
-        )?;
+    let thin_slope = knob_name(names, "roll", "--roll-thin-slope", "thin_slope");
+    if let Some(slope) = p.thin_slope {
+        slope_fault(slope, &thin_slope)?;
+    }
+    if let Some(ev) = p.thin_exposure {
+        let name = knob_name(names, "roll", "--roll-thin-exposure", "thin_exposure");
+        exposure_fault(ev, &name)?;
+        if p.thin_slope.is_none() {
+            return Err(NcError::Usage(format!(
+                "{name} is the exposure solved with a thin frame's slope, and applies \
+                 only beside it: state {thin_slope} too, or drop it"
+            )));
+        }
     }
     Ok(())
 }
@@ -1294,19 +1448,31 @@ pub fn validate_roll_frames(
         if *frame == FrameRoll::default() {
             return Err(NcError::Usage(format!(
                 "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops`, \
-                 an `exposure` or a `slope`, or drop the entry"
+                 an `exposure` or a `thin_slope`, or drop the entry"
             )));
         }
         if let Some(ev) = frame.exposure {
             exposure_fault(ev, &format!("recipe `roll.frames.\"{name}\".exposure`"))?;
         }
-        if let Some(slope) = frame.slope {
-            let entry = format!("recipe `roll.frames.\"{name}\".slope`");
+        if let Some(ev) = frame.thin_exposure {
+            let entry = format!("recipe `roll.frames.\"{name}\".thin_exposure`");
+            exposure_fault(ev, &entry)?;
+            if frame.thin_slope.is_none() {
+                return Err(NcError::Usage(format!(
+                    "{entry} is the exposure solved with a thin frame's slope, and applies \
+                     only beside it: state the entry's `thin_slope` too, or drop it"
+                )));
+            }
+        }
+        if let Some(slope) = frame.thin_slope {
+            let entry = format!("recipe `roll.frames.\"{name}\".thin_slope`");
             slope_fault(slope, &entry)?;
             validate_whole_slope(
                 linearization,
                 slope * contrast,
-                &format!("the frame's slope {slope} from {entry} times {contrast_name} {contrast}"),
+                &format!(
+                    "the frame's thin slope {slope} from {entry} times {contrast_name} {contrast}"
+                ),
                 Some(&contrast_name),
                 Some(SlopeKnob::Slope(&entry)),
                 names,
@@ -1425,7 +1591,7 @@ struct ProbeKnob {
     reset: fn(&mut Recipe),
 }
 
-const PROBE_KNOBS: [ProbeKnob; 13] = [
+const PROBE_KNOBS: [ProbeKnob; 14] = [
     ProbeKnob {
         section: "reconstruction",
         flag: "--density-offset",
@@ -1493,15 +1659,23 @@ const PROBE_KNOBS: [ProbeKnob; 13] = [
         section: "roll",
         flag: "--roll-frame-exposure",
         key: "frame_exposure",
-        stated: |r| r.roll.frame_exposure.is_some(),
+        stated: |r| r.roll.applied_small_exposure().is_some(),
         reset: |r| r.roll.frame_exposure = None,
+    },
+    // The thin pair goes together: its exposure applies only beside its slope.
+    ProbeKnob {
+        section: "roll",
+        flag: "--roll-thin-slope",
+        key: "thin_slope",
+        stated: |r| r.roll.applied_thin_slope().is_some(),
+        reset: |r| r.roll.drop_thin_lift(),
     },
     ProbeKnob {
         section: "roll",
-        flag: "--roll-frame-slope",
-        key: "frame_slope",
-        stated: |r| r.roll.frame_slope.is_some(),
-        reset: |r| r.roll.frame_slope = None,
+        flag: "--roll-thin-exposure",
+        key: "thin_exposure",
+        stated: |r| r.roll.applied_thin_exposure().is_some(),
+        reset: |r| r.roll.thin_exposure = None,
     },
     ProbeKnob {
         section: "scene_correction",
@@ -1530,9 +1704,8 @@ fn render_fault_message(
     let Some(fault) = render_fault(r)? else {
         return Ok(());
     };
-    // The frame's entry, when `r`'s white, frame exposure or frame slope came from it (a
-    // flag beats it).
-    let name = |k: &ProbeKnob| match (own, k.section, k.key) {
+    // The frame's entry, when `r`'s white or lift came from it (a flag beats it).
+    let one = |k: &ProbeKnob| match (own, k.section, k.key) {
         (Some((frame, e)), "roll", "white_stops")
             if e.white_stops.is_some() && e.white_stops == r.roll.white_stops =>
         {
@@ -1543,12 +1716,25 @@ fn render_fault_message(
         {
             format!("recipe `roll.frames.\"{frame}\".exposure`")
         }
-        (Some((frame, e)), "roll", "frame_slope")
-            if e.slope.is_some() && e.slope == r.roll.frame_slope =>
+        (Some((frame, e)), "roll", "thin_slope")
+            if e.thin_slope.is_some() && e.thin_slope == r.roll.thin_slope =>
         {
-            format!("recipe `roll.frames.\"{frame}\".slope`")
+            format!("recipe `roll.frames.\"{frame}\".thin_slope`")
+        }
+        (Some((frame, e)), "roll", "thin_exposure")
+            if e.thin_exposure.is_some() && e.thin_exposure == r.roll.thin_exposure =>
+        {
+            format!("recipe `roll.frames.\"{frame}\".thin_exposure`")
         }
         _ => knob_name(names, k.section, k.flag, k.key),
+    };
+    // The thin slope's reset drops its exposure too, which applies only beside it: named
+    // as the pair, and whether it is one.
+    let name = |k: &ProbeKnob| match PROBE_KNOBS.iter().find(|e| e.key == "thin_exposure") {
+        Some(exposure) if k.key == "thin_slope" && (exposure.stated)(r) => {
+            (format!("{} with its {}", one(k), one(exposure)), true)
+        }
+        _ => (one(k), false),
     };
     let stated: Vec<&ProbeKnob> = PROBE_KNOBS.iter().filter(|k| (k.stated)(r)).collect();
     let mut clears = Vec::new();
@@ -1565,14 +1751,25 @@ fn render_fault_message(
             " It renders with {} at their defaults",
             stated
                 .iter()
-                .map(|k| name(k))
+                .map(|k| one(k))
                 .collect::<Vec<_>>()
                 .join(" and ")
         ),
-        [one] => format!(" It renders with {one} at its default"),
+        [(one, false)] => format!(" It renders with {one} at its default"),
+        [(pair, true)] => format!(" It renders with {pair} at their defaults"),
+        some if some.iter().any(|(_, pair)| *pair) => format!(
+            " It renders with any one of these at default: {}",
+            some.iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
         some => format!(
             " It renders with any one of {} at its default",
-            some.join(", ")
+            some.iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     };
     let frame = entry.map_or(String::new(), |e| format!("recipe `roll.frames.\"{e}\"`: "));
@@ -1620,7 +1817,10 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
     let exposures = [
         roll.exposure
             .map(|_| knob_name(names, "roll", "--roll-exposure", "exposure")),
-        frame.map(|_| knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure")),
+        frame.map(|_| match roll.applied_thin_exposure() {
+            Some(_) => knob_name(names, "roll", "--roll-thin-exposure", "thin_exposure"),
+            None => knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
+        }),
         Some(name("--exposure", "exposure")),
     ]
     .into_iter()
@@ -2045,7 +2245,8 @@ impl Recipe {
     }
 
     /// This recipe as `input` renders it: the frame's [`RollSection::frames`] entry, if
-    /// any, moves into `roll.white_stops`, `roll.frame_exposure` and `roll.frame_slope`.
+    /// any, moves into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope` and
+    /// `roll.thin_exposure`.
     /// `convert` and every `roll` frame go through it, so the two stay byte-identical. The entry is removed, not copied, so a flag
     /// that then beats it is what a `--dump-params` replay renders; the other entries
     /// stay for [`validate`].
@@ -2058,8 +2259,11 @@ impl Recipe {
             if let Some(ev) = frame.exposure {
                 self.roll.frame_exposure = Some(ev);
             }
-            if let Some(slope) = frame.slope {
-                self.roll.frame_slope = Some(slope);
+            if let Some(slope) = frame.thin_slope {
+                self.roll.thin_slope = Some(slope);
+            }
+            if let Some(ev) = frame.thin_exposure {
+                self.roll.thin_exposure = Some(ev);
             }
         }
         self
@@ -2108,7 +2312,7 @@ impl Recipe {
     pub fn resolved_slope(&self) -> ResolvedSlope {
         let roll = self.applied_roll();
         let (base_slope, base_from) = match (roll.slope(), self.rendering) {
-            (Some(s), _) if roll.applied_frame_slope().is_some() => (s, SlopeBase::Frame),
+            (Some(s), _) if roll.applied_thin_slope().is_some() => (s, SlopeBase::Thin),
             (Some(s), _) => (s, SlopeBase::Roll),
             (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
             (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
@@ -2154,23 +2358,30 @@ impl Recipe {
             || r.white_stops.is_some()
             || r.exposure.is_some()
             || r.frame_exposure.is_some()
-            || r.frame_slope.is_some())
+            || r.thin_slope.is_some()
+            || r.thin_exposure.is_some())
         .then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
             slope: r.slope(),
             exposure: r.exposure,
             frame_exposure: r.frame_exposure,
-            frame_slope: r.frame_slope,
+            thin_slope: r.thin_slope,
+            thin_exposure: r.thin_exposure,
             white_balance_applied: applies && r.white_balance.is_some(),
             slope_applied: applies
                 && matches!(
                     self.resolved_slope().base_from,
-                    SlopeBase::Roll | SlopeBase::Frame
+                    SlopeBase::Roll | SlopeBase::Thin
                 ),
             exposure_applied: applies && r.exposure.is_some(),
-            frame_exposure_applied: applies && r.applied_frame_exposure().is_some(),
-            frame_slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Frame,
+            frame_exposure_applied: applies && r.applied_small_exposure().is_some(),
+            thin_lift_applied: applies && r.applied_thin_slope().is_some(),
+            taste_applied: if applies {
+                r.taste_applied()
+            } else {
+                Vec::new()
+            },
         })
     }
 
@@ -2270,11 +2481,14 @@ impl Recipe {
                  exposure, `roll.exposure` {roll}{}: the exposure applied is {} EV. A stated \
                  exposure is an adjustment on top of the roll's measurement; if it is one \
                  chosen by hand before the roll's was measured, drop it",
-                self.roll
-                    .applied_frame_exposure()
-                    .map_or(String::new(), |ev| format!(
-                        ", and this frame's, `roll.frame_exposure` {ev}"
-                    )),
+                match (
+                    self.roll.applied_thin_exposure(),
+                    self.roll.applied_small_exposure()
+                ) {
+                    (Some(ev), _) => format!(", and this frame's, `roll.thin_exposure` {ev}"),
+                    (None, Some(ev)) => format!(", and this frame's, `roll.frame_exposure` {ev}"),
+                    (None, None) => String::new(),
+                },
                 self.resolved_scene_correction().exposure
             ));
         }
@@ -2613,7 +2827,8 @@ mod tests {
         assert_eq!(
             json["roll"],
             serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null,
-                "frame_exposure": null, "frame_slope": null, "frame_lift": null, "frames": {}})
+                "frame_exposure": null, "small_lift": null, "thin_slope": null,
+                "thin_exposure": null, "thin_lift": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -3275,7 +3490,7 @@ mod tests {
         let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
         assert_eq!(other.resolved_scene_correction().exposure, 1.0);
         // Off keeps the value and drops it from the sum; `direct` leaves the roll out.
-        let off = frame(&["--frame-lift", "off"]);
+        let off = frame(&["--small-lift", "off"]);
         assert_eq!(off.roll.frame_exposure, Some(0.25));
         assert_eq!(off.resolved_scene_correction().exposure, 1.0);
         assert!(!off.roll_report(true).unwrap().frame_exposure_applied);
@@ -3284,23 +3499,47 @@ mod tests {
     }
 
     #[test]
-    fn a_frames_slope_replaces_its_whites_unless_turned_off_or_left_out() {
+    fn a_thin_lift_replaces_the_small_one_and_each_switch_turns_off_its_own() {
         let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
-            "frames": {"a.tif": {"exposure": 0.7, "slope": 2.0}}}}"#;
+            "frames": {"a.tif": {"exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7}}}}"#;
         let frame = |extra: &[&str]| {
             let r = parse(roll).unwrap().for_frame(Path::new("/scans/a.tif"));
             merge(r, &cli_flags(extra))
         };
+        let roll_slope = (roll_white::slope_for(1.5), SlopeBase::Roll);
+        let shape = |r: &Recipe| {
+            let s = r.resolved_slope();
+            let report = r.roll_report(true).unwrap();
+            (
+                (s.base_slope, s.base_from),
+                r.resolved_scene_correction().exposure,
+                report.taste_applied,
+            )
+        };
         let r = frame(&[]);
-        assert_eq!(r.roll.frame_slope, Some(2.0));
-        let s = r.resolved_slope();
-        assert_eq!((s.base_slope, s.base_from), (2.0, SlopeBase::Frame));
+        assert_eq!(
+            (r.roll.thin_slope, r.roll.thin_exposure),
+            (Some(2.0), Some(0.7))
+        );
+        assert_eq!(shape(&r), ((2.0, SlopeBase::Thin), 1.7, vec!["thin_lift"]));
         let report = r.roll_report(true).unwrap();
         assert!(
-            report.frame_slope_applied && report.slope_applied,
+            report.thin_lift_applied && report.slope_applied && !report.frame_exposure_applied,
             "{report:?}"
         );
-        // `look.contrast` multiplies it, as it does the roll's.
+        // Thin off renders the small lift; small off leaves the thin one alone.
+        assert_eq!(
+            shape(&frame(&["--thin-lift", "off"])),
+            (roll_slope, 1.25, vec!["small_lift"])
+        );
+        assert_eq!(
+            shape(&frame(&["--small-lift", "off"])),
+            ((2.0, SlopeBase::Thin), 1.7, vec!["thin_lift"])
+        );
+        let off = frame(&["--small-lift", "off", "--thin-lift", "off"]);
+        assert_eq!(shape(&off), (roll_slope, 1.0, vec![]));
+        assert_eq!(off.roll.thin_slope, Some(2.0), "off keeps the value");
+        // `look.contrast` multiplies the thin slope, as it does the roll's.
         assert_eq!(
             frame(&["--contrast", "1.1"]).resolved_slope().slope,
             2.0 * 1.1
@@ -3308,29 +3547,25 @@ mod tests {
         // Another frame keeps the roll's.
         let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
         assert_eq!(other.resolved_slope().base_from, SlopeBase::Roll);
-        // A typed white beats the whole thin lift: its slope and the exposure with it.
+        // A typed white beats the whole thin lift, and the small lift stays.
         let white = frame(&["--roll-white", "1.9"]);
-        let s = white.resolved_slope();
         assert_eq!(
-            (s.base_slope, s.base_from),
-            (roll_white::slope_for(1.9), SlopeBase::Roll)
+            shape(&white),
+            (
+                (roll_white::slope_for(1.9), SlopeBase::Roll),
+                1.25,
+                vec!["small_lift"]
+            )
         );
-        assert_eq!(white.roll.frame_exposure, None);
-        assert_eq!(white.resolved_scene_correction().exposure, 1.0);
-        // Off drops the slope with the exposure; `direct` leaves the roll out.
-        let off = frame(&["--frame-lift", "off"]);
-        let s = off.resolved_slope();
-        assert_eq!(
-            (s.base_slope, s.base_from),
-            (roll_white::slope_for(1.5), SlopeBase::Roll)
-        );
-        assert!(!off.roll_report(true).unwrap().frame_slope_applied);
+        assert_eq!(white.roll.thin_exposure, None);
+        // `direct` leaves the roll out, and applies no taste.
         let direct = frame(&["--rendering", "direct"]);
         assert_eq!(direct.resolved_slope().base_from, SlopeBase::Direct);
+        assert!(direct.roll_report(true).unwrap().taste_applied.is_empty());
     }
 
     #[test]
-    fn a_frames_slope_is_checked_by_its_own_name() {
+    fn a_thin_lift_is_checked_by_its_own_name() {
         let err = |json: &str, extra: &[&str]| {
             let r = merged(json, extra);
             validate(&r, KnobNames::FlagAndKey)
@@ -3339,23 +3574,172 @@ mod tests {
                 .to_string()
         };
         let msg = err(
-            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"slope": -1}}}}"#,
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"thin_slope": -1}}}}"#,
             &[],
         );
         assert!(
-            msg.starts_with("recipe `roll.frames.\"a.tif\".slope` must be finite and positive"),
+            msg.starts_with(
+                "recipe `roll.frames.\"a.tif\".thin_slope` must be finite and positive"
+            ),
             "{msg}"
         );
-        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-frame-slope", "0"]);
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-thin-slope", "0"]);
         assert!(
-            msg.starts_with("--roll-frame-slope (recipe `roll.frame_slope`) must be finite"),
+            msg.starts_with("--roll-thin-slope (recipe `roll.thin_slope`) must be finite"),
             "{msg}"
         );
-        // A whole slope that overflows names the frame slope, to be made smaller.
-        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-frame-slope", "3e38"]);
+        // A whole slope that overflows names the thin slope, to be made smaller.
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-thin-slope", "3e38"]);
         assert!(
-            msg.contains("or a smaller --roll-frame-slope (recipe `roll.frame_slope`)"),
+            msg.contains("or a smaller --roll-thin-slope (recipe `roll.thin_slope`)"),
             "{msg}"
+        );
+        // The exposure applies only beside its slope.
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-thin-exposure", "0.5"]);
+        assert!(
+            msg.starts_with("--roll-thin-exposure (recipe `roll.thin_exposure`) is the exposure")
+                && msg.contains("state --roll-thin-slope (recipe `roll.thin_slope`) too"),
+            "{msg}"
+        );
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"thin_exposure": 0.5}}}}"#,
+            &[],
+        );
+        assert!(
+            msg.starts_with("recipe `roll.frames.\"a.tif\".thin_exposure` is the exposure"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn the_retired_frame_slope_names_the_thin_pair() {
+        let loaded = |body: &str| -> std::result::Result<Recipe, String> {
+            let mut v: serde_json::Value = serde_json::from_str(body).unwrap();
+            strip_retired_nulls(&mut v);
+            check_body(&v, true, "recipe r.json").map_err(|e| e.message().to_string())?;
+            Ok(serde_json::from_value(v).unwrap())
+        };
+        // The default an earlier build wrote replays as if absent.
+        let old = r#"{"recipe_version": 3, "roll": {"frame_slope": null, "white_stops": 1.5,
+            "frames": {"a.tif": {"exposure": 0.2, "slope": null}}}}"#;
+        let new = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5,
+            "frames": {"a.tif": {"exposure": 0.2}}}}"#;
+        assert_eq!(loaded(old).unwrap(), parse(new).unwrap());
+        // Any other value names the rename, which replays the old render: beside a slope
+        // the exposure was the thin lift's.
+        let thin = |r: Recipe| {
+            let r = r.for_frame(Path::new("a.tif"));
+            (
+                r.resolved_slope().base_slope,
+                r.resolved_scene_correction().exposure,
+            )
+        };
+        for (body, renamed) in [
+            (
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                    "frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                    "frames": {"a.tif": {"thin_exposure": 0.6, "thin_slope": 2}}}}"#,
+            ),
+            (
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                    "frame_exposure": 0.6, "frame_slope": 2}}"#,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                    "thin_exposure": 0.6, "thin_slope": 2}}"#,
+            ),
+        ] {
+            let msg = loaded(body).unwrap_err();
+            assert!(
+                msg.contains("is not a recipe key any more")
+                    && msg.contains("To render as before, rename")
+                    && msg.contains("hanten measure-roll --out"),
+                "{msg}"
+            );
+            assert!(!msg.contains("drop the key"), "{msg}");
+            assert_eq!(thin(loaded(renamed).unwrap()), (2.0, 1.6), "{renamed}");
+        }
+        let msg = loaded(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            msg.contains(
+                r#"rename `roll.frames."a.tif".slope` to `thin_slope` and `roll.frames."a.tif".exposure`, if stated, to `thin_exposure`"#
+            ),
+            "{msg}"
+        );
+        assert!(!msg.contains("roll.frame_lift"), "{msg}");
+        // Beside the retired `frame_lift` "off", which turned both lifts off, the message
+        // migrates both, and followed it renders no lift, as before.
+        let msg = loaded(
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                "frame_lift": "off", "frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            msg.contains(
+                "and replace `roll.frame_lift` \"off\" with `roll.small_lift` \"off\" and \
+                 `roll.thin_lift` \"off\""
+            ),
+            "{msg}"
+        );
+        assert!(
+            !msg.starts_with("recipe r.json: `roll.frame_lift`"),
+            "{msg}"
+        );
+        let renamed = loaded(
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                "small_lift": "off", "thin_lift": "off",
+                "frames": {"a.tif": {"thin_exposure": 0.6, "thin_slope": 2}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(thin(renamed), (roll_white::slope_for(1.5), 1.0));
+    }
+
+    #[test]
+    fn the_retired_frame_lift_names_both_switches() {
+        let loaded = |body: &str| -> std::result::Result<Recipe, String> {
+            let mut v: serde_json::Value = serde_json::from_str(body).unwrap();
+            strip_retired_nulls(&mut v);
+            check_body(&v, true, "recipe r.json").map_err(|e| e.message().to_string())?;
+            Ok(serde_json::from_value(v).unwrap())
+        };
+        // `null`, the default every earlier file wrote, loads as if absent.
+        assert_eq!(
+            loaded(r#"{"recipe_version": 3, "roll": {"frame_lift": null}}"#).unwrap(),
+            parse(r#"{"recipe_version": 3}"#).unwrap()
+        );
+        let msg = loaded(r#"{"recipe_version": 3, "roll": {"frame_lift": "off"}}"#).unwrap_err();
+        assert!(
+            msg.contains("`roll.frame_lift` is not a recipe key any more")
+                && msg.contains(
+                    "replace `roll.frame_lift` \"off\" with `roll.small_lift` \"off\" and \
+                     `roll.thin_lift` \"off\""
+                ),
+            "{msg}"
+        );
+        let msg = loaded(r#"{"recipe_version": 3, "roll": {"frame_lift": "on"}}"#).unwrap_err();
+        assert!(
+            msg.contains(
+                "replace `roll.frame_lift` \"on\" with `roll.small_lift` \"on\" and \
+                 `roll.thin_lift` \"on\""
+            ),
+            "{msg}"
+        );
+        // Followed, the old "off" renders neither lift on a thin frame, as before.
+        let r = loaded(
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                "small_lift": "off", "thin_lift": "off", "frames": {"a.tif":
+                {"exposure": 0.25, "thin_slope": 2, "thin_exposure": 0.7}}}}"#,
+        )
+        .unwrap()
+        .for_frame(Path::new("a.tif"));
+        assert_eq!(
+            (
+                r.resolved_slope().base_from,
+                r.resolved_scene_correction().exposure
+            ),
+            (SlopeBase::Roll, 1.0)
         );
     }
 
@@ -3399,7 +3783,7 @@ mod tests {
         // Off, the lift leaves the sum, and the same values are usable.
         let r = merged(
             r#"{"recipe_version": 3, "roll": {"exposure": 100, "frame_exposure": 20}}"#,
-            &["--exposure", "10", "--frame-lift", "off"],
+            &["--exposure", "10", "--small-lift", "off"],
         );
         validate(&r, KnobNames::FlagAndKey).unwrap();
     }
@@ -4339,11 +4723,19 @@ mod tests {
                 &["--roll-frame-exposure", "0.2"],
                 |r| r.roll.frame_exposure == Some(0.2),
             ),
-            ("--roll-frame-slope", &["--roll-frame-slope", "2.1"], |r| {
-                r.roll.frame_slope == Some(2.1)
+            ("--small-lift", &["--small-lift", "off"], |r| {
+                r.roll.small_lift == Some(Lift::Off)
             }),
-            ("--frame-lift", &["--frame-lift", "off"], |r| {
-                r.roll.frame_lift == Some(FrameLift::Off)
+            ("--roll-thin-slope", &["--roll-thin-slope", "2.1"], |r| {
+                r.roll.thin_slope == Some(2.1)
+            }),
+            (
+                "--roll-thin-exposure",
+                &["--roll-thin-exposure", "0.6"],
+                |r| r.roll.thin_exposure == Some(0.6),
+            ),
+            ("--thin-lift", &["--thin-lift", "off"], |r| {
+                r.roll.thin_lift == Some(Lift::Off)
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3
@@ -4596,6 +4988,35 @@ mod tests {
             "{}",
             err.message()
         );
+    }
+
+    #[test]
+    fn the_thin_slope_is_named_with_its_exposure() {
+        let roll = [
+            "--roll-white-balance",
+            "1,1,1",
+            "--roll-white",
+            "1.5",
+            "--roll-exposure",
+            "0.4",
+        ];
+        let thin = ["--roll-thin-slope", "2", "--roll-thin-exposure", "100"];
+        let err = render_err(V3, &[&roll[..], &thin].concat()).unwrap();
+        assert!(
+            err.ends_with(
+                "It renders with any one of these at default: --roll-thin-slope (recipe \
+                 `roll.thin_slope`) with its --roll-thin-exposure (recipe \
+                 `roll.thin_exposure`); --roll-thin-exposure (recipe `roll.thin_exposure`)"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.contains("--roll-thin-slope (recipe `roll.thin_slope`), "),
+            "the slope alone is not a remedy: {err}"
+        );
+        // Each named remedy renders.
+        assert_eq!(render_err(V3, &roll), None);
+        assert_eq!(render_err(V3, &[&roll[..], &thin[..2]].concat()), None);
     }
 
     #[test]
