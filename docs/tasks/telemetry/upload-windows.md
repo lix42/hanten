@@ -16,6 +16,8 @@ the purge race, and for one lock domain with no split-brain lock recreation.
   `symlink_metadata` pre-check rather than `O_NOFOLLOW`: is that enough?
 - Does `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` keep the helper alive after
   the console closes?
+- `telemetry/panic-hook` is compile-checked only too: does its `hard_link`
+  publish hold on NTFS, and do `tests/telemetry_upload/panic_reporting.rs` pass?
 
 ## Dependencies
 

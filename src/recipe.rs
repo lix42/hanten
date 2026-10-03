@@ -224,13 +224,18 @@ pub struct RollSection {
     /// This frame's own exposure in EV, added to `exposure` while [`Self::frame_lift`] is
     /// on — where [`Recipe::for_frame`] moves a `frames` entry's `exposure`.
     pub frame_exposure: Option<f32>,
-    /// Whether `frame_exposure` applies: the opt-out, which leaves the measured values
-    /// in the recipe. Unset (`null`) is on, so a measured file layered last states
-    /// nothing here and never undoes an earlier `"off"`.
+    /// This frame's own slope, in place of the one `white_stops` places, while
+    /// [`Self::frame_lift`] is on — a thin frame's lift (`roll_white::thin_lift`), where
+    /// [`Recipe::for_frame`] moves a `frames` entry's `slope`. A slope, not a white: it is
+    /// chosen, not measured.
+    pub frame_slope: Option<f32>,
+    /// Whether `frame_exposure` and `frame_slope` apply: the opt-out, which leaves the
+    /// measured values in the recipe. Unset (`null`) is on, so a measured file layered last
+    /// states nothing here and never undoes an earlier `"off"`.
     pub frame_lift: Option<FrameLift>,
     /// The frames with their own values — a white clamped to the cap, a lift
-    /// (`roll_white::frame_lift`) — keyed by **file name** so the recipe still applies
-    /// after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
+    /// (`roll_white::frame_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
+    /// recipe still applies after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
     /// manifest's `params` beat it.
     pub frames: BTreeMap<String, FrameRoll>,
 }
@@ -244,9 +249,11 @@ pub struct FrameRoll {
     pub white_stops: Option<f32>,
     /// The frame's exposure in EV, added to the roll's (`roll.frame_exposure`).
     pub exposure: Option<f32>,
+    /// The frame's slope, in place of its white's (`roll.frame_slope`).
+    pub slope: Option<f32>,
 }
 
-/// `roll.frame_lift`, `--frame-lift`: whether a frame's own exposure applies.
+/// `roll.frame_lift`, `--frame-lift`: whether a frame's own exposure and slope apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum FrameLift {
@@ -255,9 +262,40 @@ pub enum FrameLift {
 }
 
 impl RollSection {
-    /// The slope the roll's white renders at, if it has one.
+    /// The slope this frame renders at, if the section sets one: its own while the frame
+    /// lift is on, else the one its white places.
     pub fn slope(&self) -> Option<f32> {
-        self.white_stops.map(roll_white::slope_for)
+        self.applied_frame_slope()
+            .or(self.white_stops.map(roll_white::slope_for))
+    }
+
+    /// The frame's own slope as it applies: `None` under `--frame-lift off`.
+    pub fn applied_frame_slope(&self) -> Option<f32> {
+        self.frame_slope
+            .filter(|_| self.frame_lift != Some(FrameLift::Off))
+    }
+
+    /// A white stated over this section: it beats a frame slope from an earlier layer, and
+    /// the frame exposure solved with that slope (a thin lift) goes with it. The caller
+    /// then sets any frame slope or exposure stated beside the white.
+    pub fn drop_thin_lift(&mut self) {
+        if self.frame_slope.take().is_some() {
+            self.frame_exposure = None;
+        }
+    }
+
+    /// Undo what [`Recipe::for_frame`] moved in from `entry`, back to the `stated`
+    /// section's values; a value a later layer beat stays.
+    fn undo_entry(&mut self, entry: &FrameRoll, stated: &RollSection) {
+        if entry.white_stops.is_some() && entry.white_stops == self.white_stops {
+            self.white_stops = stated.white_stops;
+        }
+        if entry.exposure.is_some() && entry.exposure == self.frame_exposure {
+            self.frame_exposure = stated.frame_exposure;
+        }
+        if entry.slope.is_some() && entry.slope == self.frame_slope {
+            self.frame_slope = stated.frame_slope;
+        }
     }
 
     /// The frame's own exposure as it applies: `None` under `--frame-lift off`.
@@ -363,6 +401,8 @@ pub enum SlopeBase {
     Fallback,
     /// `direct`, which applies no roll: its pinned [`Base::slope`].
     Direct,
+    /// The applied roll's frame slope, `roll.frame_slope` (a thin frame's lift).
+    Frame,
 }
 
 /// The look's slope and its parts: `base_slope × contrast` ([`Recipe::resolved_slope`]).
@@ -395,12 +435,15 @@ pub struct RollReport {
     pub white_balance: Option<[f32; 3]>,
     /// The section's white, as stated.
     pub white_stops: Option<f32>,
-    /// The slope `white_stops` renders at ([`roll_white::slope_for`]).
+    /// The slope the section sets ([`RollSection::slope`]): the frame's own while the
+    /// frame lift is on, else `white_stops`'s ([`roll_white::slope_for`]).
     pub slope: Option<f32>,
     /// The section's exposure, as stated.
     pub exposure: Option<f32>,
     /// This frame's own exposure (its `roll.frames` lift), as stated.
     pub frame_exposure: Option<f32>,
+    /// This frame's own slope (a thin frame's lift), as stated.
+    pub frame_slope: Option<f32>,
     /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
     /// Whether the look's base slope is the roll's.
@@ -410,6 +453,8 @@ pub struct RollReport {
     /// Whether the frame's exposure reached scene correction (not under
     /// `--frame-lift off` either).
     pub frame_exposure_applied: bool,
+    /// Whether the look's base slope is the frame's own.
+    pub frame_slope_applied: bool,
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
@@ -888,12 +933,16 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     }
     if let Some(stops) = args.roll.roll_white {
         r.roll.white_stops = Some(stops);
+        r.roll.drop_thin_lift();
     }
     if let Some(ev) = args.roll.roll_exposure {
         r.roll.exposure = Some(ev);
     }
     if let Some(ev) = args.roll.roll_frame_exposure {
         r.roll.frame_exposure = Some(ev);
+    }
+    if let Some(slope) = args.roll.roll_frame_slope {
+        r.roll.frame_slope = Some(slope);
     }
     if let Some(lift) = args.roll.frame_lift {
         r.roll.frame_lift = Some(lift);
@@ -1044,17 +1093,28 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     }
     let s = r.resolved_slope();
     let white_name = knob_name(names, "roll", "--roll-white", "white_stops");
-    let base = match s.base_from {
-        SlopeBase::Roll => format!("the roll's slope {} from {white_name}", s.base_slope),
-        SlopeBase::Fallback => format!("the fallback slope {}", s.base_slope),
-        SlopeBase::Direct => format!("the `direct` rendering's slope {}", s.base_slope),
+    let slope_name = knob_name(names, "roll", "--roll-frame-slope", "frame_slope");
+    let (base, knob) = match s.base_from {
+        SlopeBase::Roll => (
+            format!("the roll's slope {} from {white_name}", s.base_slope),
+            Some(SlopeKnob::White(&white_name)),
+        ),
+        SlopeBase::Frame => (
+            format!("the frame's slope {slope_name} {}", s.base_slope),
+            Some(SlopeKnob::Slope(&slope_name)),
+        ),
+        SlopeBase::Fallback => (format!("the fallback slope {}", s.base_slope), None),
+        SlopeBase::Direct => (
+            format!("the `direct` rendering's slope {}", s.base_slope),
+            None,
+        ),
     };
     validate_whole_slope(
         r.reconstruction.linearization,
         s.slope,
         &format!("{base} times {contrast_name} {k}"),
         Some(&contrast_name),
-        (s.base_from == SlopeBase::Roll).then_some(white_name.as_str()),
+        knob,
         names,
     )?;
     let p = r.resolved_look();
@@ -1093,19 +1153,27 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     Err(NcError::Usage(message))
 }
 
+/// The roll knob a slope comes from, named: a white (the slope falls as it rises) or a
+/// frame slope (the slope itself).
+#[derive(Clone, Copy)]
+enum SlopeKnob<'a> {
+    White(&'a str),
+    Slope(&'a str),
+}
+
 /// The whole slope, `linearization × slope` — the divisor highlight desaturation
 /// normalises its saturation measure by — must be a normal positive f32. Each factor
 /// can pass its own rule while the product overflows to infinity or underflows to zero
 /// or a subnormal, which the stage cannot use; a whole slope in range puts the slope in
 /// range too. Keyed on the product whether or not desaturation is on: it describes no
 /// usable picture either way. `slope_parts` names the slope's factors; the remedy names
-/// each knob that can move it — the multiplier and the roll white when they are factors.
+/// each knob that can move it — the multiplier and the roll's knob when they are factors.
 fn validate_whole_slope(
     linearization: f32,
     slope: f32,
     slope_parts: &str,
     contrast_name: Option<&str>,
-    white_name: Option<&str>,
+    roll_knob: Option<SlopeKnob>,
     names: KnobNames,
 ) -> Result<()> {
     let whole = linearization * slope;
@@ -1124,9 +1192,11 @@ fn validate_whole_slope(
     if let Some(contrast) = contrast_name {
         remedy += &format!(" or {contrast}");
     }
-    // The roll's slope is inversely proportional to its white.
-    if let Some(white) = white_name {
-        remedy += &format!(", or a {away} {white}");
+    // The roll's slope is inversely proportional to its white; a frame slope is itself.
+    match roll_knob {
+        Some(SlopeKnob::White(white)) => remedy += &format!(", or a {away} {white}"),
+        Some(SlopeKnob::Slope(slope)) => remedy += &format!(", or a {toward} {slope}"),
+        None => {}
     }
     Err(NcError::Usage(format!(
         "the whole slope, {gamma} {linearization:e} times the slope {slope:e} \
@@ -1167,7 +1237,24 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             &knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
         )?;
     }
+    if let Some(slope) = p.frame_slope {
+        slope_fault(
+            slope,
+            &knob_name(names, "roll", "--roll-frame-slope", "frame_slope"),
+        )?;
+    }
     Ok(())
+}
+
+/// A stated frame slope `slope`, named `name`: finite and positive.
+fn slope_fault(slope: f32, name: &str) -> Result<()> {
+    if slope.is_finite() && slope > 0.0 {
+        return Ok(());
+    }
+    Err(NcError::Usage(format!(
+        "{name} must be finite and positive — the look's base slope, as `hanten \
+         measure-roll` writes it for a thin frame — got {slope}"
+    )))
 }
 
 /// A stated exposure `ev`, named `name`: scene correction's rule on its own.
@@ -1206,12 +1293,24 @@ pub fn validate_roll_frames(
         }
         if *frame == FrameRoll::default() {
             return Err(NcError::Usage(format!(
-                "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops` or \
-                 an `exposure`, or drop the entry"
+                "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops`, \
+                 an `exposure` or a `slope`, or drop the entry"
             )));
         }
         if let Some(ev) = frame.exposure {
             exposure_fault(ev, &format!("recipe `roll.frames.\"{name}\".exposure`"))?;
+        }
+        if let Some(slope) = frame.slope {
+            let entry = format!("recipe `roll.frames.\"{name}\".slope`");
+            slope_fault(slope, &entry)?;
+            validate_whole_slope(
+                linearization,
+                slope * contrast,
+                &format!("the frame's slope {slope} from {entry} times {contrast_name} {contrast}"),
+                Some(&contrast_name),
+                Some(SlopeKnob::Slope(&entry)),
+                names,
+            )?;
         }
         let Some(stops) = frame.white_stops else {
             continue;
@@ -1229,7 +1328,7 @@ pub fn validate_roll_frames(
             base * contrast,
             &format!("the frame's slope {base} from {white} times {contrast_name} {contrast}"),
             Some(&contrast_name),
-            Some(&white),
+            Some(SlopeKnob::White(&white)),
             names,
         )?;
     }
@@ -1240,8 +1339,9 @@ pub fn validate_roll_frames(
 /// through the decode, scene correction and the look, and the film base grades to a
 /// positive luminance for display black. Fit range refuses either as a wiring bug.
 /// Run by `convert` and `roll` (not `measure-roll`, which renders nothing) after
-/// `cli::validate_shared`, for `r` and each `roll.frames` entry; `own` is the entry
-/// `r`'s frame took, so its fault is named as the entry.
+/// `cli::validate_shared`, for `r` and each `roll.frames` entry. `own` names `r`'s frame
+/// and its roll section before [`Recipe::for_frame`]: a fault the frame's entry causes is
+/// named as the entry, and the other entries are probed without what it moved in.
 ///
 /// **A probe, not a bound per knob** — legal values can multiply to zero or overflow:
 /// the film base and the corners of the reachable scan range (each channel at the scan
@@ -1249,15 +1349,20 @@ pub fn validate_roll_frames(
 /// from a region is taken at 1, where the densest sample decodes densest.
 pub fn validate_render(
     r: &Recipe,
-    own: Option<(&str, &FrameRoll)>,
+    own: Option<(&str, &RollSection)>,
     names: KnobNames,
 ) -> Result<()> {
     if r.output == OutputSection::FilmMaster {
         return Ok(());
     }
-    render_fault_message(r, own, None, names)?;
+    let own_entry = own.and_then(|(name, stated)| Some((name, stated.frames.get(name)?)));
+    render_fault_message(r, own_entry, None, names)?;
+    let mut others = r.clone();
+    if let (Some((_, entry)), Some((_, stated))) = (own_entry, own) {
+        others.roll.undo_entry(entry, stated);
+    }
     for (name, entry) in &r.roll.frames {
-        let frame = r.clone().for_frame(Path::new(name));
+        let frame = others.clone().for_frame(Path::new(name));
         render_fault_message(&frame, Some((name, entry)), Some(name), names)?;
     }
     Ok(())
@@ -1320,7 +1425,7 @@ struct ProbeKnob {
     reset: fn(&mut Recipe),
 }
 
-const PROBE_KNOBS: [ProbeKnob; 12] = [
+const PROBE_KNOBS: [ProbeKnob; 13] = [
     ProbeKnob {
         section: "reconstruction",
         flag: "--density-offset",
@@ -1392,6 +1497,13 @@ const PROBE_KNOBS: [ProbeKnob; 12] = [
         reset: |r| r.roll.frame_exposure = None,
     },
     ProbeKnob {
+        section: "roll",
+        flag: "--roll-frame-slope",
+        key: "frame_slope",
+        stated: |r| r.roll.frame_slope.is_some(),
+        reset: |r| r.roll.frame_slope = None,
+    },
+    ProbeKnob {
         section: "scene_correction",
         flag: "--white-balance",
         key: "white_balance",
@@ -1418,7 +1530,8 @@ fn render_fault_message(
     let Some(fault) = render_fault(r)? else {
         return Ok(());
     };
-    // The frame's entry, when `r`'s white or frame exposure came from it (a flag beats it).
+    // The frame's entry, when `r`'s white, frame exposure or frame slope came from it (a
+    // flag beats it).
     let name = |k: &ProbeKnob| match (own, k.section, k.key) {
         (Some((frame, e)), "roll", "white_stops")
             if e.white_stops.is_some() && e.white_stops == r.roll.white_stops =>
@@ -1429,6 +1542,11 @@ fn render_fault_message(
             if e.exposure.is_some() && e.exposure == r.roll.frame_exposure =>
         {
             format!("recipe `roll.frames.\"{frame}\".exposure`")
+        }
+        (Some((frame, e)), "roll", "frame_slope")
+            if e.slope.is_some() && e.slope == r.roll.frame_slope =>
+        {
+            format!("recipe `roll.frames.\"{frame}\".slope`")
         }
         _ => knob_name(names, k.section, k.flag, k.key),
     };
@@ -1927,8 +2045,8 @@ impl Recipe {
     }
 
     /// This recipe as `input` renders it: the frame's [`RollSection::frames`] entry, if
-    /// any, moves into `roll.white_stops` and `roll.frame_exposure`. `convert` and every `roll` frame go through
-    /// it, so the two stay byte-identical. The entry is removed, not copied, so a flag
+    /// any, moves into `roll.white_stops`, `roll.frame_exposure` and `roll.frame_slope`.
+    /// `convert` and every `roll` frame go through it, so the two stay byte-identical. The entry is removed, not copied, so a flag
     /// that then beats it is what a `--dump-params` replay renders; the other entries
     /// stay for [`validate`].
     pub fn for_frame(mut self, input: &Path) -> Self {
@@ -1939,6 +2057,9 @@ impl Recipe {
             }
             if let Some(ev) = frame.exposure {
                 self.roll.frame_exposure = Some(ev);
+            }
+            if let Some(slope) = frame.slope {
+                self.roll.frame_slope = Some(slope);
             }
         }
         self
@@ -1985,8 +2106,10 @@ impl Recipe {
     /// The look's slope and its parts: the base — the applied roll's white, else the
     /// rendering's [`Base::slope`] — times the `look.contrast` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
-        let (base_slope, base_from) = match (self.applied_roll().slope(), self.rendering) {
-            (Some(roll), _) => (roll, SlopeBase::Roll),
+        let roll = self.applied_roll();
+        let (base_slope, base_from) = match (roll.slope(), self.rendering) {
+            (Some(s), _) if roll.applied_frame_slope().is_some() => (s, SlopeBase::Frame),
+            (Some(s), _) => (s, SlopeBase::Roll),
             (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
             (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
         };
@@ -2030,17 +2153,24 @@ impl Recipe {
         (r.white_balance.is_some()
             || r.white_stops.is_some()
             || r.exposure.is_some()
-            || r.frame_exposure.is_some())
+            || r.frame_exposure.is_some()
+            || r.frame_slope.is_some())
         .then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
             slope: r.slope(),
             exposure: r.exposure,
             frame_exposure: r.frame_exposure,
+            frame_slope: r.frame_slope,
             white_balance_applied: applies && r.white_balance.is_some(),
-            slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
+            slope_applied: applies
+                && matches!(
+                    self.resolved_slope().base_from,
+                    SlopeBase::Roll | SlopeBase::Frame
+                ),
             exposure_applied: applies && r.exposure.is_some(),
             frame_exposure_applied: applies && r.applied_frame_exposure().is_some(),
+            frame_slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Frame,
         })
     }
 
@@ -2483,7 +2613,7 @@ mod tests {
         assert_eq!(
             json["roll"],
             serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null,
-                "frame_exposure": null, "frame_lift": null, "frames": {}})
+                "frame_exposure": null, "frame_slope": null, "frame_lift": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -3151,6 +3281,82 @@ mod tests {
         assert!(!off.roll_report(true).unwrap().frame_exposure_applied);
         let direct = frame(&["--rendering", "direct"]);
         assert_eq!(direct.resolved_scene_correction().exposure, 0.0);
+    }
+
+    #[test]
+    fn a_frames_slope_replaces_its_whites_unless_turned_off_or_left_out() {
+        let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+            "frames": {"a.tif": {"exposure": 0.7, "slope": 2.0}}}}"#;
+        let frame = |extra: &[&str]| {
+            let r = parse(roll).unwrap().for_frame(Path::new("/scans/a.tif"));
+            merge(r, &cli_flags(extra))
+        };
+        let r = frame(&[]);
+        assert_eq!(r.roll.frame_slope, Some(2.0));
+        let s = r.resolved_slope();
+        assert_eq!((s.base_slope, s.base_from), (2.0, SlopeBase::Frame));
+        let report = r.roll_report(true).unwrap();
+        assert!(
+            report.frame_slope_applied && report.slope_applied,
+            "{report:?}"
+        );
+        // `look.contrast` multiplies it, as it does the roll's.
+        assert_eq!(
+            frame(&["--contrast", "1.1"]).resolved_slope().slope,
+            2.0 * 1.1
+        );
+        // Another frame keeps the roll's.
+        let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
+        assert_eq!(other.resolved_slope().base_from, SlopeBase::Roll);
+        // A typed white beats the whole thin lift: its slope and the exposure with it.
+        let white = frame(&["--roll-white", "1.9"]);
+        let s = white.resolved_slope();
+        assert_eq!(
+            (s.base_slope, s.base_from),
+            (roll_white::slope_for(1.9), SlopeBase::Roll)
+        );
+        assert_eq!(white.roll.frame_exposure, None);
+        assert_eq!(white.resolved_scene_correction().exposure, 1.0);
+        // Off drops the slope with the exposure; `direct` leaves the roll out.
+        let off = frame(&["--frame-lift", "off"]);
+        let s = off.resolved_slope();
+        assert_eq!(
+            (s.base_slope, s.base_from),
+            (roll_white::slope_for(1.5), SlopeBase::Roll)
+        );
+        assert!(!off.roll_report(true).unwrap().frame_slope_applied);
+        let direct = frame(&["--rendering", "direct"]);
+        assert_eq!(direct.resolved_slope().base_from, SlopeBase::Direct);
+    }
+
+    #[test]
+    fn a_frames_slope_is_checked_by_its_own_name() {
+        let err = |json: &str, extra: &[&str]| {
+            let r = merged(json, extra);
+            validate(&r, KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string()
+        };
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"slope": -1}}}}"#,
+            &[],
+        );
+        assert!(
+            msg.starts_with("recipe `roll.frames.\"a.tif\".slope` must be finite and positive"),
+            "{msg}"
+        );
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-frame-slope", "0"]);
+        assert!(
+            msg.starts_with("--roll-frame-slope (recipe `roll.frame_slope`) must be finite"),
+            "{msg}"
+        );
+        // A whole slope that overflows names the frame slope, to be made smaller.
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-frame-slope", "3e38"]);
+        assert!(
+            msg.contains("or a smaller --roll-frame-slope (recipe `roll.frame_slope`)"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -4133,6 +4339,9 @@ mod tests {
                 &["--roll-frame-exposure", "0.2"],
                 |r| r.roll.frame_exposure == Some(0.2),
             ),
+            ("--roll-frame-slope", &["--roll-frame-slope", "2.1"], |r| {
+                r.roll.frame_slope == Some(2.1)
+            }),
             ("--frame-lift", &["--frame-lift", "off"], |r| {
                 r.roll.frame_lift == Some(FrameLift::Off)
             }),
@@ -4368,11 +4577,7 @@ mod tests {
         // `convert` of that frame: the entry moved into `roll.white_stops`, and is still
         // named as the entry; a flag that beats it is named as the flag.
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
-        let own = stated
-            .roll
-            .frames
-            .get_key_value("b.tif")
-            .map(|(n, e)| (n.as_str(), e));
+        let own = Some(("b.tif", &stated.roll));
         let frame = stated.clone().for_frame(Path::new("b.tif"));
         let err = validate_render(&frame, own, KnobNames::FlagAndKey).unwrap_err();
         assert!(
@@ -4391,5 +4596,19 @@ mod tests {
             "{}",
             err.message()
         );
+    }
+
+    #[test]
+    fn another_entry_is_probed_without_this_frames_values() {
+        // `a.tif`'s steep white and `b.tif`'s exposure each render; only together would
+        // the densest sample overflow, and no frame renders both.
+        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "frames": {
+            "a.tif": {"white_stops": 0.8}, "b.tif": {"exposure": 16}}}}"#;
+        let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
+        let frame = stated.clone().for_frame(Path::new("a.tif"));
+        let mut both = frame.clone();
+        both.roll.frame_exposure = Some(16.0);
+        assert!(render_fault(&both).unwrap().is_some(), "not vacuous");
+        validate_render(&frame, Some(("a.tif", &stated.roll)), KnobNames::FlagAndKey).unwrap();
     }
 }

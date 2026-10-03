@@ -64,6 +64,17 @@
 //! bright one is not, and nothing is darkened. Not on the white alone, which re-does the
 //! roll's exposure on a thin roll (evidence: `docs/progress/nf-calibration.md`,
 //! `## frame-level-trim`).
+//!
+//! **A flat frame gets no lift** ([`FLAT_SPREAD_STOPS`]): one surface filling the frame has
+//! no white of its own, and raising it only greys it.
+//!
+//! **A thin frame's lift** (`nf-calibration/thin-frame-lift`, on with an opt-out: taste, not
+//! quality) is a bounded fine-tune, not a placement: a thin frame need not hold a white, so
+//! nothing is solved to reach diffuse white. It raises the frame's white by about
+//! [`THIN_LIFT_STOPS`] with the film base held about where the roll renders it — a steeper
+//! slope ([`thin_lift`], which says why "about") and the exposure that keeps the base still
+//! — in place of the small lift. No statistic separates an underexposed frame from a night
+//! scene; review preferred the lift on both.
 
 use serde::Serialize;
 
@@ -139,6 +150,32 @@ pub const LIFT_FULL_STOPS: f32 = 0.9;
 /// A frame whose rendered white is at or over this gets no lift; between the two the lift
 /// falls linearly.
 pub const LIFT_NONE_STOPS: f32 = 1.5;
+
+/// A frame whose luma spans fewer stops than this from its p5 to its p95 is **flat** — one
+/// surface filling the frame — and gets no lift of either kind: a lift lost on the two
+/// such frames of ten rolls (0.59 and 0.67 stop), and won on none under 1.36.
+pub const FLAT_SPREAD_STOPS: f32 = 1.0;
+
+/// A thin-frame lift qualifies a frame whose rendered white (as [`LIFT_FULL_STOPS`]
+/// measures it) is at or under this…
+pub const THIN_WHITE_STOPS: f32 = LIFT_FULL_STOPS;
+
+/// …and whose luma has at least this share within [`NEAR_BASE_STOPS`] of the film base:
+/// its shadows sit on the base, which a normal low-key frame's do not. A night scene's do
+/// too, and review preferred the lift there.
+pub const THIN_BASE_SHARE: f32 = 0.3;
+
+/// How close to the base, in scene stops, a pixel's luma counts toward
+/// [`THIN_BASE_SHARE`].
+pub const NEAR_BASE_STOPS: f32 = 1.0;
+
+/// How far a thin-frame lift raises the frame's white, in rendered stops, with the film
+/// base held about where the roll renders it ([`thin_lift`]). Chosen by review over 0.5.
+pub const THIN_LIFT_STOPS: f32 = 1.0;
+
+/// The steepest slope a thin-frame lift may reach — grain rises with it. Review passed 2.4
+/// on two thin frames.
+pub const THIN_SLOPE_BOUND: f32 = 2.4;
 
 /// The leader measurement the guard reads, **written fresh** — the retiring
 /// leader-`Dmax` anchor is not reused (`nf-retire/dmax-machinery`).
@@ -299,7 +336,7 @@ pub fn frame_level(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f
         .0
         .iter()
         .filter(|px| px.iter().all(|v| v.is_finite()))
-        .map(|px| (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum::<f32>())
+        .map(luma)
         .filter(|y| *y > 0.0)
         .fold((0.0f64, 0usize), |(s, n), y| {
             (s + f64::from(y).log2(), n + 1)
@@ -350,6 +387,135 @@ pub fn frame_lift(white_stops: f32, roll_ev: f32) -> f32 {
     let rendered = white_stops + roll_ev;
     let t = (LIFT_NONE_STOPS - rendered) / (LIFT_NONE_STOPS - LIFT_FULL_STOPS);
     LIFT_BOUND_EV * t.clamp(0.0, 1.0)
+}
+
+/// A frame's tonal shape over `region`, from its luma in scene stops: what decides whether
+/// a lift may touch it ([`FLAT_SPREAD_STOPS`], [`THIN_BASE_SHARE`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct FrameTones {
+    /// Stops from the luma's p5 to its p95.
+    pub spread_stops: f32,
+    /// The share of pixels whose luma is within [`NEAR_BASE_STOPS`] of the base.
+    pub base_share: f32,
+}
+
+impl FrameTones {
+    pub fn flat(&self) -> bool {
+        self.spread_stops < FLAT_SPREAD_STOPS
+    }
+}
+
+/// [`FrameTones`] over `region` of the decode's **linear ACEScg**, the pixels
+/// [`frame_level`] counts, against `base_stops` ([`base_stops`]); `None` when none counts.
+pub fn frame_tones(
+    rgb: &[f32],
+    width: u32,
+    region: [u32; 4],
+    base_stops: f32,
+) -> Result<Option<FrameTones>> {
+    let sample = sample_region(rgb, width, region, FRAME_SAMPLE_PIXELS)?;
+    let stops: Vec<f32> = sample
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|px| px.iter().all(|v| v.is_finite()))
+        .map(luma)
+        .filter(|y| *y > 0.0)
+        .map(scene_stops)
+        .collect();
+    if stops.is_empty() {
+        return Ok(None);
+    }
+    let near = stops
+        .iter()
+        .filter(|s| **s < base_stops + NEAR_BASE_STOPS)
+        .count();
+    let base_share = near as f32 / stops.len() as f32;
+    // Both percentiles from one selection: p5 lies below p95's place.
+    let mut stops = stops;
+    let (lo, hi) = (
+        nearest_rank_index(stops.len(), 0.05),
+        nearest_rank_index(stops.len(), 0.95),
+    );
+    let (below, p95, _) = stops.select_nth_unstable_by(hi, f32::total_cmp);
+    let p95 = *p95;
+    let p5 = if lo < hi {
+        *below.select_nth_unstable_by(lo, f32::total_cmp).1
+    } else {
+        p95
+    };
+    Ok(Some(FrameTones {
+        spread_stops: p95 - p5,
+        base_share,
+    }))
+}
+
+fn luma(px: &[f32; 3]) -> f32 {
+    (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum()
+}
+
+/// The decoded film base (one ACEScg pixel, `algo::fixed::decode_film_base` mapped) as a
+/// luma in scene stops: where every frame's shadows bottom out.
+pub fn base_stops(px: [f32; 3]) -> f32 {
+    scene_stops(luma(&px))
+}
+
+/// Whether a frame qualifies for a thin-frame lift: its white renders low after the roll's
+/// exposure and its shadows sit on the base. A flat frame never does.
+pub fn thin(white_stops: f32, roll_ev: f32, tones: &FrameTones) -> bool {
+    !tones.flat()
+        && white_stops + roll_ev <= THIN_WHITE_STOPS
+        && tones.base_share >= THIN_BASE_SHARE
+}
+
+/// A thin frame's own slope and exposure.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ThinLift {
+    /// The frame's slope: `roll.frame_slope`.
+    pub slope: f32,
+    /// Its exposure in EV, a delta on the roll's: `roll.frame_exposure`, in place of the
+    /// frame's [`frame_lift`].
+    pub exposure: f32,
+    /// How far its white rises, in rendered stops, by [`thin_lift`]'s measure:
+    /// [`THIN_LIFT_STOPS`] unless bounded.
+    pub lift_stops: f32,
+    /// Whether [`THIN_SLOPE_BOUND`] held the lift under [`THIN_LIFT_STOPS`].
+    pub bounded: bool,
+}
+
+/// Raise a thin frame's white [`THIN_LIFT_STOPS`] with the film base held where the roll
+/// renders it: from slope `k0` and total exposure `e0` (the roll's plus the frame's
+/// [`frame_lift`]) to slope `k0 + Δ/(white − base)`, capped at [`THIN_SLOPE_BOUND`], and
+/// the exposure that keeps `k·(base + e)` where it was. `None` when no lift is possible:
+/// the white is not above the base, `k0` is already at the bound, or the exposure would
+/// fall under `e0` (a base above mid-grey), darkening the mid-tones the small lift raised.
+///
+/// Approximate: the white (film RGB, brightest channel) and the base (ACEScg luma, before
+/// the roll's gains) are not the measure the render's per-channel slope applies to, so
+/// the base moves and the white rises by about, not exactly, these amounts.
+pub fn thin_lift(
+    white_stops: f32,
+    base_stops: f32,
+    roll_ev: f32,
+    k0: f32,
+    e0: f32,
+) -> Option<ThinLift> {
+    let range = white_stops - base_stops;
+    if range <= 0.0 || k0 >= THIN_SLOPE_BOUND {
+        return None;
+    }
+    let wanted = k0 + THIN_LIFT_STOPS / range;
+    let slope = wanted.min(THIN_SLOPE_BOUND);
+    let e = k0 * (base_stops + e0) / slope - base_stops;
+    if e < e0 {
+        return None;
+    }
+    Some(ThinLift {
+        slope,
+        exposure: e - roll_ev,
+        lift_stops: (slope - k0) * range,
+        bounded: slope < wanted,
+    })
 }
 
 /// The median of the leader's brightest channel over its centre half, in the same
@@ -563,6 +729,82 @@ mod tests {
         assert!((mid - LIFT_BOUND_EV / 2.0).abs() < 1e-6, "{mid}");
         // A night frame (white far under) is held at the bound.
         assert_eq!(frame_lift(-8.0, 2.0), LIFT_BOUND_EV);
+    }
+
+    #[test]
+    fn a_thin_lift_raises_the_white_and_holds_the_base() {
+        // Frame 2005 of the 2026-09-28 roll, as review round 1 rendered it.
+        let (white, base, roll_ev) = (-1.2267, -3.707, 1.3933);
+        let (k0, e0) = (slope_for(WHITE_FLOOR_STOPS), roll_ev + LIFT_BOUND_EV);
+        let t = thin_lift(white, base, roll_ev, k0, e0).unwrap();
+        assert!((t.slope - 2.052).abs() < 1e-3, "{t:?}");
+        assert!((t.exposure - 0.696).abs() < 1e-3, "{t:?}");
+        assert!((t.lift_stops - THIN_LIFT_STOPS).abs() < 1e-5, "{t:?}");
+        assert!(!t.bounded);
+        let rendered = |k: f32, e: f32, s: f32| k * (s + e);
+        let e = roll_ev + t.exposure;
+        assert!((rendered(t.slope, e, base) - rendered(k0, e0, base)).abs() < 1e-4);
+        assert!(
+            (rendered(t.slope, e, white) - rendered(k0, e0, white) - THIN_LIFT_STOPS).abs() < 1e-4
+        );
+        // A white close to the base asks for a slope past the bound: capped, and said so.
+        let t = thin_lift(base + 0.5, base, roll_ev, k0, e0).unwrap();
+        assert_eq!(t.slope, THIN_SLOPE_BOUND);
+        assert!(t.bounded && t.lift_stops < THIN_LIFT_STOPS, "{t:?}");
+        // Nothing to spread, or no room under the bound.
+        assert_eq!(thin_lift(base, base, roll_ev, k0, e0), None);
+        assert_eq!(thin_lift(white, base, roll_ev, THIN_SLOPE_BOUND, e0), None);
+        // A base above mid-grey would solve an exposure under the small lift's: none.
+        let (white, base) = (1.5, 0.5);
+        let k0 = slope_for(white);
+        assert!(k0 * (base + e0) > 0.0 && k0 < THIN_SLOPE_BOUND);
+        assert_eq!(thin_lift(white, base, roll_ev, k0, e0), None);
+    }
+
+    #[test]
+    fn a_frames_tones_tell_flat_and_base_bound_frames() {
+        let base = -3.0;
+        // Twenty levels a fifth of a stop apart: nearest-rank p5 to p95 spans 17 steps,
+        // and the five within a stop of the base are a quarter.
+        let rgb: Vec<f32> = (0..20)
+            .flat_map(|i| {
+                let y = MID_GREY * (base + 0.1 + 0.2 * i as f32).exp2();
+                [y; 3]
+            })
+            .collect();
+        let t = frame_tones(&rgb, 20, [0, 0, 20, 1], base).unwrap().unwrap();
+        assert!((t.spread_stops - 3.4).abs() < 1e-4, "{t:?}");
+        assert!((t.base_share - 0.25).abs() < 1e-6, "{t:?}");
+        assert!(!t.flat());
+        // One surface: under a stop from p5 to p95.
+        let flat: Vec<f32> = (0..20)
+            .flat_map(|i| [MID_GREY * (0.03 * i as f32).exp2(); 3])
+            .collect();
+        assert!(
+            frame_tones(&flat, 20, [0, 0, 20, 1], base)
+                .unwrap()
+                .unwrap()
+                .flat()
+        );
+        assert_eq!(
+            frame_tones(&field([0.0; 3], 4), 4, [0, 0, 4, 1], base).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_thin_frame_is_dark_with_its_shadows_on_the_base_and_not_flat() {
+        let tones = |spread_stops, base_share| FrameTones {
+            spread_stops,
+            base_share,
+        };
+        assert!(thin(-1.2, 1.4, &tones(1.9, 0.64)));
+        // A normal low-key frame: as dark, but its shadows sit above the base.
+        assert!(!thin(-0.55, 0.65, &tones(1.4, 0.02)));
+        // Bright enough after the roll's exposure.
+        assert!(!thin(0.5, 1.4, &tones(2.0, 0.6)));
+        // Flat wins over everything.
+        assert!(!thin(-1.2, 1.4, &tones(FLAT_SPREAD_STOPS - 0.01, 0.9)));
     }
 
     #[test]

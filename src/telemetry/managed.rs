@@ -1,15 +1,18 @@
 //! Automatic collection under persistent consent, for one `convert` process.
 //!
 //! [`begin`] takes the shared collection lease and, inside the consent gate,
-//! captures an immutable snapshot of active consent; the process holds both until
-//! it ends, so `purge` and retarget wait it out while `disable` does not. The
+//! captures an immutable snapshot of active consent; [`keep_for_process`] holds both
+//! until the process ends and installs the panic hook (`telemetry::panic`), so
+//! `purge` and retarget wait it out while `disable` does not. The
 //! event goes to the snapshot's queue, and the helper is launched only if the
-//! same consent is still active then. Every wait is bounded and every failure is
+//! same consent is still active then (the panic hook launches it unchecked; its
+//! drain checks before every request). Every wait is bounded and every failure is
 //! silent: a conversion never waits long on, or fails for, telemetry.
 
 use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::consent::{self, Consent, Store};
@@ -56,6 +59,21 @@ pub fn begin() -> Option<Snapshot> {
         consent,
         _lease: lease,
     })
+}
+
+/// Keep `snapshot`, with its lease, until the process ends, and report this
+/// process's panics into its spool. A second call in one process keeps the first.
+pub fn keep_for_process(snapshot: Snapshot) -> &'static Snapshot {
+    static KEPT: OnceLock<Snapshot> = OnceLock::new();
+    let mut fresh = false;
+    let kept = KEPT.get_or_init(|| {
+        fresh = true;
+        snapshot
+    });
+    if fresh {
+        super::panic::install(kept.consent.spool.clone(), kept.consent.generation.clone());
+    }
+    kept
 }
 
 impl Snapshot {

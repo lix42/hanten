@@ -166,11 +166,11 @@ Read the module docs before changing these; they hold the traps.
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |
 | AVIF (removed) and how to restore it | `docs/design/avif-removal.md` |
 | colorimetry | `pipeline/colorimetry/`, `docs/colorimetry-maintenance.md` |
-| memory preflight | `pipeline/memory.rs` |
+| memory preflight | `pipeline/memory.rs`; the global allocator (big blocks mapped, unmapped on free) in `allocator.rs` |
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
 | goldens, cross-platform bounds, drift gate | `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs` |
-| telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill; the uploader's lock order on `telemetry/maintenance.rs`; the ingestion Worker in `services/telemetry-ingest/` (its `CLAUDE.md`) |
+| telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill; the uploader's lock order on `telemetry/maintenance.rs`; panic reporting in `telemetry/panic.rs`; the ingestion Worker in `services/telemetry-ingest/` (its `CLAUDE.md`) |
 | stage names, per-stage timing | `stage.rs` (`StageKind`, `StageClock`) |
 | build identity (`NC_GIT_*`) | `build.rs` |
 | stdout / stderr writes (lint-enforced: `main.rs`, `clippy.toml`) | `stdio.rs` |

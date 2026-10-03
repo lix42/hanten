@@ -10,21 +10,28 @@
 //! deletes its input, so a crash at any point leaves the record in some file and a
 //! later drain resends it (the server deduplicates by `event_id`).
 //!
-//! A line of an older local schema version (a record written before
-//! `SCHEMA_VERSION`, or by an older build) is dropped and only counted; one of a
-//! newer version is quarantined, for the build that wrote it.
+//! A panic (`telemetry::panic`) is written straight into the spool as a
+//! `.panic-<id>.tmp` published to `panic-ready-<id>.json`, without any of the
+//! queue's locks; a drain projects every ready file into `batch-panic-<id>-<n>.json`
+//! batches. A panic temp may belong to a live process, so a drain removes it only
+//! once it is [`PANIC_TEMP_AGE`] old, and never reads it.
+//!
+//! A record of an older local schema version (written before `SCHEMA_VERSION`, or
+//! by an older build) is dropped and only counted; one of a newer version is
+//! quarantined, for the build that wrote it.
 
 use std::ffi::OsString;
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
 use super::consent::Consent;
 use super::durable::{self, Held, Mode, Wait};
-use super::upload::{UPLOAD_SCHEMA_VERSION, to_upload_event};
+use super::panic::{self, PanicEvent};
+use super::upload::{NotUploadable, UPLOAD_SCHEMA_VERSION, to_upload_event, to_upload_panic};
 use super::{SCHEMA_VERSION, TelemetryEvent};
 
 /// The selected queue file plus everything in its spool.
@@ -41,6 +48,20 @@ const DRAIN_LOCK: &str = "drain.lock";
 const STATUS: &str = "status.json";
 /// A quarantined line is kept up to this many bytes.
 const QUARANTINE_LINE_LIMIT: usize = 16 * 1024;
+/// Panic batches are `batch-panic-<id>-<n>.json`.
+const PANIC_BATCH_PREFIX: &str = "batch-panic-";
+/// A panic temp this old is a crashed write, not a live one: a hook writes at most
+/// [`panic::MAX_BYTES`] and links it at once.
+pub const PANIC_TEMP_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// Who may still be writing a panic temp, for [`Queue::reconcile`].
+#[derive(Clone, Copy, Debug)]
+pub enum PanicWriters {
+    /// Conversions may be running: a temp is stale once [`PANIC_TEMP_AGE`] old.
+    MayRun(SystemTime),
+    /// The caller holds the collection lease exclusively, so none can be.
+    Excluded,
+}
 
 /// `<parent>/.<name>.nc-telemetry-spool` for the queue file `<parent>/<name>`.
 pub fn spool_for(queue: &Path) -> Option<PathBuf> {
@@ -57,7 +78,7 @@ pub enum Kind {
     Raw,
     Batch,
     Quarantine,
-    /// Written by the panic hook (`telemetry/panic-hook`); kept, counted and purged.
+    /// Written by the panic hook (`telemetry::panic`), projected by a drain.
     PanicReady,
     PanicTemp,
     Status,
@@ -281,10 +302,18 @@ impl Queue {
         Ok(entries)
     }
 
-    /// Remove unfinished publications; their sources still exist.
-    pub fn reconcile(&self, status: &mut Status) -> io::Result<()> {
+    /// Remove unfinished publications: ours, whose sources still exist, and the
+    /// panic temps no live hook can be writing, which are never read.
+    pub fn reconcile(&self, status: &mut Status, writers: PanicWriters) -> io::Result<()> {
         for e in self.entries()? {
-            if e.kind == Kind::Temp {
+            let stale = match (e.kind, writers) {
+                (Kind::Temp, _) | (Kind::PanicTemp, PanicWriters::Excluded) => true,
+                (Kind::PanicTemp, PanicWriters::MayRun(now)) => now
+                    .duration_since(e.modified)
+                    .is_ok_and(|age| age >= PANIC_TEMP_AGE),
+                _ => false,
+            };
+            if stale {
                 durable::remove(&self.spool, &e.name)?;
                 status.discarded_temps += 1;
             }
@@ -347,6 +376,60 @@ impl Queue {
             self.publish(&format!("batch-{id}-{:04}.json", next + i), body.as_bytes())?;
         }
         durable::remove(&self.spool, raw)?;
+        status.quarantined += quarantine.len() as u64;
+        status.dropped_other_schema += projected.other_schema;
+        status.expired += projected.expired;
+        Ok(())
+    }
+
+    /// Project every panic-ready file into `batch-panic-<id>-<n>` batches and a
+    /// quarantine file, then delete them. An event a panic batch already holds (a
+    /// crash before the deletes) is skipped.
+    pub fn project_panics(&self, now_ms: u64, status: &mut Status) -> io::Result<()> {
+        let entries = self.entries()?;
+        let ready: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.kind == Kind::PanicReady)
+            .map(|e| e.name.as_str())
+            .collect();
+        if ready.is_empty() {
+            return Ok(());
+        }
+        let mut batched = std::collections::HashSet::new();
+        for e in entries
+            .iter()
+            .filter(|e| e.name.starts_with(PANIC_BATCH_PREFIX))
+        {
+            batched.extend(batch_ids(self.read_batch(&e.name)?.as_bytes()).unwrap_or_default());
+        }
+        let mut projected = Projected::default();
+        let mut consumed = Vec::new();
+        for name in ready {
+            match durable::read_capped(&self.spool.join(name), panic::MAX_BYTES as u64) {
+                Ok(bytes) => project_panic(&bytes, now_ms, &mut projected),
+                // Larger than any hook writes: not ours to parse.
+                Err(e) if e.kind() == io::ErrorKind::FileTooLarge => status.dropped_over_cap += 1,
+                Err(e) => return Err(e),
+            }
+            consumed.push(name);
+        }
+        projected
+            .events
+            .retain(|e| event_id(e).is_none_or(|id| !batched.contains(&id)));
+        let (bodies, oversized) = chunk(&projected.events);
+        let mut quarantine = projected.quarantine;
+        quarantine.extend(oversized.into_iter().map(|e| record("oversized", &e)));
+        self.quarantine(&quarantine)?;
+        let id = durable::random_hex()?;
+        for (i, body) in bodies.iter().enumerate() {
+            self.publish(
+                &format!("{PANIC_BATCH_PREFIX}{id}-{i:04}.json"),
+                body.as_bytes(),
+            )?;
+        }
+        for name in consumed {
+            durable::remove(&self.spool, name)?;
+        }
         status.quarantined += quarantine.len() as u64;
         status.dropped_other_schema += projected.other_schema;
         status.expired += projected.expired;
@@ -547,13 +630,21 @@ impl Queue {
 
     /// The request bodies a drain would send now, in order, without writing
     /// anything: pending batches as stored, then the projection of each raw file and
-    /// of the queue file's complete lines.
+    /// of the queue file's complete lines. Like the drain, it skips an event a batch
+    /// already holds (a crash between a projection and its source's delete).
     pub fn preview(&self, now_ms: u64) -> io::Result<Vec<String>> {
         let entries = self.entries()?;
         let mut bodies = Vec::new();
+        let mut batched = std::collections::HashSet::new();
         for e in entries.iter().filter(|e| e.kind == Kind::Batch) {
-            bodies.push(self.read_batch(&e.name)?);
+            let body = self.read_batch(&e.name)?;
+            batched.extend(batch_ids(body.as_bytes()).unwrap_or_default());
+            bodies.push(body);
         }
+        let unsent = |mut events: Vec<String>| {
+            events.retain(|e| event_id(e).is_none_or(|id| !batched.contains(&id)));
+            events
+        };
         let mut sources = Vec::new();
         for e in entries.iter().filter(|e| e.kind == Kind::Raw) {
             sources.push(durable::read_capped(
@@ -569,8 +660,17 @@ impl Queue {
             sources.push(live);
         }
         for bytes in sources {
-            bodies.extend(chunk(&project(&bytes, now_ms).events).0);
+            bodies.extend(chunk(&unsent(project(&bytes, now_ms).events)).0);
         }
+        let mut panics = Projected::default();
+        for e in entries.iter().filter(|e| e.kind == Kind::PanicReady) {
+            match durable::read_capped(&self.spool.join(&e.name), panic::MAX_BYTES as u64) {
+                Ok(bytes) => project_panic(&bytes, now_ms, &mut panics),
+                Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {}
+                Err(e) => return Err(e),
+            }
+        }
+        bodies.extend(chunk(&unsent(panics.events)).0);
         Ok(bodies)
     }
 }
@@ -622,49 +722,69 @@ pub struct Projected {
 pub fn project(bytes: &[u8], now_ms: u64) -> Projected {
     let mut out = Projected::default();
     for line in bytes.split(|b| *b == b'\n') {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let text = String::from_utf8_lossy(line);
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
-            out.quarantine.push(record("malformed", &text));
-            continue;
-        };
-        match value
-            .get("schema_version")
-            .and_then(serde_json::Value::as_u64)
-        {
-            Some(v) if v == u64::from(SCHEMA_VERSION) => {}
-            // A newer build's record: kept for that build, never dropped by this one.
-            Some(v) if v > u64::from(SCHEMA_VERSION) => {
-                out.quarantine.push(record("newer_schema", &text));
-                continue;
-            }
-            _ => {
-                out.other_schema += 1;
-                continue;
-            }
-        }
-        let event: TelemetryEvent = match serde_json::from_value(value) {
-            Ok(event) => event,
-            Err(_) => {
-                out.quarantine.push(record("malformed", &text));
-                continue;
-            }
-        };
-        if now_ms.saturating_sub(event.timestamp_ms) > MAX_AGE_MS {
-            out.expired += 1;
-            continue;
-        }
-        match to_upload_event(&event).map(|u| serde_json::to_string(&u)) {
-            Ok(Ok(json)) => out.events.push(json),
-            Ok(Err(_)) => out.quarantine.push(record("malformed", &text)),
-            Err(why) => out
-                .quarantine
-                .push(record(&format!("not_uploadable:{why:?}"), &text)),
+        if !line.iter().all(u8::is_ascii_whitespace) {
+            project_record(line, now_ms, &mut out, |e: &TelemetryEvent| {
+                (e.timestamp_ms, to_upload_event(e))
+            });
         }
     }
     out
+}
+
+/// Project one panic-ready file's bytes into `out`. Pure apart from `now_ms`.
+pub fn project_panic(bytes: &[u8], now_ms: u64, out: &mut Projected) {
+    project_record(bytes, now_ms, out, |e: &PanicEvent| {
+        (e.timestamp_ms, to_upload_panic(e))
+    });
+}
+
+/// One record: dropped if of an older schema or expired, quarantined if malformed,
+/// of a newer schema or not uploadable, else projected by `upload`.
+fn project_record<E, U>(
+    bytes: &[u8],
+    now_ms: u64,
+    out: &mut Projected,
+    upload: impl Fn(&E) -> (u64, Result<U, NotUploadable>),
+) where
+    E: serde::de::DeserializeOwned,
+    U: Serialize,
+{
+    let text = String::from_utf8_lossy(bytes);
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        out.quarantine.push(record("malformed", &text));
+        return;
+    };
+    match value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+    {
+        Some(v) if v == u64::from(SCHEMA_VERSION) => {}
+        // A newer build's record: kept for that build, never dropped by this one.
+        Some(v) if v > u64::from(SCHEMA_VERSION) => {
+            out.quarantine.push(record("newer_schema", &text));
+            return;
+        }
+        _ => {
+            out.other_schema += 1;
+            return;
+        }
+    }
+    let Ok(event) = serde_json::from_value::<E>(value) else {
+        out.quarantine.push(record("malformed", &text));
+        return;
+    };
+    let (timestamp_ms, projected) = upload(&event);
+    if now_ms.saturating_sub(timestamp_ms) > MAX_AGE_MS {
+        out.expired += 1;
+        return;
+    }
+    match projected.map(|u| serde_json::to_string(&u)) {
+        Ok(Ok(json)) => out.events.push(json),
+        Ok(Err(_)) => out.quarantine.push(record("malformed", &text)),
+        Err(why) => out
+            .quarantine
+            .push(record(&format!("not_uploadable:{why:?}"), &text)),
+    }
 }
 
 const BODY_PREFIX: &str = "{\"upload_schema_version\":";

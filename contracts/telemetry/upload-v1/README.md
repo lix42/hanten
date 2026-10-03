@@ -24,13 +24,12 @@ them by hand.
 ## Rules the schema holds
 
 - The event is the local event (`telemetry::SCHEMA_VERSION` **11**) projected to its
-  upload form (`to_upload_event` for a conversion; the panic projection arrives with
-  `telemetry/panic-hook`); `source_schema_version` is that number and nothing else.
+  upload form (`to_upload_event` for a conversion, `to_upload_panic` for a panic);
+  `source_schema_version` is that number and nothing else.
   Legacy local records never upload. A later local schema bump widens the Worker's
   accepted set rather than replacing 11; queued lines of an older local version are
-  dropped by the uploader, never projected (`telemetry/upload`). Whether
-  adding the panic event bumps the local schema is `telemetry/panic-hook`'s call (see
-  `SCHEMA_VERSION`); the fixture records 11 until then.
+  dropped by the uploader, never projected (`telemetry/upload`). The panic event is
+  also version 11 (`SCHEMA_VERSION` says why).
 - **Absent is not `unknown`.** A block the run never reached is absent (`image` before
   decode, `conversion` before the destination resolved, a stage's time before it
   completed, the clip fields unless the frame finished). `unknown` is a value the run
@@ -89,6 +88,8 @@ needs a consent-version bump (`telemetry/upload`).
 
 `local/panic-ready.json` is one compact JSON object and a newline, at most 16 KiB:
 `schema_version`, `event_id`, `event: "panic"`, `command`, `timestamp_ms`,
-`nc_version`, `target`, `cpu_count`, `stage`, `frames`. Its upload form is the
-`panic` case in `requests/valid.json`; the projection that makes it arrives with
-`telemetry/panic-hook`.
+`nc_version`, `target`, `cpu_count`, `stage`, `frames`. The hook writes it as
+`panic-ready-<event_id>.json` in the queue's spool (`telemetry::panic`). Its upload
+form is the `panic` case in `requests/valid.json`, made by `to_upload_panic`: the
+envelope fields as for a conversion, `stage`, and `frames` copied. A frame the hook
+could not have written makes the whole event not uploadable.

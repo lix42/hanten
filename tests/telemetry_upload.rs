@@ -1,6 +1,11 @@
 //! End-to-end tests of opt-in telemetry upload (`telemetry/upload`): the binary
 //! against a fake `/v1/events` endpoint on loopback, with consent, data and queue
 //! directories in a private temp dir so the machine's own consent is never read.
+//! Panic reporting's tests are in `panic_reporting`.
+
+#[cfg(debug_assertions)]
+#[path = "telemetry_upload/panic_reporting.rs"]
+mod panic_reporting;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -544,6 +549,97 @@ fn rejected_events_and_malformed_requests_are_quarantined_not_retried() {
     assert_eq!(batches(&home), 0);
     assert_eq!(home.status()["queue"]["quarantine_records"], 2);
     assert_eq!(server.requests(), 2);
+}
+
+/// The shared local panic fixture as a ready file with `event_id`, written now (the
+/// fixture's own date is past the 30-day expiry).
+fn write_panic_fixture(home: &Home, event_id: &str) {
+    let fixture = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("contracts/telemetry/upload-v1/local/panic-ready.json"),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let bytes = fixture
+        .replace("5f0c3a9e81d24b7c9e0a6d3f2b1c8e47", event_id)
+        .replace("1781000000000", &now.to_string());
+    fs::write(
+        home.spool().join(format!("panic-ready-{event_id}.json")),
+        bytes,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_panic_ready_file_is_retried_acknowledged_or_quarantined() {
+    let home = Home::new("panic-journey");
+    let server = Endpoint::start(|n, body| match n {
+        0 => Reply {
+            status: 503,
+            body: "{}".into(),
+            delay: Duration::ZERO,
+        },
+        1 => Reply {
+            status: 200,
+            body: acknowledge(body, &[], &[]),
+            delay: Duration::ZERO,
+        },
+        _ => Reply {
+            status: 400,
+            body: r#"{"error":"invalid_envelope"}"#.into(),
+            delay: Duration::ZERO,
+        },
+    });
+    enable_collect_only(&home);
+    let first = "0123456789abcdef0123456789abcdef";
+    write_panic_fixture(&home, first);
+    let preview = home.run("none", &["telemetry", "preview"]);
+    assert_eq!(code(&preview), 0, "{}", stderr(&preview));
+
+    let out = home.run(&server.url, &["telemetry", "flush"]);
+    assert_eq!(code(&out), 1, "a 503 keeps the batch: {}", stderr(&out));
+    assert_eq!(batches(&home), 1);
+    assert!(
+        !spool_names(&home)
+            .iter()
+            .any(|n| n.starts_with("panic-ready-"))
+    );
+    let out = home.run(&server.url, &["telemetry", "flush"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(batches(&home), 0);
+    assert_eq!(home.status()["upload"]["accepted"], 1);
+    let bodies = server.bodies();
+    assert_eq!(bodies[0], bodies[1], "the same immutable batch");
+    assert_eq!(
+        String::from_utf8(preview.stdout).unwrap().trim_end(),
+        bodies[0],
+        "preview prints what flush sends"
+    );
+    let event = &serde_json::from_str::<serde_json::Value>(&bodies[0]).unwrap()["events"][0];
+    assert_eq!(event["event_id"], first);
+    assert_eq!(event["event_name"], "panic");
+    assert_eq!(event["stage"], "look");
+    assert_eq!(
+        event["frames"],
+        serde_json::json!([
+            "nc::pipeline::look::apply",
+            "nc::cli::convert_frame",
+            "nc::main"
+        ])
+    );
+    for local_only in ["timestamp_ms", "target", "cpu_count", "\"event\""] {
+        assert!(!bodies[0].contains(local_only), "{local_only} uploaded");
+    }
+
+    write_panic_fixture(&home, "fedcba9876543210fedcba9876543210");
+    let out = home.run(&server.url, &["telemetry", "flush"]);
+    assert_eq!(code(&out), 0, "a 400 is final: {}", stderr(&out));
+    assert_eq!(batches(&home), 0);
+    assert_eq!(home.status()["queue"]["quarantine_records"], 1);
+    assert_eq!(server.requests(), 3);
 }
 
 #[test]

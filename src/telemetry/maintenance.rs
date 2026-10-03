@@ -13,6 +13,8 @@
 //!
 //! Conversions take shared collection lease → gate (briefly) → queue lock; a
 //! drainer takes drain lock → queue lock (released) → gate → shared request lease.
+//! The panic hook takes none: it writes into the spool inside its process's shared
+//! collection lease (`telemetry::panic`).
 
 use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -25,7 +27,7 @@ use super::drain::{self, Trigger};
 use super::durable::{self, Held, Mode};
 use super::managed::{disabled_by_env, spawn_helper};
 use super::net::{self, Endpoint};
-use super::spool::Queue;
+use super::spool::{PanicWriters, Queue};
 use crate::stdio;
 use crate::types::{NcError, Result};
 
@@ -133,6 +135,7 @@ contracts/telemetry/upload-v1/README.md):
   - per-stage timings in whole milliseconds
   - image format, megapixels to 0.1, input-size bucket, bit depth, IR present
   - output encoding, film-base source kind (region/explicit), IR exported
+  - if a run panics: the stage, and up to 32 Hanten function names
 Never uploaded: file or folder names, pixels, recipe or parameter values,
 exact sizes, dimensions or timestamps, error text, any user/machine/install ID.";
 
@@ -285,7 +288,8 @@ fn retarget(store: &Store, old: &Consent, target: &Queue, fresh: &Consent) -> Re
     }
     let _queue = wait_for(|w| from.queue_lock(w), "the queue lock")?;
     let mut status = from.read_status();
-    from.reconcile(&mut status).map_err(other)?;
+    from.reconcile(&mut status, PanicWriters::Excluded)
+        .map_err(other)?;
     let held = from.holdings().map_err(other)?;
     if !held.is_empty() {
         return Err(NcError::Usage(format!(

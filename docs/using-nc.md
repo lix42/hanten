@@ -18,7 +18,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > (`pipeline_version` 9) §10's examples and §12's new entries were re-run, and at
 > `output/drop-avif` §2's build prerequisites and §8's destination examples. At
 > `core/recipe-replay-fidelity` the recipe files §4, §5 and §10 show were re-run, and at
-> `output/content-light-levels` §8's HDR destination examples. The staleness signal is
+> `output/content-light-levels` §8's HDR destination examples. At
+> `nf-calibration/thin-frame-lift` §5's default recipe and `roll.json` and §7's roll
+> examples were re-run (the `measure-roll` ones on the real rolls they name). The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -209,8 +211,9 @@ abridged):
       "white_stops": 1.9509047,
       "exposure": 0.48546875,
       "frame_exposure": null,
+      "frame_slope": null,
       "frame_lift": null,
-      "frames": { "971.tif": { "white_stops": 2.0, "exposure": null } }
+      "frames": { "971.tif": { "white_stops": 2.0, "exposure": null, "slope": null } }
     },
     "reconstruction": {
       "scale": [1.0, 0.84, 0.73], "offset": [0.0, 0.0, 0.0],
@@ -222,8 +225,9 @@ abridged):
 
 Like every recipe file Hanten writes, it is the recipe (`params`) beside the build that
 wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by file name, the frames whose white is
-above the roll's cap and the low-key frames given a small lift (`"exposure"`; none on
-this roll) (§7). `reconstruction` is the decode the gains were measured through, written
+above the roll's cap, the low-key frames given a small lift (`"exposure"`; none on
+this roll), and the thin frames given a steeper `"slope"` with their own `"exposure"`
+unless `--no-thin-lift` (§7). `reconstruction` is the decode the gains were measured through, written
 even at its defaults, because the gains hold only under it. If your `--params` recipe
 stated `input` or `measure` keys, the file carries them too — all but
 `input.export_ir`, one frame's output path, which `roll` refuses.
@@ -366,7 +370,8 @@ hanten params
                      "film_type": "unknown", "export_ir": null },
     "calibration": { "film_base": null },
     "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
-                     "frame_exposure": null, "frame_lift": null, "frames": {} },
+                     "frame_exposure": null, "frame_slope": null, "frame_lift": null,
+                     "frames": {} },
     "measure":     { "inset": 0.05 },
     "reconstruction": {
       "scale": [1.0, 0.84, 0.73],
@@ -403,7 +408,7 @@ fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, headroom
 and display black are 0.8, 6 and 6 under `default`. The look's `contrast` is a
-multiplier, so its default `1.0` keeps the base slope: the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
+multiplier, so its default `1.0` keeps the base slope: the frame's own (`roll.frame_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
 
@@ -846,7 +851,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-exposure` / `--roll-frame-exposure` /
-  `--frame-lift on`, or pass
+  `--roll-frame-slope` / `--frame-lift on`, or pass
   `--rendering default`. A recipe's
   `roll` section is not refused, nor is `--frame-lift off`, which asks for nothing (under
   the film master too).
@@ -1071,7 +1076,8 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                 "holder_applied": false, "sampled": 131072, "kept": 131065, "guarded": 7,
                 "unusable": 0, "white_stops": 0.52260643,
                 "leader_distance_stops": 2.0644333, "level_stops": -1.7618053,
-                "white_role": "under", "lift_ev": 0.2610071,
+                "white_role": "under", "spread_stops": 3.7179117,
+                "base_share": 0.38004303, "lift_ev": 0.2610071,
                 "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937 --roll-frame-exposure 0.2610071",
                 … }, … ],
   "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
@@ -1083,8 +1089,11 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
   "exposure": { "ev": 0.45537937, "level_stops": -1.0553794, "bounded": false,
                 "target_stops": -0.6, "bound_ev": 2.0 },
-  "frame_lift": { "written": true, "lifted": 30, "bound_ev": 0.3, "full_stops": 0.9,
-                  "none_stops": 1.5 },
+  "frame_lift": { "written": true, "lifted": 29, "bound_ev": 0.3, "full_stops": 0.9,
+                  "none_stops": 1.5, "flat_spread_stops": 1.0 },
+  "thin_lift": { "written": true, "lifted": 1, "base_stops": -3.707272, "white_stops": 0.9,
+                 "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
+                 "slope_bound": 2.4 },
   "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937" },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
@@ -1104,11 +1113,12 @@ measured value is never mistaken for a chosen one:
 | Flag | Recipe key | |
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
-| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope |
+| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope. Typed, or in a `roll` manifest's `params`, it drops a frame's thin lift (slope and exposure); a later `--params` layer's white does not |
 | `--roll-exposure EV` | `roll.exposure` | the roll's exposure, a neutral gain of `2^EV`; `--exposure` adds to it |
 | `--roll-frame-exposure EV` | `roll.frame_exposure` | this frame's own exposure, added to the roll's: the lift `measure-roll` writes per frame. `roll` refuses it in the shared recipe or as a flag (exit 2), since it would lift every frame alike; per frame it goes in `roll.frames` or a manifest's `params` |
-| `--frame-lift on\|off` | `roll.frame_lift` | whether `roll.frame_exposure` applies: unset (`null`) is on, so a measured file layered last never undoes an earlier `"off"`; `off` keeps the lifts in the recipe |
-| — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …}}`, either `null`: a frame's own white, in place of the roll's, and its lift. `convert` and `roll` move their input's entry into `roll.white_stops` and `roll.frame_exposure`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
+| `--roll-frame-slope SLOPE` | `roll.frame_slope` | this frame's own base slope, in place of the one `roll.white_stops` places (`--contrast` multiplies it): the thin-frame lift `measure-roll` writes. `roll` refuses it in the shared recipe or as a flag (exit 2), as it does `roll.frame_exposure` |
+| `--frame-lift on\|off` | `roll.frame_lift` | whether `roll.frame_exposure` and `roll.frame_slope` apply: unset (`null`) is on, so a measured file layered last never undoes an earlier `"off"`; `off` keeps the lifts in the recipe |
+| — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "slope": …}}`, any `null`: a frame's own white, in place of the roll's, and its lift. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure` and `roll.frame_slope`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 Each is optional. The report says what applied:
 
@@ -1116,7 +1126,7 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"frame_slope":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"frame_slope_applied":false}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
@@ -1205,7 +1215,8 @@ where its white renders after that exposure (its `white_stops` plus `exposure.ev
 whole +0.3 EV at or under +0.9 stop (`full_stops`), none at or over +1.5 (`none_stops`),
 linear between. A bright frame is never darkened. `--out` writes each non-zero lift to
 `roll.frames`, and `frame_lift.lifted` counts them; on the ten reviewed rolls 103 of 178
-frames were lifted, and review preferred the lift on 72 of them and its absence on 7.
+frames were lifted, and review preferred the lift on 72 of them and its absence on 7
+(two of those 7 were flat frames, which are no longer lifted; below).
 Turn it off when measuring (`measure-roll --no-frame-lift`: lifts are reported, not
 written) or when rendering, without re-measuring — the lift stays in the recipe:
 
@@ -1218,6 +1229,40 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-exposure 0.4 \
 With the lift on, the exposure applied is the sum (`chain.scene_correction.exposure`
 0.65). `roll.frame_lift` is the same switch in a recipe, so a `--frames` manifest can
 turn one frame's lift off.
+
+**A flat frame gets no lift**: one whose luma spans under a stop from its p5 to its p95
+(`spread_stops`, against `frame_lift.flat_spread_stops`) — one surface filling the frame,
+like a close-up of water — reports `"flat": true` and `lift_ev` 0. On the ten reviewed
+rolls two frames were flat, and review preferred no lift on both.
+
+**A thin frame gets a bigger lift** in place of the small one. A frame
+qualifies when its white renders at or under +0.9 stop after the roll's exposure
+(`thin_lift.white_stops`) and at least 30% of its luma sits within a stop of the film
+base (`base_share`, `thin_lift.base_share`): its shadows are on the base. That holds for
+an underexposed frame and for a night scene alike; review preferred the lift on both. Its
+white then rises about a stop (`thin_lift.lift_stops`) with the film base held about where
+the roll renders it — a steeper slope and the exposure that keeps the base still, in place
+of the small lift. "About": the white is read in film RGB, the base as luma before the
+roll's gains. The slope is bounded at 2.4 (`slope_bound`): grain rises with it. A frame the
+bound holds under a full stop is listed in `thin_lift.bounded`, and a thin frame no thin
+lift fits — it keeps its small lift — in `thin_lift.unlifted`; disclosed, not warned about,
+so `--strict` passes.
+Each qualifying frame's lift is reported
+as `frames[].thin_lift` (`slope`, `exposure`, `lift_stops`, `bounded`) with or without the
+flag; it is written as the frame's `roll.frames` `slope` and `exposure`, and
+`thin_lift.lifted` counts them. It is taste, not correction: `measure-roll
+--no-thin-lift` writes the small lift instead, and `--no-frame-lift` neither. `--frame-lift off` turns both halves off:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white 1.5 --roll-exposure 0.4 \
+    --roll-frame-exposure 0.7 --roll-frame-slope 2.0 | jq -c '.chain.roll | {slope, frame_slope, frame_exposure_applied, frame_slope_applied}'
+{"slope":2.0,"frame_slope":2.0,"frame_exposure_applied":true,"frame_slope_applied":true}
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white 1.5 --roll-exposure 0.4 \
+    --roll-frame-exposure 0.7 --roll-frame-slope 2.0 --frame-lift off | jq -c '.chain.roll | {slope, frame_slope, frame_exposure_applied, frame_slope_applied}'
+{"slope":1.6492873,"frame_slope":2.0,"frame_exposure_applied":false,"frame_slope_applied":false}
+```
+
+With the frame's slope applied, `chain.look.base_from` is `frame`.
 
 A roll section with gains or a white but no `roll.exposure` — a `roll.json` written
 before `measure-roll` measured the exposure, or roll flags typed without
@@ -1788,6 +1833,19 @@ Uploading empties the queue file, so once it is the `--telemetry` log that log s
 being a local history: point `NC_TELEMETRY_LOG` elsewhere to keep one. The queue and
 its hidden sibling spool (`.<name>.nc-telemetry-spool`) are capped at 25 MiB, and
 records expire after 30 days.
+
+**Panic reporting.** If a consented `convert` panics (an internal bug, exit 101),
+it leaves one panic event in the spool before Rust prints its usual message, and a
+background upload starts right away, as after a normal run. The event holds the
+stage the run was in and up to 32 Hanten function names
+(`nc::pipeline::look::apply`, …), never the panic message, a file path, a line
+number or an address. A process reports its first panic only, and nothing is
+recorded while 64 panic events already wait in the spool or on a filesystem without
+hard links (some network or FAT volumes). `--telemetry` alone never reports panics,
+and the panic's stderr and exit code are the same either way.
+This is not crash reporting: a run killed by a signal (a segfault, `kill -9`),
+aborted, stopped by the out-of-memory killer or forced to quit reports nothing. The
+queued count is `panic_ready` in `hanten telemetry status`.
 
 | Command | What it does |
 |---|---|
