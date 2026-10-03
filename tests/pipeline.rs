@@ -9966,7 +9966,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         far.to_str().unwrap(),
         "--out",
         measured.to_str().unwrap(),
-        "--no-frame-lift",
+        "--no-small-lift",
+        "--no-thin-lift",
     ]);
     assert_eq!(code, 0, "{err}");
     let written = written_recipe(&measured);
@@ -9974,8 +9975,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(
         written["roll"]["frames"],
         serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"],
-            "exposure": null, "slope": null}}),
-        "keyed by file name, the clamped frame only (`--no-frame-lift`): {written}"
+            "exposure": null, "thin_slope": null, "thin_exposure": null}}),
+        "keyed by file name, the clamped frame only (no lifts): {written}"
     );
     // The input it was decoded under travels too: these scans state no transfer.
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
@@ -10122,7 +10123,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         far.to_str().unwrap(),
         "--out",
         capped_recipe.to_str().unwrap(),
-        "--no-frame-lift",
+        "--no-small-lift",
     ]);
     assert_eq!(code, 0, "{err}");
     let capped = json(&stdout);
@@ -10142,8 +10143,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     // `nf-calibration/frame-level-trim`: a night frame (~-1 stop), an ordinary one (~0)
     // and a bright one (~+2.9) on one roll. The lift follows where each white renders
     // after the roll's exposure: the night frame is held at the bound, the bright one is
-    // not lifted, and the report names each. Off at measurement (`--no-frame-lift`) and
-    // off at render (`--frame-lift off`, `roll.frame_lift`) render alike.
+    // not lifted, and the report names each. Off at measurement (`--no-small-lift`) and
+    // off at render (`--small-lift off`, `roll.small_lift`) render alike.
     let tmp = TempDir::new("measure-roll-lift");
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
@@ -10182,15 +10183,15 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     let lifted = tmp.path("lifted.json");
     let (report, written) = measure(&lifted, &[]);
     let lift = |i: usize| report["frames"][i]["lift_ev"].as_f64().unwrap();
-    let bound = report["frame_lift"]["bound_ev"].as_f64().unwrap();
+    let bound = report["small_lift"]["bound_ev"].as_f64().unwrap();
     assert!(
         (lift(0) - bound).abs() < 1e-6,
         "held at the bound: {report}"
     );
     assert!(lift(1) > 0.0 && lift(1) <= bound, "{report}");
     assert_eq!(lift(2), 0.0, "a bright frame is not lifted: {report}");
-    assert_eq!(report["frame_lift"]["written"], true, "{report}");
-    assert_eq!(report["frame_lift"]["lifted"], 2, "{report}");
+    assert_eq!(report["small_lift"]["written"], true, "{report}");
+    assert_eq!(report["small_lift"]["lifted"], 2, "{report}");
     let frames = &written["roll"]["frames"];
     assert_eq!(
         frames["night.tif"]["exposure"],
@@ -10245,8 +10246,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     // Off three ways, one picture: measured without lifts, turned off by flag, and
     // turned off by a recipe layer.
     let unlifted = tmp.path("unlifted.json");
-    let (report_off, written_off) = measure(&unlifted, &["--no-frame-lift"]);
-    assert_eq!(report_off["frame_lift"]["written"], false, "{report_off}");
+    let (report_off, written_off) = measure(&unlifted, &["--no-small-lift"]);
+    assert_eq!(report_off["small_lift"]["written"], false, "{report_off}");
     assert_eq!(
         report_off["frames"][0]["lift_ev"], report["frames"][0]["lift_ev"],
         "still reported: {report_off}"
@@ -10257,7 +10258,7 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     );
     let off_layer = write_file(
         &tmp.path("off.json"),
-        r#"{"recipe_version": 3, "roll": {"frame_lift": "off"}}"#,
+        r#"{"recipe_version": 3, "roll": {"small_lift": "off"}}"#,
     );
     let convert = |name: &str, extra: &[&str]| {
         let output = tmp.path(name);
@@ -10276,7 +10277,7 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     let (never, _) = convert("never.tiff", &["--params", &s(&unlifted)]);
     let (by_flag, flag_report) = convert(
         "flag.tiff",
-        &["--params", &s(&lifted), "--frame-lift", "off"],
+        &["--params", &s(&lifted), "--small-lift", "off"],
     );
     let (by_key, _) = convert(
         "key.tiff",
@@ -10285,14 +10286,14 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     assert_ne!(on, never, "not vacuous: the lift moved the picture");
     assert_eq!(
         by_flag, never,
-        "`--frame-lift off` renders the unlifted recipe"
+        "`--small-lift off` renders the unlifted recipe"
     );
     assert_eq!(
         by_key, never,
-        "`roll.frame_lift` off renders the unlifted recipe"
+        "`roll.small_lift` off renders the unlifted recipe"
     );
-    // The measured file states no `frame_lift`, so layered last it keeps an earlier off.
-    assert!(written["roll"]["frame_lift"].is_null(), "{written}");
+    // The measured file states no `small_lift`, so layered last it keeps an earlier off.
+    assert!(written["roll"]["small_lift"].is_null(), "{written}");
     let (key_first, _) = convert(
         "key-first.tiff",
         &["--params", &s(&off_layer), "--params", &s(&lifted)],
@@ -10316,26 +10317,26 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
 }
 
 #[test]
-fn frame_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_exposure() {
-    let tmp = TempDir::new("frame-lift-rules");
+fn small_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_exposure() {
+    let tmp = TempDir::new("small-lift-rules");
     // `off` asks for nothing, so neither `direct` nor the film master refuses it.
     for (name, extra) in [
         ("direct.tiff", &["--rendering", "direct"][..]),
         ("master.tiff", &["--film-master"][..]),
     ] {
-        let (code, _, err) =
-            convert_48bit(&tmp.path(name), &[extra, &["--frame-lift", "off"]].concat());
+        let off = ["--small-lift", "off", "--thin-lift", "off"];
+        let (code, _, err) = convert_48bit(&tmp.path(name), &[extra, &off].concat());
         assert_eq!(code, 0, "{name}: {err}");
     }
     // `on` asks for a lift the film master would ignore, and is named as typed.
     let (code, _, err) = convert_48bit(
         &tmp.path("on.tiff"),
-        &["--film-master", "--frame-lift", "on"],
+        &["--film-master", "--small-lift", "on"],
     );
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains(
-            "--frame-lift on applies the roll's measurements through the rendering \
+            "--small-lift on applies the roll's measurements through the rendering \
                       stages, but --film-master writes"
         ) && err.contains("drop --film-master"),
         "{err}"
@@ -10358,7 +10359,7 @@ fn frame_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("--roll-frame-exposure is one frame's own exposure, and on `roll`"),
+        err.contains("--roll-frame-exposure is one frame's own lift, and on `roll`"),
         "{err}"
     );
     let dumped = write_file(
@@ -10377,7 +10378,7 @@ fn frame_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("the recipe's `roll.frame_exposure` is one frame's own exposure"),
+        err.contains("the recipe's `roll.frame_exposure` is one frame's own lift"),
         "{err}"
     );
 }
@@ -10387,7 +10388,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     // `nf-calibration/thin-frame-lift`: a thin frame (white low, a large share on the
     // base), a thinner one the slope bound holds, a flat one and two ordinary ones. The
     // lift is written by default and only reported under `--no-thin-lift`; the thin frame
-    // renders with its base where the roll put it, and `--frame-lift off` drops it.
+    // renders with its base where its small lift put it, and `--thin-lift off` drops it.
     let tmp = TempDir::new("measure-roll-thin");
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
@@ -10431,6 +10432,8 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     // Reported, not written.
     let plain = tmp.path("plain.json");
     let (report, written) = measure(&plain, &["--no-thin-lift"]);
+    assert_eq!(report["thin_lift"]["kind"], "taste", "{report}");
+    assert_eq!(report["small_lift"]["kind"], "taste", "{report}");
     assert_eq!(report["thin_lift"]["written"], false, "{report}");
     assert_eq!(report["thin_lift"]["lifted"], 0, "{report}");
     let thin = frame(&report, "thin")["thin_lift"].clone();
@@ -10449,23 +10452,23 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     );
     let frames = &written["roll"]["frames"];
     assert!(frames.get("flat.tif").is_none(), "{written}");
-    assert!(frames["thin.tif"]["slope"].is_null(), "{written}");
-    assert!(
-        frames["thin.tif"]["exposure"].as_f64().unwrap() > 0.0,
-        "{written}"
-    );
+    assert!(frames["thin.tif"]["thin_slope"].is_null(), "{written}");
+    let small_ev = frames["thin.tif"]["exposure"].clone();
+    assert!(small_ev.as_f64().unwrap() > 0.0, "{written}");
 
-    // Written by default: the thin lift in place of the small one; every other entry
-    // unchanged. A bounded lift is disclosed, not warned about, so `--strict` passes.
+    // Written by default beside the small lift, which stays for `--thin-lift off`; every
+    // other entry unchanged. A bounded lift is disclosed, not warned about, so `--strict`
+    // passes.
     let lifted = tmp.path("lifted.json");
     let (report_l, written_l) = measure(&lifted, &["--strict"]);
     assert_eq!(report_l["thin_lift"]["written"], true, "{report_l}");
     assert_eq!(report_l["thin_lift"]["lifted"], 2, "{report_l}");
     let entry = &written_l["roll"]["frames"]["thin.tif"];
-    assert_eq!(entry["slope"], thin["slope"], "{written_l}");
-    assert_eq!(entry["exposure"], thin["exposure"], "{written_l}");
+    assert_eq!(entry["thin_slope"], thin["slope"], "{written_l}");
+    assert_eq!(entry["thin_exposure"], thin["exposure"], "{written_l}");
+    assert_eq!(entry["exposure"], small_ev, "{written_l}");
     assert_eq!(
-        written_l["roll"]["frames"]["thinnest.tif"]["slope"].as_f64(),
+        written_l["roll"]["frames"]["thinnest.tif"]["thin_slope"].as_f64(),
         report_l["thin_lift"]["slope_bound"].as_f64(),
     );
     for n in ["mid.tif", "bright.tif"] {
@@ -10482,8 +10485,9 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
             .as_str()
             .unwrap()
             .ends_with(&format!(
-                "--roll-frame-slope {}",
-                thin["slope"].as_f64().unwrap() as f32
+                "--roll-thin-slope {} --roll-thin-exposure {}",
+                thin["slope"].as_f64().unwrap() as f32,
+                thin["exposure"].as_f64().unwrap() as f32
             )),
         "{report_l}"
     );
@@ -10507,10 +10511,17 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     let (steep, steep_report) = convert("steep.tiff", &["--params", &s(&lifted)]);
     assert_ne!(small, steep, "not vacuous");
     assert_eq!(
-        steep_report["chain"]["look"]["base_from"], "frame",
+        steep_report["chain"]["look"]["base_from"], "thin",
         "{steep_report}"
     );
-    assert_eq!(steep_report["chain"]["roll"]["frame_slope_applied"], true);
+    let roll = &steep_report["chain"]["roll"];
+    assert_eq!(roll["thin_lift_applied"], true, "{roll}");
+    assert_eq!(roll["frame_exposure_applied"], false, "{roll}");
+    assert_eq!(
+        roll["taste_applied"],
+        serde_json::json!(["thin_lift"]),
+        "{roll}"
+    );
     let base_stops = |r: &serde_json::Value| {
         r["chain"]["fit_range"]["display_black"]["film_base_stops"]
             .as_f64()
@@ -10522,10 +10533,41 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         base_stops(&steep_report),
         base_stops(&small_report)
     );
-    // `--no-frame-lift` writes neither lift; off at render drops both halves of a written
-    // one: the roll's slope and exposure alone.
+
+    // Each switch turns off its own lift at render, by flag or by a recipe layered before
+    // the measured file, and renders what measuring without it renders.
+    let thin_off = write_file(
+        &tmp.path("thin-off.json"),
+        r#"{"recipe_version": 3, "roll": {"thin_lift": "off"}}"#,
+    );
+    let (by_flag, flag_report) = convert(
+        "thin-off-flag.tiff",
+        &["--params", &s(&lifted), "--thin-lift", "off"],
+    );
+    let (by_key, _) = convert(
+        "thin-off-key.tiff",
+        &["--params", &s(&thin_off), "--params", &s(&lifted)],
+    );
+    assert_eq!(by_flag, small, "`--thin-lift off` renders the small lift");
+    assert_eq!(
+        by_key, small,
+        "`roll.thin_lift` off before the measured file holds"
+    );
+    assert_eq!(
+        flag_report["chain"]["roll"]["taste_applied"],
+        serde_json::json!(["small_lift"]),
+        "{flag_report}"
+    );
+    // The small switch leaves the thin lift alone.
+    let (small_off, _) = convert(
+        "small-off.tiff",
+        &["--params", &s(&lifted), "--small-lift", "off"],
+    );
+    assert_eq!(small_off, steep, "`--small-lift off` keeps the thin lift");
+    // Both off: the roll's slope and exposure alone.
     let unlifted = tmp.path("unlifted.json");
-    let (report_u, written_u) = measure(&unlifted, &["--no-frame-lift"]);
+    let (report_u, written_u) = measure(&unlifted, &["--no-small-lift", "--no-thin-lift"]);
+    assert_eq!(report_u["small_lift"]["written"], false, "{report_u}");
     assert_eq!(report_u["thin_lift"]["written"], false, "{report_u}");
     assert!(
         written_u["roll"]["frames"].get("thin.tif").is_none(),
@@ -10533,13 +10575,641 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     );
     let (off, off_report) = convert(
         "off.tiff",
-        &["--params", &s(&lifted), "--frame-lift", "off"],
+        &[
+            "--params",
+            &s(&lifted),
+            "--small-lift",
+            "off",
+            "--thin-lift",
+            "off",
+        ],
     );
     let (never, _) = convert("never.tiff", &["--params", &s(&unlifted)]);
-    assert_eq!(off, never, "`--frame-lift off` drops the slope too");
+    assert_eq!(off, never, "both switches off drop both lifts");
     assert_eq!(
         off_report["chain"]["look"]["base_from"], "roll",
         "{off_report}"
+    );
+    assert_eq!(
+        off_report["chain"]["roll"]["taste_applied"],
+        serde_json::json!([]),
+        "{off_report}"
+    );
+
+    // `--no-small-lift` alone writes the thin pair and no small lift: the pair is solved
+    // from the small-lifted render either way, so the frame renders the same.
+    let no_small = tmp.path("no-small.json");
+    let (_, written_n) = measure(&no_small, &["--no-small-lift"]);
+    let entry_n = &written_n["roll"]["frames"]["thin.tif"];
+    assert!(
+        entry_n.get("exposure").is_none_or(|e| e.is_null()),
+        "{written_n}"
+    );
+    assert_eq!(entry_n["thin_slope"], entry["thin_slope"], "{written_n}");
+    assert_eq!(
+        entry_n["thin_exposure"], entry["thin_exposure"],
+        "{written_n}"
+    );
+    let (no_small_render, _) = convert("no-small.tiff", &["--params", &s(&no_small)]);
+    assert_eq!(
+        no_small_render, steep,
+        "the thin pair alone renders the same"
+    );
+
+    // A typed small lift on a thin-lifted frame would be ignored: refused, with remedies
+    // that work. A `--dump-params` of the frame carries both and replays.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("typed-small.tiff")),
+        "--params",
+        &s(&lifted),
+        "--roll-frame-exposure",
+        "0.5",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-exposure is this frame's small lift, but its thin lift")
+            && err.contains("use --thin-lift off;")
+            && err.contains("use --roll-thin-exposure"),
+        "{err}"
+    );
+    convert(
+        "typed-small-off.tiff",
+        &[
+            "--params",
+            &s(&lifted),
+            "--roll-frame-exposure",
+            "0.5",
+            "--thin-lift",
+            "off",
+        ],
+    );
+    let dumped = tmp.path("dumped.json");
+    convert(
+        "dumping.tiff",
+        &["--params", &s(&lifted), "--dump-params", &s(&dumped)],
+    );
+    let (replayed, _) = convert("replayed.tiff", &["--params", &s(&dumped)]);
+    assert_eq!(replayed, steep, "a dump of a thin frame replays");
+    // The same in a `roll --frames` manifest's `params`.
+    let manifest = |name: &str, params: &str| {
+        write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{"frames":[{{"input":{:?},"params":{params}}}]}}"#,
+                s(&path("thin"))
+            ),
+        )
+    };
+    let roll_over = |params: &Path, frames: &Path, out: &str| {
+        run(&[
+            "roll",
+            "--frames",
+            &s(frames),
+            "--params",
+            &s(params),
+            "--out-dir",
+            &s(&tmp.path(out)),
+        ])
+    };
+    let roll_with = |frames: &Path, out: &str| roll_over(&lifted, frames, out);
+    let small_in_params = manifest("small.json", r#"{"roll":{"frame_exposure":0.5}}"#);
+    let (code, _, err) = roll_with(&small_in_params, "rolled-small");
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "per-frame `params` override: `roll.frame_exposure` is this frame's small lift"
+        ) && err.contains("use `roll.thin_lift` \"off\";")
+            && err.contains("use `roll.thin_exposure`"),
+        "{err}"
+    );
+    assert!(!err.contains("--thin-lift"), "{err}");
+    let thin_off_in_params = manifest(
+        "small-off.json",
+        r#"{"roll":{"frame_exposure":0.5,"thin_lift":"off"}}"#,
+    );
+    let (code, _, err) = roll_with(&thin_off_in_params, "rolled-small-off");
+    assert_eq!(code, 0, "{err}");
+
+    // Stated with its thin slope, the small lift is the measured shape and is spared: the
+    // thin frame's `frames[].flag` pasted on `convert` renders as its `--params` file
+    // does, and with `--thin-lift off` as the file measured without the thin lift.
+    let flag = frame(&report_l, "thin")["flag"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(flag.contains("--roll-frame-exposure"), "{flag}");
+    let pasted = |name: &str, extra: &[&str]| {
+        let mut argv = vec!["--params", recipe.to_str().unwrap()];
+        argv.extend(flag.split_whitespace());
+        argv.extend(extra);
+        convert(name, &argv).0
+    };
+    assert_eq!(pasted("pasted.tiff", &[]), steep, "the pasted flag");
+    assert_eq!(
+        pasted("pasted-off.tiff", &["--thin-lift", "off"]),
+        small,
+        "the pasted flag, thin lift off"
+    );
+    // So are a thin frame's dumped roll keys in a manifest's `params`, over a recipe with
+    // no entry for it, so the render is the manifest's.
+    let rolled = |params: &str, out: &str| {
+        let (code, _, err) = roll_over(&unlifted, &manifest(&format!("{out}.json"), params), out);
+        assert_eq!(code, 0, "{err}");
+        let files: Vec<_> = std::fs::read_dir(tmp.path(out))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        std::fs::read(&files[0]).unwrap()
+    };
+    let keys = format!(
+        r#""frame_exposure":{},"thin_slope":{},"thin_exposure":{}"#,
+        entry["exposure"], entry["thin_slope"], entry["thin_exposure"]
+    );
+    assert_eq!(
+        rolled(&format!(r#"{{"roll":{{{keys}}}}}"#), "rolled-dumped"),
+        steep,
+        "the dumped keys in a manifest"
+    );
+    assert_eq!(
+        rolled(
+            &format!(r#"{{"roll":{{{keys},"thin_lift":"off"}}}}"#),
+            "rolled-dumped-off"
+        ),
+        small,
+        "the dumped keys with the thin lift off"
+    );
+
+    // A file an earlier build wrote states the retired keys at `null`, which replay as
+    // absent, in an envelope, bare, or in a manifest's `params`.
+    let mut old =
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&plain).unwrap())
+            .unwrap();
+    old["params"]["roll"]["frame_slope"] = serde_json::Value::Null;
+    let roll_keys = old["params"]["roll"].as_object_mut().unwrap();
+    roll_keys.remove("small_lift");
+    roll_keys.insert("frame_lift".into(), serde_json::Value::Null);
+    for e in old["params"]["roll"]["frames"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        e["slope"] = serde_json::Value::Null;
+    }
+    let old_envelope = write_file(&tmp.path("old-envelope.json"), &old.to_string());
+    let old_bare = write_file(&tmp.path("old-bare.json"), &old["params"].to_string());
+    for (name, file) in [
+        ("old-envelope.tiff", &old_envelope),
+        ("old-bare.tiff", &old_bare),
+    ] {
+        let (render, _) = convert(name, &["--params", &s(file)]);
+        assert_eq!(render, small, "{name}");
+    }
+    let null_in_params = manifest(
+        "null.json",
+        r#"{"roll":{"frame_slope":null,"frame_lift":null}}"#,
+    );
+    let (code, _, err) = roll_with(&null_in_params, "rolled-null");
+    assert_eq!(code, 0, "{err}");
+    // A non-null one names the rename, which replays the old render.
+    let mut old_thin = old["params"].clone();
+    old_thin["roll"]["frames"]["thin.tif"] =
+        serde_json::json!({"exposure": entry["thin_exposure"], "slope": entry["thin_slope"]});
+    let old_thin = write_file(&tmp.path("old-thin.json"), &old_thin.to_string());
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-thin.tiff")),
+        "--params",
+        &s(&old_thin),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            r#"rename `roll.frames."thin.tif".slope` to `thin_slope` and `roll.frames."thin.tif".exposure`, if stated, to `thin_exposure`"#
+        ),
+        "{err}"
+    );
+    let mut renamed = old["params"].clone();
+    renamed["roll"]["frames"]["thin.tif"] = serde_json::json!(
+        {"thin_exposure": entry["thin_exposure"], "thin_slope": entry["thin_slope"]}
+    );
+    let renamed = write_file(&tmp.path("renamed.json"), &renamed.to_string());
+    let (render, _) = convert("renamed.tiff", &["--params", &s(&renamed)]);
+    assert_eq!(render, steep, "the rename replays the thin lift");
+
+    // The removed `--roll-frame-slope` names the thin pair, and the remedy replays it.
+    let (slope, exposure) = (
+        (entry["thin_slope"].as_f64().unwrap() as f32).to_string(),
+        (entry["thin_exposure"].as_f64().unwrap() as f32).to_string(),
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-flag.tiff")),
+        "--params",
+        &s(&plain),
+        "--roll-frame-exposure",
+        &exposure,
+        "--roll-frame-slope",
+        &slope,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-slope was removed: a thin frame's lift is its own pair")
+            && err.contains(&format!(
+                "pass --roll-thin-slope {slope} --roll-thin-exposure {exposure} in place of \
+                 --roll-frame-exposure {exposure}"
+            )),
+        "{err}"
+    );
+    assert!(!err.contains("unexpected argument"), "{err}");
+    assert!(!err.contains("--thin-lift off"), "{err}");
+    let (render, _) = convert(
+        "new-flag.tiff",
+        &[
+            "--params",
+            &s(&plain),
+            "--roll-thin-slope",
+            &slope,
+            "--roll-thin-exposure",
+            &exposure,
+        ],
+    );
+    assert_eq!(render, steep, "the flag remedy replays the thin lift");
+    // Without a typed exposure it cites none; beside the retired `--frame-lift off`, which
+    // turned both lifts off, it migrates that too, and the remedy renders no lift.
+    let old_flag = |extra: &[&str]| {
+        let mut argv = vec![
+            "convert".to_owned(),
+            s(&path("thin")),
+            "-o".to_owned(),
+            s(&tmp.path("old-flag.tiff")),
+            "--params".to_owned(),
+            s(&plain),
+            "--roll-frame-slope".to_owned(),
+            slope.clone(),
+        ];
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, _, err) = run(&argv);
+        assert_eq!(code, 2, "{err}");
+        err
+    };
+    let err = old_flag(&[]);
+    assert!(
+        err.contains(&format!(
+            "pass --roll-thin-slope {slope} with, as --roll-thin-exposure, the frame's \
+             `roll.frames` entry `exposure` if it has one"
+        )) && !err.contains("--roll-frame-exposure"),
+        "{err}"
+    );
+    // Following it with the slope alone would drop the entry's small lift silently: the
+    // mirror rule refuses that, naming the value, and its remedy renders the old exposure.
+    let small_value = (small_ev.as_f64().unwrap() as f32).to_string();
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("slope-alone.tiff")),
+        "--params",
+        &s(&plain),
+        "--roll-thin-slope",
+        &slope,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "--roll-thin-slope replaces this frame's small lift of {small_value} EV"
+        )) && err.contains(&format!("add --roll-thin-exposure {small_value};"))
+            && err.contains("use --small-lift off"),
+        "{err}"
+    );
+    let (_, kept_report) = convert(
+        "slope-kept.tiff",
+        &[
+            "--params",
+            &s(&plain),
+            "--roll-thin-slope",
+            &slope,
+            "--roll-thin-exposure",
+            &small_value,
+        ],
+    );
+    assert_eq!(
+        kept_report["chain"]["scene_correction"]["exposure"],
+        small_report["chain"]["scene_correction"]["exposure"],
+        "the small lift's exposure kept: {kept_report}"
+    );
+    assert_eq!(kept_report["chain"]["look"]["base_from"], "thin");
+    let (_, dropped_report) = convert(
+        "slope-dropped.tiff",
+        &[
+            "--params",
+            &s(&plain),
+            "--roll-thin-slope",
+            &slope,
+            "--small-lift",
+            "off",
+        ],
+    );
+    assert_eq!(dropped_report["chain"]["look"]["base_from"], "thin");
+    // The same in a manifest's `params`.
+    let (code, _, err) = roll_over(
+        &plain,
+        &manifest(
+            "slope-alone-manifest.json",
+            &format!(r#"{{"roll":{{"thin_slope":{slope}}}}}"#),
+        ),
+        "rolled-slope-alone",
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "per-frame `params` override: `roll.thin_slope` replaces this frame's small lift \
+             of {small_value} EV"
+        )) && err.contains(&format!("add `roll.thin_exposure` {small_value};"))
+            && !err.contains("--roll-thin-exposure"),
+        "{err}"
+    );
+    let (code, _, err) = roll_over(
+        &plain,
+        &manifest(
+            "slope-kept-manifest.json",
+            &format!(r#"{{"roll":{{"thin_slope":{slope},"thin_exposure":{small_value}}}}}"#),
+        ),
+        "rolled-slope-kept",
+    );
+    assert_eq!(code, 0, "{err}");
+    let err = old_flag(&["--roll-frame-exposure", &exposure, "--frame-lift", "off"]);
+    assert!(
+        err.contains("and replace --frame-lift off with --small-lift off --thin-lift off"),
+        "{err}"
+    );
+    assert!(!err.contains("--frame-lift was removed"), "{err}");
+    let (render, _) = convert(
+        "new-flag-off.tiff",
+        &[
+            "--params",
+            &s(&plain),
+            "--roll-thin-slope",
+            &slope,
+            "--roll-thin-exposure",
+            &exposure,
+            "--small-lift",
+            "off",
+            "--thin-lift",
+            "off",
+        ],
+    );
+    assert_eq!(
+        render, never,
+        "the remedy under --frame-lift off renders no lift"
+    );
+
+    // The retired `--frame-lift` switched both lifts: its migration names both switches,
+    // and followed, an old `off` renders neither, as before.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-switch.tiff")),
+        "--params",
+        &s(&lifted),
+        "--frame-lift",
+        "off",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--frame-lift was removed")
+            && err.contains("replace --frame-lift off with --small-lift off --thin-lift off"),
+        "{err}"
+    );
+    assert!(!err.contains("unexpected argument"), "{err}");
+    let (render, _) = convert(
+        "new-switch.tiff",
+        &[
+            "--params",
+            &s(&lifted),
+            "--small-lift",
+            "off",
+            "--thin-lift",
+            "off",
+        ],
+    );
+    assert_eq!(render, never, "the migrated --frame-lift off");
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-switch-on.tiff")),
+        "--params",
+        &s(&lifted),
+        "--frame-lift",
+        "on",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("replace --frame-lift on with --small-lift on --thin-lift on"),
+        "{err}"
+    );
+    // As a recipe key: an old `"off"` layer before the measured file.
+    let old_off = write_file(
+        &tmp.path("old-off.json"),
+        r#"{"recipe_version": 3, "roll": {"frame_lift": "off"}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-off.tiff")),
+        "--params",
+        &s(&old_off),
+        "--params",
+        &s(&lifted),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`roll.frame_lift` is not a recipe key any more")
+            && err.contains(
+                "replace `roll.frame_lift` \"off\" with `roll.small_lift` \"off\" and \
+                 `roll.thin_lift` \"off\""
+            ),
+        "{err}"
+    );
+    let new_off = write_file(
+        &tmp.path("new-off.json"),
+        r#"{"recipe_version": 3, "roll": {"small_lift": "off", "thin_lift": "off"}}"#,
+    );
+    let (render, _) = convert(
+        "new-off.tiff",
+        &["--params", &s(&new_off), "--params", &s(&lifted)],
+    );
+    assert_eq!(render, never, "the migrated `frame_lift` \"off\" layer");
+    // An old "on" was no no-op: it beat an earlier "off", as a flag or a later layer, and
+    // rendered both lifts. Its migration does too.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-off-on.tiff")),
+        "--params",
+        &s(&old_off),
+        "--params",
+        &s(&lifted),
+        "--frame-lift",
+        "on",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--frame-lift was removed"), "{err}");
+    let (render, _) = convert(
+        "new-off-on-flag.tiff",
+        &[
+            "--params",
+            &s(&new_off),
+            "--params",
+            &s(&lifted),
+            "--small-lift",
+            "on",
+            "--thin-lift",
+            "on",
+        ],
+    );
+    assert_eq!(
+        render, steep,
+        "the migrated --frame-lift on beats an off layer"
+    );
+    let old_on = write_file(
+        &tmp.path("old-on.json"),
+        r#"{"recipe_version": 3, "roll": {"frame_lift": "on"}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&path("thin")),
+        "-o",
+        &s(&tmp.path("old-on-layer.tiff")),
+        "--params",
+        &s(&new_off),
+        "--params",
+        &s(&old_on),
+        "--params",
+        &s(&lifted),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "replace `roll.frame_lift` \"on\" with `roll.small_lift` \"on\" and \
+             `roll.thin_lift` \"on\""
+        ),
+        "{err}"
+    );
+    let new_on = write_file(
+        &tmp.path("new-on.json"),
+        r#"{"recipe_version": 3, "roll": {"small_lift": "on", "thin_lift": "on"}}"#,
+    );
+    let (render, _) = convert(
+        "new-on-layer.tiff",
+        &[
+            "--params",
+            &s(&new_off),
+            "--params",
+            &s(&new_on),
+            "--params",
+            &s(&lifted),
+        ],
+    );
+    assert_eq!(
+        render, steep,
+        "the migrated `frame_lift` \"on\" layer beats an off one"
+    );
+    // In a manifest's `params` too.
+    let (code, _, err) = roll_with(
+        &manifest("old-off-manifest.json", r#"{"roll":{"frame_lift":"off"}}"#),
+        "rolled-old-off",
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`roll.frame_lift` is not a recipe key any more"),
+        "{err}"
+    );
+    // `measure-roll --no-frame-lift` wrote neither lift.
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &s(&path("thin")),
+        "--params",
+        &s(&recipe),
+        "--no-frame-lift",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--no-frame-lift was removed")
+            && err.contains("pass --no-small-lift --no-thin-lift"),
+        "{err}"
+    );
+    // On `roll` a frame's lift is no flag, so it names the per-frame keys.
+    let (code, _, err) = run(&[
+        "roll",
+        &s(&path("thin")),
+        "--params",
+        &s(&plain),
+        "--roll-frame-slope",
+        &slope,
+        "-o",
+        &s(&tmp.path("rolled-old-flag")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "state that frame's `thin_slope` {slope} in the shared recipe's `roll.frames` entry"
+        )) && err.contains("a --frames manifest's `params`")
+            && !err.contains("pass --roll-thin-slope"),
+        "{err}"
+    );
+
+    // A typed small lift stated with a typed thin value is the measured shape too, over a
+    // recipe's thin slope.
+    convert(
+        "typed-small-thin-exposure.tiff",
+        &[
+            "--params",
+            &s(&lifted),
+            "--roll-frame-exposure",
+            "0.3",
+            "--roll-thin-exposure",
+            "0.8",
+        ],
+    );
+    // So is a manifest's small lift with a thin exposure.
+    let (code, _, err) = roll_with(
+        &manifest(
+            "small-thin-exposure.json",
+            r#"{"roll":{"frame_exposure":0.3,"thin_exposure":0.8}}"#,
+        ),
+        "rolled-small-thin-exposure",
+    );
+    assert_eq!(code, 0, "{err}");
+
+    // On `roll`, a typed lift is named before the recipe's beneath it.
+    let (code, _, err) = run(&[
+        "roll",
+        &s(&path("thin")),
+        "--params",
+        &s(&dumped),
+        "--roll-thin-slope",
+        "2.0",
+        "-o",
+        &s(&tmp.path("rolled-dumped-typed")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-thin-slope is one frame's own lift")
+            && !err.contains("the recipe's `roll.frame_exposure`"),
+        "{err}"
     );
 
     // On `roll`, one frame's slope would steepen every frame.
@@ -10549,14 +11219,14 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         &s(&path("mid")),
         "--params",
         &s(&plain),
-        "--roll-frame-slope",
+        "--roll-thin-slope",
         "2.0",
         "-o",
         &s(&tmp.path("rolled")),
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("--roll-frame-slope is one frame's own slope"),
+        err.contains("--roll-thin-slope is one frame's own lift"),
         "{err}"
     );
 }
@@ -12942,9 +13612,9 @@ fn a_frames_override_beats_a_roll_flag() {
 
 #[test]
 fn a_stated_white_drops_a_frames_thin_lift() {
-    // A frame's thin lift (`roll.frames` slope and the exposure solved with it) is beaten
-    // whole by a white stated over it: typed on `convert`, or in a `roll --frames`
-    // manifest's `params`. The frame renders as if it had no entry.
+    // A frame's thin lift (`roll.frames` thin slope and exposure) is beaten whole by a
+    // white stated over it: typed on `convert`, or in a `roll --frames` manifest's
+    // `params`. The frame renders its small lift, as if its entry held that alone.
     let tmp = TempDir::new("white-beats-thin-lift");
     let roll = |frames: &str| {
         format!(
@@ -12954,9 +13624,12 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     };
     let lifted = write_file(
         &tmp.path("lifted.json"),
-        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.7, "slope": 2.0}}"#),
+        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.2, "thin_slope": 2.0, "thin_exposure": 0.7}}"#),
     );
-    let plain = write_file(&tmp.path("plain.json"), &roll("{}"));
+    let plain = write_file(
+        &tmp.path("plain.json"),
+        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.2}}"#),
+    );
     let small = write_file(
         &tmp.path("small.json"),
         &roll(r#"{"hdri-64bit.tif": {"exposure": 0.7}}"#),
@@ -12986,14 +13659,16 @@ fn a_stated_white_drops_a_frames_thin_lift() {
         chain["roll"]["slope"], control_report["chain"]["roll"]["slope"],
         "{report}"
     );
-    assert!(chain["roll"]["frame_slope"].is_null(), "{report}");
-    assert!(chain["roll"]["frame_exposure"].is_null(), "{report}");
-    assert_eq!(beaten, control, "the stated white, the roll's exposure");
+    assert!(chain["roll"]["thin_slope"].is_null(), "{report}");
+    assert!(chain["roll"]["thin_exposure"].is_null(), "{report}");
+    assert_eq!(chain["roll"]["frame_exposure_applied"], true, "{report}");
+    assert_eq!(beaten, control, "the stated white, the small lift");
     // Not vacuous: unbeaten, the frame renders on its own slope.
     let (own, own_report) = convert("own.tiff", &["--params", &s(&lifted)]);
-    assert_eq!(own_report["chain"]["look"]["base_from"], "frame");
+    assert_eq!(own_report["chain"]["look"]["base_from"], "thin");
     assert_ne!(own, control);
-    // A frame slope typed beside the white is kept; a small lift alone keeps its exposure.
+    // A thin pair typed beside the white is kept (a thin slope alone would drop the small
+    // lift, and is refused); a small lift alone keeps its exposure.
     let (_, typed) = convert(
         "typed.tiff",
         &[
@@ -13001,11 +13676,13 @@ fn a_stated_white_drops_a_frames_thin_lift() {
             &s(&lifted),
             "--roll-white",
             "1.9",
-            "--roll-frame-slope",
+            "--roll-thin-slope",
             "2.2",
+            "--roll-thin-exposure",
+            "0.2",
         ],
     );
-    assert_eq!(typed["chain"]["look"]["base_from"], "frame", "{typed}");
+    assert_eq!(typed["chain"]["look"]["base_from"], "thin", "{typed}");
     let (_, kept) = convert(
         "kept.tiff",
         &["--params", &s(&small), "--roll-white", "1.9"],
@@ -13015,8 +13692,8 @@ fn a_stated_white_drops_a_frames_thin_lift() {
         "{kept}"
     );
 
-    // A `roll --frames` manifest's white beats the entry the same way; its own frame
-    // slope, stated beside the white, is kept.
+    // A `roll --frames` manifest's white beats the entry the same way; its own thin
+    // pair, stated beside the white, is kept.
     let roll_with = |name: &str, params: &str| {
         let manifest = write_file(
             &tmp.path(&format!("{name}.json")),
@@ -13044,13 +13721,14 @@ fn a_stated_white_drops_a_frames_thin_lift() {
         chain["roll"]["slope"],
         control_report["chain"]["roll"]["slope"]
     );
-    assert!(chain["roll"]["frame_exposure"].is_null(), "{chain}");
+    assert!(chain["roll"]["thin_exposure"].is_null(), "{chain}");
+    assert_eq!(chain["roll"]["frame_exposure_applied"], true, "{chain}");
     let chain = roll_with(
         "manifest-slope",
-        r#"{"roll": {"white_stops": 1.9, "frame_slope": 2.2}}"#,
+        r#"{"roll": {"white_stops": 1.9, "thin_slope": 2.2, "thin_exposure": 0.2}}"#,
     );
-    assert_eq!(chain["look"]["base_from"], "frame", "{chain}");
-    assert_eq!(chain["roll"]["frame_slope"], 2.2, "{chain}");
+    assert_eq!(chain["look"]["base_from"], "thin", "{chain}");
+    assert_eq!(chain["roll"]["thin_slope"], 2.2, "{chain}");
 }
 
 #[test]

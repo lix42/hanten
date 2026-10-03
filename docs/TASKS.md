@@ -391,6 +391,7 @@ graph TD
     nf-calibration/frame-level-trim
     nf-calibration/exposure-buckets
     nf-calibration/taste-vs-quality
+    nf-calibration/thin-lift-confirmation
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -651,6 +652,7 @@ graph TD
   nf-calibration/roll-exposure --> nf-calibration/exposure-buckets
   nf-calibration/thin-frame-lift --> nf-calibration/taste-vs-quality
   nf-calibration/frame-level-trim --> nf-calibration/taste-vs-quality
+  nf-calibration/taste-vs-quality --> nf-calibration/thin-lift-confirmation
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1272,6 +1274,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/taste-vs-quality` (new flow): `nf-calibration/thin-frame-lift`, `nf-calibration/frame-level-trim`
   — filed 2026-10-01: thin-frame-lift's round 2 was a matter of taste; the lifts it and
   frame-level-trim add are preferences, unlike the corrections, and need to read as such
+- `nf-calibration/thin-lift-confirmation` (new flow): `nf-calibration/taste-vs-quality`
+  — filed 2026-10-02: thin-frame-lift's confirmation round and noise measurement,
+  compared through the thin lift's own switch
 
 ## Tasks
 
@@ -2059,10 +2064,14 @@ the design now in `docs/design-spec.md` (§6–§7):
   **closed—not needed 2026-10-01**: no split of the 09-28 roll moves its exposure more
   than 0.24 EV (0.05 at the half), so a group measures what the roll does; the residual
   is per frame, `frame-level-trim`'s
-- [ ] [Separate taste from quality in the automatic
-  adjustments](tasks/nf-calibration/taste-vs-quality.md) — classify each automatic
-  adjustment as a correction or a preference, give every preference one documented off
-  switch, and record what a GUI needs to preview and toggle them
+- [x] [Separate taste from quality in the automatic
+  adjustments](tasks/nf-calibration/taste-vs-quality.md) — **done 2026-10-02.** Every
+  automatic adjustment is a correction, a guard or a preference (design-spec §6); the two
+  lifts are preferences, each with its own switch (`--small-lift`, `--thin-lift`), the
+  thin lift stored as its own pair beside the small one; `--frame-lift` retired
+- [ ] [Confirm the thin lift on an independent
+  roll](tasks/nf-calibration/thin-lift-confirmation.md) — a review round on 09-29's four
+  thin frames, on vs `--thin-lift off`, and the noise the steeper slope adds
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the

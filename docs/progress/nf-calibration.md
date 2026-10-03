@@ -63,20 +63,33 @@ lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.
 the roll's exposure, 0 to +0.3 EV, keyed on where its white renders after that exposure;
 bright frames are never darkened. `measure-roll` writes it as a **delta** in
 `roll.frames."<file>".exposure`, which `convert`/`roll` move into `roll.frame_exposure`.
-On by default; off at measurement (`--no-frame-lift`) or at render (`--frame-lift off`,
-`roll.frame_lift`, `null` = on) without re-measuring. Review: the lift was better on 72 of
+On by default; off at measurement (`--no-small-lift`) or at render (`--small-lift off`,
+`roll.small_lift`, `null` = on) without re-measuring (`taste-vs-quality` renamed the
+switches). Review: the lift was better on 72 of
 103 lifted frames, worse on 7. A **flat** frame (luma p5–p95 under a stop) gets no lift, and
-a thin frame's lift (below; on by default, `--no-thin-lift`) replaces the small one.
+a thin frame's lift (below) replaces the small one while it applies.
 
 **`thin-frame-lift` is done (2026-10-01): a thin frame gets a steeper slope and the
 exposure that holds the film base**, raising its white about a stop (slope bound 2.4), in
 place of the small lift. A frame qualifies when its white renders at or under +0.9 stop
 after the roll's exposure and 30% of its luma sits within a stop of the base, which a
-night scene also meets. Written as `roll.frames."<file>".slope` and `exposure`, moved into
-`roll.frame_slope` (`--roll-frame-slope`; the look's `base_from` is then `frame`). On by
-default, a taste adjustment: `--no-thin-lift` at measurement, `--frame-lift off` at render.
-A typed `--roll-white` or a manifest's `roll.white_stops` drops both halves. Not
-confirmed on an independent roll, and noise unmeasured: `taste-vs-quality` carries both.
+night scene also meets. Written as `roll.frames."<file>".thin_slope` and `thin_exposure`
+beside the small lift, moved into `roll.thin_slope` / `roll.thin_exposure` (the look's
+`base_from` is then `thin`). A typed `--roll-white` or a manifest's `roll.white_stops` drops
+the thin pair. Not confirmed on an independent roll, and noise unmeasured:
+`thin-lift-confirmation` carries both.
+
+**`taste-vs-quality` is done (2026-10-02): every automatic adjustment is a correction, a guard or a
+preference** (design-spec §6). Corrections (the roll's white balance, exposure and white)
+have no switch; guards (the white's cap, floor and clamp; the flat frame) bound them; the
+two lifts are preferences, on by default and each with its own switch at measurement
+(`--no-small-lift`, `--no-thin-lift`) and at render (`--small-lift` / `roll.small_lift`,
+`--thin-lift` / `roll.thin_lift`), the value kept in the recipe while off. Thin off renders
+the small lift. The report lists them in `chain.roll.taste_applied`. The old switch, which
+turned both off (`--frame-lift`, `roll.frame_lift`, `--no-frame-lift`), and the old thin
+keys (`roll.frame_slope`, an entry's `slope`, `--roll-frame-slope`) are refused with
+migrations that replay the old render; a `null` one is dropped. A typed or manifest-stated
+lift that another source's lift would silently replace is refused, naming the value.
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -1209,10 +1222,114 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## taste-vs-quality
 
-**Status:** not started
-**Updated:** 2026-10-01
+**Status:** done
+**Updated:** 2026-10-02
 
 - 2026-10-01: filed (user) after `thin-frame-lift`'s round 2, which could not be called:
   the thin lift is brighter, which viewers tend to like, but whether it is better is
   opinion. Goal: tell corrections from preferences, and let a user (and a future GUI)
   preview and turn off the preferences.
+- 2026-10-02: **started; decided (user)**: one switch per preference, not one "taste"
+  switch; `default` keeps the preferences on and the spec's "no taste" was amended; a
+  report field marks them; the confirmation round and noise measurement go to a new task.
+  Pushed back on the brief: a render-time thin switch was impossible as stored, since a
+  thin frame's entry replaced its small lift, so off could only render no lift.
+- 2026-10-02: **implemented.**
+  - **The line** (design-spec §6, "Corrections and preferences"): a correction restores
+    what the roll recorded on every frame alike; a preference reacts to one frame. Review
+    chose every kind's constants, so "reviewed" is not the test.
+  - **Recipe**: `roll.frame_slope` → `roll.thin_slope` plus `roll.thin_exposure`, a pair
+    beside the small lift's `roll.frame_exposure`; `roll.thin_lift` / `--thin-lift`
+    gates the pair, `roll.frame_lift` / `--frame-lift` the small lift only. While the thin
+    pair applies it replaces the small lift; off, the small lift renders. Entries are
+    `{white_stops, exposure, thin_slope, thin_exposure}`. A thin exposure without its slope
+    is refused (it was solved with it). A typed white now drops the thin pair and keeps
+    the small lift (before, it dropped the frame's exposure with the slope).
+  - **Retired**: `roll.frame_slope` and an entry's `slope` are refused at every value with
+    a migration message, the codebase's practice and pre-release; `--roll-frame-slope` was
+    removed outright (a day old, as `--thin-lift` was).
+  - **`measure-roll`**: `--no-frame-lift` now leaves out the small lift only (it was both),
+    so the flag means at measurement what `--frame-lift off` means at render — a departure
+    from the agreed plan, which kept it. Both lift sections gain `"kind": "taste"`;
+    `frame_lift.lifted` now counts thin frames too, since they carry a small lift.
+  - **Report**: `chain.roll` loses `frame_slope` / `frame_slope_applied`, gains
+    `thin_slope`, `thin_exposure`, `thin_lift_applied` and `taste_applied`;
+    `frame_exposure_applied` is the small lift's alone. `base_from` `frame` → `thin`.
+  - The v9 `recipe` fingerprint was refreshed in place (`50987e7d7708865b` →
+    `0ef629d9ced49cb9`): new keys, all `null` by default; no default pixel moved.
+  - **Verified**: unit tests (each switch, the probe naming, the retired keys); a binary
+    test of the four switch combinations on a thin frame, each byte-identical to the render
+    it stands for (thin off = the `--no-thin-lift` file, small off = the default, both off
+    = the file measured with neither); the ten archive rolls re-measured
+    (`../temp/taste-vs-quality/`): every frame's `lift_ev`, `thin_lift`, white and flatness
+    identical to `thin-frame-lift`'s reports, 101 of 178 frames with a small lift written,
+    14 with a thin pair (each beside its small lift). The guide's §5/§7 examples re-run,
+    the 09-18 `measure-roll` one on the real roll (`frame_lift.lifted` 29 → 30).
+- 2026-10-02: **review fixes.** Corrects "refused at every value" above: a `null`
+  `roll.frame_slope` or entry `slope`, which every earlier file carries, is dropped at
+  load (`recipe::strip_retired_nulls`, every body: `--params` layers bare or enveloped,
+  manifest `params`); any other value is refused naming the rename (`slope` →
+  `thin_slope`, the exposure beside it → `thin_exposure`), since dropping the slope alone
+  rendered that exposure as a small lift. `--roll-frame-slope` is a hidden removed flag
+  naming the same pair. A small lift typed, or stated in a manifest's `params`, on a frame
+  whose thin lift applies is refused (it was silently ignored); a recipe file's is spared,
+  so a thin frame's dump replays. The render-fault probe names the thin slope with its
+  exposure, since its reset drops both.
+- 2026-10-02: narrowed that small-lift refusal to a thin lift from elsewhere: a small lift
+  stated beside its thin slope (a frame's `measure-roll` `flag`, dumped keys in a manifest)
+  is the measured shape, the `--thin-lift off` fallback, and renders.
+- 2026-10-02: the migrations now replay a switched-off lift: an old `roll.frame_lift`
+  "off" (or typed `--frame-lift off`) turned the old slope off too, so the rename adds
+  `thin_lift` off; `--roll-frame-slope`'s remedy cites only a typed exposure and, on
+  `roll`, the per-frame keys. Either thin value stated beside a small lift spares it.
+- 2026-10-02: **decided (user): the small-lift switch is renamed, the old one retired.**
+  `--frame-lift`, `roll.frame_lift` and `measure-roll --no-frame-lift` turned both lifts
+  off; above, they had come to mean the small lift alone, so an old command would render
+  differently under the same spelling. Now `--small-lift` / `roll.small_lift` /
+  `--no-small-lift`; `taste_applied` lists `small_lift` and `measure-roll`'s section is
+  `small_lift`. The old spellings are refused with both switches as the remedy (a `null`
+  `roll.frame_lift`, every earlier file's default, is dropped); a retired slope's message
+  migrates a `frame_lift` beside it too, so one pass loads. `roll.frame_exposure`,
+  `--roll-frame-exposure` and an entry's `exposure` keep their names. v9 `recipe`
+  fingerprint refreshed in place (`0ef629d9ced49cb9` → `f3594e984e5e431b`); no default
+  pixel moved. The `measure-roll` report quote in the guide (§7) was renamed, not re-run on
+  the real roll.
+- 2026-10-02: an old `frame_lift` "on" migrates to both switches "on", not "drop it": it beat
+  an earlier "off". Corrects "one pass loads" above: retired keys are named one per run (a
+  recipe with several old thin entries takes a run per entry); each message is
+  self-consistent.
+- 2026-10-02: the small-lift rule's mirror: a thin slope typed (or in a manifest's
+  `params`) with no thin exposure, over a small lift that would apply, is refused naming
+  that lift's value (it silently dropped it; the slope migrations led there). The
+  migrations now name the frame's entry `exposure` as the thin exposure where one took the
+  slope's exposure's place.
+- 2026-10-02: **done.** Landed: design-spec §6 "Corrections and preferences" (the
+  classification, and what a GUI needs); the thin lift as its own pair
+  (`roll.thin_slope`, `roll.thin_exposure`) beside the small lift, each preference with its
+  own switch (`--small-lift` / `roll.small_lift`, `--thin-lift` / `roll.thin_lift`;
+  `measure-roll --no-small-lift`, `--no-thin-lift`); `chain.roll.taste_applied` and
+  `thin_lift_applied`, `kind: "taste"` on `measure-roll`'s lift sections; the retired
+  spellings refused with migrations that replay the old render (nulls dropped); two
+  presence rules against a lift silently replaced by another source's. Verified: unit and
+  binary tests (each switch combination byte-identical to the render it stands for, each
+  migration followed to the old render, `frames[].flag` pasted into `convert`); the ten
+  archive rolls' lifts unchanged (101 of 178 small, 14 thin, each beside its small lift);
+  the guide's §5/§7 examples re-run. Review: `nc-reviewer` plus a cold reviewer standing in
+  for Codex (out of credits), the user's `/code-review`, and the ship review, over six fix
+  rounds. **For dependents:**
+  - `thin-lift-confirmation` compares through `--thin-lift off`; the thin pair is solved
+    from the small-lifted render, so it holds the base about where the small lift renders
+    it and does not change with the small switch.
+  - A GUI previews a preference by toggling its switch; the values stay in the recipe, and
+    a measured file layered last never states a switch.
+  - A recipe with several old thin entries is migrated one entry per run.
+
+## thin-lift-confirmation
+
+**Status:** not started
+**Updated:** 2026-10-02
+
+- 2026-10-02: filed (user) from `taste-vs-quality`, carrying `thin-frame-lift`'s
+  confirmation round and noise measurement. 2026-09-29 Ektar 100, scanned after the
+  thresholds were set, is the independent roll: `measure-roll` thin-lifts 2017, 2044, 2052
+  and 2053 (slopes 1.78–1.90, none bounded; `../temp/taste-vs-quality/reports/`).

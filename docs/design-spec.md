@@ -102,8 +102,9 @@ The deterministic core owns the image science. Any future ML assistance (see
    converters — measured against Negative Lab Pro on three frames of one roll,
    Hanten's `p95 − p5` moves **0.96 stops** where NLP's moves **4.3–4.5** (see
    `docs/progress/analysis.md`, `analysis/nlp-comparison`). A frame's own statistics
-   read a sunset as a cast, which is why per-frame auto white balance retired. Per-frame adjustment returns only as bounded, visible lifts, each with an off switch
-   (`nf-calibration/thin-frame-lift`, `nf-calibration/frame-level-trim`).
+   read a sunset as a cast, which is why per-frame auto white balance retired. Per-frame
+   adjustment returns only as bounded preferences, each reported and each with its own
+   off switch (§6, "Corrections and preferences").
 
 ## 4. Input formats
 
@@ -376,7 +377,7 @@ The formulas and each knob's range are in §9; this is what each stage is for.
 - **The look** owes three controls the old chain never had as controls:
   - **Contrast** — the print-contrast half of the old single `gamma`, as a slope
     pivoted at mid-grey. Its base is the roll's, set by the roll's white (§8 `roll`), or
-    a thin frame's own slope, and the knob multiplies it, so one taste carries across rolls as one number.
+    a thin frame's own slope (`roll.thin_slope`), and the knob multiplies it, so one taste carries across rolls as one number.
   - **A per-channel grade pivoted at mid-grey** — the photographer-facing counterpart
     of the decode's `density.scale`. Acting on working-space channels after the 3×3,
     it corrects a cast that grows with brightness, which white balance cannot. Pivoted
@@ -425,8 +426,10 @@ knob starts from, and each has one principle (`crate::rendering`):
   container needs.** It does not apply the roll section. It is the handoff to an
   external editor and — stated SDR — the rendering the decode's calibration loop
   holds fixed (`design-update.md` Part 3).
-- **`default` is what our code produces from measured values alone**: the roll section
-  applied, today's defaults for everything else, and no taste.
+- **`default` is what our code produces from measured values**: the roll section
+  applied, the preferences that won review on (each reported, each with its own off
+  switch: "Corrections and preferences" below), and today's defaults for everything
+  else.
 
 | | `direct` | `default` |
 |---|---|---|
@@ -457,6 +460,40 @@ knob starts from, and each has one principle (`crate::rendering`):
   `direct`'s output moved, log it as a dated entry in `nf-calibration`'s progress,
   since review rounds before and after no longer compare like for like. A task that
   changes a stage decides `direct`'s part as its own work.
+
+### Corrections and preferences
+
+Every value Hanten sets on its own is one of three kinds
+(`nf-calibration/taste-vs-quality`). A **correction** brings the scan back to what the
+film recorded, on the whole roll alike; it has no switch, since without it the scan is
+wrong rather than differently liked (`direct` leaves out the whole roll section). A
+**guard** bounds a measurement, or keeps a preference off a frame it would harm. A
+**preference** is a choice a viewer may not share: on by default only when it won
+review, and each has its own switch at render that keeps the measured value in the
+recipe. Review chose the constants of every kind, so "reviewed" does not separate them;
+what does is whether the adjustment restores the roll or reacts to one frame.
+
+| adjustment | kind | why | off at render |
+|---|---|---|---|
+| roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour | — |
+| roll exposure (`roll.exposure`) | correction | brings a thin or dense roll to a normal level with one gain, so frames keep their relative levels | — |
+| roll white (`roll.white_stops`) | correction | places the roll's measured highlights at diffuse white | — |
+| the white's cap and floor; a frame clamped to the cap | guard | keep a blown frame from flattening the roll, and an underexposed roll from being stretched | — |
+| flat frame (`roll_white::FLAT_SPREAD_STOPS`) | guard | keeps both lifts off one surface filling the frame | — |
+| small lift (`roll.frame_exposure`) | preference | brightens a low-key frame by up to +0.3 EV; preferred on 72 of 103 frames, but leaving a dark frame dark is a choice | `--small-lift off`, `roll.small_lift` |
+| thin lift (`roll.thin_slope`, `roll.thin_exposure`) | preference | raises a thin frame's white about a stop with the film base held about where its small lift renders it; review found it brighter, not better | `--thin-lift off`, `roll.thin_lift` |
+
+What a preference carries, so a GUI can preview it with and without, and toggle it:
+
+- **Its value stays in the recipe while off.** `measure-roll --out` writes every
+  preference it measured, a thin frame's small lift beside its thin one, so turning the
+  thin lift off shows the small one, not none.
+- **A measurement never states a switch** (unset is on), so a `measure-roll` file
+  layered last keeps an earlier `"off"`. Both switches are frame-local: a `roll
+  --frames` manifest may turn one frame's off.
+- **The report names it.** `chain.roll.taste_applied` lists the preferences applied, by
+  their switch's key; `measure-roll`'s `small_lift` and `thin_lift` sections are
+  `"kind": "taste"`.
 
 **Explicit knobs build on the base, under either rendering.** `--white-balance`
 multiplies the base gains and `--contrast` the base slope, each with identity 1; every
@@ -614,8 +651,8 @@ bracketed calibration frames. Moving one moves every default pixel, so it costs 
 - **`d` is a calibration, not a brightness knob** (0.62, hand-frozen as `generic-c41`'s
   mid aim; stocks measure 0.54–0.70). Brightness is set in rendering: a roll's level
   by its measured exposure (`roll.exposure`), and a low-key frame's by a small lift on
-  top (`roll.frame_exposure`), and a thin frame's by a steeper slope with it
-  (`roll.frame_slope`).
+  top (`roll.frame_exposure`), and a thin frame's by a steeper slope and its own
+  exposure (`roll.thin_slope`, `roll.thin_exposure`).
 - **`gamma` split in two** (`nf-reconstruction/gamma-split`). Linearizing the film
   (≈1/0.55 ≈ 1.8) is calibration and stays as `reconstruction.linearization`; at 1.8
   the decode's output is scene-linear (double the exposure, double the value), which
@@ -765,7 +802,7 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white and each lifted frame its lift (a low-key frame's exposure, or a thin frame's slope and exposure in its place; none on a flat frame; `--no-frame-lift` writes neither, `--no-thin-lift` the small one only), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten measure-roll` | Measure a roll's white balance, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to −0.6 scene stops from mid-grey, within ±2 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
 | `hanten params`  | Print the full default parameter set as JSON, in the §8 envelope (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
@@ -1086,11 +1123,13 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5 --roll-exposure 0.455" } }
 # roll.json: { "recipe_version": 3, "calibration": { "film_base": { "explicit": [...] } },
 #   "roll": { "white_balance": [...], "white_stops": 1.5, "exposure": 0.455,
-#             "frame_exposure": null, "frame_slope": null, "frame_lift": null,
-#             "frames": { "f07.tif": { "white_stops": 2.0, "exposure": null, "slope": null },   # clamped
-#                         "f12.tif": { "white_stops": null, "exposure": 0.3, "slope": null } } } } # lifted
-# (A thin frame gets a `slope` and its own `exposure`; `--no-thin-lift` writes its small
-# lift instead, `--no-frame-lift` no lifts; `convert`/`roll --frame-lift off` ignores both.)
+#             "frame_exposure": null, "small_lift": null,
+#             "thin_slope": null, "thin_exposure": null, "thin_lift": null,
+#             "frames": { "f07.tif": { "white_stops": 2.0, "exposure": null, … },   # clamped
+#                         "f12.tif": { "white_stops": null, "exposure": 0.3, … } } } } # lifted
+# (A thin frame also gets a `thin_slope` and `thin_exposure`, which replace its small
+# lift. `--no-small-lift` / `--no-thin-lift` leave one out; `convert`/`roll
+# --small-lift off` / `--thin-lift off` turn a written one off.)
 
 # Convert the roll from that one frozen recipe: SDR Display P3 16-bit TIFFs,
 # out/<stem>_positive.tiff. A look is its own layer, and a flag beats both.
@@ -1422,47 +1461,74 @@ is refused (exit 2), since it asks for something the run will not do.
 - `--roll-white STOPS` ⇒ `roll.white_stops` — the roll's white in scene stops above
   mid-grey, finite and positive: the measurement, not a slope. The look's base slope is
   `log2(1/0.18) / white_stops`, which renders it at diffuse white with mid-grey pinned,
-  unless the frame has its own (`roll.frame_slope`), and `look.contrast` multiplies it.
+  unless a thin lift applies (`roll.thin_slope`), and `look.contrast` multiplies it.
   A higher white is a flatter picture. Typed, or in a `roll` manifest's `params`, it drops
-  a frame's thin lift (slope and exposure); a later `--params` layer's does not.
+  a frame's thin lift (slope and exposure) and keeps its small lift; a later `--params`
+  layer's does not.
 - `--roll-exposure EV` ⇒ `roll.exposure` — the roll's measured exposure, a neutral
   gain added to `scene_correction.exposure` (`2^EV` must be normal), so a frame darker
   than its roll stays dark, beyond a bounded lift. It does not move `white_stops`, which is measured at
   exposure 0.
-- `--roll-frame-exposure EV` ⇒ `roll.frame_exposure` — this frame's own exposure, a
-  **delta** added to `roll.exposure`: the lift `measure-roll` gives a low-key frame
-  (`nf-calibration/frame-level-trim`), 0 to +0.3 EV, keyed on where the frame's white
-  renders after the roll's exposure. A delta, so it keeps its meaning when the roll is
-  re-measured. `roll` refuses it stated for the whole roll (a flag, or the shared
-  recipe), which would lift every frame alike. A **flat** frame — its luma spans under a
-  stop from p5 to p95, one surface filling it — gets no lift.
-- `--roll-frame-slope SLOPE` ⇒ `roll.frame_slope` — this frame's own base slope, finite
-  and positive, in place of the one `white_stops` places; `look.contrast` multiplies it.
-  `measure-roll` writes it (unless `--no-thin-lift`), with the frame's own exposure, for a **thin**
-  frame (`nf-calibration/thin-frame-lift`): its white low after the roll's exposure and
-  its shadows on the film base. The pair raises the frame's white about a stop with the
-  film base held about where the roll renders it (the white is read in film RGB, the
-  base as luma before the roll's gains), within a slope bound (2.4), in place of the
-  small lift. A frame the bound holds, or one no thin lift fits (it keeps its small
-  lift), is listed in the report's `thin_lift` section, not warned about. A slope, not a white, because it is chosen, not measured. `roll` refuses it for
-  the whole roll, as it does `roll.frame_exposure`.
-- `--frame-lift on|off` ⇒ `roll.frame_lift` (unset `null` is on, so `measure-roll`'s file, layered last, keeps an earlier `"off"`) — whether
-  `roll.frame_exposure` and `roll.frame_slope` apply; off renders the roll's exposure
-  and slope. Off keeps the measured lifts in the recipe, so one
-  frame or a whole roll can be compared without them and turned back on. Typed `off` is
-  spared by the roll-flag refusals under `direct` and the film master: it asks for
-  nothing.
+- `--roll-frame-exposure EV` ⇒ `roll.frame_exposure` — this frame's **small lift**, a
+  preference (§6): a **delta** added to `roll.exposure`, the lift `measure-roll` gives a
+  low-key frame (`nf-calibration/frame-level-trim`), 0 to +0.3 EV, keyed on where the
+  frame's white renders after the roll's exposure. A delta, so it keeps its meaning when
+  the roll is re-measured. A thin lift replaces it while that applies. A **flat** frame —
+  its luma spans under a stop from p5 to p95, one surface filling it — gets no lift.
+- `--small-lift on|off` ⇒ `roll.small_lift` — whether the small lift applies.
+- `--roll-thin-slope SLOPE` ⇒ `roll.thin_slope` and `--roll-thin-exposure EV` ⇒
+  `roll.thin_exposure` — a **thin** frame's lift, a preference (§6;
+  `nf-calibration/thin-frame-lift`): a base slope in place of the one `white_stops`
+  places (`look.contrast` multiplies it), and the exposure solved with it, a delta on
+  `roll.exposure` in place of the small lift. A frame is thin when its white sits low
+  after the roll's exposure and its shadows on the film base. The pair raises the
+  frame's white about a stop with the film base held about where its small lift renders
+  it (the white is read in film RGB, the base as luma before the roll's gains), within a
+  slope bound (2.4); solved from that render, the pair is the same with the small lift
+  off. A frame the bound holds, or one no thin lift fits (it has its small
+  lift only), is listed in the report's `thin_lift` section, not warned about. A slope,
+  not a white, because it is chosen, not measured. The exposure applies only beside the
+  slope, and is refused without one.
+- `--thin-lift on|off` ⇒ `roll.thin_lift` — whether the thin pair applies; off, the
+  frame renders its small lift.
+
+Each switch is unset (`null`) by default, which is on, so `measure-roll`'s file layered
+last keeps an earlier `"off"`. Off keeps the measured values in the recipe, so one frame
+or a whole roll can be compared without them and turned back on. Typed `off` is spared by
+the roll-flag refusals under `direct` and the film master: it asks for nothing. `roll`
+refuses a frame's lift stated for the whole roll (a flag, or the shared recipe), which
+would lift every frame alike. A small lift typed (or in a manifest's `params`) on a frame
+whose thin lift applies from elsewhere is refused: the thin lift replaces it. Stated with
+a thin value, as `measure-roll`'s `frames[].flag` and a dump carry it, it is the
+fallback `--thin-lift off` renders. The mirror: a thin slope typed (or in a manifest's
+`params`) without a thin exposure, over a small lift that would apply, is refused naming
+that lift's value as the thin exposure to keep it (or `--small-lift off` to drop it),
+since the slope would drop it silently. A recipe file's values are never refused, so a
+dump replays. `roll.frame_slope`,
+`--roll-frame-slope` and an entry's `slope` (before 2026-10-02) carried the thin lift,
+with the exposure beside them as its exposure: a `null` key, as every file then wrote it,
+is dropped; any other value is refused, naming the rename to `thin_slope` and
+`thin_exposure` that renders as before. `roll.frame_lift` / `--frame-lift` and
+`measure-roll --no-frame-lift` (before 2026-10-02) switched both lifts: a `null` key is
+dropped, and any other value is refused naming both switches (`"off"` →
+`small_lift` and `thin_lift` `"off"`, `"on"` → both `"on"`, since it beat an earlier
+`"off"`; `--no-frame-lift` → `--no-small-lift --no-thin-lift`). Retired keys are
+diagnosed one at a time, a recipe with several old thin entries one entry per run; a
+retired slope's message migrates the switch beside it too, so following it never meets
+the switch's refusal.
+
 - `roll.frames` (no flag) maps a **file name** to that frame's own
-  `{"white_stops": …, "exposure": …, "slope": …}` (any may be `null`) — the clamps and
-  lifts `measure-roll --out` writes. `convert` and each `roll` frame move their input's
-  entry into `roll.white_stops`, `roll.frame_exposure` and `roll.frame_slope` before any
-  flag, and a `--frames`
+  `{"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …}` (any may be
+  `null`) — the clamps and lifts `measure-roll --out` writes. `convert` and each `roll`
+  frame move their input's entry into `roll.white_stops`, `roll.frame_exposure`,
+  `roll.thin_slope` and `roll.thin_exposure` before any flag, and a `--frames`
   manifest's `params` beat it; a manifest may not state `roll.frames` itself.
 
-The report's `chain.roll` states each value, the `slope` derived, and whether each was
+The report's `chain.roll` states each value, the `slope` derived, whether each was
 applied (`white_balance_applied`, `slope_applied`, `exposure_applied`,
-`frame_exposure_applied`, `frame_slope_applied`); `chain.look.base_from` is `frame` when
-the frame's own slope set the look's. A rendered run
+`frame_exposure_applied`, `thin_lift_applied`), and `taste_applied`, the preferences
+applied by their switch's key (`small_lift`, `thin_lift`); `chain.look.base_from` is
+`thin` when a thin slope set the look's. A rendered run
 warns once where a recipe file's `scene_correction.white_balance` (not the identity)
 or non-zero `scene_correction.exposure` sits beside the roll's — a possible leftover
 (`Recipe::roll_overlap_warnings`) — and where a section with gains or a white has no
@@ -1537,8 +1603,8 @@ stage is a bit-exact identity. Controls run in the order listed.
   the base slope, finite and positive, default `1`. The look applies the **slope**,
   `base × contrast`, pivoted at mid-grey: `out_c = 0.18 · (in_c / 0.18)^slope` on each
   ACEScg channel; slope 1 reproduces the scene's contrast, and non-positive and
-  non-finite samples pass through. The base is the frame's own slope
-  (`roll.frame_slope`), else the applied roll's (`log2(1/0.18) / roll.white_stops`),
+  non-finite samples pass through. The base is a thin frame's slope
+  (`roll.thin_slope`, while `roll.thin_lift` is on), else the applied roll's (`log2(1/0.18) / roll.white_stops`),
   else the fallback, the same formula at a white
   of +1.75 (`look::DEFAULT_SLOPE` ≈ 1.414, whole slope 2.54; `nf-calibration/no-roll-defaults`
   chose it by review over 2.0 and the white rule's floor), and `direct`'s pinned ≈ 1.414.
@@ -1570,7 +1636,7 @@ stage is a bit-exact identity. Controls run in the order listed.
   bit-exact identity. It assumes a roll-level white balance ahead of it.
 
 The report's `chain.look` states `contrast`, `base_slope`, `base_from` (`roll`,
-`frame`, `fallback` or `direct`), the resulting `slope`, and the section as run.
+`thin`, `fallback` or `direct`), the resulting `slope`, and the section as run.
 
 ### Fit range (`fit_range`)
 Fits the scene's range into the display's, with the display's **peak** as the

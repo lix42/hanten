@@ -20,7 +20,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `core/recipe-replay-fidelity` the recipe files §4, §5 and §10 show were re-run, and at
 > `output/content-light-levels` §8's HDR destination examples. At
 > `nf-calibration/thin-frame-lift` §5's default recipe and `roll.json` and §7's roll
-> examples were re-run (the `measure-roll` ones on the real rolls they name). The staleness signal is
+> examples were re-run (the `measure-roll` ones on the real rolls they name), and again at
+> `nf-calibration/taste-vs-quality`, with §8's `direct` roll-flag refusal. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -211,9 +212,12 @@ abridged):
       "white_stops": 1.9509047,
       "exposure": 0.48546875,
       "frame_exposure": null,
-      "frame_slope": null,
-      "frame_lift": null,
-      "frames": { "971.tif": { "white_stops": 2.0, "exposure": null, "slope": null } }
+      "small_lift": null,
+      "thin_slope": null,
+      "thin_exposure": null,
+      "thin_lift": null,
+      "frames": { "971.tif": { "white_stops": 2.0, "exposure": null,
+                               "thin_slope": null, "thin_exposure": null } }
     },
     "reconstruction": {
       "scale": [1.0, 0.84, 0.73], "offset": [0.0, 0.0, 0.0],
@@ -226,8 +230,8 @@ abridged):
 Like every recipe file Hanten writes, it is the recipe (`params`) beside the build that
 wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by file name, the frames whose white is
 above the roll's cap, the low-key frames given a small lift (`"exposure"`; none on
-this roll), and the thin frames given a steeper `"slope"` with their own `"exposure"`
-unless `--no-thin-lift` (§7). `reconstruction` is the decode the gains were measured through, written
+this roll), and the thin frames given a `"thin_slope"` and `"thin_exposure"` beside it
+(§7). `reconstruction` is the decode the gains were measured through, written
 even at its defaults, because the gains hold only under it. If your `--params` recipe
 stated `input` or `measure` keys, the file carries them too — all but
 `input.export_ir`, one frame's output path, which `roll` refuses.
@@ -370,7 +374,8 @@ hanten params
                      "film_type": "unknown", "export_ir": null },
     "calibration": { "film_base": null },
     "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
-                     "frame_exposure": null, "frame_slope": null, "frame_lift": null,
+                     "frame_exposure": null, "small_lift": null,
+                     "thin_slope": null, "thin_exposure": null, "thin_lift": null,
                      "frames": {} },
     "measure":     { "inset": 0.05 },
     "reconstruction": {
@@ -408,7 +413,7 @@ fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, headroom
 and display black are 0.8, 6 and 6 under `default`. The look's `contrast` is a
-multiplier, so its default `1.0` keeps the base slope: the frame's own (`roll.frame_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
+multiplier, so its default `1.0` keeps the base slope: a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
 
@@ -851,10 +856,10 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-exposure` / `--roll-frame-exposure` /
-  `--roll-frame-slope` / `--frame-lift on`, or pass
-  `--rendering default`. A recipe's
-  `roll` section is not refused, nor is `--frame-lift off`, which asks for nothing (under
-  the film master too).
+  `--roll-thin-slope` / `--roll-thin-exposure` / `--small-lift on` / `--thin-lift on`, or
+  pass `--rendering default`. A recipe's `roll` section is not refused, nor is
+  `--small-lift off` or `--thin-lift off`, which ask for nothing (under the film master
+  too).
 
 ### Scene correction
 
@@ -953,7 +958,7 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
   {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","slope":1.413675,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
   ```
 
-  `base_from` is `roll`, `fallback` or `direct`, and `slope` is `base_slope` ×
+  `base_from` is `roll`, `thin`, `fallback` or `direct`, and `slope` is `base_slope` ×
   `contrast`.
 
 - An out-of-range value is refused naming the flag and the key:
@@ -1089,9 +1094,10 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
   "exposure": { "ev": 0.45537937, "level_stops": -1.0553794, "bounded": false,
                 "target_stops": -0.6, "bound_ev": 2.0 },
-  "frame_lift": { "written": true, "lifted": 29, "bound_ev": 0.3, "full_stops": 0.9,
-                  "none_stops": 1.5, "flat_spread_stops": 1.0 },
-  "thin_lift": { "written": true, "lifted": 1, "base_stops": -3.707272, "white_stops": 0.9,
+  "small_lift": { "kind": "taste", "written": true, "lifted": 30, "bound_ev": 0.3,
+                  "full_stops": 0.9, "none_stops": 1.5, "flat_spread_stops": 1.0 },
+  "thin_lift": { "kind": "taste", "written": true, "lifted": 1, "base_stops": -3.707272,
+                 "white_stops": 0.9,
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
                  "slope_bound": 2.4 },
   "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937" },
@@ -1113,12 +1119,40 @@ measured value is never mistaken for a chosen one:
 | Flag | Recipe key | |
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
-| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope. Typed, or in a `roll` manifest's `params`, it drops a frame's thin lift (slope and exposure); a later `--params` layer's white does not |
+| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope. Typed, or in a `roll` manifest's `params`, it drops a frame's thin lift (slope and exposure) and keeps its small lift; a later `--params` layer's white does not |
 | `--roll-exposure EV` | `roll.exposure` | the roll's exposure, a neutral gain of `2^EV`; `--exposure` adds to it |
-| `--roll-frame-exposure EV` | `roll.frame_exposure` | this frame's own exposure, added to the roll's: the lift `measure-roll` writes per frame. `roll` refuses it in the shared recipe or as a flag (exit 2), since it would lift every frame alike; per frame it goes in `roll.frames` or a manifest's `params` |
-| `--roll-frame-slope SLOPE` | `roll.frame_slope` | this frame's own base slope, in place of the one `roll.white_stops` places (`--contrast` multiplies it): the thin-frame lift `measure-roll` writes. `roll` refuses it in the shared recipe or as a flag (exit 2), as it does `roll.frame_exposure` |
-| `--frame-lift on\|off` | `roll.frame_lift` | whether `roll.frame_exposure` and `roll.frame_slope` apply: unset (`null`) is on, so a measured file layered last never undoes an earlier `"off"`; `off` keeps the lifts in the recipe |
-| — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "slope": …}}`, any `null`: a frame's own white, in place of the roll's, and its lift. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure` and `roll.frame_slope`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
+| `--roll-frame-exposure EV` | `roll.frame_exposure` | this frame's small lift, added to the roll's exposure: the lift `measure-roll` writes for a low-key frame. A thin lift replaces it |
+| `--small-lift on\|off` | `roll.small_lift` | whether the small lift applies |
+| `--roll-thin-slope SLOPE` | `roll.thin_slope` | a thin frame's base slope, in place of the one `roll.white_stops` places (`--contrast` multiplies it) |
+| `--roll-thin-exposure EV` | `roll.thin_exposure` | the exposure solved with the thin slope, added to the roll's in place of the small lift; refused without `roll.thin_slope` (exit 2) |
+| `--thin-lift on\|off` | `roll.thin_lift` | whether the thin lift applies; off, the frame renders its small lift |
+| — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …}}`, any `null`: a frame's own white, in place of the roll's, and its lifts. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope` and `roll.thin_exposure`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
+
+A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
+`roll.thin_exposure` in the shared recipe or as a flag (exit 2), since it would lift every
+frame alike; per frame it goes in `roll.frames` or a manifest's `params`. A typed
+`--roll-frame-exposure` (or a manifest's `roll.frame_exposure`) on a frame whose thin lift
+applies from the recipe is refused (exit 2), since the thin lift replaces it; stated with a
+thin value, as in a frame's `flag`, it is the `--thin-lift off` fallback. Likewise a typed
+`--roll-thin-slope` (or a manifest's `roll.thin_slope`) with no thin exposure, over a
+small lift, is refused (exit 2): it would drop that lift's exposure, so the message names
+it — add `--roll-thin-exposure <that value>` to keep it, or `--small-lift off` to drop
+it. Each switch is
+unset (`null`) by default, which is on, so a measured file layered last never undoes an
+earlier `"off"`; `off` keeps the lift in the recipe.
+
+Before 2026-10-02 a thin frame's lift was `roll.frame_slope` (`--roll-frame-slope`) or an
+entry's `slope`, with the exposure beside it. At `null`, as every file then wrote them,
+they are dropped; any other value is refused (exit 2), naming the rename that renders as
+before — the slope to `thin_slope` and the exposure that rendered beside it (a frame's
+`roll.frames` entry `exposure` where it has one) to `thin_exposure` — or re-run
+`measure-roll --out`. The old switch, `--frame-lift` / `roll.frame_lift`, and
+`measure-roll --no-frame-lift` switched both lifts; they are refused too (a `null` key
+is dropped), naming both switches: `--frame-lift off` → `--small-lift off --thin-lift
+off`, `--frame-lift on` → `--small-lift on --thin-lift on` (it beat a recipe's `off`), the
+keys likewise, `--no-frame-lift` → `--no-small-lift --no-thin-lift`. One old key is
+named per run (a recipe with several old thin entries takes a run per entry); a retired
+slope's message also migrates the switch beside it.
 
 Each is optional. The report says what applied:
 
@@ -1126,7 +1160,7 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"frame_slope":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"frame_slope_applied":false}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"taste_applied":[]}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
@@ -1210,28 +1244,36 @@ film base. If the roll really is that far off, add `--exposure` when converting
 ten rolls, over −1.0 and −0.8 (both lost on nearly every frame) and −0.3 (split frame by
 frame); it measured +0.02 to +1.74 EV on them.
 
+**The roll's white balance, exposure and white are corrections; the two lifts below are
+preferences** (taste). A correction restores what the roll recorded and has no switch.
+A preference is on by default because review preferred it, and each has its own off
+switch at render that keeps its value in the recipe, so a frame or a roll can be
+compared with and without it and turned back on. The report's `chain.roll.taste_applied`
+names the preferences applied, by their switch's key; `measure-roll`'s `small_lift` and
+`thin_lift` sections say `"kind": "taste"`.
+
 **A low-key frame gets a small lift** on top of the roll's exposure (`lift_ev`), keyed on
 where its white renders after that exposure (its `white_stops` plus `exposure.ev`): the
 whole +0.3 EV at or under +0.9 stop (`full_stops`), none at or over +1.5 (`none_stops`),
 linear between. A bright frame is never darkened. `--out` writes each non-zero lift to
-`roll.frames`, and `frame_lift.lifted` counts them; on the ten reviewed rolls 103 of 178
-frames were lifted, and review preferred the lift on 72 of them and its absence on 7
-(two of those 7 were flat frames, which are no longer lifted; below).
-Turn it off when measuring (`measure-roll --no-frame-lift`: lifts are reported, not
+`roll.frames`, and `small_lift.lifted` counts them; on the ten reviewed rolls 101 of 178
+frames are lifted, and review preferred the lift on 72 and its absence on 7 (two of those
+7 were flat frames, which are no longer lifted; below).
+Turn it off when measuring (`measure-roll --no-small-lift`: lifts are reported, not
 written) or when rendering, without re-measuring — the lift stays in the recipe:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-exposure 0.4 \
-    --roll-frame-exposure 0.25 --frame-lift off | jq -c '.chain.roll | {exposure, frame_exposure, exposure_applied, frame_exposure_applied}'
-{"exposure":0.4,"frame_exposure":0.25,"exposure_applied":true,"frame_exposure_applied":false}
+    --roll-frame-exposure 0.25 --small-lift off | jq -c '.chain.roll | {exposure, frame_exposure, exposure_applied, frame_exposure_applied, taste_applied}'
+{"exposure":0.4,"frame_exposure":0.25,"exposure_applied":true,"frame_exposure_applied":false,"taste_applied":[]}
 ```
 
 With the lift on, the exposure applied is the sum (`chain.scene_correction.exposure`
-0.65). `roll.frame_lift` is the same switch in a recipe, so a `--frames` manifest can
+0.65). `roll.small_lift` is the same switch in a recipe, so a `--frames` manifest can
 turn one frame's lift off.
 
 **A flat frame gets no lift**: one whose luma spans under a stop from its p5 to its p95
-(`spread_stops`, against `frame_lift.flat_spread_stops`) — one surface filling the frame,
+(`spread_stops`, against `small_lift.flat_spread_stops`) — one surface filling the frame,
 like a close-up of water — reports `"flat": true` and `lift_ev` 0. On the ten reviewed
 rolls two frames were flat, and review preferred no lift on both.
 
@@ -1239,30 +1281,33 @@ rolls two frames were flat, and review preferred no lift on both.
 qualifies when its white renders at or under +0.9 stop after the roll's exposure
 (`thin_lift.white_stops`) and at least 30% of its luma sits within a stop of the film
 base (`base_share`, `thin_lift.base_share`): its shadows are on the base. That holds for
-an underexposed frame and for a night scene alike; review preferred the lift on both. Its
-white then rises about a stop (`thin_lift.lift_stops`) with the film base held about where
-the roll renders it — a steeper slope and the exposure that keeps the base still, in place
-of the small lift. "About": the white is read in film RGB, the base as luma before the
-roll's gains. The slope is bounded at 2.4 (`slope_bound`): grain rises with it. A frame the
-bound holds under a full stop is listed in `thin_lift.bounded`, and a thin frame no thin
-lift fits — it keeps its small lift — in `thin_lift.unlifted`; disclosed, not warned about,
-so `--strict` passes.
-Each qualifying frame's lift is reported
-as `frames[].thin_lift` (`slope`, `exposure`, `lift_stops`, `bounded`) with or without the
-flag; it is written as the frame's `roll.frames` `slope` and `exposure`, and
-`thin_lift.lifted` counts them. It is taste, not correction: `measure-roll
---no-thin-lift` writes the small lift instead, and `--no-frame-lift` neither. `--frame-lift off` turns both halves off:
+an underexposed frame and for a night scene alike. Its white then rises about a stop
+(`thin_lift.lift_stops`) with the film base held about where its small lift renders it
+(the pair is solved from that render) — a steeper slope and the exposure that keeps the
+base still, in place of the small lift.
+"About": the white is read in film RGB, the base as luma before the roll's gains. The
+slope is bounded at 2.4 (`slope_bound`): grain rises with it. A frame the bound holds
+under a full stop is listed in `thin_lift.bounded`, and a thin frame no thin lift fits —
+it has its small lift only — in `thin_lift.unlifted`; disclosed, not warned about, so
+`--strict` passes. Review found the lift brighter, not better: it is on because viewers
+tend to like brighter, so it is the preference most worth trying off.
+Each qualifying frame's lift is reported as `frames[].thin_lift` (`slope`, `exposure`,
+`lift_stops`, `bounded`); it is written as the frame's `roll.frames` `thin_slope` and
+`thin_exposure`, beside its small lift, and `thin_lift.lifted` counts them (14 of 178 on
+the ten rolls). `measure-roll --no-thin-lift` leaves it out; `--no-small-lift` writes it
+alone, unchanged. `--thin-lift off` turns it off at render, and the frame renders its
+small lift; `--small-lift off` leaves it alone:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white 1.5 --roll-exposure 0.4 \
-    --roll-frame-exposure 0.7 --roll-frame-slope 2.0 | jq -c '.chain.roll | {slope, frame_slope, frame_exposure_applied, frame_slope_applied}'
-{"slope":2.0,"frame_slope":2.0,"frame_exposure_applied":true,"frame_slope_applied":true}
+    --roll-thin-slope 2.0 --roll-thin-exposure 0.7 \
+    | jq -c '[(.chain.roll | {slope, thin_lift_applied, frame_exposure_applied, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from]'
+[{"slope":2.0,"thin_lift_applied":true,"frame_exposure_applied":false,"taste_applied":["thin_lift"]},1.1,"thin"]
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white 1.5 --roll-exposure 0.4 \
-    --roll-frame-exposure 0.7 --roll-frame-slope 2.0 --frame-lift off | jq -c '.chain.roll | {slope, frame_slope, frame_exposure_applied, frame_slope_applied}'
-{"slope":1.6492873,"frame_slope":2.0,"frame_exposure_applied":false,"frame_slope_applied":false}
+    --roll-frame-exposure 0.3 --roll-thin-slope 2.0 --roll-thin-exposure 0.7 --thin-lift off \
+    | jq -c '[(.chain.roll | {slope, thin_lift_applied, frame_exposure_applied, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from]'
+[{"slope":1.6492873,"thin_lift_applied":false,"frame_exposure_applied":true,"taste_applied":["small_lift"]},0.70000005,"roll"]
 ```
-
-With the frame's slope applied, `chain.look.base_from` is `frame`.
 
 A roll section with gains or a white but no `roll.exposure` — a `roll.json` written
 before `measure-roll` measured the exposure, or roll flags typed without
