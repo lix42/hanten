@@ -125,3 +125,6 @@ The gate wants:
   no sample, control, or PDF belongs in the repo.
 - exiftool accepts files no decoder parses, so it is not a substitute: it shows the
   segments, not whether a decoder finds the gain map.
+- `nctool viewer check` runs this oracle, and libultrahdr, over every gain-map JPEG of
+  a viewer set, comparing each channel's gain with nc's report
+  ([`../viewer-interop/README.md`](../viewer-interop/README.md)).

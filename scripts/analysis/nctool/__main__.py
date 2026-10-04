@@ -1,11 +1,12 @@
 """`python -m nctool` entry point.
 
-Six command groups: `manifest` (generate / validate / roles / patches), `compare`
+Seven command groups: `manifest` (generate / validate / roles / patches), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
 converted image, whatever produced it), `review` (render a described matrix
-of conversions into a review set for `tools/review-app`), and `acceptance`
-(decode every encoding without nc and check it against nc's pre-encode buffers).
+of conversions into a review set for `tools/review-app`), `acceptance`
+(decode every encoding without nc and check it against nc's pre-encode buffers), and
+`viewer` (the file set and decoder pre-checks for the manual viewer rubric).
 
 `metrics` and `acceptance` need third-party packages; see
 `scripts/analysis/requirements.txt`. Importing the module is still free — it
@@ -25,6 +26,7 @@ from . import metrics as _metrics
 from . import patches as _patches
 from . import review as _review
 from . import roll as _roll
+from . import viewer as _viewer
 
 ASSET_ROOT_HELP = ("asset root (the folder containing manifest.json); defaults to "
                    "$NC_ASSET_ROOT, else ../nc-assets (the machine-local Drive symlink)")
@@ -332,6 +334,34 @@ def build_parser() -> argparse.ArgumentParser:
     achart.add_argument("--check", action="store_true",
                         help="check the file at --out matches the generator instead")
     achart.set_defaults(func=_acceptance.cmd_chart)
+
+    # --- viewer: the manual viewer rubric's file set and pre-checks -----------
+    vw = sub.add_parser("viewer", help="build the viewer-interoperability file set and "
+                                       "run its decoder pre-checks")
+    vsub = vw.add_subparsers(dest="cmd", required=True)
+    vset = vsub.add_parser("set", help="render every destination from each viewer.json "
+                                       "input, with viewer-set.json and rubric.md")
+    vset.add_argument("--out", required=True,
+                      help="directory to write the set to (outside the repository)")
+    vset.add_argument("--nc", help="hanten binary (default: auto-discovered)")
+    vset.add_argument("--config", default=_viewer.CONFIG,
+                      help="file-set config (default: scripts/analysis/viewer.json)")
+    vset.add_argument("--benchmark", default=_compare.BENCHMARK,
+                      help="benchmark manifest the destinations come from (default: "
+                           "scripts/analysis/benchmark.json)")
+    vset.add_argument("--input", action="append",
+                      help="render only this input (repeatable)")
+    vset.add_argument("--force", action="store_true",
+                      help="rebuild over an existing set, replacing its rubric.md")
+    _add_root(vset)
+    vset.set_defaults(func=_viewer.cmd_set)
+    vcheck = vsub.add_parser("check", help="decode every gain-map JPEG of a set with "
+                                           "Apple ImageIO and libultrahdr")
+    vcheck.add_argument("set", help="a directory `viewer set` wrote")
+    vcheck.add_argument("--oracle", required=True,
+                        help="the built ImageIO oracle (scripts/iso-decoder-oracle/)")
+    vcheck.add_argument("--ultrahdr", help="ultrahdr_app (default: from PATH)")
+    vcheck.set_defaults(func=_viewer.cmd_check)
 
     return ap
 

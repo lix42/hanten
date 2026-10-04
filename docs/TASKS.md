@@ -306,6 +306,7 @@ graph TD
     analysis/display-output-acceptance
     analysis/display-acceptance-harness
     analysis/viewer-interoperability
+    analysis/android-gain-map-check
     analysis/conversion-analysis-tooling
     analysis/asset-manifest
     analysis/conversion-metrics
@@ -721,6 +722,7 @@ graph TD
   nf-core/default-flip --> analysis/display-acceptance-harness
   nf-verification/benchmark-set --> analysis/display-acceptance-harness
   nf-core/default-flip --> analysis/viewer-interoperability
+  analysis/viewer-interoperability --> analysis/android-gain-map-check
   nf-retire/sigmoid-and-simple --> nf-retire/characteristic
   nf-look/stock-data-home --> nf-retire/characteristic
   nf-core/stage-skeleton --> nf-core/report-contract
@@ -996,7 +998,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — `output/presets` is history: its presets retired with the flip; the default it accepts is
   the one `nf-core/default-flip` ships
 - `analysis/display-acceptance-harness` (post-MVP; split from `display-output-acceptance` 2026-10-01): `nf-core/default-flip`, `nf-verification/benchmark-set`
-- `analysis/viewer-interoperability` (post-MVP; split from `display-output-acceptance` 2026-10-01, absorbs `output/gain-map-dialect-activation`): `nf-core/default-flip`
+- `analysis/viewer-interoperability` (post-MVP; split from `display-output-acceptance` 2026-10-01, absorbed `output/gain-map-dialect-activation`, whose Android check moved to `analysis/android-gain-map-check` 2026-10-04): `nf-core/default-flip`
+- `analysis/android-gain-map-check` (post-MVP, **low priority**; split from `viewer-interoperability` 2026-10-04): `analysis/viewer-interoperability`
 - `analysis/conversion-analysis-tooling` (post-MVP, spike): `analysis/real-scan-verification`
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
@@ -1549,7 +1552,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needed CMake and NASM for libaom (until `output/drop-avif`) and a C compiler for lcms2. Retained as decision history
 - [x] [Final ISO gain-map metadata](tasks/output/iso-gain-map-metadata.md) — add verified ISO 21496-1:2025 metadata to the same JPEG and prove dual-dialect agreement. **Metadata and container halves implemented against the licensed text** (2026-08-04: `pipeline/gain_map/iso.rs` C.2.2 payload + normative validation; `io/ultra_hdr.rs` `Dialects::LegacyPlusIso` writing C.4.3/C.4.6 segments into both images, MPF-safe). **Code complete**; verified with exiftool (MPF index resolves, second image extracts, 2350+1186=3536 bytes) and `sips`. **Both blockers cleared 2026-08-06**: the CIPA DC-007 text was fetched and read (its two conformance gaps split into `output/mp-container-conformance`), and the external decoder oracle ran — Apple ImageIO, harness committed at `scripts/iso-decoder-oracle/`. The oracle found a real defect: the baseline segment sat *after* `SOF0`, where no reader scans, so ImageIO saw no gain map at all; fixed, and the metadata now reads back field-for-field as written (the decoder's 4.926 headroom is nc's own declared constant echoed back, not evidence — `GainMapMax` is). **Done 2026-08-07** on the strength of the Apple oracle plus libultrahdr; the Android 15+ half and CLI activation moved to `output/gain-map-dialect-activation` so they stop gating `output/presets`. **Note the `ts:` URN is the published first edition's, not a draft** — and libultrahdr's compact-denominator ISO layout is *non-conformant*, so nc owns its serializer.
 - [x] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **closed—narrowed claim** (2026-10-01): `io::iso_gain_map` already writes MP Type `050000` and keeps `APP0 JFIF` first; the file carries no Exif, so its base is not the DC-007 baseline ISO 21496-1 C.4.3 asks for (DC-007 §4.2.1, §5.1), recorded in its module doc and design-spec §9
-- [x] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is that task's
+- [x] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is `analysis/android-gain-map-check`'s (split 2026-10-04)
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
 - [x] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
 - [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — *re-scoped
@@ -1689,7 +1692,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
 - [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
 - [x] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
-- [ ] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS/iPhone, Android 15+ (from `output/gain-map-dialect-activation`), another non-Apple reader and an SDR-only reader
+- [~] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
+- [ ] [Android gain-map check](tasks/analysis/android-gain-map-check.md) — **low priority** (user, 2026-10-04). Does Android 15+ display nc's ISO-only, three-channel gain-map JPEG as HDR (from `output/gain-map-dialect-activation`)? Needs a device
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
 - [x] [Conversion metrics & photographic analysis](tasks/analysis/conversion-metrics.md) —

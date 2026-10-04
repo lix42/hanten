@@ -1263,9 +1263,50 @@ What other epics need to know about `analysis`:
 
 ## viewer-interoperability
 
-**Status:** not started
-**Updated:** 2026-10-01
+**Status:** in progress
+**Updated:** 2026-10-04
 
 - 2026-10-01: Split out of `display-output-acceptance`: the manual viewer rubric. It
   absorbs `output/gain-map-dialect-activation`, whose remaining question is whether
   Android 15+ displays nc's ISO-only, three-channel gain-map JPEG as HDR.
+- 2026-10-04: Planned with the user. A small fixed file set (the chart fixture plus two
+  real frames, every ready row and the film master) built by `nctool viewer set`;
+  item 3 is pass/fail only for the gain-map JPEG, observed for the HDR TIFFs; TIFFs go
+  to the Apple readers only; libultrahdr decodes the gain-map files as a pre-check.
+  Readers: macOS, iPhone, Chrome and an SDR-only reader. No Android device, so the
+  Android check is split out as `android-gain-map-check` (low priority), which
+  `display-output-acceptance` does not wait on.
+
+### 2026-10-04 — file set and pre-checks
+
+- **`nctool viewer set` / `viewer check`** (`scripts/analysis/nctool/viewer.py`, `viewer.json`;
+  procedure in `scripts/viewer-interop/README.md`). The destinations are the benchmark
+  `fixtures` set's (12: every ready row plus the film master), so the set has no case
+  list of its own. Inputs: the acceptance chart, `2026-09-09-Ektar100/1627` (gains
+  4.87 / 4.39 / 3.26, three clearly different channels; 1605's 4.87 / 2.67 / 2.09
+  would also do) and
+  `2026-07-24-Gold200/1144` (every channel at the 4.87 peak; 6.5% of samples clipped).
+  A real frame renders under its roll's `measure-roll` recipe (real frames, unexposed
+  frame, leader), re-measured each run; a frozen `real-scan-verify` recipe pins an SDR
+  destination and has no `roll` section, so it renders with the fallback slope.
+  36 files; two runs byte-identical, recipes included.
+- **Found while building it:** nc's output is smaller than the scan (`ektar-1627`:
+  4921×3321 from a 4945×3350 frame), so a decode-size check must use the file's own
+  size. nc's TIFF IFD sits after the pixel data.
+- **Pre-checks pass on all six gain-map JPEGs** (macOS 26.6.2 ImageIO; libultrahdr
+  v2.0.2 from Homebrew). Both decoders find the ISO map and read the three channel
+  gains nc's report states: libultrahdr's `maxContentBoost` on `ektar-1627` is
+  4.86571 / 4.38857 / 3.25752 against the report's 4.865707 / 4.3885746 / 3.2575197, so
+  Google's parser reads nc's ISO-only, three-channel file per channel. Falsified by hand:
+  a copy cut after the primary image fails both (`ABSENT`; probe exit 255), and a set
+  stating the gains in reverse order fails both.
+- No Android device; that half is `android-gain-map-check`, and libultrahdr's result
+  above is its starting evidence. The manual rubric is next.
+
+## android-gain-map-check
+
+**Status:** not started
+**Updated:** 2026-10-04
+
+- 2026-10-04: Split out of `viewer-interoperability` (user: low priority, no device).
+  Does Android 15+ display the ISO-only, three-channel gain-map JPEG as HDR?

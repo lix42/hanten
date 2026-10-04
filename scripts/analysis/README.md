@@ -588,6 +588,14 @@ only when every oracle passed; a golden mismatch alone does not stop it, so `--g
 --write-golden G` re-baselines a deliberate change and keeps the old values under
 `previous`. Determinism reruns a byte-identical encoding for its digests only.
 
+## Viewer file set and pre-checks — `viewer set`, `viewer check`
+
+`viewer set --out DIR` renders every destination of the benchmark's `fixtures` set from
+each input of `viewer.json` (the chart and two real frames), with `viewer-set.json` and a
+`rubric.md` checklist; `viewer check DIR --oracle PATH` decodes each gain-map JPEG with
+Apple ImageIO and libultrahdr. Stdlib only. The procedure, and why, is
+[`../viewer-interop/README.md`](../viewer-interop/README.md).
+
 ## Datasheet digitization — `digitize_datasheets.py`
 
 Not part of `nctool`, and not stdlib-only: it reads the vector characteristic curves in
@@ -618,5 +626,5 @@ fixtures, and images synthesized in the test itself, rather than the Drive-hoste
 scans. `NCTOOL_REQUIRE_DEPS=1` makes a missing `numpy`/`tifffile` a failure
 instead of letting the metrics tests skip while the run still prints `ok`; leave
 it unset locally if you have not made the venv. The harness tests, `compare`'s
-end-to-end test (the `fixtures` set, run twice) and the acceptance tests additionally
-need `cargo build` to have produced `target/debug/hanten`.
+end-to-end test (the `fixtures` set, run twice), the acceptance tests and `viewer`'s
+end-to-end test additionally need `cargo build` to have produced `target/debug/hanten`.

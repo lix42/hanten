@@ -1776,7 +1776,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   multiplies (`pipeline::gain_ratio`). Adobe RGB has no gain-map row. Apple ImageIO
   reads it as HDR with three distinct channel entries; a change to the container needs
   the manual `scripts/iso-decoder-oracle/` check (macOS), since exiftool accepts files
-  no decoder parses. Android and other viewers are `analysis/viewer-interoperability`'s.
+  no decoder parses. Other viewers are `analysis/viewer-interoperability`'s, Android
+  `analysis/android-gain-map-check`'s.
 - **Linear HDR TIFF** — the HDR rendition's display-linear samples, clamped at the
   peak and counted (`chain.peak_clamp`), written verbatim as 32-bit float in Display P3, Adobe RGB, sRGB or BT.2020, with a synthesized
   linear ICC profile of that gamut: `1.0` is the 203 cd/m² reference white, the peak
@@ -2256,7 +2257,8 @@ shipped or retired item keeps its number and shrinks to one line.
     shipped and was then **removed** (`output/drop-avif`,
     [`design/avif-removal.md`](design/avif-removal.md)).
 23. **ISO gain-map HDR** — *shipped* as the per-channel, ISO-only gain-map JPEG (§9).
-    Open: viewer checks, Android included (`analysis/viewer-interoperability`), and
+    Open: viewer checks (`analysis/viewer-interoperability`; Android in
+    `analysis/android-gain-map-check`), and
     cross-device acceptance (`analysis/display-output-acceptance`).
 
 ## 13. Open questions

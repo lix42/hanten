@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "note": "The viewer-interoperability file set for `python -m nctool viewer set` (scripts/viewer-interop/README.md). Every destination case of benchmark.json's `fixtures` set that names a destination (`--range` or `--film-master`), applied to each input below. A chart input reuses acceptance.json's input of that name; a roll input is rendered under the recipe `hanten measure-roll` writes for its roll (the roll's real frames, with its unexposed frame and leader). `expect` is what the rubric checks per encoding: `rendition` is item 2, `fallback` item 3 (gated only where `fallback_gated`), `readers` who opens it, once per display setting (`true` where HDR is on). `hdr` marks an encoding whose item 2 is an HDR rendition, so with HDR off item 3 replaces it.",
+  "destinations": {
+    "benchmark_set": "fixtures",
+    "input": "tests/fixtures/hdri-64bit.tif",
+    "prefix": "hdri-",
+    "flags": ["--range", "--film-master"]
+  },
+  "inputs": {
+    "chart": {
+      "acceptance_input": "chart",
+      "why": "known patches and a neutral ramp; no personal content"
+    },
+    "ektar-1627": {
+      "roll": "2026-09-09-Ektar100",
+      "frame": "1627",
+      "why": "three clearly different channel gains (about 4.9 / 4.4 / 3.3), so a reader that uses one channel shows it"
+    },
+    "gold-1144": {
+      "roll": "2026-07-24-Gold200",
+      "frame": "1144",
+      "why": "highlights reach the HDR peak on every channel, so the headroom ceiling is exercised"
+    }
+  },
+  "readers": {
+    "macos-preview": {"label": "macOS Preview", "settings": {"HDR display, HDR on": true, "HDR off": false}},
+    "macos-photos": {"label": "macOS Photos", "settings": {"HDR display, HDR on": true, "HDR off": false}},
+    "iphone-photos": {"label": "iPhone Photos", "settings": {"HDR on": true}},
+    "chrome": {"label": "Chrome on macOS", "settings": {"HDR display, HDR on": true, "HDR off": false}},
+    "sdr-only": {"label": "an SDR-only reader", "settings": {"as installed": false}}
+  },
+  "expect": {
+    "sdr-tiff": {
+      "hdr": false,
+      "rendition": "SDR",
+      "fallback": "n/a (an SDR file)",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos"]
+    },
+    "hdr-linear-tiff": {
+      "hdr": true,
+      "rendition": "HDR: highlights brighter than SDR white on an HDR display",
+      "fallback": "not specified: record what the reader shows",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos"]
+    },
+    "hdr-pq-tiff": {
+      "hdr": true,
+      "rendition": "HDR: highlights brighter than SDR white on an HDR display",
+      "fallback": "not specified: record what the reader shows",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos"]
+    },
+    "hdr-hlg-tiff": {
+      "hdr": true,
+      "rendition": "HDR: highlights brighter than SDR white on an HDR display",
+      "fallback": "not specified: record what the reader shows",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos"]
+    },
+    "gain-map-jpeg": {
+      "hdr": true,
+      "rendition": "HDR on an HDR display (the gain map applied)",
+      "fallback": "the SDR base image, matching the SDR TIFF of the same gamut in tone",
+      "fallback_gated": true,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos", "chrome", "sdr-only"]
+    },
+    "film-master": {
+      "hdr": false,
+      "rendition": "not a display rendition (scene-linear ACEScg): record what the reader shows",
+      "fallback": "not specified: record what the reader shows",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos"]
+    }
+  }
+}
