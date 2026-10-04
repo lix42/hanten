@@ -9,7 +9,9 @@
 > - [`analysis/display-acceptance-harness`](display-acceptance-harness.md) builds the
 >   harness and the decode-back oracles below, on fixtures;
 > - [`analysis/viewer-interoperability`](viewer-interoperability.md) owns the manual
->   viewer rubric, Android included.
+>   viewer rubric; its Android half is
+>   [`analysis/android-gain-map-check`](android-gain-map-check.md) (low priority), which
+>   this gate does not wait on.
 
 ## Goal
 

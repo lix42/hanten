@@ -53,9 +53,9 @@ Settled by the oracle (2026-09-27): Apple ImageIO reads the ISO gain map from nc
 container, with the `050000` type code, and parses all three channels' metadata
 distinctly — see the progress log.
 
-Not checked: Chrome, and the HDR rendition on an HDR display. Android and Chrome are
-`analysis/viewer-interoperability`'s (from `output/gain-map-dialect-activation`,
-closed 2026-10-01).
+Not checked: Chrome, and the HDR rendition on an HDR display. Chrome is
+`analysis/viewer-interoperability`'s, Android `analysis/android-gain-map-check`'s (from
+`output/gain-map-dialect-activation`, closed 2026-10-01).
 
 ## How to Verify
 

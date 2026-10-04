@@ -10,6 +10,7 @@ otherwise.
 | [`real-scan-verify/`](real-scan-verify/) | The older staged full-resolution verification harness and its frozen recipes. |
 | [`reference-snapshot/`](reference-snapshot/) | Build and cache the frozen pre-migration reference binary (`reserve`), and the pinned reference invocation. |
 | [`iso-decoder-oracle/`](iso-decoder-oracle/) | A macOS ImageIO interoperability oracle for ISO and legacy gain-map JPEGs. |
+| [`viewer-interop/`](viewer-interop/) | The manual viewer rubric: build the file set (`nctool viewer set`), run the decoder pre-checks (`nctool viewer check`), then check each reader by hand. |
 | [`render-defaults-v2/`](render-defaults-v2/) | Reproduce the historical v1-to-v2 default-render measurements. |
 | [`render-defaults-v3/`](render-defaults-v3/) | Render and measure the legacy-TIFF-to-gain-map-JPEG default transition. |
 
