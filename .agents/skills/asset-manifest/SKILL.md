@@ -99,7 +99,11 @@ warm updates, but a same-size edit would go undetected).
 - `converted/nc/*` buckets default `regenerable: true` (sha256 skipped, since the
   harness reproduces them) except `V0`; `nlp/*` and everything else are hashed.
 - `source_frame` for a converted output is resolved by matching its filename stem
-  against the source roll's frames; NLP outputs with no roll directory map to `2026-07-23-Portra160`.
+  against the source roll's frames. The roll is a `<roll>` subdirectory, else a version
+  directory named after a roll (`converted/<producer>/<roll>/<serial>.tif`), else
+  `2026-07-23-Portra160` (the first NLP batch).
+- A 16-bit output's `encoding` names its gamut (`u16-display-p3`, `u16-adobe-rgb`, …) from
+  the file's ICC primaries, never from the producer; no recognisable profile gives `u16`.
 - The inventory tracks **image artifacts** (`.tif`/`.tiff`). Companion files that
   share an image's stem — `.json` recipe/report sidecars and `.jpg` previews — are
   intentionally **not** separate entries; they travel with their image. `validate`

@@ -38,6 +38,15 @@ def fake_inspect(nc, path):
                 format="silverfast-hdri", ir_present=True)
 
 
+def fake_gamut(path):
+    """Stand-in for `manifest.icc_gamut`: the gamut keys off a marker in the filename."""
+    name = os.path.basename(path)
+    for marker, gamut in (("p3", "display-p3"), ("adobe", "adobe-rgb"), ("_corr", "srgb")):
+        if marker in name:
+            return gamut
+    return None
+
+
 PATCH = {"label": "cloud", "rect": [0.1, 0.2, 0.05, 0.04], "kind": "white",
          "source": "test 2026-09-30"}
 
@@ -64,7 +73,8 @@ class Base(unittest.TestCase):
             json.dump(m, f)
 
     def build(self, prev=None, reuse_hash=False, carry=None):
-        with mock.patch.object(manifest, "inspect", fake_inspect):
+        with mock.patch.object(manifest, "inspect", fake_inspect), \
+                mock.patch.object(manifest, "icc_gamut", fake_gamut):
             return manifest.build_manifest(self.A, "fake-nc", reuse_hash, prev or {}, carry)
 
     def generate(self, **kw):
@@ -76,6 +86,7 @@ class Base(unittest.TestCase):
             setattr(args, k, v)
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(manifest, "inspect", fake_inspect), \
+                mock.patch.object(manifest, "icc_gamut", fake_gamut), \
                 mock.patch.object(manifest, "resolve_nc", return_value=("fake-nc", None)), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = manifest.cmd_generate(args)
@@ -344,6 +355,26 @@ class TestBuild(Base):
         encs = {os.path.basename(o["file"]): o["encoding"] for o in nlp["outputs"]}
         self.assertEqual(encs["img1-positive.tif"], "u16")
         self.assertEqual(encs["img2_b32-positive.tif"], "f32")
+
+    def test_u16_gamut_from_icc_primaries(self):
+        # The gamut comes from the file's profile, whoever wrote it; none known -> plain u16.
+        self.put("converted/nc/2026-10-01/RollA/1605-p3.tif")
+        self.put("converted/silverfast-ccr/RollA/1605-adobe.tif")
+        self.put("converted/nc/2026-10-01/RollA/1606.tif")
+        m, _ = self.build()
+        encs = {os.path.basename(o["file"]): o["encoding"]
+                for b in m["converted"].values() for o in b["outputs"]}
+        self.assertEqual(encs["1605-p3.tif"], "u16-display-p3")
+        self.assertEqual(encs["1605-adobe.tif"], "u16-adobe-rgb")
+        self.assertEqual(encs["1606.tif"], "u16")
+
+    def test_source_frame_from_a_plain_serial_name(self):
+        # `<serial>.tif` carries no producer suffix; the extension alone is stripped.
+        self.put("rolls/RollA/1605.tif")
+        self.put("converted/silverfast-ccr/RollA/1605.tif")
+        m, _ = self.build()
+        out = m["converted"]["silverfast-ccr/RollA"]["outputs"]   # the version dir is the roll
+        self.assertEqual(out[0]["source_frame"], "rolls/RollA/1605.tif")
 
     def test_role_preserved_by_path(self):
         self.put("rolls/RollA/u.tif")
