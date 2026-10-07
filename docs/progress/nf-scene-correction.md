@@ -285,3 +285,15 @@ wants it, it is a look control.
   E1): fit range and fade width could not be settled by eye or by patch medians; the
   ColorChecker rolls (Gold200, Ektar100 shot) carry picture frames, so each roll's line
   can be checked against its chart.
+
+## correction-confidence
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the sea probe (`../temp/beach-probe/`, Artifact
+  https://claude.ai/artifact/FEa5gytdqhFfUnKvVhjzKa): frames the user marked as sea pull
+  the roll white balance and the midtone line warm (09-14: white balance blue −405 against
+  a random-draw max of 190, patch cast 110 → 465). The user's direction: corrections stay
+  on by default; warn when in doubt, turn off only when sure, and score each in the
+  report. `--rendering direct` is not yet a safe fallback (patch casts 340–500).
