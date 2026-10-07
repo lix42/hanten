@@ -881,8 +881,8 @@ What other epics need to know about `analysis`:
 
 ## calibration-frame-capture
 
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** in progress
+**Updated:** 2026-10-07
 
 - Goal: shoot, develop, scan and register the ColorChecker bracket rolls three other tasks
   name as a precondition, and take a first neutrality measurement against them.
@@ -902,6 +902,15 @@ What other epics need to know about `analysis`:
 - 2026-09-29: `nf-calibration/saturation-margin` now depends on this task (user), and the
   protocol's bracket gains **+3 and +4**, one roll Gold200: the rolls hold a single
   overexposed frame, and the margin needs whites past the film's shoulder.
+- 2026-10-07: **in progress, no longer blocked** (user): Gold200 and Ektar100 shot with the
+  −2 … +2 bracket and ordinary picture frames on each roll, not yet developed; Portra400 and
+  UltraMax400 planned, other stocks possibly later; +3/+4 to be added on the coming rolls.
+  The consumer list was refreshed: the closed `sigmoid-parameter-calibration`,
+  `dmax-per-channel-reduction`, `scale-gamma-loop` and `split-default-migration` gave way to
+  `neutrality-gate`; `nf-calibration/offset-question` and the new
+  `nf-scene-correction/midtone-neutral-fit` (from `docs/spike/poor-development.md`) now depend on this task. Protocol
+  additions: at least ten picture frames per chart roll, so the roll's midtone line can be
+  checked against its chart; one Ektar100 roll.
 
 ## review-reference-cells
 

@@ -55,3 +55,5 @@ Open:
 
 - [Tune `scale` and `gamma` by review](scale-gamma-loop.md) — the offset is read
   off what `scale` leaves behind
+- [Capture the calibration frames](../analysis/calibration-frame-capture.md) — the
+  bracket varies density at one illuminant, the measurement that identifies a value

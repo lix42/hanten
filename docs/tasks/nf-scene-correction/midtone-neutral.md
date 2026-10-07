@@ -33,8 +33,8 @@ Known (`docs/spike/poor-development.md`, 2026-10-02/06):
 
 Open:
 
-- Fit range (every voted band, or below the fade) and fade width: wait for ColorChecker
-  frames (`analysis/calibration-frame-capture`). Ship the spike's values until then.
+- Fit range (every voted band, or below the fade) and fade width: ship the spike's values;
+  `midtone-neutral-fit` settles them against the ColorChecker frames.
 - The beach case (a roll dominated by one scene colour) and warm light filling a frame's
   midtones (09-20 1883): a guard, a tint gate, or a documented turn-down.
 - Whether the white rule's p97, cap +2.0 and floor +1.5 still hold once whites are
