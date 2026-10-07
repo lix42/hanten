@@ -37,7 +37,7 @@ wrong one costs a full re-render:
   A set built that way has no charts.
 - `../nc-assets` must resolve (machine-local symlink).
 - **The frames are the user's own photographs**: output goes outside the repo and is never
-  committed or published. `nctool review generate` refuses an output directory inside it.
+  committed or published anywhere public (a private claude.ai Artifact is allowed). `nctool review generate` refuses an output directory inside it.
 
 ## 1. The image set
 
@@ -209,8 +209,8 @@ would make this first-class; until then it is manual. Three things to get right:
    no key and the app draws a gap — never force a mapping.
    The manifest carries a `source_frame` link meant to be this identity and to survive a
    rename, and it is what `analysis/review-reference-cells` plans to pair on — but **check it
-   before relying on it**: on the current manifest it is `null` on all 122 converted entries,
-   so pairing on it today yields nothing.
+   before relying on it**: a manifest generated before the generator learned plain
+   `<serial>.tif` names (2026-10-07) has it `null` on every converted entry.
 3. **Measure it in the space it is now in, and write the record to disk**:
 
    ```sh
@@ -310,7 +310,8 @@ weeks later.
 
 ## Traps
 
-- **Never publish or commit a review set.** The images are personal photographs.
+- **Never commit a review set or publish it anywhere public.** The images are personal
+  photographs; a private claude.ai Artifact is the one allowed exception.
 - **An SDR set has no browser-displayable cell yet**: the SDR destinations are TIFF only
   (SDR JPEG is `output/sdr-jpeg-preset`), and a gain-map JPEG shows its HDR rendition.
   Render by hand and convert the TIFF to a JPEG keeping its ICC profile.

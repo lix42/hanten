@@ -314,8 +314,9 @@ committed.
   the rebate: measure `Dmin` once from an unexposed frame (`hanten measure-base`) and
   reuse it.
 - **Comparing renders by eye:** use `tools/review-app` with sets from the
-  `render-review-set` skill. **Never commit or publish a review set** — the images
-  are the user's photographs.
+  `render-review-set` skill. **Never commit a review set or publish it anywhere
+  public** — the images are the user's photographs. A private claude.ai Artifact is
+  the one allowed place to publish frames.
 
 ### Process
 
