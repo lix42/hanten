@@ -275,3 +275,13 @@ wants it, it is a look control.
   frame on two poor and two good rolls. The switch is a data floor (≥ 10 frames, enough
   voted bands), not a poor-development detector. The two-point slope it superseded is not
   filed. Fit range and fade width wait for ColorChecker frames.
+
+## midtone-neutral-fit
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`, `TODO.md` round 5 and
+  E1): fit range and fade width could not be settled by eye or by patch medians; the
+  ColorChecker rolls (Gold200, Ektar100 shot) carry picture frames, so each roll's line
+  can be checked against its chart.

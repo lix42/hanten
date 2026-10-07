@@ -181,6 +181,7 @@ graph TD
   nf-scene-correction --> nf-retire
   nf-calibration --> nf-scene-correction
   nf-scene-correction --> nf-calibration
+  analysis --> nf-scene-correction
   nf-core --> nf-docs
   nf-core --> analysis
   nf-verification --> analysis
@@ -353,6 +354,7 @@ graph TD
     nf-scene-correction/levels-knob
     nf-scene-correction/roll-white-balance
     nf-scene-correction/midtone-neutral
+    nf-scene-correction/midtone-neutral-fit
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -715,6 +717,9 @@ graph TD
   nf-calibration/scale-gamma-loop --> nf-calibration/offset-question
   nf-calibration/scale-gamma-loop --> nf-calibration/neutrality-gate
   analysis/calibration-frame-capture --> nf-calibration/neutrality-gate
+  analysis/calibration-frame-capture --> nf-calibration/offset-question
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/midtone-neutral-fit
+  analysis/calibration-frame-capture --> nf-scene-correction/midtone-neutral-fit
   io/scanner-density-calibration --> nf-calibration/user-calibration-procedure
   nf-calibration/scale-gamma-loop --> nf-calibration/user-calibration-procedure
   analysis/review-build-axis --> nf-verification/reference-snapshot
@@ -1031,11 +1036,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote
   `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the
   stage printed success). The harness has no automated coverage at all
-- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**, **blocked**): `analysis/asset-manifest`
-  — filed 2026-09-12. Three tasks named these frames as a precondition in their own words and
-  none owned producing them, so the graph reported work executable when the thing blocking it
-  was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
-  `nf-calibration/scale-gamma-loop`, and `nf-calibration/neutrality-gate`
+- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`
+  — filed 2026-09-12. Several tasks named these frames as a precondition in their own words
+  and none owned producing them, so the graph reported work executable when the thing
+  blocking it was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
+  `nf-calibration/neutrality-gate`, `nf-calibration/saturation-margin`,
+  `nf-calibration/offset-question` and `nf-scene-correction/midtone-neutral-fit`
 - `analysis/review-reference-cells` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/review-build-axis` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/probe-fixture-roll-names` (post-MVP): `analysis/asset-manifest`
@@ -1172,7 +1178,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   — the two knobs the decode owns, tuned against a held-fixed rendering.
   Supersedes `algo/sigmoid-parameter-calibration` and
   `film-base/dmax-per-channel-reduction`
-- `nf-calibration/offset-question` (new flow): `nf-calibration/scale-gamma-loop`
+- `nf-calibration/offset-question` (new flow): `nf-calibration/scale-gamma-loop`, `analysis/calibration-frame-capture`
   — the term is real; two candidate values lost a review, and identifying one
   needs one illuminant
 - `nf-calibration/neutrality-gate` (new flow): `nf-calibration/scale-gamma-loop`, `analysis/calibration-frame-capture`
@@ -1307,6 +1313,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-scene-correction/midtone-neutral` (new flow): `nf-scene-correction/roll-white-balance`, `nf-calibration/taste-vs-quality`
   — filed 2026-10-07 from the poor-development spike (`docs/spike/poor-development.md`):
   the joined midtone line, on by default above a data floor
+- `nf-scene-correction/midtone-neutral-fit` (new flow): `nf-scene-correction/midtone-neutral`, `analysis/calibration-frame-capture`
+  — filed 2026-10-07: the fit range and fade width the spike could not settle by eye
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -1753,15 +1761,13 @@ the design now in `docs/design-spec.md` (§6–§7):
   black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and
   TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full
   analysis suite runs in Linux and macOS CI
-- [ ] [Capture the calibration frames](tasks/analysis/calibration-frame-capture.md) —
-  **blocked** (user, 2026-09-29). **Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket on
-  two rolls to the protocol agreed 2026-09-08, register them in `manifest.json`, and take a
-  first neutrality measurement. **Four** tasks named these frames as a precondition and none
-  owned producing them, so the graph reported work executable when the blocker was film that
-  did not exist. Gates `io/scanner-density-calibration`, `algo/sigmoid-parameter-calibration`,
-  `film-base/dmax-per-channel-reduction` (parked 2026-09-13 for exactly this), and
-  `algo/split-default-migration`'s release gate. Since 2026-09-29 also
-  `nf-calibration/saturation-margin`, which needs the bracket extended to +3/+4
+- [~] [Capture the calibration frames](tasks/analysis/calibration-frame-capture.md) —
+  **Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to
+  the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first
+  neutrality measurement. **Shooting (2026-10-07)**: Gold200 and Ektar100 shot, −2 … +2;
+  Portra400 and UltraMax400 planned; +3/+4 still to add. Gates
+  `nf-calibration/neutrality-gate`, `saturation-margin`, `offset-question`,
+  `nf-scene-correction/midtone-neutral-fit` and `io/scanner-density-calibration`
 - [x] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc
   review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer**
   shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on
@@ -1916,6 +1922,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   roll](tasks/nf-scene-correction/midtone-neutral.md) — the cast a poor development leaves
   in the midtones, removed by a per-roll line through the frames' votes; on by default
   with ten frames or more; each frame's white then measured on the corrected samples
+- [ ] [Settle the midtone line's fit range against the
+  chart](tasks/nf-scene-correction/midtone-neutral-fit.md) — fit range and fade width
+  chosen on the ColorChecker's neutral row, not patch medians
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to

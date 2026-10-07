@@ -1210,6 +1210,9 @@ frames; the look's default contrast is `no-roll-defaults`'.
   well-developed 09-14 Ektar, where applying it changed nothing visible. If ColorChecker
   frames show the same residual on every Ektar roll, it is a per-stock term for the decode,
   not a per-roll correction.
+- 2026-10-07: now depends on `analysis/calibration-frame-capture`: the bracket is the
+  one-illuminant density series this task's open question asks for. An Ektar100 chart roll
+  is shot.
 
 ## neutrality-gate
 

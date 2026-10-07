@@ -2,7 +2,7 @@
 
 ## Goal
 
-Produce, scan and register the calibration frames three other tasks are waiting on:
+Produce, scan and register the calibration frames several tasks are waiting on:
 a neutral **series** (not a single patch) plus coloured patches, shot to a protocol
 that makes relative log exposures known by construction. Without them, "is nc's
 colour neutral?" cannot be answered by measurement — only asserted.
@@ -12,27 +12,28 @@ the code half is registering the result in `manifest.json` and measuring it.
 
 ## Why it is its own task
 
-**Five** tasks name these frames as a precondition, each in its own words, and none of
-them owns producing them:
+Several tasks name these frames as a precondition, each in its own words, and none of
+them owns producing them. The live consumers (2026-10-07):
 
-- `io/scanner-density-calibration` — needs them for the 3×3 + offset fit. Its tier 1
-  is deliberately non-calibrating, so its checkbox can go green without them.
-- `nf-calibration/scale-gamma-loop` — needed a bracketed roll and a grey card in
-  frame, which is the same shoot. It closed on review (2026-09-27) and handed that
-  pass to `nf-calibration/neutrality-gate`.
-- `film-base/dmax-per-channel-reduction` — **parked 2026-09-13** for want of exactly
-  this (its route 3). Added here after #115 merged; it is the one consumer that was
-  not visible when this task was filed on 2026-09-12.
 - `nf-calibration/neutrality-gate` — the release gate is neutrality checked against a
-  **known-neutral reference, not the leader**. That gate is evidence, not a task, so
-  the graph could not see it.
-- `nf-calibration/saturation-margin` (added 2026-09-29) — the over end of the bracket,
-  to learn where a frame's white saturates the film.
+  **known-neutral reference, not the leader**, and it is the calibrated pass of `scale`
+  and the linearization that `scale-gamma-loop` handed on.
+- `nf-calibration/saturation-margin` — the over end of the bracket (+3/+4), to learn
+  where a frame's white saturates the film.
+- `nf-calibration/offset-question` — a density offset is identified only by density
+  varied at one illuminant, which is what the bracket is; it also carries a possible
+  Ektar residual from the poor-development spike.
+- `nf-scene-correction/midtone-neutral-fit` — the midtone line's fit range and fade
+  width, judged against the chart's neutrals instead of patch medians
+  (`docs/spike/poor-development.md`).
+- `io/scanner-density-calibration` — the 3×3 + offset fit. Its tier 1 is deliberately
+  non-calibrating, so its checkbox can go green without them.
 
-`io/scanner-density-calibration` and `nf-calibration/scale-gamma-loop` each carry a
-dated note reaching the same conclusion independently (#115, 2026-09-13: "plan it once",
-"shooting for only one of them wastes the other two"). Those notes are the reasoning;
-this task is the owner.
+Earlier consumers have closed or moved: `algo/sigmoid-parameter-calibration` and
+`film-base/dmax-per-channel-reduction` were superseded by `nf-calibration/scale-gamma-loop`,
+which closed on review (2026-09-27) and handed its calibrated pass to `neutrality-gate`;
+`algo/split-default-migration`'s gate half is `neutrality-gate`. Their notes (#115,
+2026-09-13: "plan it once") are the reasoning that made this task the owner.
 
 Leaving the precondition implicit meant the graph reported work as executable when
 the thing actually blocking it was a roll of film that did not exist.
@@ -70,6 +71,11 @@ short note on why each requirement exists for the fit it performs.
 - **Two different rolls**, not one. Per-frame residuals scatter at sd 0.3–1.6 and one
   fixture roll spans −1.88…+2.03, so a single roll cannot separate "the film and
   scanner" from "that roll" — the fork the whole diagnosis sits on.
+- **At least ten ordinary picture frames on each chart roll** (2026-10-07), so
+  `measure-roll` fits the roll's midtone line from the pictures and the chart checks it.
+  The chart frames themselves must not vote (`analysis/calibration-role-consumers`).
+- **Stocks** (2026-10-07): one roll should be Ektar100, for the spike's possible Ektar
+  residual, and one Gold200, the earliest shoulder, for the +3/+4 frames.
 - **Different subject matter between them — variety is the requirement, not count**
   (from `film-base/dmax-per-channel-reduction`'s 2026-09-13 parking note). Both existing
   whole rolls are one Hawaii trip: blue-dominant, little red, with the bright subjects
@@ -77,6 +83,13 @@ short note on why each requirement exists for the fit it performs.
   "roll property" is confounded when two rolls share a photographer and a palette, so
   more of the same trip adds n without removing the confound. The target itself removes
   the scene from the measurement, but the surrounding frames should still vary.
+
+## Shot so far
+
+- 2026-10-07 (user): Gold200 and Ektar100, bracket −2 … +2, each roll with ordinary
+  picture frames; not yet developed. Portra400 and UltraMax400 planned, other stocks
+  possibly later. +3/+4 not shot yet: add them on the coming rolls (and on Gold200 if a
+  roll is shot again), since `saturation-margin` needs them.
 
 ## Scope
 
@@ -93,7 +106,7 @@ Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode
 - **What "role" a calibration frame gets in the manifest.** The existing roles
   describe a roll's frames (leader, unexposed, picture); a bracketed target frame is
   a fourth kind and needs its exposure offset and lighting recorded alongside it.
-- **Whether one measurement command serves all three consumers**, or each wants its
+- **Whether one measurement command serves every consumer**, or each wants its
   own read of the same frames. Worth resolving before writing any of them.
 - **How much scatter survives the protocol.** The bracket removes exposure ambiguity
   by construction, but ~11 frames of one condition were needed to resolve a 0.3
