@@ -356,6 +356,7 @@ graph TD
     nf-scene-correction/levels-knob
     nf-scene-correction/roll-white-balance
     nf-scene-correction/midtone-neutral
+    nf-scene-correction/correction-confidence
     nf-scene-correction/midtone-neutral-fit
   end
   subgraph nf-look
@@ -672,6 +673,9 @@ graph TD
   nf-calibration/taste-vs-quality --> nf-scene-correction/midtone-neutral
   nf-look/contrast-definition --> nf-look/contrast-on-luminance
   nf-scene-correction/midtone-neutral --> nf-look/contrast-on-luminance
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/correction-confidence
+  nf-scene-correction/roll-white-balance --> nf-scene-correction/correction-confidence
+  nf-calibration/taste-vs-quality --> nf-scene-correction/correction-confidence
   nf-calibration/level-target-zero --> nf-calibration/envelope-hybrid-placement
   nf-calibration/taste-vs-quality --> nf-calibration/envelope-hybrid-placement
   nf-look/contrast-on-luminance --> nf-calibration/envelope-hybrid-placement
@@ -1319,6 +1323,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   the joined midtone line, on by default above a data floor
 - `nf-scene-correction/midtone-neutral-fit` (new flow): `nf-scene-correction/midtone-neutral`, `analysis/calibration-frame-capture`
   — filed 2026-10-07: the fit range and fade width the spike could not settle by eye
+- `nf-scene-correction/correction-confidence` (new flow): `nf-scene-correction/midtone-neutral`, `nf-scene-correction/roll-white-balance`, `nf-calibration/taste-vs-quality`
+  — filed 2026-10-07 from the sea probe: a roll of one scene colour fools the corrections,
+  so the report scores each one and suggests an alternative rather than auto-fixing
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -1930,6 +1937,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Settle the midtone line's fit range against the
   chart](tasks/nf-scene-correction/midtone-neutral-fit.md) — fit range and fade width
   chosen on the ColorChecker's neutral row, not patch medians
+- [ ] [How far to trust a roll's
+  corrections](tasks/nf-scene-correction/correction-confidence.md) — a per-correction score
+  and suggested alternative in the report: apply when confident, warn when in doubt, turn
+  off when sure it is wrong
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
