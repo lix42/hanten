@@ -263,3 +263,15 @@ wants it, it is a look control.
   by `io/multi-frame-memory-growth` — macOS malloc's cache of freed large blocks, not the
   per-frame model; `src/allocator.rs` maps big blocks directly. 35 Gold200 frames now
   peak at 0.60 GB (`measure-roll`) and 0.65 GB (`roll`). Numbers in `docs/progress/io.md`.
+
+## midtone-neutral
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
+  `../temp/roll-neutral-spike/TODO.md` B1, B2, detection switch). Five review rounds
+  (`../temp/b3-review/` … `b7-review/`) chose the joined line in scene correction; no bad
+  frame on two poor and two good rolls. The switch is a data floor (≥ 10 frames, enough
+  voted bands), not a poor-development detector. The two-point slope it superseded is not
+  filed. Fit range and fade width wait for ColorChecker frames.

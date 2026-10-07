@@ -1202,9 +1202,14 @@ frames; the look's default contrast is `no-roll-defaults`'.
 ## offset-question
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-10-07
 
 - 2026-09-19: created with the new-flow plan. Goal: does `density.offset` earn a value?.
+- 2026-10-07: evidence from the poor-development spike (`docs/spike/poor-development.md`): the midtone line's
+  average correction is 44 (×1000 log ratio) on well-developed 09-18 Gold but 270 on
+  well-developed 09-14 Ektar, where applying it changed nothing visible. If ColorChecker
+  frames show the same residual on every Ektar roll, it is a per-stock term for the decode,
+  not a per-roll correction.
 
 ## neutrality-gate
 
@@ -1333,3 +1338,44 @@ frames; the look's default contrast is `no-roll-defaults`'.
   confirmation round and noise measurement. 2026-09-29 Ektar 100, scanned after the
   thresholds were set, is the independent roll: `measure-roll` thin-lifts 2017, 2044, 2052
   and 2053 (slopes 1.78–1.90, none bounded; `../temp/taste-vs-quality/reports/`).
+
+## level-target-zero
+
+**Status:** not started
+**Updated:** 2026-10-03
+
+- 2026-10-03: filed (user) from the colour-cast spike (`../temp/roll-neutral-spike/`,
+  `TODO.md`). Target 0 put midtones at SilverFast CCR's level on 09-18, 09-20, 09-29
+  (median L* +4.5 / −0.7 / +2.7 against CCR; −0.6 sat 6–12 L* darker; `m10.txt`). Review
+  (`../temp/r1-target-desat/`): target 0 beat −0.6 on almost every frame of 09-18 Gold
+  (1813 the exception) and on 09-29 Ektar; on 09-29's brightest frames (2028, 2037) the two
+  tied, −0.6 keeping more cloud detail — `roll-exposure`'s by-frame split again.
+
+## envelope-hybrid-placement
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
+  `../temp/roll-neutral-spike/TODO.md` A4, G3, G5). Whole-roll review on 09-29 and 09-18
+  (`../temp/a4-review/`) chose the envelope hybrid, R 7, α 0.6, as the default; per-roll and
+  the two per-frame placements stay as choices. Ships with the span-based roll slope and a
+  maximum slope of 3.5, both provisional (`hybrid-slope-bounds`).
+
+## hybrid-slope-bounds
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` G2, G3(c), G4,
+  A6): the span-based roll slope's anchor (its whitest point lands at L* 97.7) and whether
+  the maximum slope is fixed or depends on the frame.
+
+## display-white
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A8, G1): diffuse
+  white renders at L* 79 and the band above it is mostly empty; reviews preferred the
+  white near L* 90–92.

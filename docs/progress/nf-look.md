@@ -951,3 +951,12 @@ preset row; do not reuse the name.
   `docs/using-nc.md` claim re-run against the binary. Open for dependents:
   `no-roll-defaults` chooses `DEFAULT_SLOPE`; a named "scene contrast" (slope exactly
   1) has no spelling — `--contrast` reaches it only as the base's reciprocal.
+
+## contrast-on-luminance
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A3b–A3d, D2):
+  with saturation held, steep slopes won 10 of 12 frames; the amount of saturation waits
+  for cast-corrected colour.
