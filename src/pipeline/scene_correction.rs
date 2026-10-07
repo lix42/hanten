@@ -237,6 +237,39 @@ pub fn apply(
     })?;
 
     let mut buffer = WorkingBuffer::from_aces(image);
+    // SPIKE (never merge): the midtone neutral, grade form, with the extrapolation guard.
+    // NC_SPIKE_MIDTONE_GRADE="alr,ber,alb,beb,lo,hi[,s_join,s_w]": per pixel, s = log2(Y(rgb * wb) / 0.18)
+    // clamped to [lo, hi]; channel c *= 2^-(al_c s + be_c); luminance restored.
+    if let Ok(v) = std::env::var("NC_SPIKE_MIDTONE_GRADE") {
+        let p: Vec<f32> = v.split(',').map(|x| x.trim().parse().expect("spike param")).collect();
+        let luma = [0.272_228_7_f32, 0.674_081_8, 0.053_689_5];
+        let wb = white_balance;
+        pixels::map_in_place(buffer.rgb_mut(), |px| {
+            let y = luma[0] * px[0] + luma[1] * px[1] + luma[2] * px[2];
+            let yw = luma[0] * px[0] * wb[0] + luma[1] * px[1] * wb[1] + luma[2] * px[2] * wb[2];
+            if !(y > 0.0 && yw > 0.0) {
+                return;
+            }
+            let raw = (yw / 0.18).log2();
+            let s = raw.clamp(p[4], p[5]);
+            // Optional bend (8 params): from s_join the correction falls linearly to zero at s_w.
+            let fade = if p.len() == 8 && raw > p[6] {
+                ((p[7] - raw) / (p[7] - p[6])).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let s = if p.len() == 8 { s.min(p[6]) } else { s };
+            px[0] *= (-(p[0] * s + p[1]) * fade).exp2();
+            px[2] *= (-(p[2] * s + p[3]) * fade).exp2();
+            let y2 = luma[0] * px[0] + luma[1] * px[1] + luma[2] * px[2];
+            if y2 > 0.0 {
+                let k = y / y2;
+                for c in px.iter_mut() {
+                    *c *= k;
+                }
+            }
+        });
+    }
     if gains != [1.0, 1.0, 1.0] {
         pixels::map_in_place(buffer.rgb_mut(), |px| {
             for c in 0..3 {

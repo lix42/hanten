@@ -319,6 +319,14 @@ pub fn decode(
         ..
     } = *params;
 
+    // SPIKE (never merge): the midtone neutral, decode form, with the extrapolation guard.
+    // NC_SPIKE_MIDTONE_DECODE="ar,br,lor,hir,ab,bb,lob,hib": on the shipped-scale density,
+    // D_c -= (a_c * clamp(D_c, lo_c, hi_c) + b_c) / (1 + a_c) for c in {r, b}.
+    let spike: Option<[f32; 8]> = std::env::var("NC_SPIKE_MIDTONE_DECODE").ok().map(|v| {
+        let p: Vec<f32> = v.split(',').map(|x| x.trim().parse().expect("spike param")).collect();
+        p.try_into().expect("8 spike params")
+    });
+
     // Fused measurement + calibration + curve, one pass. The driver is fallible and
     // this body is not — there is no per-pixel failure in a decode that loses
     // nothing by construction — so every pixel returns `Ok`; the cost is the wrapper.
@@ -333,7 +341,18 @@ pub fn decode(
             };
             // Not `mul_add`, and `+ offset` is not skipped at zero. See the module
             // docs: both are bit-identity rules, not style.
-            let corrected = scale[c] * d + offset[c];
+            let mut corrected = scale[c] * d + offset[c];
+            if let Some(p) = spike {
+                let k = match c {
+                    0 => Some(0),
+                    2 => Some(4),
+                    _ => None,
+                };
+                if let Some(k) = k {
+                    let (a, b, lo, hi) = (p[k], p[k + 1], p[k + 2], p[k + 3]);
+                    corrected -= (a * corrected.clamp(lo, hi) + b) / (1.0 + a);
+                }
+            }
             out[c] = 10f32.powf(linearization * (corrected - anchor));
         }
         Ok(out)
