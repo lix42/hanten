@@ -179,6 +179,8 @@ graph TD
   nf-calibration --> core
   nf-core --> core
   nf-scene-correction --> nf-retire
+  nf-calibration --> nf-scene-correction
+  nf-scene-correction --> nf-calibration
   nf-core --> nf-docs
   nf-core --> analysis
   nf-verification --> analysis
@@ -350,6 +352,7 @@ graph TD
     nf-scene-correction/flare-removal
     nf-scene-correction/levels-knob
     nf-scene-correction/roll-white-balance
+    nf-scene-correction/midtone-neutral
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -363,6 +366,7 @@ graph TD
     nf-look/scene-range-mapping
     nf-look/desaturation-band-fit
     nf-look/contrast-definition
+    nf-look/contrast-on-luminance
   end
   subgraph nf-display-stages
     nf-display-stages/fit-range
@@ -393,6 +397,10 @@ graph TD
     nf-calibration/exposure-buckets
     nf-calibration/taste-vs-quality
     nf-calibration/thin-lift-confirmation
+    nf-calibration/level-target-zero
+    nf-calibration/envelope-hybrid-placement
+    nf-calibration/hybrid-slope-bounds
+    nf-calibration/display-white
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -654,6 +662,19 @@ graph TD
   nf-calibration/thin-frame-lift --> nf-calibration/taste-vs-quality
   nf-calibration/frame-level-trim --> nf-calibration/taste-vs-quality
   nf-calibration/taste-vs-quality --> nf-calibration/thin-lift-confirmation
+  nf-calibration/roll-exposure --> nf-calibration/level-target-zero
+  nf-calibration/taste-vs-quality --> nf-calibration/level-target-zero
+  nf-scene-correction/roll-white-balance --> nf-scene-correction/midtone-neutral
+  nf-calibration/taste-vs-quality --> nf-scene-correction/midtone-neutral
+  nf-look/contrast-definition --> nf-look/contrast-on-luminance
+  nf-scene-correction/midtone-neutral --> nf-look/contrast-on-luminance
+  nf-calibration/level-target-zero --> nf-calibration/envelope-hybrid-placement
+  nf-calibration/taste-vs-quality --> nf-calibration/envelope-hybrid-placement
+  nf-look/contrast-on-luminance --> nf-calibration/envelope-hybrid-placement
+  nf-calibration/envelope-hybrid-placement --> nf-calibration/hybrid-slope-bounds
+  nf-scene-correction/midtone-neutral --> nf-calibration/hybrid-slope-bounds
+  nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
+  nf-calibration/level-target-zero --> nf-calibration/display-white
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1280,6 +1301,24 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/thin-lift-confirmation` (new flow): `nf-calibration/taste-vs-quality`
   — filed 2026-10-02: thin-frame-lift's confirmation round and noise measurement,
   compared through the thin lift's own switch
+- `nf-calibration/level-target-zero` (new flow): `nf-calibration/roll-exposure`, `nf-calibration/taste-vs-quality`
+  — filed 2026-10-03: the colour-cast spike found target 0 matches SilverFast CCR's
+  midtones, and review preferred it on a good and a poorly developed roll
+- `nf-scene-correction/midtone-neutral` (new flow): `nf-scene-correction/roll-white-balance`, `nf-calibration/taste-vs-quality`
+  — filed 2026-10-07 from the poor-development spike (`docs/spike/poor-development.md`):
+  the joined midtone line, on by default above a data floor
+- `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
+  — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
+  corrected colour
+- `nf-calibration/envelope-hybrid-placement` (new flow): `nf-calibration/level-target-zero`, `nf-calibration/taste-vs-quality`, `nf-look/contrast-on-luminance`
+  — filed 2026-10-07: the spike's default placement; it starts from the target-0 exposure,
+  generalises the lifts, and was approved with saturation held
+- `nf-calibration/hybrid-slope-bounds` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-scene-correction/midtone-neutral`
+  — filed 2026-10-07: the hybrid's provisional anchor and maximum slope, measured on
+  whites taken after colour correction
+- `nf-calibration/display-white` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
+  — filed 2026-10-07: a white target in display terms, set together with the brightness
+  target
 
 ## Tasks
 
@@ -1873,6 +1912,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   the scene's light; `path-to-white`'s band needs it. **Done 2026-09-23**: `hanten
   measure-roll` (pooled p99, leader guard), and per-frame auto white balance retired
   on the new chain
+- [ ] [A midtone neutral measured per
+  roll](tasks/nf-scene-correction/midtone-neutral.md) — the cast a poor development leaves
+  in the midtones, removed by a per-roll line through the frames' votes; on by default
+  with ten frames or more; each frame's white then measured on the corrected samples
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
@@ -1930,6 +1973,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   `look::DEFAULT_SLOPE`, or `direct`'s), default 1; absolute values are slopes in the
   report. `recipe_version` 3: a version 2 `look.contrast` number is refused with its
   conversion
+- [ ] [Contrast on luminance, saturation its own
+  setting](tasks/nf-look/contrast-on-luminance.md) — a steeper slope stops adding colour;
+  the default saturation is set by review on corrected colour
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the
@@ -2076,6 +2122,18 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Confirm the thin lift on an independent
   roll](tasks/nf-calibration/thin-lift-confirmation.md) — a review round on 09-29's four
   thin frames, on vs `--thin-lift off`, and the noise the steeper slope adds
+- [ ] [Raise the roll's brightness target to
+  0](tasks/nf-calibration/level-target-zero.md) — `measure-roll` puts the median frame at
+  mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred
+  it on 09-18 Gold and 09-29 Ektar
+- [ ] [Envelope hybrid placement](tasks/nf-calibration/envelope-hybrid-placement.md) —
+  each frame its own contrast and exposure, inside the limits the roll's placement sets
+  (R 7, α 0.6); per-roll and per-frame placements as a user's choices
+- [ ] [The envelope's anchor and the maximum
+  slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the two limits the hybrid ships
+  with provisional values
+- [ ] [Where white lands on the display](tasks/nf-calibration/display-white.md) — a white
+  target near L* 90–92 instead of diffuse white (L* 79), set with the brightness target
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the

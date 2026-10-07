@@ -27,6 +27,11 @@ What is known:
   `scale` from the calibration frames, so an offset settled before it may need
   re-reading.
 
+- **A hint from the poor-development spike** (`docs/spike/poor-development.md`): on
+  well-developed 09-14 Ektar the per-roll midtone line still corrects about as much as on
+  a poor roll (270 vs 44 on 09-18 Gold, ×1000 log ratio), with no visible gain. A
+  residual shared by every Ektar roll would be a per-stock term here.
+
 Open:
 
 - **What measurement identifies a value?** Density varied at a single illuminant —
