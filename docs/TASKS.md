@@ -143,6 +143,7 @@ graph TD
   core --> output
   algo --> output
   output --> analysis
+  analysis --> output
   nf-reconstruction --> nf-core
   nf-retire --> nf-core
   nf-core --> nf-reconstruction
@@ -291,6 +292,7 @@ graph TD
     output/drop-avif
     output/post-fanout-encode-slowdown
     output/content-light-levels
+    output/float-tiff-in-readers
   end
   subgraph telemetry
     telemetry/perf-instrumentation
@@ -753,6 +755,7 @@ graph TD
   nf-verification/benchmark-set --> analysis/display-acceptance-harness
   nf-core/default-flip --> analysis/viewer-interoperability
   analysis/viewer-interoperability --> analysis/android-gain-map-check
+  analysis/viewer-interoperability --> output/float-tiff-in-readers
   nf-retire/sigmoid-and-simple --> nf-retire/characteristic
   nf-look/stock-data-home --> nf-retire/characteristic
   nf-core/stage-skeleton --> nf-core/report-contract
@@ -971,6 +974,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/adobe-rgb-gamut` (post-MVP): `output/presets`
 - `output/sdr-report-block` (post-MVP): `output/presets`
 - `output/sdr-jpeg-preset` (post-MVP): `output/presets`, `output/sdr-display-rendering`
+- `output/float-tiff-in-readers` (post-MVP; from the viewer rubric 2026-10-07): `analysis/viewer-interoperability`
 - `output/linear-render` (**done** 2026-09-01; no downstream blockers):
   `output/sdr-display-rendering`
   — shipped `print.display_tone` / `--display-tone <shoulder|none>`, applied by both display
@@ -1614,6 +1618,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   needs an encoder block like `hdr_linear_tiff` / `hdr_coded_tiff`, or whether its ICC profile
   already says everything
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
+- [ ] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. Find a signal Apple acts on, or declare it an editor format
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
   frames against the shipped default reconstruction: `blown%` fell on every one (mean 6.5 →
@@ -1746,7 +1751,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
 - [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
 - [x] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
-- [~] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
+- [x] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
 - [ ] [Android gain-map check](tasks/analysis/android-gain-map-check.md) — **low priority** (user, 2026-10-04). Does Android 15+ display nc's ISO-only, three-channel gain-map JPEG as HDR (from `output/gain-map-dialect-activation`)? Needs a device
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
