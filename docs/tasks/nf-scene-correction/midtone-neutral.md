@@ -35,8 +35,9 @@ Open:
 
 - Fit range (every voted band, or below the fade) and fade width: ship the spike's values;
   `midtone-neutral-fit` settles them against the ColorChecker frames.
-- The beach case (a roll dominated by one scene colour) and warm light filling a frame's
-  midtones (09-20 1883): a guard, a tint gate, or a documented turn-down.
+- Warm light filling a frame's midtones (09-20 1883): a tint gate or a documented
+  turn-down. The beach case (a roll dominated by one scene colour) is detected and
+  reported, not fixed: `correction-confidence`.
 - Whether the white rule's p97, cap +2.0 and floor +1.5 still hold once whites are
   measured after correction; they were tuned before it.
 - The recipe and report shape, and how a frame override or a stated `--white-balance`

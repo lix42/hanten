@@ -183,7 +183,9 @@ adds `y + 1.15·(rgb − y)` around each pixel's luminance.
   neither better nor worse. Waits for ColorChecker frames.
 - **The beach case**: candidates are a second pass on pixels near neutral after the first
   correction, a guard against strong disagreement with the white, and weighting bands by
-  how well frames agree (which helps mixed scenes, not the beach).
+  how well frames agree (which helps mixed scenes, not the beach). Probed 2026-10-07 on
+  sea frames: they pull warm, and the roll white balance more than the line; the user
+  chose to detect and report rather than fix (`nf-scene-correction/correction-confidence`).
 - **1883's warm light**: a tint gate or a user turn-down.
 - **The envelope's anchor and the maximum slope.** 3.5 is a placeholder; whether it is a
   fixed value or depends on the frame (thinness, how far its exposure moved, saturation).
