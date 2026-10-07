@@ -143,6 +143,7 @@ graph TD
   core --> output
   algo --> output
   output --> analysis
+  analysis --> output
   nf-reconstruction --> nf-core
   nf-retire --> nf-core
   nf-core --> nf-reconstruction
@@ -291,6 +292,7 @@ graph TD
     output/drop-avif
     output/post-fanout-encode-slowdown
     output/content-light-levels
+    output/float-tiff-in-readers
   end
   subgraph telemetry
     telemetry/perf-instrumentation
@@ -354,6 +356,7 @@ graph TD
     nf-scene-correction/levels-knob
     nf-scene-correction/roll-white-balance
     nf-scene-correction/midtone-neutral
+    nf-scene-correction/correction-confidence
     nf-scene-correction/midtone-neutral-fit
   end
   subgraph nf-look
@@ -670,6 +673,9 @@ graph TD
   nf-calibration/taste-vs-quality --> nf-scene-correction/midtone-neutral
   nf-look/contrast-definition --> nf-look/contrast-on-luminance
   nf-scene-correction/midtone-neutral --> nf-look/contrast-on-luminance
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/correction-confidence
+  nf-scene-correction/roll-white-balance --> nf-scene-correction/correction-confidence
+  nf-calibration/taste-vs-quality --> nf-scene-correction/correction-confidence
   nf-calibration/level-target-zero --> nf-calibration/envelope-hybrid-placement
   nf-calibration/taste-vs-quality --> nf-calibration/envelope-hybrid-placement
   nf-look/contrast-on-luminance --> nf-calibration/envelope-hybrid-placement
@@ -749,6 +755,7 @@ graph TD
   nf-verification/benchmark-set --> analysis/display-acceptance-harness
   nf-core/default-flip --> analysis/viewer-interoperability
   analysis/viewer-interoperability --> analysis/android-gain-map-check
+  analysis/viewer-interoperability --> output/float-tiff-in-readers
   nf-retire/sigmoid-and-simple --> nf-retire/characteristic
   nf-look/stock-data-home --> nf-retire/characteristic
   nf-core/stage-skeleton --> nf-core/report-contract
@@ -967,6 +974,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/adobe-rgb-gamut` (post-MVP): `output/presets`
 - `output/sdr-report-block` (post-MVP): `output/presets`
 - `output/sdr-jpeg-preset` (post-MVP): `output/presets`, `output/sdr-display-rendering`
+- `output/float-tiff-in-readers` (post-MVP; from the viewer rubric 2026-10-07): `analysis/viewer-interoperability`
 - `output/linear-render` (**done** 2026-09-01; no downstream blockers):
   `output/sdr-display-rendering`
   — shipped `print.display_tone` / `--display-tone <shoulder|none>`, applied by both display
@@ -1315,6 +1323,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   the joined midtone line, on by default above a data floor
 - `nf-scene-correction/midtone-neutral-fit` (new flow): `nf-scene-correction/midtone-neutral`, `analysis/calibration-frame-capture`
   — filed 2026-10-07: the fit range and fade width the spike could not settle by eye
+- `nf-scene-correction/correction-confidence` (new flow): `nf-scene-correction/midtone-neutral`, `nf-scene-correction/roll-white-balance`, `nf-calibration/taste-vs-quality`
+  — filed 2026-10-07 from the sea probe: a roll of one scene colour fools the corrections,
+  so the report scores each one and suggests an alternative rather than auto-fixing
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -1607,6 +1618,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   needs an encoder block like `hdr_linear_tiff` / `hdr_coded_tiff`, or whether its ICC profile
   already says everything
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
+- [ ] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. Find a signal Apple acts on, or declare it an editor format
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
   frames against the shipped default reconstruction: `blown%` fell on every one (mean 6.5 →
@@ -1739,7 +1751,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
 - [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
 - [x] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
-- [~] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
+- [x] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
 - [ ] [Android gain-map check](tasks/analysis/android-gain-map-check.md) — **low priority** (user, 2026-10-04). Does Android 15+ display nc's ISO-only, three-channel gain-map JPEG as HDR (from `output/gain-map-dialect-activation`)? Needs a device
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
@@ -1925,6 +1937,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Settle the midtone line's fit range against the
   chart](tasks/nf-scene-correction/midtone-neutral-fit.md) — fit range and fade width
   chosen on the ColorChecker's neutral row, not patch medians
+- [ ] [How far to trust a roll's
+  corrections](tasks/nf-scene-correction/correction-confidence.md) — a per-correction score
+  and suggested alternative in the report: apply when confident, warn when in doubt, turn
+  off when sure it is wrong
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
