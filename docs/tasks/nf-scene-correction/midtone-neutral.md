@@ -28,6 +28,10 @@ Known (`docs/spike/poor-development.md`, 2026-10-02/06):
 - **Replaces nothing**: the decode's fixed scaling and the roll white balance stay. The
   line measures what they leave, is off without enough data, and is flat in shadows and
   highlights.
+- **A tint gate spares strongly coloured light** (09-20 1883's sunset-lit cloud): the
+  correction fades out as a pixel's colour moves 0.6 → 0.9 (log2) from the line's cast at
+  its stop. Every true neutral on the reviewed rolls sits within ~0.23. Round 8: neutral
+  patches unchanged, 1883, 1879 and 1886 better, no visible difference elsewhere.
 - The spike's code (`spike/midtone-guard`, never merged) is evidence, not a starting
   point.
 
@@ -35,9 +39,9 @@ Open:
 
 - Fit range (every voted band, or below the fade) and fade width: ship the spike's values;
   `midtone-neutral-fit` settles them against the ColorChecker frames.
-- Warm light filling a frame's midtones (09-20 1883): a tint gate or a documented
-  turn-down. The beach case (a roll dominated by one scene colour) is detected and
-  reported, not fixed: `correction-confidence`.
+- The tint gate's fade (0.6 → 0.9) is the one setting tried, on two rolls.
+- The beach case (a roll dominated by one scene colour) is detected and reported, not
+  fixed: `correction-confidence`.
 - Whether the white rule's p97, cap +2.0 and floor +1.5 still hold once whites are
   measured after correction; they were tuned before it.
 - The recipe and report shape, and how a frame override or a stated `--white-balance`

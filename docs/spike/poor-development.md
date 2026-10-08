@@ -186,7 +186,8 @@ adds `y + 1.15·(rgb − y)` around each pixel's luminance.
   how well frames agree (which helps mixed scenes, not the beach). Probed 2026-10-07 on
   sea frames: they pull warm, and the roll white balance more than the line; the user
   chose to detect and report rather than fix (`nf-scene-correction/correction-confidence`).
-- **1883's warm light**: a tint gate or a user turn-down.
+- **1883's warm light**: settled 2026-10-07 — a tint gate (round 8; filed in
+  `nf-scene-correction/midtone-neutral`). Its fade (0.6 → 0.9) is tried on two rolls only.
 - **The envelope's anchor and the maximum slope.** 3.5 is a placeholder; whether it is a
   fixed value or depends on the frame (thinness, how far its exposure moved, saturation).
 - **Where white lands in display terms** (L\* 90–92 by the reviews) and how that target
