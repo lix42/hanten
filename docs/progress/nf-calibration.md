@@ -52,11 +52,12 @@ roll has no measurement is `no-roll-defaults`'.
 
 **`roll-exposure` is done (2026-09-29): the roll's level is measured, as
 `roll.exposure`** — one neutral gain per roll that brings the median frame's log-average
-ACEScg luma to −0.6 scene stops from mid-grey (±2 EV), added to
+ACEScg luma to mid-grey (±3 EV; −0.6 stop until `level-target-zero`, 2026-10-07), added to
 `scene_correction.exposure` under `default`. The decode still lets film speed show
 through; the roll's level is set after it. The white stays measured at exposure 0, so a
-lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.02 to
-+1.74 EV on ten rolls. Exposure groups within a roll were closed as not needed
+lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.62 to
++2.34 EV on eleven rolls at target 0; the lifts below were reviewed at −0.6, and at 0
+fewer frames qualify (small 101 → 45, thin 14 → 4 of 178). Exposure groups within a roll were closed as not needed
 (`exposure-buckets`, 2026-10-01): no split of 09-28 moves its exposure more than 0.24 EV.
 
 **`frame-level-trim` is done (2026-10-01): a low-key frame gets a small lift** on top of
@@ -1335,17 +1336,20 @@ frames; the look's default contrast is `no-roll-defaults`'.
 ## thin-lift-confirmation
 
 **Status:** not started
-**Updated:** 2026-10-02
+**Updated:** 2026-10-07
 
 - 2026-10-02: filed (user) from `taste-vs-quality`, carrying `thin-frame-lift`'s
   confirmation round and noise measurement. 2026-09-29 Ektar 100, scanned after the
   thresholds were set, is the independent roll: `measure-roll` thin-lifts 2017, 2044, 2052
   and 2053 (slopes 1.78–1.90, none bounded; `../temp/taste-vs-quality/reports/`).
+- 2026-10-07: from `level-target-zero`: at target 0 (+0.6 EV on every roll) 09-29 thin-lifts
+  only 2052 and 2053 (2017 and 2044 now take the small lift alone), and over the archive 6
+  frames qualify, not 18. Judge the round at the new target.
 
 ## level-target-zero
 
-**Status:** not started
-**Updated:** 2026-10-03
+**Status:** done
+**Updated:** 2026-10-07
 
 - 2026-10-03: filed (user) from the colour-cast spike (`../temp/roll-neutral-spike/`,
   `TODO.md`). Target 0 put midtones at SilverFast CCR's level on 09-18, 09-20, 09-29
@@ -1353,6 +1357,44 @@ frames; the look's default contrast is `no-roll-defaults`'.
   (`../temp/r1-target-desat/`): target 0 beat −0.6 on almost every frame of 09-18 Gold
   (1813 the exception) and on 09-29 Ektar; on 09-29's brightest frames (2028, 2037) the two
   tied, −0.6 keeping more cloud detail — `roll-exposure`'s by-frame split again.
+- 2026-10-07: **implemented.** Decisions (user): `LEVEL_TARGET_STOPS` −0.6 → **0**, a
+  constant (not a flag: `--exposure` already moves a roll); `EXPOSURE_BOUND_EV` 2 → **3**,
+  since 09-11 needs +2.34 at target 0; no extra review round (the spike's on 09-18 and 09-29
+  stands); no drift-gate row or `pipeline_version` bump, since a measuring command's constant
+  changes new measurements, not how a written recipe replays (`version.rs`). Bright frames
+  and the white placed at exposure 0 are left to `display-white` and
+  `envelope-hybrid-placement`, which set the white and the exposure together.
+  - **Archive re-measure** (`../temp/level-target-zero/`, `scripts/measure.py` against
+    `taste-vs-quality`'s reports): every roll's exposure moved exactly +0.6000 EV, none
+    bounded (+0.62 on 09-09 to +2.34 on 09-11); frame whites, levels, spreads and base
+    shares identical. Lifts re-derive: small 126 → 61 frames over eleven rolls (101 → 45 on
+    the ten reviewed), thin 18 → 6 (14 → 4). Thin lifts kept: 09-13's two, 09-28's 2000 and
+    2005, 09-29's 2052 and 2053.
+
+    | roll | exposure | small lifts | thin lifts |
+    |---|---|---|---|
+    | 07-15 Ektar100 | +0.49 → +1.09 | 0 → 0 | 0 → 0 |
+    | 07-23 Portra160 | +0.36 → +0.96 | 1 → 1 | 0 → 0 |
+    | 07-24 Gold200 | +0.48 → +1.08 | 1 → 0 | 0 → 0 |
+    | 09-09 Ektar100 | +0.02 → +0.62 | 4 → 1 | 0 → 0 |
+    | 09-11 Portra400 | +1.74 → +2.34 | 8 → 5 | 3 → 0 |
+    | 09-13 Portra400 | +1.34 → +1.94 | 8 → 4 | 2 → 2 |
+    | 09-14 Ektar100 | +0.16 → +0.76 | 15 → 2 | 0 → 0 |
+    | 09-18 Gold200 | +0.65 → +1.25 | 30 → 19 | 1 → 0 |
+    | 09-20 Portra400 | +0.67 → +1.27 | 17 → 6 | 2 → 0 |
+    | 09-28 Portra400-dark | +1.39 → +1.99 | 17 → 7 | 6 → 2 |
+    | 09-29 Ektar100 | +0.64 → +1.24 | 25 → 16 | 4 → 2 |
+
+  - Two binary tests had synthetic frames bright enough that only the −0.6 target lifted
+    them; their fixtures now keep a lifted frame at target 0 (a narrower dark band; a
+    bright uniform second frame).
+  - Guide: §7's 09-18 report and §5's 07-15 `roll.json` re-run on the real rolls; the
+    target, bound and lift counts restated.
+- 2026-10-07: **done.** All CI gates green; reviewed by Codex and a diff review before
+  the PR. For dependents: `display-white` and `envelope-hybrid-placement` start from
+  target 0, where the roll exposure is 0.6 EV higher and the white is still measured at
+  exposure 0; the small- and thin-lift preferences were reviewed at −0.6, so
+  `thin-lift-confirmation` judges at 0 (its 09-29 set is now 2052 and 2053).
 
 ## envelope-hybrid-placement
 
