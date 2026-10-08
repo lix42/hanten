@@ -238,8 +238,9 @@ pub fn apply(
 
     let mut buffer = WorkingBuffer::from_aces(image);
     // SPIKE (never merge): the midtone neutral, grade form, with the extrapolation guard.
-    // NC_SPIKE_MIDTONE_GRADE="alr,ber,alb,beb,lo,hi[,s_join,s_w]": per pixel, s = log2(Y(rgb * wb) / 0.18)
-    // clamped to [lo, hi]; channel c *= 2^-(al_c s + be_c); luminance restored.
+    // NC_SPIKE_MIDTONE_GRADE="alr,ber,alb,beb,lo,hi[,s_join,s_w[,g0,g1]]": per pixel, s = log2(Y(rgb * wb) / 0.18)
+    // clamped to [lo, hi]; channel c *= 2^-(al_c s + be_c); luminance restored. Optional tint gate: the
+    // correction fades from full to none as the pixel's (r/g, b/g) after wb lies g0 → g1 (log2) from the cast.
     if let Ok(v) = std::env::var("NC_SPIKE_MIDTONE_GRADE") {
         let p: Vec<f32> = v.split(',').map(|x| x.trim().parse().expect("spike param")).collect();
         let luma = [0.272_228_7_f32, 0.674_081_8, 0.053_689_5];
@@ -253,14 +254,23 @@ pub fn apply(
             let raw = (yw / 0.18).log2();
             let s = raw.clamp(p[4], p[5]);
             // Optional bend (8 params): from s_join the correction falls linearly to zero at s_w.
-            let fade = if p.len() == 8 && raw > p[6] {
+            let fade = if p.len() >= 8 && raw > p[6] {
                 ((p[7] - raw) / (p[7] - p[6])).clamp(0.0, 1.0)
             } else {
                 1.0
             };
-            let s = if p.len() == 8 { s.min(p[6]) } else { s };
-            px[0] *= (-(p[0] * s + p[1]) * fade).exp2();
-            px[2] *= (-(p[2] * s + p[3]) * fade).exp2();
+            let s = if p.len() >= 8 { s.min(p[6]) } else { s };
+            let (cr, cb) = ((p[0] * s + p[1]) * fade, (p[2] * s + p[3]) * fade);
+            let gate = if p.len() == 10 {
+                let gr = (px[0] * wb[0] / (px[1] * wb[1])).log2() - cr;
+                let gb = (px[2] * wb[2] / (px[1] * wb[1])).log2() - cb;
+                let d = gr.hypot(gb);
+                if d.is_finite() { ((p[9] - d) / (p[9] - p[8])).clamp(0.0, 1.0) } else { 1.0 }
+            } else {
+                1.0
+            };
+            px[0] *= (-cr * gate).exp2();
+            px[2] *= (-cb * gate).exp2();
             let y2 = luma[0] * px[0] + luma[1] * px[1] + luma[2] * px[2];
             if y2 > 0.0 {
                 let k = y / y2;
