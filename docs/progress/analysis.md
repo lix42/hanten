@@ -1272,8 +1272,8 @@ What other epics need to know about `analysis`:
 
 ## viewer-interoperability
 
-**Status:** in progress
-**Updated:** 2026-10-04
+**Status:** done
+**Updated:** 2026-10-07
 
 - 2026-10-01: Split out of `display-output-acceptance`: the manual viewer rubric. It
   absorbs `output/gain-map-dialect-activation`, whose remaining question is whether
@@ -1311,6 +1311,30 @@ What other epics need to know about `analysis`:
   stating the gains in reverse order fails both.
 - No Android device; that half is `android-gain-map-check`, and libultrahdr's result
   above is its starting evidence. The manual rubric is next.
+
+### 2026-10-07 — the rubric, done
+
+- **Set rebuilt** on `54bd929` (pipeline_version 9): 36 files; `viewer check` PASS on all
+  six gain-map JPEGs again (ImageIO oracle, libultrahdr). `sips` decodes every file at
+  its stated size, 3 channels, no alpha, no Orientation tag.
+- **Readers** (user, by hand, all 36 files where the reader takes them): macOS 26.6.2
+  (25G83), built-in Liquid Retina XDR (M3 Pro); HDR off = Displays › Preset set to an SDR
+  preset. Preview 11.0 and Photos 11.0, HDR on and off; iPhone Photos (AirDrop), HDR on;
+  Chrome 155.0.8059.39 HDR on and off and Firefox 157.0.1 (the SDR-only reader) on the
+  gain-map JPEGs. The user answered by exception rather than filling `rubric.md`: every
+  item passed except the two below.
+- **Failures** — both on the two 32-bit float TIFFs, filed together as
+  `output/float-tiff-in-readers`:
+  - The HDR linear TIFF never displays as HDR. ImageIO decodes it as float in an
+    extended-range space but reports `contentHeadroom` 0 (unknown), against 4.93 for the
+    PQ/HLG TIFFs and the gain-map JPEG decoded to HDR: the file carries no HDR signal
+    (design-spec §5), and the samples are there (chart: 11–14% above 1.0, peak 2.89).
+    The film master not displaying as HDR is expected (scene-linear, item 2 records only).
+  - Preview's sidebar shows no thumbnail for either float TIFF with several files open.
+    `qlmanage -t` thumbnails them normally, so it is Preview's own path.
+- **Trap for the next run:** `sips` and `exiftool` name the Display P3 and ACEScg
+  profiles `RGB built-in` (Little CMS's default, kept so the shipped ICC bytes do not
+  change). It is not a finding.
 
 ## android-gain-map-check
 

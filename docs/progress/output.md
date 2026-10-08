@@ -1836,3 +1836,12 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
     corrected. `telemetry_upload`'s `a_refused_convert_is_a_parse_failure_event`
     timeouts seen here were the uploader's drain race, fixed by
     `telemetry/upload-live-check` (#234); green after rebasing onto it.
+
+## float-tiff-in-readers
+
+**Status:** not started
+**Updated:** 2026-10-07
+
+- 2026-10-07: Filed from `analysis/viewer-interoperability`'s rubric (evidence in
+  `progress/analysis.md`, 2026-10-07): the HDR linear TIFF does not display as HDR in
+  Apple's readers, and Preview's sidebar has no thumbnail for it or the film master.

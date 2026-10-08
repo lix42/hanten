@@ -275,6 +275,12 @@ wants it, it is a look control.
   frame on two poor and two good rolls. The switch is a data floor (≥ 10 frames, enough
   voted bands), not a poor-development detector. The two-point slope it superseded is not
   filed. Fit range and fade width wait for ColorChecker frames.
+- 2026-10-07: 1883's warm light gets a tint gate, not a turn-down (user, round 8,
+  `../temp/b8-review/`; feasibility Artifact https://claude.ai/artifact/FKonxohqsff9nMmUkPMyf3).
+  The correction fades as a pixel moves 0.6 → 0.9 (log2) from the line's cast; neutrals
+  sit within ~0.23, 1883's underside at 0.73. Neutral patches unchanged (09-20 8.8, 09-29
+  3.4); 1883 underside a\* 16.8 → 12.9 (today's WB 9.8); the user preferred the gate on
+  1879, 1883 and 1886 and saw no difference elsewhere.
 
 ## midtone-neutral-fit
 

@@ -254,6 +254,29 @@ def inspect(nc: str | None, path: str) -> dict:
         return dict(error=str(e), metadata_source="none")
 
 
+# The red column of an ICC profile's matrix (D50-adapted XYZ) per gamut. Profile
+# descriptions are unreliable (Hanten's say "RGB built-in"); the primaries are not.
+ICC_RED = {"srgb": (0.4361, 0.2225, 0.0139), "display-p3": (0.5151, 0.2412, -0.0011),
+           "adobe-rgb": (0.6097, 0.3111, 0.0195), "bt2020": (0.6734, 0.2790, -0.0019)}
+
+
+def icc_gamut(path: str) -> str | None:
+    """The gamut named by the file's embedded ICC primaries, or None (no profile, no
+    exiftool, or primaries that match none of `ICC_RED`)."""
+    try:
+        out = subprocess.run(["exiftool", "-s", "-s", "-s", "-RedMatrixColumn", path],
+                             capture_output=True, text=True, timeout=60).stdout
+        red = [float(v) for v in out.split()]
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if len(red) != 3:
+        return None
+    for name, ref in ICC_RED.items():
+        if max(abs(a - b) for a, b in zip(red, ref)) < 0.005:
+            return name
+    return None
+
+
 # ------------------------------------------------------------------ asset walks
 # One set of directory-walking rules, shared by generate (which builds structured
 # entries) and validate (which flattens to an on-disk file set). Keeping the walk
@@ -588,12 +611,16 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
         outputs = []
         for roll, r in files:
             fn = os.path.basename(r)
-            stem = fn
             for suf in SUFFIXES:
                 if fn.endswith(suf):
                     stem = fn[:-len(suf)]
                     break
-            src_roll = roll or NLP_SOURCE_ROLL
+            else:
+                stem = os.path.splitext(fn)[0]  # `<serial>.tif`, as CCR and NLP name them
+            # The roll: a <roll> subdir, else a version dir named after a roll
+            # (`converted/<producer>/<roll>/<serial>.tif`), else the NLP source roll.
+            src_roll = roll or (version if os.path.isdir(os.path.join(rolls_dir, version))
+                                else NLP_SOURCE_ROLL)
             o = {"file": r}
             if roll:
                 o["roll"] = roll
@@ -611,14 +638,15 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
             o["source_frame"] = src
             if prevf.get("note"):
                 o["note"] = prevf["note"]
-            # encoding: infer from inspected bit depth, not filename — a V0
-            # `_corr.tif` is a 16-bit sRGB corrected variant, not float. nc float
-            # outputs are linear; nc 16-bit are sRGB.
+            # encoding: depth from the inspected bit depth, not the filename (a V0
+            # `_corr.tif` is 16-bit, not float); a 16-bit file's gamut from its ICC
+            # primaries, never assumed per producer. nc float outputs are linear.
             bits = o.get("bits")
             if bits == 32:
                 o["encoding"] = "f32-linear" if producer == "nc" else "f32"
             elif bits == 16:
-                o["encoding"] = "u16-srgb" if producer == "nc" else "u16"
+                gamut = icc_gamut(os.path.join(A, r))
+                o["encoding"] = f"u16-{gamut}" if gamut else "u16"
             outputs.append(o)
         bucket["outputs"] = outputs
         m["converted"][name] = bucket

@@ -16,6 +16,13 @@ Known:
   1.78–1.90, none bounded).
 - The lift is taste: a round compares `--thin-lift off` (the frame's small lift) with on,
   and "brighter, no preference" is an expected verdict, not a failure.
+- **09-29 is a poorly developed roll** (`docs/spike/poor-development.md`), and its frames
+  sit near the threshold: under the spike's two-point scale 2044 lost its thin lift
+  (16 L\* darker). A colour correction that moves the whites (`midtone-neutral`'s two-pass
+  white) or the placement (`envelope-hybrid-placement`, which generalises the lifts) can
+  change which frames qualify, so a round states the build it ran on.
+- A low-contrast frame with no shadows near the base (09-18's 1799, span 1.6) is not thin
+  by the rule and gets only the small lift.
 - No noise has been measured at slopes up to 2.11 (2.4 was judged by eye only, on 2005 and
   1983); `nf-look/scene-range-mapping`'s 09-25 noise budget preferred a flatter whole
   contrast for a lone dark frame.
