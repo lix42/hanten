@@ -76,7 +76,7 @@ pattern failure is `invalid_field`.
 | `image.input_size_bucket` | `input_bytes`: `lt_8_mib` … `512_plus_mib` |
 | `conversion.encoding` | the destination's row in `destination::ROWS` |
 | `conversion.film_base_source` | the kind only: `region` or `explicit` |
-| `conversion.ir_exported` | `timing_ms.ir_export` present |
+| `conversion.ir_exported` | `timing_ms.ir_export` present (always `false` since `--export-ir` retired) |
 
 Never uploaded: `params_hash`, exact dimensions, byte sizes and timestamps, the
 target triple, film-base coordinates or values, the destination's axes,

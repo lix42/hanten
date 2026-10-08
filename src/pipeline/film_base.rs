@@ -1724,8 +1724,7 @@ mod tests {
         // The fact callers want is "did consuming the IR plane change anything?",
         // and it is returned rather than re-derived from the inputs.
         // All-zero depths are a *measurement* that moved nothing, which is what both
-        // committed fixtures and the 2026-09 rolls read; keying suppression of the
-        // "IR preserved but not used" note on `holder.is_some()` suppressed it there.
+        // committed fixtures and the 2026-09 rolls read.
         let moved = effective_area(&ir_holder_edges(200, 200, [4, 8, 12, 2]), 0.05).unwrap();
         assert!(moved.holder.is_some() && moved.holder_applied);
 

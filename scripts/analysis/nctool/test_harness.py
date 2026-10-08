@@ -268,60 +268,44 @@ printf '{"command":"roll","frames":[{"input":"real.tif","output":"%s/real_positi
         self.assertNotIn("converted FixtureRoll", result.stdout)
         self.assertFalse((self.out / "FixtureRoll" / "real_positive.tiff").exists())
 
-    def test_strict_probe_rejects_non_warning_failure_status(self):
+    def test_ir_stage_rejects_a_warning_about_the_carried_plane(self):
         self.seed_recipes()
-        fake_bin = self.tmp / "bin"
-        fake_bin.mkdir()
-        fake_exiftool = fake_bin / "exiftool"
-        fake_exiftool.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        fake_exiftool.chmod(fake_exiftool.stat().st_mode | stat.S_IXUSR)
-        fake_nc = self.tmp / "fake-strict-nc"
+        fake_nc = self.tmp / "fake-ir-nc"
         fake_nc.write_text(
             """#!/usr/bin/env bash
 set -eu
-strict=false
 previous=
 for arg in "$@"; do
-  [ "$arg" = "--strict" ] && strict=true
-  if [ "$previous" = "-o" ] || [ "$previous" = "--export-ir" ]; then
+  if [ "$previous" = "-o" ]; then
     cp "$FAKE_TIFF_SOURCE" "$arg"
-    previous=
-    continue
   fi
   previous=$arg
 done
-if [ "$strict" = true ]; then
-  if [ "${FAKE_STRICT_DIAGNOSTIC:-expected}" = expected ]; then
-    echo 'hanten: warning: input carries an IR plane; it is preserved but not used in the conversion' >&2
-  else
-    echo 'hanten: warning: an unrelated warning' >&2
-  fi
-  echo 'error: --strict: simulated usage failure' >&2
-  exit "${FAKE_STRICT_RC:-2}"
-fi
+case "${FAKE_IR:-silent}" in
+  warns) echo 'hanten: warning: input carries an IR plane' >&2 ;;
+  layout) echo 'hanten: warning: file has additional IFDs beyond the IR plane; ignored' >&2 ;;
+  fails) echo 'error: simulated failure' >&2; exit 4 ;;
+esac
 printf '{"command":"convert"}\n'
 """,
             encoding="utf-8",
         )
         fake_nc.chmod(fake_nc.stat().st_mode | stat.S_IXUSR)
-        env = {
-            "FAKE_TIFF_SOURCE": str(FIXTURES / "hdr-48bit.tif"),
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-        }
+        env = {"FAKE_TIFF_SOURCE": str(FIXTURES / "hdr-48bit.tif")}
 
-        result = self.run_harness("ir", fake_nc, env)
+        result = self.run_harness("ir", fake_nc, {**env, "FAKE_IR": "fails"})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("expected warning-promotion exit 1", result.stderr)
+        self.assertIn("converting the IR frame failed", result.stderr)
 
-        env.update(FAKE_STRICT_RC="1", FAKE_STRICT_DIAGNOSTIC="unrelated")
-        result = self.run_harness("ir", fake_nc, env)
+        result = self.run_harness("ir", fake_nc, {**env, "FAKE_IR": "warns"})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("lacked the expected IR-ignored/strict diagnostic", result.stderr)
+        self.assertIn("the carried IR plane raised a warning", result.stderr)
 
-        env.update(FAKE_STRICT_RC="1", FAKE_STRICT_DIAGNOSTIC="expected")
-        result = self.run_harness("ir", fake_nc, env)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("exit=1", result.stdout)
+        # A decoder layout note naming the plane is not the retired warning.
+        for fake_ir in ("silent", "layout"):
+            result = self.run_harness("ir", fake_nc, {**env, "FAKE_IR": fake_ir})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("IR plane carried without a warning", result.stdout)
 
 
 if __name__ == "__main__":

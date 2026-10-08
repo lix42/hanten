@@ -31,7 +31,8 @@ pub enum StageKind {
     Destination,
     /// Writing the container, and the `--export-film-rgb` file.
     Encode,
-    /// Writing the `--export-ir` plane.
+    /// Writing the IR plane. Never timed since `--export-ir` retired; kept because the
+    /// name is on the telemetry wire, and dropping it is a schema bump.
     IrExport,
 }
 

@@ -34,8 +34,9 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 - **The decode before the 3×3 is exportable** (`film-rgb-export`, 2026-09-30):
   `convert --export-film-rgb PATH` writes an untagged f32 TIFF of the dye layers, which
   `nctool metrics --space film-rgb` measures per channel. It is the point for per-layer
-  (`scale`) measurements; `film-master` mixes the layers. `roll` refuses it for now
-  (`roll-side-exports`).
+  (`scale`) measurements; `film-master` mixes the layers. `roll --export-film-rgb` (a
+  switch) writes each frame's beside its output (`roll-side-exports`, which also
+  removed the IR export).
 - **`nctool compare`'s set runs on the new chain** (`benchmark-set`, 2026-10-01): one
   fixtures case per ready destination row (a Rust test enforces it), plus the film
   master, `direct` and the default, on both input formats. A case has a `destination`
@@ -474,8 +475,71 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## roll-side-exports
 
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** done
+**Updated:** 2026-10-08
 
 - 2026-09-29: created as a follow-up to `film-rgb-export`, which made the export
   `convert`-only. Goal: per-frame film RGB and IR exports from `roll`.
+
+### 2026-10-07 — implemented
+
+- **User decision: the IR export is removed, not carried to `roll`.** `--export-ir`
+  is a hidden flag refused in `reject_removed_flags` on both commands, and
+  `input.export_ir` a `RETIRED_KEYS` entry; its `null`, which every older dump
+  wrote, is dropped by `strip_retired_nulls`. Gone with it: `encode::export_ir`,
+  `Report.ir_exported`, roll's `reject_roll_unsupported` and the memory model's
+  u16 IR staging term (`RunProfile`'s variants lost their `export_ir` field; the
+  calibration rows that measured the flag stay as history).
+- **User decision: the "IR plane preserved but not used" warning is dropped.** With
+  no export, its only remedy would have been "drop `--strict`", so every HDRi run
+  under `--strict` failed with nothing to do. Carrying the plane is now the normal
+  case. `scripts/real-scan-verify/harness.sh`'s `ir` stage now fails only on the
+  retired message (`input carries an IR plane`), not on the decoder's layout notes,
+  and its `nctool` test follows. It was the only real-scan check that `--strict`
+  promotes a warning to exit 1; that coverage is gone, and only fixture tests in
+  `tests/pipeline.rs` check the promotion now.
+- **Kept on the telemetry wire:** `StageKind::IrExport`, `timing_ms.ir_export` and the
+  upload's `conversion.ir_exported` (now always `false`). Dropping them is a
+  `SCHEMA_VERSION` bump, a contract change and a Worker change for no gain; do it with
+  the next schema bump.
+- **`recipe` fingerprint refreshed in place** (`f3594e984e5e431b` → `f06b2b04908795a4`):
+  the default recipe lost a `null` key; no default pixel moved.
+- **`roll --export-film-rgb`** (user decisions): a switch, each frame writing
+  `<input-stem>_film-rgb.tiff` in its output's folder (`film_rgb_export_name`), so an
+  explicit `--frames` output carries its export along. The flag takes an optional
+  value only to refuse it (exit 2, before recipes load): a bare switch let convert's
+  `--export-film-rgb PATH` read the path as one more input scan, failing only when that
+  frame decoded. The cost: put the flag after the inputs. Each export joins
+  `ensure_roll_targets_distinct` beside the outputs, and the frame report carries
+  `film_rgb_exported`.
+- **Verified:** `roll_exports_each_frames_film_rgb_as_convert_does` (both fixtures, each
+  export byte-identical to its frame's `convert --export-film-rgb`);
+  `a_roll_export_colliding_with_another_frames_output_is_refused_before_rendering`
+  (case-insensitive, nothing written, with a control);
+  `the_retired_ir_export_is_refused_by_flag_and_by_key_on_both_commands`;
+  `a_carried_ir_plane_raises_no_warning` (HDRi with a marched holder passes `--strict`).
+  The tests that used `--export-ir` as a second staged artifact now use the film RGB
+  and pre-encode exports. `docs/using-nc.md` re-verified against the binary for the
+  sections it touches.
+
+### 2026-10-08 — review fixes
+
+- **A clash's remedy depends on which two targets clashed**, not on the error text.
+  Write targets carry a `RollTarget` tag, and `film_rgb_clash_remedy` names a fix only
+  where one works: a frame's output against its own export → rename that output;
+  against another frame's export → rename it or separate the folders; two exports
+  (one scan listed twice) → separate folders; an input or `--report-file` clash → no
+  remedy. The first cut matched message text and advised moves that cannot work.
+- **Bare `--export-ir`** reaches the removal message (`num_args = 0..=1`, like the
+  other removed value flags) instead of clap's "a value is required".
+- Known costs of the refused-value switch, kept: roll's usage line shows
+  `[<NONE>]`, and a single scan placed right after the flag gets clap's
+  "missing `<INPUTS>`".
+
+### 2026-10-08 — done
+
+- Landed as above. Gates: fmt, machete, clippy, build, doc, nctool, `cargo test`.
+- **For dependents:** nothing reads the decoded image after `fixed::decode` now;
+  releasing it early is filed as `nf-core/release-decoded-image`. The IR plane has no
+  observable consumer, so `nf-core/buffer-strategy`'s positive "the plane arrives"
+  check is the only planned guard that it rides the chain uncoloured.

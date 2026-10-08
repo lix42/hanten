@@ -516,9 +516,8 @@ reconstruction is measured, and it refuses any stage the recipe asks for (§9).
 ### 6.1 IR channel handling
 
 The IR plane (when present) is decoded and carried alongside RGB. **No conversion
-stage consumes it**: every HDRi `convert` notes that the plane is preserved but not
-used, unless `--export-ir <path>` writes it out for inspection or downstream tooling.
-Its one reader is the **effective area** (§9 `measure`): where a marker-verified
+stage consumes it**, and carrying it is the normal case, so it raises no warning; it
+is not exported (`--export-ir` retired). Its one reader is the **effective area** (§9 `measure`): where a marker-verified
 plane **measures able to separate holder from film on that frame**, the opaque
 scanner holder (dark in IR) is cut from the frame's edges, since IR-transparent film
 (base, rebate, picture) reads bright. That area is what `measure-base`, `inspect` and
@@ -834,7 +833,7 @@ top level, one section per stage in chain order, the destination last:
 ```json
 {
   "recipe_version": 3,
-  "input": { "transfer": "auto", "meaning": "auto", "film_type": "unknown", "export_ir": null },
+  "input": { "transfer": "auto", "meaning": "auto", "film_type": "unknown" },
   "calibration": { "film_base": {"explicit": [0.163, 0.080, 0.0377]} },
   "roll": { "white_balance": [1.002, 1.0, 1.277], "white_stops": 1.5, "exposure": 0.455, "frames": {} },
   "measure": { "inset": 0.05 },
@@ -1187,18 +1186,14 @@ the exception: they touch no parameter at all, so they have no recipe key. Retir
 and keys are listed at the end of this section.
 
 ### Input / decode
-- `--export-ir <path>` — write the IR plane to a separate TIFF (HDRi only).
-  Recipe key `input.export_ir`. The IR TIFF is 32-bit float beside a float primary
-  (the film master, the linear HDR TIFF) and 16-bit otherwise. The IR *samples* never
-  change: the plane is carried through the pipeline untouched, so only the
-  quantization headroom differs. Refused on `roll` (one path, N frames).
-- `--export-film-rgb <path>` (`convert` only; operational, no recipe key) — write the
+- `--export-film-rgb <path>` (operational, no recipe key) — write the
   fixed decode's output **before** the NC film RGB v1 3×3 as an f32 TIFF with no ICC
   profile, since the dye layers have no primaries (`nf-verification/film-rgb-export`).
   Sent through the pinned mapper it equals the film master bit for bit. The cleanest
   point for per-layer measurement (`nctool metrics --space film-rgb`). Reported as
-  `film_rgb_exported`; per-frame exports from `roll` are
-  `nf-verification/roll-side-exports`.
+  `film_rgb_exported`. On `roll` it is a switch with no path: each frame writes
+  `<input-stem>_film-rgb.tiff` beside its output, guarded like an output, and its
+  entry reports `film_rgb_exported` (`nf-verification/roll-side-exports`).
 - `--export-pre-encode <path>` (`convert` only; operational, no recipe key) — write what
   the destination's encoder receives, one untagged TIFF page per buffer: the linear
   rendition before any transfer (both, for the gain map) and the gain map's codes
@@ -1359,10 +1354,8 @@ covered by raising the inset, which is added on top of the cap.
 per-frame reference density, retired with `nf-retire/dmax-machinery` — so an *empty*
 region is always a warning on `convert` (with no reported area), never a refusal.
 `measure.inset` stays live for `hanten measure-base` and `hanten measure-roll`, which
-measure over the area. For the same reason `holder_applied` does not suppress
-`convert`'s "IR preserved but not used" note: a marched holder moves the reported
-rectangle but no rendered pixel. (`inspect`, which renders nothing, counts the march
-as use.)
+measure over the area. A marched holder moves the reported rectangle but no rendered
+pixel.
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key
@@ -1692,7 +1685,7 @@ boundary. The stage list names it after the destination's gamut,
 ### Output / encode
 
 **How artifacts reach disk (`io/transactional-output-writes`).** Every file `nc`
-writes — the primary output, the IR export, the film RGB export, `--dump-params`,
+writes — the primary output, the film RGB export, `--dump-params`,
 `--report-file` — is written to a **same-directory temp**, flushed, **fsynced**, and
 only then renamed onto its final path. Two guarantees follow, and one deliberately
 does not:
@@ -1723,8 +1716,8 @@ does not:
   a signal that kills the process does **not** run destructors, so `SIGINT`/`SIGKILL`
   can leave an inert `*.nctmp` beside the output. No signal handler or startup
   scavenging is installed, so the guarantee is stated for ordinary error paths only.
-- **One conversion's artifacts commit together.** The film RGB export, the IR export
-  and the primary are all staged before any is renamed, so a failure in a later one
+- **One conversion's artifacts commit together.** The side exports and the primary
+  are all staged before any is renamed, so a failure in a later one
   leaves *no* primary output. The renames are
   pre-checked (a target occupied by a directory fails before anything is promoted) and
   the **primary is renamed last**, because its presence is what reads as success.
@@ -1833,7 +1826,9 @@ alias, on flags and recipe keys alike. The reference build
 - **Film base and input**: `--auto-base` and `"auto"` (a base is always stated),
   `--assume-linear` and `input.color` (→ the two input axes), the `estimate`
   subcommand (→ `measure-base`), and `measure-base --grid` (→
-  `film-base/tiling-uniformity-validator`).
+  `film-base/tiling-uniformity-validator`). `--export-ir` and `input.export_ir`
+  retired with no replacement (`nf-verification/roll-side-exports`); a `null` key, as
+  older dumps wrote it, is dropped.
 
 ### Global
 - `--params <json>`, `--dump-params <json>`
@@ -1890,8 +1885,7 @@ recipe — `calibration.film_base`, the applied `roll.white_balance` or `roll.ex
 `reconstruction` key, `rendering`, or a stated `output` — warns, naming both values
 (`cli::ROLL_WIDE`). A restatement does not; `frames[].overrides` records it.
 `roll.white_stops` is frame-local: it is how a clamped frame states its own white.
-`input.export_ir` is rejected in roll mode (one path, N frames). Determinism: same batch + same recipe ⇒ byte-identical output per
-frame.
+Determinism: same batch + same recipe ⇒ byte-identical output per frame.
 
 **Telemetry (operational, `convert` only — NOT recipe keys).** Opt-in
 performance + context telemetry. These are operational flags like `--report`, so
@@ -1925,7 +1919,7 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   the fail-loudly rule, since telemetry is non-critical observability. A
   `--telemetry-file` **or**
   `--telemetry` log path (`NC_TELEMETRY_LOG` or the default path) that would *collide* with the
-  input, the `--params` recipe, or the output/IR export/report-file is still a loud
+  input, the `--params` recipe, or the output/export/report-file is still a loud
   usage error (a config mistake, caught up front — an odd log path must never
   silently append into the scan).
 
@@ -1990,7 +1984,8 @@ output was written.
 `timing_ms` has one field per stage (`crate::stage::StageKind`), present once that
 stage **completes** — a failed stage's time counts only toward `total`, which also covers
 recipe load, validation, the memory preflight and the commit. The four chain stages are
-absent for the film master, which runs none, and `ir_export` without `--export-ir`; a
+absent for the film master, which runs none, and `ir_export` always (retired with
+`--export-ir`); a
 gain map's `fit_range` and `fit_gamut` sum its two renditions (the copy that splits
 them counts only toward `total`), and `scene_correction` and `look` include the film
 base's one-pixel grade. The history of the shape is `telemetry::SCHEMA_VERSION`'s
@@ -2037,7 +2032,7 @@ src/
 ├── film_stock/          # test-only: digitized stock curves, evidence for the decode's constants
 ├── io/
 │   ├── decode.rs        # SilverFast HDR/HDRi (TIFF) → LinearImage (+IR)
-│   ├── encode.rs        # 16-bit / f32 TIFF with ICC; the IR export
+│   ├── encode.rs        # 16-bit / f32 TIFF with ICC
 │   ├── jpeg.rs          # baseline JPEG for the gain-map container
 │   ├── iso_gain_map.rs  # the gain-map JPEG: MPF container + ISO 21496-1 metadata
 │   └── staged.rs        # write to a temp beside the target, fsync, rename

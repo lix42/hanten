@@ -393,8 +393,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // pixel moved. Again by `nf-calibration/thin-frame-lift` (was `601475237e7a5941`):
         // `roll.frame_slope`, `null` by default and applied only when stated. Again by
         // `nf-calibration/taste-vs-quality` (was `50987e7d7708865b`): the lift keys renamed
-        // and split, all `null` by default; no default pixel moved.
-        recipe: "f3594e984e5e431b",
+        // and split, all `null` by default; no default pixel moved. Again by
+        // `nf-verification/roll-side-exports` (was `f3594e984e5e431b`): `input.export_ir`,
+        // `null` by default, retired with the IR export; no default pixel moved.
+        recipe: "f06b2b04908795a4",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

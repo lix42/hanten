@@ -127,8 +127,8 @@ override, and so are the destination flags `--film-master` or `--range`,
 build that takes destinations; against a preset build (the reference build) they
 are refused before anything is measured, and its output goes in `--recipe`
 instead. `--strict-estimate` is recommended for calibration; `--strict-roll` is
-separate because a frozen explicit base on an IR scan can legitimately emit the
-documented unused-IR warning.
+separate because on the reference build a frozen explicit base on an IR scan
+legitimately emits its unused-IR warning.
 
 ### Tags
 

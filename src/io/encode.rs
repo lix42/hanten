@@ -1,5 +1,5 @@
-//! [`LinearImage`] → 16-bit / 32-bit-float TIFF with an embedded ICC, and the optional
-//! IR export — plus the domain-typed HDR TIFF entry points.
+//! [`LinearImage`] → 16-bit / 32-bit-float TIFF with an embedded ICC, plus the
+//! domain-typed HDR TIFF entry points.
 //!
 //! [`encode_u16`] writes an SDR display rendition, [`encode_f32`] the film master and
 //! [`encode_film_rgb`] the pre-matrix film RGB. The two HDR entry points are separate on purpose,
@@ -23,7 +23,7 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
-use tiff::encoder::colortype::{ColorType, Gray16, Gray32Float, RGB8, RGB16, RGB32Float};
+use tiff::encoder::colortype::{ColorType, RGB8, RGB16, RGB32Float};
 use tiff::encoder::{TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard, TiffValue};
 use tiff::tags::Tag;
 
@@ -545,20 +545,6 @@ fn quantize_coded_u16(
     Ok((data, report, stats, QuantizationError { max: worst, rms }))
 }
 
-/// Write the IR plane as a single-channel TIFF at `depth`. Errors loudly when the
-/// image carries no IR plane rather than writing an empty/placeholder file — the
-/// caller asked for IR export, so a missing plane is a real failure.
-pub fn export_ir(image: &LinearImage, depth: OutDepth, path: &Path) -> Result<Staged> {
-    // Check for the IR plane before staging anything. Staging alone would no longer
-    // clobber the target — that is the point of the temp — but there is no reason to
-    // create and immediately discard a file for a request that cannot succeed.
-    if image.ir.is_none() {
-        return Err(no_ir_error());
-    }
-    let (staged, ()) = staged::stage(path, |writer| export_ir_to_writer(writer, image, depth))?;
-    Ok(staged)
-}
-
 /// The sidecar path for an output: `<output>.json` (extension appended, not
 /// replaced, so `a.tiff` → `a.tiff.json` and output/sidecar stay paired by name).
 /// No run writes a sidecar now; the CLI reads this path to find, and remove, one an
@@ -631,61 +617,9 @@ fn encode_to_writer<W: Write + Seek>(
     }
 }
 
-fn export_ir_to_writer<W: Write + Seek>(
-    writer: W,
-    image: &LinearImage,
-    depth: OutDepth,
-) -> Result<()> {
-    let ir = image.ir.as_deref().ok_or_else(no_ir_error)?;
-    let (w, h) = (image.width, image.height);
-    let big = resolve_bigtiff(BigTiff::Auto, w, h, 1, depth_bytes(depth), 0);
-
-    match (depth, big) {
-        (OutDepth::U16, false) => {
-            // IR is normalized to [0,1] at decode and carried through untouched,
-            // so quantization cannot clip it — the report is provably all-zero
-            // and safe to drop. Revisit if IR-processing stages ever land.
-            let (data, report) = quantize_u16(ir);
-            debug_assert!(!report.any_loss(), "IR plane unexpectedly clipped");
-            encode_planar::<_, TiffKindStandard, Gray16>(
-                TiffEncoder::new(writer)?,
-                w,
-                h,
-                &data,
-                None,
-            )
-        }
-        (OutDepth::U16, true) => {
-            let (data, report) = quantize_u16(ir);
-            debug_assert!(!report.any_loss(), "IR plane unexpectedly clipped");
-            encode_planar::<_, TiffKindBig, Gray16>(
-                TiffEncoder::new_big(writer)?,
-                w,
-                h,
-                &data,
-                None,
-            )
-        }
-        (OutDepth::F32, false) => encode_planar::<_, TiffKindStandard, Gray32Float>(
-            TiffEncoder::new(writer)?,
-            w,
-            h,
-            ir,
-            None,
-        ),
-        (OutDepth::F32, true) => encode_planar::<_, TiffKindBig, Gray32Float>(
-            TiffEncoder::new_big(writer)?,
-            w,
-            h,
-            ir,
-            None,
-        ),
-    }
-}
-
 /// The one place pixels actually hit the `tiff` encoder. Generic over the file
-/// kind (classic vs BigTIFF) and the color type (u16/f32 × RGB/Gray) so the four
-/// depth×size combinations share a single body. The ICC blob, when present, is
+/// kind (classic vs BigTIFF) and the color type (u16 or f32 RGB), so every
+/// depth×size combination shares one body. The ICC blob, when present, is
 /// written as the `ICCProfile` tag (34675) before the sample data.
 fn encode_planar<W, K, C>(
     encoder: TiffEncoder<W, K>,
@@ -718,10 +652,6 @@ where
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn no_ir_error() -> NcError {
-    NcError::Unsupported("cannot export IR: image has no IR plane (HDRi input only)".into())
-}
 
 fn depth_bytes(depth: OutDepth) -> u64 {
     match depth {
@@ -1223,41 +1153,6 @@ mod tests {
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
         let read = dec.get_tag_u8_vec(Tag::IccProfile).unwrap();
         assert_eq!(read, icc);
-    }
-
-    #[test]
-    fn export_ir_writes_single_channel() {
-        let image = img(2, 1, vec![0.0; 6], Some(vec![0.25, 0.75]));
-        let mut buf = Cursor::new(Vec::new());
-        export_ir_to_writer(&mut buf, &image, OutDepth::U16).unwrap();
-
-        let mut dec = Decoder::new(Cursor::new(buf.into_inner())).unwrap();
-        assert_eq!(dec.dimensions().unwrap(), (2, 1));
-        let DecodingResult::U16(pixels) = dec.read_image().unwrap() else {
-            panic!("expected u16 IR image");
-        };
-        assert_eq!(pixels, vec![16384, 49151]);
-    }
-
-    #[test]
-    fn export_ir_errors_without_ir_plane() {
-        let image = img(2, 1, vec![0.0; 6], None);
-        let mut buf = Cursor::new(Vec::new());
-        let err = export_ir_to_writer(&mut buf, &image, OutDepth::U16).unwrap_err();
-        assert!(matches!(err, NcError::Unsupported(_)));
-    }
-
-    #[test]
-    fn export_ir_without_plane_does_not_create_file() {
-        // The no-IR error must fire before the file is created, so an existing
-        // target the user pointed --export-ir at is never clobbered.
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("nc_no_ir_test_{}.tiff", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let image = img(2, 1, vec![0.0; 6], None);
-        let err = export_ir(&image, OutDepth::U16, &path).unwrap_err();
-        assert!(matches!(err, NcError::Unsupported(_)));
-        assert!(!path.exists(), "no-IR export must not create the file");
     }
 
     #[test]

@@ -5,7 +5,8 @@
 Let `hanten roll` write each frame's side exports, the pre-matrix film RGB
 (`--export-film-rgb`) and the IR plane (`--export-ir`), next to that frame's output
 in `--out-dir`. Today `roll` refuses both, because one path cannot serve every frame,
-so a roll has to be exported one `convert` at a time. The `scale` calibration is
+so a roll has to be exported one `convert` at a time. (The IR export was retired
+instead; see the progress log.) The `scale` calibration is
 measured across a roll's frames, which is where a per-frame export pays off.
 
 ## Design
