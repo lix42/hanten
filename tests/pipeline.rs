@@ -8952,15 +8952,19 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     // would (`nf-calibration/roll-section` moved them, and moved no pixel).
     let tmp = TempDir::new("measure-roll-reuse");
     let frame = fixture("hdr-48bit.tif").display().to_string();
+    // A bright, flat second frame raises the roll's level, so its exposure leaves the
+    // fixture's white low enough to be lifted.
     let second = tmp.path("second.tif");
-    std::fs::copy(&frame, &second).unwrap();
+    write_uniform_density(&second, [0.9, 0.55, 0.42], 1.2);
+    // The synthetic frame states its input; the fixture's already resolves to the same.
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
     let recipe = tmp.path("wb.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
         &frame,
         second.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
+        "--params",
+        input.to_str().unwrap(),
         "--out",
         recipe.to_str().unwrap(),
     ]);
@@ -8972,7 +8976,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_ne!(
         report["white_balance"]["gains"],
         serde_json::json!([1.0, 1.0, 1.0]),
-        "not vacuous: the fixture's roll white is off neutral"
+        "not vacuous: the roll white is off neutral"
     );
     assert_eq!(report["frames"].as_array().unwrap().len(), 2);
     assert_eq!(
@@ -11251,8 +11255,10 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
         tmp.path("leader.tif"),
     );
     write_uniform_density(&blank, base, 0.0);
-    write_picture_density(&dim, base, 0.904);
-    write_picture_density(&bright, base, 1.122);
+    // A narrow dark band keeps each frame's level near its white, so the roll's exposure
+    // leaves both whites low enough to be lifted.
+    write_split_density(&dim, base, 0.904, 0.704, 7);
+    write_split_density(&bright, base, 1.122, 0.922, 7);
     write_uniform_density(&leader, base, 1.5);
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     let frames = [s(&dim), s(&bright)];

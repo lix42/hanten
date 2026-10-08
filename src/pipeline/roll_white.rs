@@ -131,13 +131,13 @@ pub const FALLBACK_WHITE_STOPS: f32 = 1.75;
 pub const SATURATION_MARGIN_STOPS: f32 = 0.5;
 
 /// Where a roll's exposure puts its median frame level ([`frame_level`]), in scene stops
-/// from mid-grey. Chosen by review over -1.0 and -0.8 (both lost on nearly every frame)
-/// and -0.3 (split frame by frame: low-key frames wanted it, bright ones did not).
-pub const LEVEL_TARGET_STOPS: f32 = -0.6;
+/// from mid-grey: mid-grey itself, where a light meter would. Chosen by review over −0.6
+/// on a good and a poorly developed roll (`nf-calibration/level-target-zero`).
+pub const LEVEL_TARGET_STOPS: f32 = 0.0;
 
-/// The most a measured roll exposure moves, either way, in EV. The ten rolls reviewed
-/// measured +0.02 to +1.74.
-pub const EXPOSURE_BOUND_EV: f32 = 2.0;
+/// The most a measured roll exposure moves, either way, in EV: a check for wrong inputs.
+/// The eleven archive rolls measure +0.62 to +2.34.
+pub const EXPOSURE_BOUND_EV: f32 = 3.0;
 
 /// The most a frame's lift adds, in EV: the step review compared (a target 0.3 stop
 /// brighter); nothing larger was tested.
@@ -714,7 +714,7 @@ mod tests {
         // Both ways within the bound, and a bound that binds says so.
         let dark = roll_exposure(&[Some(-4.0)]).unwrap();
         assert_eq!((dark.ev, dark.bounded), (EXPOSURE_BOUND_EV, true));
-        let bright = roll_exposure(&[Some(3.0)]).unwrap();
+        let bright = roll_exposure(&[Some(4.0)]).unwrap();
         assert_eq!((bright.ev, bright.bounded), (-EXPOSURE_BOUND_EV, true));
         assert!(roll_exposure(&[None, None]).is_err());
     }

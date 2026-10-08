@@ -25,24 +25,22 @@ Known:
   split 8–10 **by frame** — low-key frames wanted brighter, bright frames −0.6. The same
   split shows here: on 09-29's brightest frames (2028, 2037) today ≈ target 0, today
   keeping more cloud detail.
+- Decided (user, 2026-10-07): the target stays a constant (`--exposure` already moves a
+  roll); bright frames and re-placing the white (measured at exposure 0, so target 0 puts
+  most frames' whites above diffuse white) go to `display-white` and
+  `envelope-hybrid-placement`.
 
 Open:
 
-- Whether bright frames need anything once the target moves (the by-frame split), or
-  whether that belongs to the per-frame work the spike tracks.
-- Whether the target becomes a `measure-roll` flag, or stays a constant.
 - How the thin lift's thresholds read at the new exposure (`thin-lift-confirmation`).
-- The roll's white is measured at exposure 0, so target 0's extra ~+0.6 EV pushes most frames'
-  whites above diffuse white (median frame +0.3 to +1.4 stops on 8 of 10 rolls, the spike's
-  per-frame probe) — likely why bright frames lose cloud detail. Re-place the white after the
-  exposure, or leave it to the per-frame work?
 
 ## How to Verify
 
 - `measure-roll` on the archived rolls: roll exposures move by +0.6 EV unless bounded;
   frame lifts re-derive.
-- A drift-gate row (`version::PIPELINE_FINGERPRINTS`) and the `docs/using-nc.md` text
-  that states the target.
+- The `docs/using-nc.md` text that states the target. No drift-gate row or
+  `pipeline_version` bump: the target is a measuring command's constant, which changes
+  what a new measurement writes but not how a written recipe replays (`version.rs`).
 
 ## Dependencies
 

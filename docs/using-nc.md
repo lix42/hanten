@@ -21,7 +21,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `output/content-light-levels` §8's HDR destination examples. At
 > `nf-calibration/thin-frame-lift` §5's default recipe and `roll.json` and §7's roll
 > examples were re-run (the `measure-roll` ones on the real rolls they name), and again at
-> `nf-calibration/taste-vs-quality`, with §8's `direct` roll-flag refusal. The staleness signal is
+> `nf-calibration/taste-vs-quality`, with §8's `direct` roll-flag refusal. At
+> `nf-calibration/level-target-zero` §5's `roll.json` and §7's `measure-roll` report were
+> re-run on their real rolls. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -210,7 +212,7 @@ abridged):
     "roll": {
       "white_balance": [0.886392, 1.0, 1.188019],
       "white_stops": 1.9509047,
-      "exposure": 0.48546875,
+      "exposure": 1.0854688,
       "frame_exposure": null,
       "small_lift": null,
       "thin_slope": null,
@@ -1082,25 +1084,23 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                 "unusable": 0, "white_stops": 0.52260643,
                 "leader_distance_stops": 2.0644333, "level_stops": -1.7618053,
                 "white_role": "under", "spread_stops": 3.7179117,
-                "base_share": 0.38004303, "lift_ev": 0.2610071,
-                "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937 --roll-frame-exposure 0.2610071",
-                … }, … ],
+                "base_share": 0.38004303, "lift_ev": 0.0, … }, … ],
   "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
   "white": { "stops": 1.5, "bound": "floor", "slope": 1.6492873,
              "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
                             "slope": 1.2369655,
-                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-exposure 0.45537937" }, … ],
+                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-exposure 1.0553794" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
-  "exposure": { "ev": 0.45537937, "level_stops": -1.0553794, "bounded": false,
-                "target_stops": -0.6, "bound_ev": 2.0 },
-  "small_lift": { "kind": "taste", "written": true, "lifted": 30, "bound_ev": 0.3,
+  "exposure": { "ev": 1.0553794, "level_stops": -1.0553794, "bounded": false,
+                "target_stops": 0.0, "bound_ev": 3.0 },
+  "small_lift": { "kind": "taste", "written": true, "lifted": 19, "bound_ev": 0.3,
                   "full_stops": 0.9, "none_stops": 1.5, "flat_spread_stops": 1.0 },
-  "thin_lift": { "kind": "taste", "written": true, "lifted": 1, "base_stops": -3.707272,
+  "thin_lift": { "kind": "taste", "written": true, "lifted": 0, "base_stops": -3.707272,
                  "white_stops": 0.9,
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
                  "slope_bound": 2.4 },
-  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937" },
+  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 1.0553794" },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
@@ -1235,14 +1235,14 @@ slope is derived from it at render time.
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
 `level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
 mid-grey, over the pixels with positive luma; the exposure (`exposure.ev`) brings the
-**median** frame level to −0.6 (`target_stops`), so one night scene or one bright frame does not set it. A frame darker than its roll stays
-dark, beyond a small lift (below) — it renders what is on the film. The exposure is limited to ±2 EV (`bound_ev`); a
+**median** frame level to mid-grey (`target_stops` 0), where a light meter would put it, so one night scene or one bright frame does not set it. A frame darker than its roll stays
+dark, beyond a small lift (below) — it renders what is on the film. The exposure is limited to ±3 EV (`bound_ev`); a
 roll that needs more warns (`bounded: true`), and `measure-roll --strict` refuses it.
 That usually means wrong inputs: check they are this roll's picture frames under its
 film base. If the roll really is that far off, add `--exposure` when converting
-(`convert`, `roll`), which adds to `roll.exposure`. The target was chosen by review on
-ten rolls, over −1.0 and −0.8 (both lost on nearly every frame) and −0.3 (split frame by
-frame); it measured +0.02 to +1.74 EV on them.
+(`convert`, `roll`), which adds to `roll.exposure`. The target was chosen by review over
+−0.6 stop, which left midtones darker than SilverFast's; it measures +0.62 to +2.34 EV on
+the eleven archive rolls.
 
 **The roll's white balance, exposure and white are corrections; the two lifts below are
 preferences** (taste). A correction restores what the roll recorded and has no switch.
@@ -1256,9 +1256,10 @@ names the preferences applied, by their switch's key; `measure-roll`'s `small_li
 where its white renders after that exposure (its `white_stops` plus `exposure.ev`): the
 whole +0.3 EV at or under +0.9 stop (`full_stops`), none at or over +1.5 (`none_stops`),
 linear between. A bright frame is never darkened. `--out` writes each non-zero lift to
-`roll.frames`, and `small_lift.lifted` counts them; on the ten reviewed rolls 101 of 178
-frames are lifted, and review preferred the lift on 72 and its absence on 7 (two of those
-7 were flat frames, which are no longer lifted; below).
+`roll.frames`, and `small_lift.lifted` counts them. Review preferred the lift on 72 of the
+101 frames it gave on ten rolls and its absence on 7 (two of those 7 were flat frames,
+which are no longer lifted; below), judged at a target 0.6 stop darker; at mid-grey 45 of
+those 178 frames are lifted.
 Turn it off when measuring (`measure-roll --no-small-lift`: lifts are reported, not
 written) or when rendering, without re-measuring — the lift stays in the recipe:
 
@@ -1293,7 +1294,7 @@ it has its small lift only — in `thin_lift.unlifted`; disclosed, not warned ab
 tend to like brighter, so it is the preference most worth trying off.
 Each qualifying frame's lift is reported as `frames[].thin_lift` (`slope`, `exposure`,
 `lift_stops`, `bounded`); it is written as the frame's `roll.frames` `thin_slope` and
-`thin_exposure`, beside its small lift, and `thin_lift.lifted` counts them (14 of 178 on
+`thin_exposure`, beside its small lift, and `thin_lift.lifted` counts them (4 of 178 on
 the ten rolls). `measure-roll --no-thin-lift` leaves it out; `--no-small-lift` writes it
 alone, unchanged. `--thin-lift off` turns it off at render, and the frame renders its
 small lift; `--small-lift off` leaves it alone:

@@ -2147,7 +2147,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Confirm the thin lift on an independent
   roll](tasks/nf-calibration/thin-lift-confirmation.md) — a review round on 09-29's four
   thin frames, on vs `--thin-lift off`, and the noise the steeper slope adds
-- [ ] [Raise the roll's brightness target to
+- [x] [Raise the roll's brightness target to
   0](tasks/nf-calibration/level-target-zero.md) — `measure-roll` puts the median frame at
   mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred
   it on 09-18 Gold and 09-29 Ektar
