@@ -722,7 +722,7 @@ mod tests {
             linearization,
             ..DecodeParams::default()
         };
-        let (film, _) = fixed::decode(&image, &FilmBase::from(BASE), &params).unwrap();
+        let (film, _) = fixed::decode(image, &FilmBase::from(BASE), &params).unwrap();
         let (corrected, _) =
             scene_correction::apply(map_nc_film_rgb_v1(film), &SceneCorrectionParams::default())
                 .unwrap();
@@ -909,7 +909,7 @@ mod tests {
         let scan = scan_at(&DENSITIES, |t| [t + 0.1, t, t - 0.1]);
         let image = LinearImage::new(DENSITIES.len() as u32, 1, scan.clone(), None).unwrap();
         let (film, _) =
-            fixed::decode(&image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
+            fixed::decode(image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
         let unlooked = map_nc_film_rgb_v1(film).rgb().to_vec();
         let identity = graded(
             &scan,
@@ -1018,7 +1018,7 @@ mod tests {
         };
         let image = LinearImage::new(4, 1, scan.clone(), None).unwrap();
         let (film, _) =
-            fixed::decode(&image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
+            fixed::decode(image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
         let mut by_hand = map_nc_film_rgb_v1(film).rgb().to_vec();
         let section = LookSection::default();
         let pull = Pull::new(

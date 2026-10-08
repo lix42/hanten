@@ -725,7 +725,7 @@ pub(crate) mod drift_gate {
     /// The fixed decode over [`pixels`] / [`base`], then the NC film RGB v1 mapping: the
     /// film RGB, the ACEScg RGB, and the anchor the decode resolved.
     fn rendered(params: &DecodeParams) -> (Vec<f32>, Vec<f32>, f32) {
-        let (film, report) = fixed::decode(&pixels(), &base(), params)
+        let (film, report) = fixed::decode(pixels(), &base(), params)
             .expect("the decode must succeed on the frozen vectors");
         let film_rgb = film.rgb().to_vec();
         let aces = working_space::map_nc_film_rgb_v1(film);

@@ -137,7 +137,7 @@ mod tests {
     fn reconstruction_returns_a_film_rgb_image_and_preserves_ir() {
         // The type-level boundary: the decode produces a `FilmRgbImage` (enforced by
         // its signature) with the dimensions and IR plane intact.
-        let (film, _) = fixed::decode(&image(), &base(), &fixed::DecodeParams::default()).unwrap();
+        let (film, _) = fixed::decode(image(), &base(), &fixed::DecodeParams::default()).unwrap();
         assert_eq!((film.width(), film.height()), (2, 1));
         assert_eq!(film.rgb().len(), 6);
         assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]));

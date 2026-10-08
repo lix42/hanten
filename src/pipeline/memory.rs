@@ -6,9 +6,8 @@
 //!
 //! `io::decode::decode_limits` advertises a 4 GiB *input read buffer*, which
 //! guards only the `tiff` crate's `u16` staging buffer. The derived peak is a
-//! multiple of it, because whole-image `f32` buffers **overlap**: the
-//! orchestrator holds the decoded image until after the render, while the
-//! algorithm produces the positive. So the run's
+//! multiple of it, because whole-image buffers **overlap** (the `f32` image beside
+//! its read buffers, the encoder's staging, a second rendition). So the run's
 //! real ceiling was never checked at all. This module makes it explicit and
 //! checkable *before* the first big allocation.
 //!
@@ -23,14 +22,15 @@
 //! decode     rgb32 + max(rgb16 read buffer, ir16 + ir32)      18 B/px
 //! film-base  decoded (rgb32+ir32) + 3 f32 channel vectors     16 + 12·s B/px
 //!            over the sampled rectangle
-//! render     decoded + the chain's buffer + retained sample    32 + 12·s B/px
-//! encode     decoded + rendered + u16 quantize + retained     38 + 12·s B/px
+//! render     the chain's buffer + retained sample             16 + 12·s B/px
+//! encode     rendered + u16 quantize + retained               22 + 12·s B/px
 //! ```
 //!
-//! The chain's buffer is `decoded`-shaped: the fixed decode clones the IR plane beside
-//! its output, and every stage moves that buffer and works in place. A 32-bit float
-//! TIFF ([`RunProfile::F32Tiff`]) writes it verbatim, so its encode row has no
-//! quantize term and its peak is the render row. The gain-map JPEG
+//! The chain's buffer **is** the decoded image: `algo::fixed::decode` consumes the scan
+//! and writes the positive into it, its IR plane moving with it, and every stage moves
+//! that buffer on and works in place. A 32-bit float TIFF ([`RunProfile::F32Tiff`])
+//! writes it verbatim, so its encode row has no quantize term and, with nothing
+//! sampled, its peak is the decode row. The gain-map JPEG
 //! ([`RunProfile::GainMapJpeg`]) holds two renditions and the full-resolution gains
 //! at render (`chain::render_pair`). Which phase peaks is **per profile**, not a
 //! property of any category: `which_phase_peaks_is_per_profile_and_measured_not_assumed`
@@ -45,11 +45,11 @@
 //!
 //! Notes on the non-obvious entries:
 //!
-//! - **Two images at render, not one.** Every colour transform runs in place, so
-//!   there is no third, but the decoded image still outlives the render, so
-//!   `render` counts two. `--export-film-rgb` writes the decode's buffer verbatim
-//!   before the 3×3, and `--export-pre-encode` the buffers the render already holds,
-//!   so neither adds a term.
+//! - **One image at render.** The decode and every colour transform run in place.
+//!   `--export-film-rgb` writes the decode's buffer verbatim before the 3×3, and
+//!   `--export-pre-encode` the buffers the render already holds, so neither adds a
+//!   term. Until `nf-core/release-decoded-image` the decode wrote a new buffer and the
+//!   scan was held to the frame's end: two images at render, 16 B/px more.
 //! - **Retention: a freed buffer is still counted at every later peak.** The film-base
 //!   sample is **added into** the render and encode phases rather than competing with
 //!   them. This was macOS malloc's behaviour: it kept freed large blocks resident, and
@@ -232,6 +232,28 @@
 //! pair fitted its codec staging, and `docs/design/avif-removal.md` keeps that fit
 //! for anyone restoring it.
 //!
+//! **Since `nf-core/release-decoded-image` (2026-10-08) every conversion row above
+//! over-states its run**: each held the scan to the frame's end, 16 B/px more for HDRi
+//! than the profiles now count. They stay as the evidence behind the constants they
+//! fitted. The conversion profiles now rest on this set — Linux x86_64, `wait4` peak
+//! RSS, synthetic HDRi frames, explicit base:
+//!
+//! | destination | 5.83 MP | 18.66 MP | 74.65 MP | 74.65 MP model | margin |
+//! |---|---|---|---|---|---|
+//! | SDR TIFF | 0.135 GB | 0.417 GB | 1.649 GB | 2.023 GB | +22.7% |
+//! | linear float TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 1.679 GB | +24.4% |
+//! | PQ TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 2.023 GB | +49.8% |
+//! | `--film-master` | 0.111 GB | 0.342 GB | 1.350 GB | 1.679 GB | +24.4% |
+//! | gain-map JPEG | 0.221 GB | 0.693 GB | 2.750 GB | 3.997 GB | +45.4% |
+//!
+//! Each fell by the scan's 16 B/px against the previous build on the same frame (the
+//! float TIFFs by 14, their peak now the decode phase). `accounted` is 0.94–1.00x of
+//! measured for the SDR and float TIFFs; the PQ TIFF peaked with the float ones (its
+//! quantize buffer never set the peak on Linux) and the gain map at 0.82x of accounted,
+//! both over-counted. **The macOS calibration is owed:** before this change macOS
+//! peaked ~4 B/px above Linux on every destination, which would put the float TIFF's
+//! 74.65 MP estimate within about 1% of its peak. Re-measure on the largest real scan.
+//!
 //! Peak RSS varies by a few tens of KB between identical runs; the frozen literals
 //! in the tests are single observations, which is why the assertions are
 //! `estimate >= measured` rather than equality.
@@ -293,7 +315,9 @@ const WORKING_CHANNELS: u64 = 3;
 /// was modelled this constant was 4 GiB, justified against a 3.40 GB estimate that
 /// omitted the region sample.) A machine that wants a tighter or looser ceiling
 /// sets `--max-memory`; the rejection message says so, and the RAM-aware warn tier
-/// is what protects a small machine from a budget this size.
+/// is what protects a small machine from a budget this size. Since
+/// `nf-core/release-decoded-image` that run accounts 34 B/px and estimates 3.05 GB,
+/// so the budget has more headroom than it was sized for.
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// Proportional part of the allowance added to the accounted buffers, in percent.
@@ -335,12 +359,10 @@ pub enum RunProfile {
     /// branch, `chain::render`), and an SDR destination or a coded HDR one (PQ/HLG
     /// codes; `hdr::from_new_chain` and `hdr::encode_transfer` both work in place).
     ///
-    /// It holds the decoded image (to the frame's end), the decode's one output
-    /// buffer carrying a cloned IR plane, a chain that moves that buffer through every
-    /// boundary and transforms it in place, and a 3x2 B quantize buffer with `tiff`
-    /// streaming strips. Its peak is the **encode** phase. Measured for the SDR TIFF
-    /// in every gamut and for the PQ and HLG TIFFs (the module doc's calibration
-    /// table).
+    /// It holds the decoded image, which the fixed decode rewrites in place and the
+    /// chain moves through every boundary and transforms in place, then a 3x2 B
+    /// quantize buffer with `tiff` streaming strips. Its peak is the **encode** phase.
+    /// Measured for the SDR TIFF and the PQ TIFF (the module doc's calibration table).
     ///
     /// **One branch only.** A gain-map pair (`chain::render_pair`) copies the graded
     /// image and holds two working buffers through fit range and fit gamut, so it has
@@ -348,27 +370,27 @@ pub enum RunProfile {
     U16Tiff,
     /// Into a **32-bit float TIFF**: the linear HDR destination, or the film master.
     /// [`U16Tiff`](Self::U16Tiff)'s buffers with no quantize buffer — f32 is written
-    /// verbatim. Measured for the linear HDR TIFF in every gamut and for the film
-    /// master (the module doc's calibration table).
+    /// verbatim, so with nothing sampled its peak is the **decode** phase. Measured for
+    /// the linear HDR TIFF and the film master (the module doc's calibration table).
     F32Tiff,
-    /// Into the **gain-map JPEG**: the decoded image, then `chain::render_pair` — the
-    /// chain's buffer (image-shaped: the decode's cloned IR plane is dropped only as
-    /// the pair starts) and the RGB-only graded copy it splits off — then the
-    /// full-resolution f32 gains. The HDR rendition and the gains are dropped as soon as
-    /// the next buffer is built from them, but are summed, not competed (the module
-    /// doc's retention rule). Encode adds the u8 base, the half-resolution map and both
-    /// JPEGs, the JPEGs at a fitted size. Measured (the module doc's calibration table).
+    /// Into the **gain-map JPEG**: `chain::render_pair` — the chain's buffer (the
+    /// decoded image, its IR plane dropped only as the pair starts) and the RGB-only
+    /// graded copy it splits off — then the full-resolution f32 gains. The HDR
+    /// rendition and the gains are dropped as soon as the next buffer is built from
+    /// them, but are summed, not competed (the module doc's retention rule). Encode
+    /// adds the u8 base, the half-resolution map and both JPEGs, the JPEGs at a fitted
+    /// size. Measured (the module doc's calibration table).
     GainMapJpeg,
     /// `inspect` / `measure-base`: decode, then sample — no render, no encode.
     DecodeOnly,
     /// `measure-roll`, per frame: the fixed decode into linear ACEScg, then a strided
     /// sample of it — no chain, no encode.
     ///
-    /// Holds [`U16Tiff`](Self::U16Tiff)'s render-phase buffers — the decoded image
-    /// and the decode's one output buffer with its cloned IR plane, mapped into ACEScg
-    /// in place — and nothing after them, so it peaks at the **render** phase. The
-    /// roll's pooled sample (~1.5 MB a frame, `roll_white::FRAME_SAMPLE_PIXELS`) grows
-    /// across frames and is not in this per-frame model; a 36-frame roll pools ~57 MB.
+    /// Holds [`U16Tiff`](Self::U16Tiff)'s render-phase buffer — the decoded image,
+    /// decoded and mapped into ACEScg in place — and nothing after it, so it peaks at
+    /// the **decode** phase. The roll's pooled sample (~1.5 MB a frame,
+    /// `roll_white::FRAME_SAMPLE_PIXELS`) grows across frames and is not in this
+    /// per-frame model; a 36-frame roll pools ~57 MB.
     MeasureRoll,
 }
 
@@ -438,10 +460,10 @@ pub struct PeakEstimate {
     /// Equals the decoded image alone when nothing is sampled (an explicit
     /// `--film-base`).
     pub film_base_bytes: u64,
-    /// Named-buffer total during the render (decoded image + positive). Zero for
-    /// [`RunProfile::DecodeOnly`], which never renders.
+    /// Named-buffer total during the render (the positive, written over the decoded
+    /// image). Zero for [`RunProfile::DecodeOnly`], which never renders.
     pub render_bytes: u64,
-    /// Named-buffer total during encode (decoded + rendered + quantize buffers).
+    /// Named-buffer total during encode (rendered + quantize buffers).
     /// Zero for [`RunProfile::DecodeOnly`], which never encodes.
     pub encode_bytes: u64,
 }
@@ -676,47 +698,38 @@ pub fn estimate_peak(
     // Film base (stage 2): the decoded image plus that sample.
     let film_base_bytes = sum(image, sampled)?;
 
-    // The TIFF profiles' phases, as a closure because the two share one buffer set and
-    // differ only in the quantize term.
-    let tiff_phases = |depth: OutDepth| -> Result<(u64, u64)> {
-        // Render: the decoded image (held to the frame's end) plus the chain's buffer
-        // and its cloned IR plane. Every stage and the output transfer work in place,
-        // so there is no third image.
-        let render = mul(image, 2)?;
-        // Encode: decoded + rendered, plus the u16 staging buffers (none at
-        // f32 depth, which writes the working buffer verbatim). The output is
-        // RGB whatever the input was, so these follow `WORKING_CHANNELS`.
+    // From the render on, the chain's buffer *is* the decoded image: the fixed decode
+    // rewrites it in place and every stage moves it on. `sampled` is added to each
+    // later phase, not competed against them: the module doc's retention rule.
+    // Measured: treating a full-frame `--base-region` sample as a *competing* phase
+    // under-estimated that run by 10%.
+    let render = sum(image, sampled)?;
+    // Encode for the TIFF profiles: the u16 staging buffer (none at f32 depth, which
+    // writes the working buffer verbatim). The output is RGB whatever the input was,
+    // so it follows `WORKING_CHANNELS`.
+    let tiff_encode = |depth: OutDepth| -> Result<u64> {
         let quantize = match depth {
             OutDepth::U16 => mul(pixels, mul(WORKING_CHANNELS, 2)?)?,
             OutDepth::F32 => 0,
         };
-        // `sampled` is added to both later phases, not competed against them: the
-        // module doc's retention rule, the one the encode buffers are summed under.
-        // Measured: a full-frame `--base-region` convert peaks at 50 B/px
-        // (32 render + 6 quantize + 12 sampled), and treating the sample as a
-        // *competing* phase instead under-estimated that run by 10%.
-        Ok((
-            sum(render, sampled)?,
-            sum(sum(mul(image, 2)?, quantize)?, sampled)?,
-        ))
+        sum(render, quantize)
     };
     let (render_bytes, encode_bytes) = match profile {
         RunProfile::DecodeOnly => (0, 0),
-        RunProfile::MeasureRoll => (sum(mul(image, 2)?, sampled)?, 0),
-        RunProfile::U16Tiff => tiff_phases(OutDepth::U16)?,
-        RunProfile::F32Tiff => tiff_phases(OutDepth::F32)?,
+        RunProfile::MeasureRoll => (render, 0),
+        RunProfile::U16Tiff => (render, tiff_encode(OutDepth::U16)?),
+        RunProfile::F32Tiff => (render, tiff_encode(OutDepth::F32)?),
         RunProfile::GainMapJpeg => {
-            // Render: decoded + the chain's image-shaped buffer + the RGB-only split
-            // copy + the f32 gains.
-            let render = sum(mul(image, 2)?, mul(rgb32, 2)?)?;
+            // Render: the chain's image-shaped buffer + the RGB-only split copy + the
+            // f32 gains.
+            let render = sum(image, mul(rgb32, 2)?)?;
             // Encode: all of that retained, plus the u8 base (3 B/px), the u8 map
             // (0.75), the gain-map JPEG, and the base JPEG that `assemble` grows in
             // place. The base JPEG's doubling growth and
             // that final copy make it up to ~3x its length under the retention rule.
             // The 5 B/px is a content assumption fitted to measured JPEGs (at most
             // 0.55 B/px: a thin grainy frame pushed +5 EV), not an enumeration; the
-            // allowance (~10 B/px at 74.65 MP, less the measured ~0.7 overhead) covers a
-            // base JPEG up to about 2–3 B/px.
+            // allowance (~7 B/px at 74.65 MP) covers a base JPEG up to about 2 B/px.
             let byte_staging = mul(pixels, 5)?;
             (
                 sum(render, sampled)?,
@@ -1003,8 +1016,10 @@ mod tests {
         // then. Just the truth, so the next author reads it off a test instead of a
         // sentence.
         let peak_phase = |profile| {
-            let e = estimate_peak(&shape(10, 10, false), profile, SamplePlan::none()).unwrap();
-            if e.accounted_bytes == e.render_bytes {
+            let e = estimate_peak(&shape(10, 10, true), profile, SamplePlan::none()).unwrap();
+            if e.accounted_bytes == e.decode_bytes {
+                "decode"
+            } else if e.accounted_bytes == e.render_bytes {
                 "render"
             } else if e.accounted_bytes == e.encode_bytes {
                 "encode"
@@ -1014,11 +1029,12 @@ mod tests {
         };
         for (profile, expected) in [
             (RunProfile::U16Tiff, "encode"),
-            // f32 is written verbatim, so encode adds nothing and render is the peak.
-            (RunProfile::F32Tiff, "render"),
+            // The chain holds one image, so the decode's read buffers outweigh it, and
+            // f32 is written verbatim.
+            (RunProfile::F32Tiff, "decode"),
             // Encode retains every render buffer and adds the byte staging.
             (RunProfile::GainMapJpeg, "encode"),
-            (RunProfile::MeasureRoll, "render"),
+            (RunProfile::MeasureRoll, "decode"),
         ] {
             assert_eq!(peak_phase(profile), expected, "{profile:?}");
         }
@@ -1032,24 +1048,24 @@ mod tests {
     #[test]
     fn phase_totals_match_the_documented_bytes_per_pixel() {
         // The model, pinned per phase against the hand-derived per-pixel costs in
-        // the module doc (HDRi: 18 / 32 / 38 B/px, film-base 16 + 12·s). A change
+        // the module doc (HDRi: 18 / 16 / 22 B/px, film-base 16 + 12·s). A change
         // here is a change to what the gate promises, so it must be deliberate.
         let px = 1000u64 * 1000;
         let e = estimate_peak(&shape(1000, 1000, true), convert_u16(), SamplePlan::none()).unwrap();
         assert_eq!(e.decode_bytes, 18 * px);
         // Nothing sampled (explicit base): the decoded image alone.
         assert_eq!(e.film_base_bytes, 16 * px);
-        assert_eq!(e.render_bytes, 32 * px);
-        assert_eq!(e.encode_bytes, 38 * px);
-        assert_eq!(e.accounted_bytes, 38 * px);
+        assert_eq!(e.render_bytes, 16 * px);
+        assert_eq!(e.encode_bytes, 22 * px);
+        assert_eq!(e.accounted_bytes, 22 * px);
 
-        // Without an IR plane every phase loses its IR buffers: 18 / 12 / 24 / 30.
+        // Without an IR plane every phase loses its IR buffers: 18 / 12 / 12 / 18.
         let e =
             estimate_peak(&shape(1000, 1000, false), convert_u16(), SamplePlan::none()).unwrap();
         assert_eq!(e.decode_bytes, 18 * px);
         assert_eq!(e.film_base_bytes, 12 * px);
-        assert_eq!(e.render_bytes, 24 * px);
-        assert_eq!(e.encode_bytes, 30 * px);
+        assert_eq!(e.render_bytes, 12 * px);
+        assert_eq!(e.encode_bytes, 18 * px);
     }
 
     #[test]
@@ -1067,16 +1083,16 @@ mod tests {
 
         // …and it does NOT leave `convert` alone. The sample is freed before the
         // render, but the retention rule keeps it in the later phases: render
-        // 32 + 12, encode 38 + 12 = 50 B/px. Pinned because the
+        // 16 + 12, encode 22 + 12 = 34 B/px. Pinned because the
         // first version of this model let the phase merely *compete* with encode
         // and under-estimated a real full-frame-region convert by 10.2%.
         let convert = estimate_peak(&s, convert_u16(), SamplePlan::rect(px)).unwrap();
-        assert_eq!(convert.render_bytes, 44 * px);
-        assert_eq!(convert.encode_bytes, 50 * px);
-        assert_eq!(convert.accounted_bytes, 50 * px);
-        // With nothing sampled, the retained term is zero and encode is 38 again.
+        assert_eq!(convert.render_bytes, 28 * px);
+        assert_eq!(convert.encode_bytes, 34 * px);
+        assert_eq!(convert.accounted_bytes, 34 * px);
+        // With nothing sampled, the retained term is zero and encode is 22 again.
         let explicit = estimate_peak(&s, convert_u16(), SamplePlan::none()).unwrap();
-        assert_eq!(explicit.encode_bytes, 38 * px);
+        assert_eq!(explicit.encode_bytes, 22 * px);
 
         // Nothing sampled (an explicit base, or the effective-area histogram): the
         // phase is the decoded image alone.
@@ -1088,15 +1104,15 @@ mod tests {
     fn f32_output_skips_the_quantize_buffer() {
         let px = 1000u64 * 1000;
         // f32 writes the working buffer verbatim — encode allocates nothing extra,
-        // so the two overlapping images (32 B/px) are the peak.
+        // so encode is the one image (16 B/px) and the decode (18 B/px) is the peak.
         let f32_out = estimate_peak(
             &shape(1000, 1000, true),
             RunProfile::F32Tiff,
             SamplePlan::none(),
         )
         .unwrap();
-        assert_eq!(f32_out.encode_bytes, 32 * px);
-        assert_eq!(f32_out.accounted_bytes, 32 * px);
+        assert_eq!(f32_out.encode_bytes, 16 * px);
+        assert_eq!(f32_out.accounted_bytes, 18 * px);
 
         // u16 stages a 6 B/px RGB buffer on top.
         let u16_out = estimate_peak(
@@ -1105,7 +1121,7 @@ mod tests {
             SamplePlan::none(),
         )
         .unwrap();
-        assert_eq!(u16_out.encode_bytes, 38 * px);
+        assert_eq!(u16_out.encode_bytes, 22 * px);
     }
 
     #[test]
@@ -1119,9 +1135,9 @@ mod tests {
         let e = estimate_peak(&gray, convert_u16(), SamplePlan::none()).unwrap();
         // rgb32 (12) + the 1-channel u16 read buffer (2).
         assert_eq!(e.decode_bytes, 14 * px);
-        // Two 3-channel f32 images + the 3-channel u16 quantize buffer.
-        assert_eq!(e.render_bytes, 24 * px);
-        assert_eq!(e.encode_bytes, 30 * px);
+        // One 3-channel f32 image + the 3-channel u16 quantize buffer.
+        assert_eq!(e.render_bytes, 12 * px);
+        assert_eq!(e.encode_bytes, 18 * px);
     }
 
     #[test]
@@ -1161,13 +1177,13 @@ mod tests {
         // deliberate.
         let standard = shape(5184, 3599, true); // a roll frame, 18.66 MP HDRi
         for (shape, profile, sampling, accounted, estimated) in [
-            // 74.65 MP: encode 38 B/px, decode-only 18 B/px (explicit base).
+            // 74.65 MP: encode 22 B/px, decode-only 18 B/px (explicit base).
             (
                 big(),
                 convert_u16(),
                 SamplePlan::none(),
-                2_836_684_800u64,
-                3_396_405_248u64,
+                1_642_291_200u64,
+                2_022_852_608u64,
             ),
             (
                 big(),
@@ -1181,8 +1197,8 @@ mod tests {
                 standard,
                 convert_u16(),
                 SamplePlan::none(),
-                708_974_208,
-                949_538_066,
+                410_458_752,
+                606_245_285,
             ),
             (
                 standard,
@@ -1191,13 +1207,13 @@ mod tests {
                 335_829_888,
                 520_422_086,
             ),
-            // 18.66 MP gain map: encode 61 B/px.
+            // 18.66 MP gain map: encode 45 B/px.
             (
                 standard,
                 RunProfile::GainMapJpeg,
                 SamplePlan::none(),
-                1_138_090_176,
-                1_443_021_419,
+                839_574_720,
+                1_099_728_653,
             ),
         ] {
             let e = estimate_peak(&shape, profile, sampling).unwrap();
@@ -1208,9 +1224,9 @@ mod tests {
 
     #[test]
     fn estimate_stays_conservative_against_the_measured_peaks() {
-        // The calibration set from the module doc (macOS/aarch64 peak RSS on the
-        // release binary). The model must never come in *under* a measured peak —
-        // an under-estimate would let the gate approve a run that then OOMs.
+        // The calibration sets from the module doc. The model must never come in
+        // *under* a measured peak — an under-estimate would let the gate approve a run
+        // that then OOMs.
         //
         // Documentation of intent, not a live check: both sides are frozen
         // literals, so this can never fail on any target. The regression pin on the
@@ -1218,44 +1234,30 @@ mod tests {
         // Every measured conversion used an explicit `--film-base`; keep the
         // corresponding no-sampling plan alongside each frozen case.
         //
-        // The conversions were measured on the removed chain (see the module doc):
-        // its u16 and f32 `convert` held the buffers the TIFF profiles count, so each
-        // measured peak still bounds its profile.
-        let standard = shape(5184, 3599, true); // a roll frame, 18.66 MP HDRi
-        let hdr_out = RunProfile::F32Tiff;
-        // The current chain's destinations (`nf-destinations/memory-profiles`): a PQ
-        // TIFF, the film master and the gain map (the 18.66 MP one at `--exposure 3`).
-        let small = shape(1890, 3083, true); // 5.83 MP HDRi
+        // The conversions: Linux, synthetic HDRi, after `nf-core/release-decoded-image`
+        // (the SDR TIFF for `U16Tiff`, the linear float TIFF for `F32Tiff`).
+        let small = shape(2700, 2160, true); // 5.83 MP HDRi
         let large = shape(5184, 3600, true); // 18.66 MP HDRi
-        let gain_map = RunProfile::GainMapJpeg;
-        let current = [
-            (small, convert_u16(), 256_163_840u64),
-            (large, convert_u16(), 795_246_592),
-            (small, hdr_out, 220_987_392),
-            (large, hdr_out, 683_081_728),
-            (small, gain_map, 361_906_176),
-            (large, gain_map, 1_157_562_368),
-        ]
-        .map(|(shape, profile, measured)| (shape, profile, SamplePlan::none(), measured));
-        let cases: [(ImageShape, RunProfile, SamplePlan, u64); 5] = [
-            (
-                big(),
-                RunProfile::DecodeOnly,
-                SamplePlan::none(),
-                1_503_330_304,
-            ),
-            (big(), convert_u16(), SamplePlan::none(), 3_145_760_768),
-            (big(), hdr_out, SamplePlan::none(), 2_697_887_744),
-            (standard, convert_u16(), SamplePlan::none(), 681_164_800),
-            (
-                standard,
-                RunProfile::DecodeOnly,
-                SamplePlan::none(),
-                328_286_208,
-            ),
+        let (u16_out, f32_out, gain_map) =
+            (convert_u16(), RunProfile::F32Tiff, RunProfile::GainMapJpeg);
+        let conversions = [
+            (small, u16_out, 135_008_256u64),
+            (large, u16_out, 417_419_264),
+            (big(), u16_out, 1_649_000_448),
+            (small, f32_out, 111_693_824),
+            (large, f32_out, 342_638_592),
+            (big(), f32_out, 1_350_287_360),
+            (small, gain_map, 220_876_800),
+            (large, gain_map, 692_514_816),
+            (big(), gain_map, 2_750_021_632),
         ];
-        for (shape, profile, sampling, measured) in cases.into_iter().chain(current) {
-            let e = estimate_peak(&shape, profile, sampling).unwrap();
+        // Decode-only: macOS/aarch64, on real scans.
+        let decode_only = [
+            (big(), RunProfile::DecodeOnly, 1_503_330_304u64),
+            (shape(5184, 3599, true), RunProfile::DecodeOnly, 328_286_208),
+        ];
+        for (shape, profile, measured) in conversions.into_iter().chain(decode_only) {
+            let e = estimate_peak(&shape, profile, SamplePlan::none()).unwrap();
             assert!(
                 e.estimated_peak_bytes >= measured,
                 "{profile:?} at {}x{}: estimate {} under measured {measured}",
@@ -1271,8 +1273,8 @@ mod tests {
         // allowance dominates them (see the module doc).
         for (profile, measured) in [
             (RunProfile::DecodeOnly, 1_503_330_304u64),
-            (convert_u16(), 3_145_760_768),
-            (hdr_out, 2_697_887_744),
+            (u16_out, 1_649_000_448),
+            (f32_out, 1_350_287_360),
         ] {
             let e = estimate_peak(&big(), profile, SamplePlan::none()).unwrap();
             assert!(
@@ -1307,12 +1309,12 @@ mod tests {
     #[test]
     fn minimum_viable_budget_is_the_fixed_allowance() {
         // The fixed allowance is unconditional, so it is a floor: a 1x1 image
-        // estimates at 128 MiB + its 30 bytes, and any budget at or below the floor
+        // estimates at 128 MiB + its 18 bytes, and any budget at or below the floor
         // rejects *every* possible input. Documented here (and in the rejection
         // message) so the floor isn't a surprise.
         let tiny = shape(1, 1, false);
         let e = estimate_peak(&tiny, convert_u16(), SamplePlan::none()).unwrap();
-        assert_eq!(e.estimated_peak_bytes, ALLOWANCE_FIXED_BYTES + 30);
+        assert_eq!(e.estimated_peak_bytes, ALLOWANCE_FIXED_BYTES + 18);
 
         let err = preflight(
             &tiny,
@@ -1336,7 +1338,7 @@ mod tests {
                 &tiny,
                 convert_u16(),
                 SamplePlan::none(),
-                Budget::resolve(Some(ALLOWANCE_FIXED_BYTES + 30)),
+                Budget::resolve(Some(ALLOWANCE_FIXED_BYTES + 18)),
                 None,
             )
             .is_ok()
@@ -1372,19 +1374,19 @@ mod tests {
     fn warn_tier_fires_only_against_detected_ram() {
         let budget = Budget::resolve(Some(8 * 1024 * 1024 * 1024));
 
-        // A 4 GiB machine: the estimate is over 70% of RAM → warn (but proceed).
+        // A 2 GiB machine: the estimate is over 70% of RAM → warn (but proceed).
         let small = preflight(
             &big(),
             convert_u16(),
             SamplePlan::none(),
             budget,
-            Some(4 * 1024 * 1024 * 1024),
+            Some(2 * 1024 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(small.decision, Verdict::Warn);
         let msg = warn_message(&small).expect("a warn verdict must carry a message");
         assert!(msg.contains("70%"), "{msg}");
-        assert!(msg.contains("4.0 GiB"), "{msg}");
+        assert!(msg.contains("2.0 GiB"), "{msg}");
 
         // A 48 GiB machine: nowhere near the threshold.
         let large = preflight(

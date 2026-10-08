@@ -170,7 +170,7 @@ impl Tally {
 fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayPeak) -> Tally {
     let aces = || -> AcesCgImage {
         map_nc_film_rgb_v1(
-            fixed::decode(image, base, &recipe.reconstruction)
+            fixed::decode(image.clone(), base, &recipe.reconstruction)
                 .unwrap()
                 .0,
         )

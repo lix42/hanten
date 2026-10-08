@@ -30,8 +30,10 @@ with an IR plane) on every destination.
 
 - Does dropping the image early actually return the memory to the OS on both
   platforms (`allocator.rs` maps big blocks), so measured peak RSS falls by the full
-  term?
+  term? **Linux: yes** — 16 B/px, measured 2026-10-08. **macOS: not yet measured.**
 - Is the IR-plane clone worth removing here, or left to `nf-core/buffer-strategy`?
+  **Removed here (2026-10-08).** Releasing the scan needed the decode to work in place,
+  which moves the plane instead of cloning it; its route through the chain is unchanged.
 
 ## How to Verify
 

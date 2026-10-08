@@ -258,7 +258,7 @@ fn golden_decode_is_correct_within_its_libm_window() {
         (PROBE_OFFSET, &DECODE_PROBE_OFFSET),
     ] {
         let params = decode_params(offset);
-        let (film, report) = fixed::decode(&decode_scan(), &base(), &params).unwrap();
+        let (film, report) = fixed::decode(decode_scan(), &base(), &params).unwrap();
         assert_eq!(film.rgb().len(), expected.len());
 
         for (i, (&got, &want)) in film.rgb().iter().zip(expected).enumerate() {
@@ -357,7 +357,7 @@ fn the_fingerprint_vector_sits_at_the_minimum_decode_window() {
     let scan = drift_gate::pixels();
     let base = <[f32; 3]>::from(drift_gate::base());
     let params = DecodeParams::default();
-    let (film, _) = fixed::decode(&scan, &drift_gate::base(), &params).unwrap();
+    let (film, _) = fixed::decode(scan.clone(), &drift_gate::base(), &params).unwrap();
     for (i, (&s, &got)) in scan.rgb.iter().zip(film.rgb()).enumerate() {
         let d = -(f64::from(s.max(SCAN_FLOOR) / base[i % 3]).log10()) as f32;
         let window = reachable_window(

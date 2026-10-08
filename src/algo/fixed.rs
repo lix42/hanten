@@ -298,8 +298,12 @@ pub struct DecodeReport {
 /// surfaces as an [`NcError`], never a silently-wrong image. Values are unclamped
 /// and non-finite samples ride through for `io::encode` to count — the clamping
 /// boundary is the u16 encode and nowhere else.
+///
+/// Consumes the scan and writes the positive into its buffer, the IR plane moving
+/// with it, so a frame never holds the scan and its positive at once
+/// (`pipeline::memory`).
 pub fn decode(
-    image: &LinearImage,
+    image: LinearImage,
     base: &FilmBase,
     params: &DecodeParams,
 ) -> Result<(FilmRgbImage, DecodeReport)> {
@@ -319,11 +323,11 @@ pub fn decode(
         ..
     } = *params;
 
-    // Fused measurement + calibration + curve, one pass. The driver is fallible and
-    // this body is not — there is no per-pixel failure in a decode that loses
-    // nothing by construction — so every pixel returns `Ok`; the cost is the wrapper.
-    let rgb = pixels::try_map(&image.rgb, |_, px| {
-        let mut out = [0.0_f32; 3];
+    // The fields are public, so re-check the buffer lengths the positive inherits.
+    let mut image = LinearImage::new(image.width, image.height, image.rgb, image.ir)?;
+    // Fused measurement + calibration + curve, one pass. Each output sample reads
+    // only its own input sample, so rewriting in place is the same arithmetic.
+    pixels::map_in_place(&mut image.rgb, |px| {
         for c in 0..3 {
             let s = px[c];
             let d = if s.is_finite() {
@@ -334,17 +338,12 @@ pub fn decode(
             // Not `mul_add`, and `+ offset` is not skipped at zero. See the module
             // docs: both are bit-identity rules, not style.
             let corrected = scale[c] * d + offset[c];
-            out[c] = 10f32.powf(linearization * (corrected - anchor));
+            px[c] = 10f32.powf(linearization * (corrected - anchor));
         }
-        Ok(out)
-    })?;
+    });
 
-    let film = FilmRgbImage::from_linear(
-        LinearImage::new(image.width, image.height, rgb, image.ir.clone())
-            .expect("the decode preserves the validated buffer-length invariants"),
-    );
     Ok((
-        film,
+        FilmRgbImage::from_linear(image),
         DecodeReport {
             anchor,
             anchor_rule: params.anchor.name(),
@@ -378,7 +377,7 @@ fn check_base(base: &FilmBase) -> Result<()> {
 /// parameter the decode reads — scale, offset, linearization, anchor — by construction.
 pub fn decode_film_base(base: &FilmBase, params: &DecodeParams) -> Result<FilmRgbImage> {
     let pixel = LinearImage::new(1, 1, vec![base.r, base.g, base.b], None)?;
-    Ok(decode(&pixel, base, params)?.0)
+    Ok(decode(pixel, base, params)?.0)
 }
 
 /// What makes a [`DecodeParams`] unusable.
@@ -546,7 +545,7 @@ mod tests {
             s = f32::from_bits(s.to_bits() - 1);
         }
         let img = LinearImage::new(N as u32, 1, samples.clone(), None).unwrap();
-        let (film, report) = decode(&img, &b, &params).unwrap();
+        let (film, report) = decode(img, &b, &params).unwrap();
 
         let mut witnesses = 0usize;
         for (i, out) in film.rgb().iter().enumerate() {
@@ -586,9 +585,7 @@ mod tests {
         // bundled 2.0, where `anchor-spike` read `anchor_value: 0.99236375` off the
         // binary — the number `docs/spike/white-placement.md` reasons from. Both are
         // pinned, so a change to any of the three constants lands here first.
-        let report = decode(&scan(), &base(), &DecodeParams::default())
-            .unwrap()
-            .1;
+        let report = decode(scan(), &base(), &DecodeParams::default()).unwrap().1;
         assert_eq!(report.anchor, 1.033_737_5);
         assert_eq!(report.anchor_rule, "mid-at-base-offset");
         let bundled = AnchorRule::MidAboveBase(MID_ABOVE_BASE).anchor(BUNDLED_CONTRAST);
@@ -613,12 +610,12 @@ mod tests {
         // to rendering. (It holds only without a shoulder, which is part of why the
         // sigmoid's knees retired.)
         let (img, b) = (scan(), base());
-        let a = decode(&img, &b, &DecodeParams::default()).unwrap().0;
+        let a = decode(img.clone(), &b, &DecodeParams::default()).unwrap().0;
         let shifted = DecodeParams {
             anchor: AnchorRule::MidAboveBase(MID_ABOVE_BASE + 0.1),
             ..DecodeParams::default()
         };
-        let c = decode(&img, &b, &shifted).unwrap().0;
+        let c = decode(img, &b, &shifted).unwrap().0;
         let gain = 10f32.powf(-LINEARIZATION * 0.1);
         for (x, y) in a.rgb().iter().zip(c.rgb()) {
             if x.is_finite() && *x > 0.0 {
@@ -634,19 +631,30 @@ mod tests {
     fn the_ir_plane_is_carried_and_never_minted() {
         // Preserve, don't consume — and the falsifiable half: an IR-free scan must
         // stay IR-free.
-        let (film, _) = decode(&scan(), &base(), &DecodeParams::default()).unwrap();
+        let (film, _) = decode(scan(), &base(), &DecodeParams::default()).unwrap();
         assert_eq!(film.ir(), Some(&[0.1_f32, 0.2, 0.3, 0.4][..]));
         assert_eq!((film.width(), film.height()), (4, 1));
 
         let bare = LinearImage::new(1, 1, vec![0.5, 0.3, 0.2], None).unwrap();
-        let (film, _) = decode(&bare, &base(), &DecodeParams::default()).unwrap();
+        let (film, _) = decode(bare, &base(), &DecodeParams::default()).unwrap();
         assert_eq!(film.ir(), None);
+    }
+
+    #[test]
+    fn the_decode_writes_into_the_scan_s_own_buffers() {
+        // The memory model counts one image from the decode on (`pipeline::memory`);
+        // a copy of either plane would put the scan back beside its positive.
+        let image = scan();
+        let (rgb, ir) = (image.rgb.as_ptr(), image.ir.as_ref().unwrap().as_ptr());
+        let (film, _) = decode(image, &base(), &DecodeParams::default()).unwrap();
+        assert_eq!(film.rgb().as_ptr(), rgb);
+        assert_eq!(film.ir().unwrap().as_ptr(), ir);
     }
 
     #[test]
     fn a_degenerate_base_fails_loudly() {
         for bad in [[0.0, 0.5, 0.5], [-0.1, 0.5, 0.5], [f32::NAN, 0.5, 0.5]] {
-            let err = decode(&scan(), &FilmBase::from(bad), &DecodeParams::default()).unwrap_err();
+            let err = decode(scan(), &FilmBase::from(bad), &DecodeParams::default()).unwrap_err();
             assert!(err.message().contains("film base"), "{}", err.message());
         }
     }
@@ -678,7 +686,7 @@ mod tests {
                 "the product",
             ),
         ] {
-            let err = decode(&scan(), &base(), &params).unwrap_err();
+            let err = decode(scan(), &base(), &params).unwrap_err();
             assert!(
                 err.message().contains("non-usable anchor"),
                 "{what} overflow was not refused: {}",
@@ -710,7 +718,7 @@ mod tests {
                 "offset[2]",
             ),
         ] {
-            let err = decode(&scan(), &base(), &params).unwrap_err();
+            let err = decode(scan(), &base(), &params).unwrap_err();
             assert!(err.message().contains(needle), "{}", err.message());
         }
 
@@ -720,7 +728,7 @@ mod tests {
         // at load; a programmatic caller reaches this guard.
         for scale in [[1.0, 0.0, 1.0], [1.0, -0.84, 1.0]] {
             let err = decode(
-                &scan(),
+                scan(),
                 &base(),
                 &DecodeParams {
                     scale,
@@ -738,7 +746,7 @@ mod tests {
         // The mid-grey offset is a density *above* the base, so it is positive.
         for d in [0.0, -0.1, f32::NAN] {
             let err = decode(
-                &scan(),
+                scan(),
                 &base(),
                 &DecodeParams {
                     anchor: AnchorRule::MidAboveBase(d),
@@ -756,7 +764,7 @@ mod tests {
         // Falsifiability for the pair above: the *offset* is signed, so a negative one
         // is ordinary and must still decode.
         decode(
-            &scan(),
+            scan(),
             &base(),
             &DecodeParams {
                 offset: [-0.05; 3],
@@ -773,7 +781,7 @@ mod tests {
         // sample propagates as `NaN` so `io::encode`'s counter still surfaces it.
         // Laundering the second would hide corrupt input behind a plausible pixel.
         let img = LinearImage::new(2, 1, vec![0.0, -1.0, 0.5, f32::NAN, 0.5, 0.5], None).unwrap();
-        let (film, _) = decode(&img, &base(), &DecodeParams::default()).unwrap();
+        let (film, _) = decode(img, &base(), &DecodeParams::default()).unwrap();
         let out = film.rgb();
         assert!(out[0].is_finite() && out[0] >= 0.0, "{}", out[0]);
         assert!(out[1].is_finite() && out[1] >= 0.0, "{}", out[1]);
