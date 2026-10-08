@@ -23,7 +23,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > examples were re-run (the `measure-roll` ones on the real rolls they name), and again at
 > `nf-calibration/taste-vs-quality`, with §8's `direct` roll-flag refusal. At
 > `nf-calibration/level-target-zero` §5's `roll.json` and §7's `measure-roll` report were
-> re-run on their real rolls. The staleness signal is
+> re-run on their real rolls, and at `nf-verification/roll-side-exports` §5's default
+> recipe, §8's film RGB export (now on `roll` too), §9's IR section and §11's flag tables.
+> The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -235,8 +237,7 @@ above the roll's cap, the low-key frames given a small lift (`"exposure"`; none 
 this roll), and the thin frames given a `"thin_slope"` and `"thin_exposure"` beside it
 (§7). `reconstruction` is the decode the gains were measured through, written
 even at its defaults, because the gains hold only under it. If your `--params` recipe
-stated `input` or `measure` keys, the file carries them too — all but
-`input.export_ir`, one frame's output path, which `roll` refuses.
+stated `input` or `measure` keys, the file carries them too.
 
 - `--unexposed` measures the frame exactly as `measure-base` does with no source flag
   (below), and reports that evidence under the report's `unexposed` object.
@@ -373,7 +374,7 @@ hanten params
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
-                     "film_type": "unknown", "export_ir": null },
+                     "film_type": "unknown" },
     "calibration": { "film_base": null },
     "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
                      "frame_exposure": null, "small_lift": null,
@@ -442,7 +443,7 @@ usage: invalid recipe t.json: unknown field `exposur`, expected `white_balance` 
 ```
 
 This means a **misplaced** key fails too — a key must live under the stage section
-that owns it (`--export-ir` ⇒ `input.export_ir`, not top level).
+that owns it (`--film-type` ⇒ `input.film_type`, not top level).
 
 ### Recipes from earlier builds
 
@@ -1380,13 +1381,33 @@ Each stage's default and its identity are accepted, since neither asks for anyth
 their defaults) — which is how a flag clears a recipe's stage for a master. The film
 master and a destination axis are one choice, refused at the parser.
 
-**`--export-film-rgb PATH`** (`convert` only, beside any destination) also writes the
+**`--export-film-rgb PATH`** (beside any destination) also writes the
 fixed decode *before* the NC film RGB v1 3×3 into ACEScg — the dye layers' values,
 unmixed, which is what a per-channel decode measurement wants. It is a 32-bit float
 TIFF with **no ICC profile**: the channels have no primaries, so a viewer shows it
 untagged. Measure it with `nctool metrics --space film-rgb`, whose `channels` block
 compares field for field with a film master's measured with `--channels`. The report names it in
 `film_rgb_exported`. Through the pinned 3×3 it is the film master to the bit.
+
+On `roll` the flag takes **no path**: each frame writes `<input-stem>_film-rgb.tiff`
+beside its own output (an explicit `--frames` output's folder included), byte for byte
+what that frame's `convert --export-film-rgb` writes, and its report entry names it in
+`film_rgb_exported`. Put the flag after the inputs; a path after it is refused (exit 2)
+rather than read as another scan. An export name that collides with any output, input
+or other export — case-insensitively — is refused before any frame renders:
+
+```
+usage: output for scans/f02.tif (out/f01_film-rgb.tiff) collides with film RGB export
+       for scans/f01.tif: a frame's film RGB export is <input-stem>_film-rgb.tiff in
+       its output's folder, so rename that output, or give the two frames' outputs
+       different folders
+```
+
+Renaming `f02`'s output is the simple fix. A manifest that lists one scan twice
+collides on the two exports whatever its outputs are named, so only folders separate
+them (`"one/a.tiff"`, `"two/b.tiff"`); a frame whose own output takes its export's
+name is told to rename that output. A clash with an input or `--report-file` names
+no export remedy.
 
 **`--export-pre-encode PATH`** (`convert` only, beside any destination) also writes
 what the destination's encoder receives — the linear rendition before any transfer,
@@ -1574,11 +1595,11 @@ has no validated placement in the pipeline yet.
 
 ### IR (HDRi 64-bit input)
 
-The IR plane is decoded and **preserved, but no rendered pixel depends on it**:
+The IR plane is decoded and **preserved, but no rendered pixel depends on it**.
+Carrying it is the normal case, so it raises no warning, and `--strict` passes on an
+HDRi scan. It is not exported: `--export-ir` and `input.export_ir` were removed and
+exit 2 (a `null` key, as older dumps wrote it, is dropped).
 
-- `--export-ir PATH` writes the decoded plane out. **`convert` only** — `roll`
-  rejects `input.export_ir`, because one path cannot serve every frame, so IR
-  planes have to be exported frame by frame.
 - **IR film-holder measurement** runs by itself when the plane can do the job: it
   is the first cut of the [effective area](#the-measurement-region-the-effective-area),
   which `measure-base` and `measure-roll` measure over. Hanten measures the interior IR
@@ -1738,15 +1759,6 @@ flag) refuses (exit 2), but `convert` and `roll` warn rather than refuse, and th
 omits `effective_area` — there is no region to report, and `--measure-inset` has no
 effect on that run.
 
-> Every `convert` of a scan carrying an IR plane warns "input carries an IR plane; it
-> is preserved but not used in the conversion", which **`--strict` promotes to a
-> failure**. The effective area's holder march reads the plane, but no rendered pixel
-> depends on it, so it does not count. Either drop `--strict` for those runs, or use
-> `--export-ir` so the plane is consumed.
-
-`--export-ir PATH` writes the plane from the decoded image at the destination's depth —
-32-bit float beside a float TIFF, 16-bit otherwise.
-
 ---
 
 ## 10. Reports, warnings, and exit codes
@@ -1836,6 +1848,7 @@ recipe and can never perturb a pixel. `params` takes none of them, and `inspect`
 | `--report` / `--report-file` | Report format (`json`, `none`) and destination |
 | `-v` / `-vv` / `--quiet` | stderr verbosity — never pollutes stdout |
 | `--strict` | Promote warnings to errors |
+| `--export-film-rgb` | The decode before the 3×3, untagged f32 TIFF: `PATH` on `convert`, a switch naming each frame's file on `roll` ([§8](#8-destinations)); refused elsewhere |
 
 These are **`convert` only** — every other command exits 2 if given one:
 
@@ -1843,7 +1856,6 @@ These are **`convert` only** — every other command exits 2 if given one:
 |---|---|
 | `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance event (JSONL, `schema_version` 11), one per run — failed runs included, once the command line parses. `outcome.status` is `success` or `failure`; a failure names its `stage` (a stage, or `setup` / `preflight` / `finalize`), `error_kind` (`usage`, `decode`, …, or `strict` for a `--strict` promotion) and `exit_code`, and carries only what the run reached — never the error message. `timing_ms` has one field per completed stage, `conversion.params_hash` is the report's, and a finished frame's `outcome.clipped` / `non_finite` counts come with their denominator, `outcome.total_samples`. Also `NC_TELEMETRY_LOG`. |
 | `--seed N` | Reserved; nothing is stochastic today |
-| `--export-film-rgb PATH` | The decode before the 3×3, untagged f32 TIFF ([§8](#8-destinations)) |
 | `--export-pre-encode PATH` | The buffers the destination's encoder receives, untagged TIFF pages ([§8](#8-destinations)) |
 
 > **Caveat on `--max-memory`:** the budget also caps the TIFF read buffers, so a
@@ -1968,11 +1980,6 @@ Every `convert` under the `default` rendering warns until the roll is measured, 
 The recipe was written before `pipeline_version` 8, for the removed chain (§5). Start
 from `hanten params`, carry `calibration.film_base` across, and render the old recipe
 itself with the reference build.
-
-**`--strict` fails on every frame of an IR scan**
-Expected — see §9: no conversion reads the IR plane, so it warns, and `--strict`
-promotes it. Passing `--film-type` does not change this; it gates nothing. Either
-drop `--strict` for those runs, or use `--export-ir` so the plane is consumed.
 
 **Output differs between two machines**
 Determinism is scoped to one build and architecture. Transcendental FP and the

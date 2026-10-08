@@ -1320,10 +1320,9 @@ def cmd_generate(args) -> int:
             dest = out / f"{rendition_stem(key, config['id'])}.{output['suffix']}"
             # Recorded **before** the render, not after it succeeds: a `hanten`
             # that exits nonzero may already have written this file. `--strict`
-            # gates *after* encoding, so a frame carrying the IR warning writes
-            # the image (and, on a preset build, its sidecar) and then exits 1 —
-            # measured against the binary — and `--strict` is not an owned flag, so
-            # an ordinary config may pass it. Booking it here makes a render that failed
+            # gates *after* encoding, so a frame that warns (clipping, say) writes
+            # the image (and, on a preset build, its sidecar) and then exits 1, and
+            # `--strict` is not an owned flag, so an ordinary config may pass it. Booking it here makes a render that failed
             # before writing anything over-match, which is the same trade
             # `dest_key` makes for case: over-matching only deletes a stale index
             # that was arguably still true, while a miss leaves a lie in place and

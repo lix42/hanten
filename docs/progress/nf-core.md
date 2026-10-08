@@ -1201,6 +1201,14 @@ SDR/HDR split splits *from*.
 
 - 2026-09-19: filed after the plan review. Goal: stage seams, buffers and the IR plane.
 
+## release-decoded-image
+
+**Status:** not started
+**Updated:** 2026-10-08
+
+- 2026-10-08: filed from `nf-verification/roll-side-exports`, which retired `--export-ir`,
+  the last reader of the decoded image after the decode. Goal: release it early.
+
 ## one-luma-dot
 
 **Status:** done

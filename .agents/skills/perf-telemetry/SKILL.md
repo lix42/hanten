@@ -145,7 +145,8 @@ record, with no `event_id`/`event`/`command`/`stage` and an `outcome` of just th
 three counts. **v11** (`telemetry/upload-schema`) added `outcome.total_samples`, the
 denominator of the clip counts (a gain map counts both renditions).
 
-`timing_ms.ir_export` appears only when `--export-ir` ran, and the four chain stages
+`timing_ms.ir_export` never appears (it retired with `--export-ir`; the wire name
+stays until a schema bump), and the four chain stages
 (`scene_correction` … `fit_gamut`) not for the film master, which runs none; a gain
 map's `fit_range` and `fit_gamut` sum its two renditions (the copy that splits them
 counts only toward `total`), and `scene_correction` and `look` include the film base's

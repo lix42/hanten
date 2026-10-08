@@ -27,13 +27,12 @@ memory decision as much as a structural one.
   carrying it is a design commitment (CLAUDE.md: "carried through, not
   consumed") — with IR-based dust removal as the roadmap follow-up that would actually
   read it after the render. What makes that easy to lose is that **no current
-  feature depends on the plane arriving at the end of the chain**: `--export-ir`
-  writes from the *decoded* image, pre-render (which is also what makes
-  `RunProfile::Convert` peak at encode rather than render), and both IR warnings are
-  derived before the render too. Today's SDR render is the cautionary case — it
+  feature depends on the plane arriving at the end of the chain** (`--export-ir`,
+  which wrote from the decoded image, retired with `nf-verification/roll-side-exports`).
+  Today's SDR render is the cautionary case — it
   drops the plane outright (`LinearImage::new(w, h, rgb, None)`) and no test, warning
   or counter reads zero because of it. So the check has to be a **positive assertion
-  that the plane arrives**, not an inference from a warning still firing. Decide
+  that the plane arrives**. Decide
   whether it travels in the stage types or stays with the orchestrator.
 - **`nf-core/stage-skeleton` already made a provisional call here**, which this task
   may keep or overturn: the plane travels *in* the stage types
@@ -61,11 +60,7 @@ memory decision as much as a structural one.
 - The memory model's estimate stays slightly under measured, inside its 15%
   allowance, and a budget just under the modelled peak exits 6.
 - The plane is asserted to **arrive at the end of the chain**, positively — an
-  IR-carrying frame in, the same samples out of the last boundary. Both of the checks
-  below pass with the plane dropped mid-chain, so neither can stand in for it.
-- `--export-ir` writes the plane under the new flow, and the IR-preserved warning
-  fires on an IR-carrying scan and promotes under `--strict` — these are pre-render
-  facts, so they are regression checks on the flow, not evidence about the chain.
+  IR-carrying frame in, the same samples out of the last boundary.
 - The four CI gates pass.
 
 ## Dependencies

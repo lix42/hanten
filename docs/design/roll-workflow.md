@@ -105,8 +105,7 @@ the roll's measurements come from one command and live in one file.
   file as `roll.frames`, so the user never passes a manifest by hand (open question 3).
 - **The file renders alone**: `--out` also carries the `reconstruction` the
   measurement ran under, stated even at its default since the gains hold only under
-  that decode, and the `input` and `measure` sections when they are not the defaults —
-  never `input.export_ir`, a frame's output path.
+  that decode, and the `input` and `measure` sections when they are not the defaults.
 - **The report no longer carries the recipe** (`reuse.recipe`, `reuse.frames`, and
   `measure-base`'s `calibration` object): they existed to be extracted with `jq`. The
   `convert` flags (`reuse.flag`, `film_base_flag`) stay, and so do the measured values.

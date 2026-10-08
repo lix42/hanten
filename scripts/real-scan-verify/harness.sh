@@ -11,7 +11,7 @@
 #               uniformity (unexposed / full-exp / real)
 #   freeze    - measure per-roll Dmin (unexposed), freeze recipes
 #   convert   - roll-convert every real frame, 16-bit + float HDR
-#   ir        - export IR plane, check --strict behaviour
+#   ir        - convert an IR frame, check the carried plane raises no warning
 #   determinism - byte-identical re-run + --params reload
 #   resource  - /usr/bin/time -l peak RSS + wall-clock on the largest scan
 set -euo pipefail
@@ -256,39 +256,21 @@ stage_convert() {
 }
 
 stage_ir() {
-  # one representative real frame per matrix; export IR + --strict behaviour
+  # one representative real frame: no conversion reads the IR plane, and carrying it
+  # is the normal case, so it must raise no warning
   IFS='|' read -r roll uf ff reals <<<"${ROLLS[0]}"; fr=$(echo $reals|awk '{print $1}')
-  $NC convert --params "$REC/$roll.json" --export-ir "$ART/ir-$roll.tiff" \
-     -o "$ART/ir-pos-$roll.tiff" "$A/rolls/$roll/$fr" --report json > "$ART/ir.json" 2>"$ART/ir.err"
-  echo "IR export ($roll/$fr):"; exiftool -s -s -s -ImageWidth -ImageHeight -BitsPerSample "$ART/ir-$roll.tiff" 2>/dev/null
-  echo "--strict on same frame (expect IR-ignored warning -> hard error):"
-  # A typed white balance and contrast (identities) silence the `default` rendering's
-  # "no roll measurement" warning, so the exit 1 is attributable to the IR note alone.
-  if $NC convert --params "$REC/$roll.json" -o "$ART/strict.tiff" \
-      --white-balance 1,1,1 --contrast 1 \
-      "$A/rolls/$roll/$fr" --strict >/dev/null 2>"$ART/strict.err"; then
-    echo "error: --strict unexpectedly succeeded; expected the IR-ignored warning to fail" >&2
-    return 1
-  else
-    strict_rc=$?
-  fi
-  if [ "$strict_rc" -ne 1 ]; then
-    echo "error: --strict exited $strict_rc; expected warning-promotion exit 1" >&2
-    cat "$ART/strict.err" >&2
+  if ! $NC convert --params "$REC/$roll.json" -o "$ART/ir-pos-$roll.tiff" \
+      "$A/rolls/$roll/$fr" --report json > "$ART/ir.json" 2>"$ART/ir.err"; then
+    echo "error: converting the IR frame failed" >&2
+    cat "$ART/ir.err" >&2
     return 1
   fi
-  # Matches only the stable clause of the IR note. Its tail is wording and has
-  # already moved once ("not used in Step 1" -> "not used in the conversion"), and
-  # this harness is not in CI, so a prose pin here breaks silently. Don't tighten it
-  # back. The second grep pins the *mechanism* — strict promoted a warning — which is
-  # the property this check exists for.
-  if ! grep -Fq 'input carries an IR plane' "$ART/strict.err" ||
-      ! grep -Fq 'error: --strict:' "$ART/strict.err"; then
-    echo "error: --strict exit 1 lacked the expected IR-ignored/strict diagnostic" >&2
-    cat "$ART/strict.err" >&2
+  if grep -Fq 'input carries an IR plane' "$ART/ir.err"; then
+    echo "error: the carried IR plane raised a warning" >&2
+    cat "$ART/ir.err" >&2
     return 1
   fi
-  echo "  exit=$strict_rc"; cat "$ART/strict.err"
+  echo "IR plane carried without a warning ($roll/$fr)"
 }
 
 stage_determinism() {

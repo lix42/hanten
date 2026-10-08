@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Values are in a linear working space, range ~`[0, 1]`. `rgb` is interleaved
 /// (`r,g,b, r,g,b, …`) with `len == width * height * 3`. The IR plane, when
-/// present (HDRi input), is `len == width * height`. It is exported verbatim
-/// (`--export-ir`) and, since `ir-holder-detection`, consumed by the film-base
+/// present (HDRi input), is `len == width * height`. Since `ir-holder-detection` it
+/// is consumed by the film-base
 /// holder mask — but **only when [`ir_verified`](Self::ir_verified) is true**, and
 /// only when the plane measures able to separate holder from film on that frame
 /// (`pipeline::film_base::ir_separability`; design-spec §6.1).
@@ -511,10 +511,6 @@ pub struct InputParams {
     /// (`ir-usability-detection`). Reserved for the roadmap tasks that still need a
     /// chemistry axis (`bw-support`; IR dust removal). See [`FilmType`].
     pub film_type: FilmType,
-    /// Write the decoded IR plane to this path (HDRi only); `None` skips export.
-    /// An input/decode-domain artifact (design-spec §9, Input/decode) — carried
-    /// here so `pipeline-orchestration` can drive the IR exporter.
-    pub export_ir: Option<String>,
 }
 
 /// Where a conversion's film base comes from (design-spec §9, stage 2): stated

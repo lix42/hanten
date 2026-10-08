@@ -49,8 +49,7 @@ use crate::telemetry;
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseProvenance,
     FilmBaseSource, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams, NcError,
-    OutDepth, OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion,
-    check_measure_inset,
+    OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion, check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -390,7 +389,7 @@ pub struct ConvertArgs {
     /// Write the effective (resolved) parameters to JSON, once the run has succeeded.
     #[arg(long, value_name = "JSON")]
     pub dump_params: Option<PathBuf>,
-    /// Treat warnings (clipping, IR-ignored, …) as hard errors.
+    /// Treat warnings (clipping, no roll measurement, …) as hard errors.
     #[arg(long)]
     pub strict: bool,
     /// Fix any stochastic step for reproducibility (none in Step 1; reserved).
@@ -527,6 +526,12 @@ pub struct RollArgs {
     pub recipe_in: Vec<PathBuf>,
     #[command(flatten)]
     pub knobs: ConversionFlags,
+    /// Also write each frame's film RGB, as `convert --export-film-rgb` does, to
+    /// `<input-stem>_film-rgb.tiff` beside that frame's output. Takes no path, so put
+    /// it after the inputs. Operational flag — not a recipe key; never affects the
+    /// output image.
+    #[arg(long, num_args = 0..=1, value_name = "NONE")]
+    pub export_film_rgb: Option<Option<PathBuf>>,
     /// Treat any frame's warnings as a hard error (after the roll report is
     /// emitted), like `convert --strict`.
     #[arg(long)]
@@ -634,8 +639,9 @@ pub struct InputOverrides {
     /// need.
     #[arg(long = "film-type", value_enum, value_name = "TYPE")]
     pub film_type: Option<FilmType>,
-    /// Write the decoded IR plane to this path (HDRi only).
-    #[arg(long, value_name = "PATH")]
+    /// Retired: the IR plane is no longer exported. Hidden, and kept only to emit a
+    /// migration error.
+    #[arg(long, hide = true, num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
     pub export_ir: Option<String>,
 }
 
@@ -1340,9 +1346,6 @@ pub struct Report {
     /// top-level key `film_base_flag`; the recipe half is what `--out` writes.
     #[serde(flatten)]
     pub reuse: Option<ReuseReady>,
-    /// Path the IR plane was exported to, when `--export-ir` was given.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ir_exported: Option<PathBuf>,
     /// Path the film RGB was exported to, when `--export-film-rgb` was given: the
     /// fixed decode's output before the NC film RGB v1 3×3, as an f32 TIFF with no
     /// ICC profile. Its channels are the dye layers, not a colour space.
@@ -1360,7 +1363,7 @@ pub struct Report {
     /// the difference of these means). Report-only, like `loss`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_stats: Option<OutputStats>,
-    /// Non-fatal warnings (clipping, IR-ignored, BigTIFF auto-promote, …).
+    /// Non-fatal warnings (clipping, no roll measurement, …).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     /// Wall-clock time in milliseconds.
@@ -2170,7 +2173,7 @@ pub fn validate_shared(r: &Recipe) -> Result<()> {
     // The *unstated* case is deliberately not handled here — it is the last rule in
     // this function. "You have not chosen a film base" is the least specific
     // diagnosis there is, so letting it run first would pre-empt every rule below
-    // (and `reject_roll_unsupported*`) on a config that has both problems, reporting
+    // (and `reject_roll_unsupported_input`) on a config that has both problems, reporting
     // the vaguer one. Flag-shape first.
     match r.calibration.film_base {
         Some(FilmBaseSource::Explicit(b)) => validate_explicit_film_base(&b)?,
@@ -2513,7 +2516,7 @@ fn keys_collide(a: &Path, b: &Path) -> bool {
 
 /// Reject write targets that would clobber the input scan or one another —
 /// e.g. `-o` equal to the input (destroys the negative), or `--report-file`
-/// equal to the output or the IR export (truncates a just-written artifact) — all of
+/// equal to the output or an export (truncates a just-written artifact) — all of
 /// which would otherwise "succeed" with exit 0. Fail loudly up front instead.
 /// Comparison is case-insensitivity-aware (see [`keys_collide`]) so a
 /// case-only difference can't slip a second write onto the same file on a
@@ -2600,6 +2603,11 @@ fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool, on_roll: bool)
     }
     if let Some((flag, what)) = removed_dmax_flag(&args.dmax) {
         return Err(NcError::Usage(removed_dmax_message(flag, what)));
+    }
+    if args.input_opts.export_ir.is_some() {
+        return Err(NcError::Usage(
+            "--export-ir was removed: the IR plane is no longer exported. Drop the flag.".into(),
+        ));
     }
     if args.film_base.auto_base {
         return Err(NcError::Usage(format!(
@@ -3184,7 +3192,7 @@ fn sample_plan(source: &FilmBaseSource) -> SamplePlan {
 }
 
 /// The per-frame conversion core: **stage-0 memory preflight** → decode →
-/// film-base estimate → render → optional IR export → encode. Pure of the operational
+/// film-base estimate → render → encode. Pure of the operational
 /// concerns the callers layer on top (`--strict` gating, report emission, telemetry),
 /// so `convert` and `roll` share one byte-for-byte identical frame path.
 ///
@@ -3265,7 +3273,7 @@ fn convert_frame(
     // gate — it never touches a pixel, so the output stays deterministic.
     let mem = preflight_memory(
         input,
-        run_profile(destination, recipe.input.export_ir.is_some()),
+        run_profile(destination),
         sample_plan(&base_source),
         budget,
         memory::detect_total_ram(),
@@ -3321,14 +3329,6 @@ fn convert_frame(
     // loudly with a distinct message rather than silently misconvert.
     reject_positive_mode(info)?;
 
-    // `--export-ir` on a scan with no IR plane can't be honored: fail fast,
-    // before writing any output, rather than after the main encode.
-    let export_ir = recipe.input.export_ir.as_deref().map(PathBuf::from);
-    if export_ir.is_some() && !info.ir_present {
-        return Err(NcError::Unsupported(
-            "--export-ir requested but the input has no IR plane (HDRi input only)".into(),
-        ));
-    }
     // Stage 2 — film-base estimate. Resolved before the render so its quality
     // warning (a non-uniform region) is pushed — and so
     // echoed to stderr — *before* the fallible render runs, and ride out in the
@@ -3384,31 +3384,12 @@ fn convert_frame(
         }
     }
 
-    // Note an IR plane that's carried but not consumed. Nothing in a conversion reads
-    // it: a stated base reads no holder, and the effective area — which a marched
-    // holder does move (`effective_area.holder_applied`) — reaches no rendered pixel.
-    // That is why the wording names `effective_area`.
-    //
-    // Not emitted when the plane is being exported: `--export-ir` is the user
-    // handling it, so warning — and failing under `--strict` — would be wrong.
-    if info.ir_present && export_ir.is_none() {
-        push_warning_buf(
-            warnings,
-            log,
-            "input carries an IR plane; it is preserved but not used in the \
-             conversion — no rendered pixel depends on it, whatever \
-             `effective_area.holder` measured (use --export-ir to write it out)"
-                .into(),
-        );
-    }
-
     render_frame(
         DecodedFrame {
             recipe,
             destination,
             image,
             base: base.base,
-            export_ir,
             exports,
             output,
             report,
@@ -3601,13 +3582,13 @@ fn is_nc_sidecar(path: &Path) -> bool {
 
 /// The memory profile a destination is sized with: one per shape of buffers
 /// it holds, not one per destination; each sharing is measured (`pipeline::memory`).
-fn run_profile(destination: recipe::Destination, export_ir: bool) -> RunProfile {
+fn run_profile(destination: recipe::Destination) -> RunProfile {
     match destination {
-        recipe::Destination::FilmMaster => RunProfile::F32Tiff { export_ir },
+        recipe::Destination::FilmMaster => RunProfile::F32Tiff,
         recipe::Destination::Display(d) => match d.encoding {
-            Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => RunProfile::U16Tiff { export_ir },
-            Encoding::HdrLinearTiff => RunProfile::F32Tiff { export_ir },
-            Encoding::GainMapJpeg => RunProfile::GainMapJpeg { export_ir },
+            Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => RunProfile::U16Tiff,
+            Encoding::HdrLinearTiff => RunProfile::F32Tiff,
+            Encoding::GainMapJpeg => RunProfile::GainMapJpeg,
         },
     }
 }
@@ -3711,19 +3692,6 @@ impl DestinationRender {
                 ..
             } => Some(*report),
             Self::Rendered { .. } | Self::FilmMaster { .. } => None,
-        }
-    }
-
-    /// The depth an `--export-ir` plane is written at: the primary's — f32 beside a
-    /// float TIFF, u16 otherwise.
-    fn ir_depth(&self) -> OutDepth {
-        match self {
-            Self::FilmMaster { .. }
-            | Self::Rendered {
-                pixels: DestinationPixels::HdrLinear(..),
-                ..
-            } => OutDepth::F32,
-            Self::Rendered { .. } => OutDepth::U16,
         }
     }
 }
@@ -3876,8 +3844,8 @@ fn render_gain_map(
     clock: &mut impl StageClock,
 ) -> Result<(DestinationRender, Option<staged::Staged>)> {
     let peak = d.range.peak()?;
-    // Neither JPEG stores the IR plane (`--export-ir` reads the decoded image), so it is
-    // dropped before the pair splits the graded image and copies it.
+    // Neither JPEG stores the IR plane, so it is dropped before the pair splits the
+    // graded image and copies it.
     let chain::RenderedPair { sdr, hdr } = chain::render_pair(
         aces.without_ir(),
         film_base,
@@ -4012,7 +3980,7 @@ fn encode_render(
     })
 }
 
-/// `convert`'s side exports, staged with the primary and committed before it.
+/// A frame's side exports, staged with the primary and committed before it.
 #[derive(Clone, Copy, Default)]
 struct Exports<'a> {
     /// `--export-film-rgb`: the fixed decode before the 3×3.
@@ -4030,7 +3998,6 @@ struct DecodedFrame<'a> {
     destination: recipe::Destination,
     image: LinearImage,
     base: FilmBase,
-    export_ir: Option<PathBuf>,
     exports: Exports<'a>,
     output: &'a Path,
     report: Report,
@@ -4041,7 +4008,7 @@ struct DecodedFrame<'a> {
 /// film RGB v1 → `pipeline::chain` → the destination the recipe's `output` resolves to
 /// (`crate::destination`), or straight to the film master.
 ///
-/// The optional film RGB and IR exports and the primary are staged, then committed
+/// The optional side exports and the primary are staged, then committed
 /// together with the primary last. No sidecar is written.
 fn render_frame(
     frame: DecodedFrame<'_>,
@@ -4055,7 +4022,6 @@ fn render_frame(
         destination,
         image,
         base,
-        export_ir,
         exports,
         output,
         mut report,
@@ -4138,16 +4104,6 @@ fn render_frame(
         removed_sidecar: None,
     });
 
-    // The IR export reads the *decoded* image and is staged before the primary, at
-    // the destination's depth (f32 for a float TIFF, else u16).
-    if let Some(path) = &export_ir {
-        let depth = render.ir_depth();
-        pending.push(clock.time(StageKind::IrExport, || {
-            encode::export_ir(&image, depth, path)
-        })?);
-        report.ir_exported = Some(path.clone());
-    }
-
     let (primary, mut outcome) = clock.time(StageKind::Encode, || {
         encode_render(render, output, &mut report, log, warnings)
     })?;
@@ -4179,9 +4135,6 @@ fn render_frame(
     }
     if let Some(path) = exports.pre_encode {
         log.info(format_args!("wrote pre-encode buffers {}", path.display()));
-    }
-    if let Some(path) = &export_ir {
-        log.info(format_args!("wrote IR plane {}", path.display()));
     }
     log.info(format_args!("wrote {}", output.display()));
 
@@ -4238,7 +4191,7 @@ fn render_frame(
 }
 
 /// `hanten convert` — the full pipeline: decode → film-base → fixed decode → the
-/// chain → encode (+ optional IR export). Warnings are
+/// chain → encode. Warnings are
 /// collected into the report and echoed to stderr; `--strict` promotes any of
 /// them to a non-zero exit.
 ///
@@ -4310,10 +4263,9 @@ struct ConvertAttempt {
     frame: FrameFacts,
     /// Accumulated as they are raised; moved into the report on success.
     warnings: Vec<String>,
-    /// The resolved output path and the recipe's `--export-ir` path, once known — the
-    /// paths a failure event's sinks must not land on.
+    /// The resolved output path, once known — a path a failure event's sinks must not
+    /// land on.
     output: Option<PathBuf>,
-    export_ir: Option<PathBuf>,
     /// Set once the destination resolved.
     conversion: Option<telemetry::ConversionInfo>,
     /// The write-target guard passed, telemetry's sinks included.
@@ -4357,7 +4309,6 @@ fn convert_attempt(
     // The frame's own roll values first, then the flags win over every recipe.
     let stated_roll = loaded.recipe.roll.clone();
     let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), &args.knobs);
-    attempt.export_ir = recipe.input.export_ir.as_deref().map(PathBuf::from);
     // Flag-presence rules, ahead of every value rule that could refuse first.
     reject_roll_flags_nothing_applies(&args.knobs, &recipe)?;
     let typed = &args.knobs.roll;
@@ -4421,7 +4372,7 @@ fn convert_attempt(
     // `NC_TELEMETRY_LOG` or `--telemetry-file` can't append into (and corrupt) the
     // input scan or an artifact. A collision is a config error, distinct from a
     // telemetry *write* failure, which is fail-soft.
-    let targets = write_targets(args, &output, attempt.export_ir.as_deref(), telemetry_log);
+    let targets = write_targets(args, &output, telemetry_log);
     ensure_write_targets_distinct(&args.input, &targets)?;
     // `--dump-params X --params X` is allowed only when X is the sole layer: it
     // rewrites the recipe it replays. Over one of several, it would fold the others in.
@@ -4444,20 +4395,14 @@ fn convert_attempt(
         .filter(|(label, _)| {
             matches!(
                 *label,
-                "--output"
-                    | "--report-file"
-                    | "--export-ir"
-                    | "--export-film-rgb"
-                    | "--export-pre-encode"
+                "--output" | "--report-file" | "--export-film-rgb" | "--export-pre-encode"
             )
         })
         .collect();
     for recipe_file in recipe_files(&args.recipe_in) {
         ensure_write_targets_spare(recipe_file, "the --params recipe", &spare_recipes)?;
     }
-    if let Some(msg) =
-        telemetry_sink_collision(args, &output, attempt.export_ir.as_deref(), telemetry_log)
-    {
+    if let Some(msg) = telemetry_sink_collision(args, &output, telemetry_log) {
         return Err(NcError::Usage(msg));
     }
     attempt.guarded = true;
@@ -4476,7 +4421,6 @@ fn convert_attempt(
     if let (Some(dump), Some(dump_path)) = (&dump, &args.dump_params) {
         let earlier = [
             ("--output", Some(output.as_path())),
-            ("--export-ir", attempt.export_ir.as_deref()),
             ("--export-film-rgb", args.export_film_rgb.as_deref()),
             ("--report-file", args.report.report_file.as_deref()),
         ];
@@ -4594,13 +4538,12 @@ fn convert_attempt(
 }
 
 /// Every path a `convert` writes, labelled for [`ensure_write_targets_distinct`]:
-/// the output, `--dump-params`, `--report-file`, `--export-ir`, `--export-film-rgb`,
+/// the output, `--dump-params`, `--report-file`, `--export-film-rgb`,
 /// `--export-pre-encode`, and telemetry's sinks (`--telemetry-file` unless it is `-`,
 /// and the resolved log).
 fn write_targets<'a>(
     args: &'a ConvertArgs,
     output: &'a Path,
-    export_ir: Option<&'a Path>,
     telemetry_log: Option<&'a Path>,
 ) -> Vec<(&'static str, &'a Path)> {
     let mut targets: Vec<(&str, &Path)> = vec![("--output", output)];
@@ -4609,9 +4552,6 @@ fn write_targets<'a>(
     }
     if let Some(p) = args.report.report_file.as_deref() {
         targets.push(("--report-file", p));
-    }
-    if let Some(p) = export_ir {
-        targets.push(("--export-ir", p));
     }
     if let Some(p) = args.export_film_rgb.as_deref() {
         targets.push(("--export-film-rgb", p));
@@ -4670,6 +4610,8 @@ struct PlannedFrame {
     overrides: Option<serde_json::Value>,
     /// Which input axes the CLI asserted for this frame, its `overrides` accounted for.
     input_from_cli: InputFromCli,
+    /// Where `--export-film-rgb` writes this frame's film RGB ([`film_rgb_export_name`]).
+    film_rgb: Option<PathBuf>,
 }
 
 /// The roll-level JSON report emitted on stdout (or `--report-file`): any roll-level
@@ -4790,6 +4732,10 @@ enum FrameStatus {
         hdr_linear_tiff: Option<Box<HdrLinearTiffResult>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         hdr_coded_tiff: Option<Box<HdrCodedTiffResult>>,
+        /// Where `--export-film-rgb` wrote this frame's film RGB — mirrors the
+        /// single-frame `Report` field.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        film_rgb_exported: Option<PathBuf>,
     },
     /// A frame that failed to convert: the failure message. The roll records it
     /// and continues (the loud non-zero exit is the batch-level signal).
@@ -4853,14 +4799,24 @@ fn expand_input(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 /// hardcoded `tiff` — a manifest's per-frame `params` override may change `output`, and
 /// the name has to describe the bytes actually written.
 fn default_output_name(input: &Path, out_dir: &Path, target: OutputTarget) -> PathBuf {
-    let stem = input
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "frame".to_string());
     out_dir.join(format!(
-        "{stem}_positive.{}",
+        "{}_positive.{}",
+        input_stem(input),
         target.container().canonical()
     ))
+}
+
+/// A frame's `roll --export-film-rgb` path: `<input-stem>_film-rgb.tiff` in its
+/// output's directory, so it sits beside the frame's output, explicit or derived.
+fn film_rgb_export_name(input: &Path, output: &Path) -> PathBuf {
+    output.with_file_name(format!("{}_film-rgb.tiff", input_stem(input)))
+}
+
+fn input_stem(input: &Path) -> String {
+    input
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "frame".to_string())
 }
 
 /// Resolve a frame's output path: a manifest's explicit path (absolute used
@@ -4897,24 +4853,6 @@ fn load_manifest(path: &Path) -> Result<RollManifest> {
         .map_err(|e| NcError::Usage(format!("invalid --frames manifest {}: {e}", path.display())))
 }
 
-/// Roll mode writes one output per frame into a shared directory, so a single
-/// `input.export_ir` path — which every frame would overwrite — is nonsensical.
-/// Reject it loudly rather than silently clobbering one IR file N times.
-fn reject_roll_unsupported(r: &Recipe) -> Result<()> {
-    // Do not reintroduce a destination list here: every destination is roll-capable,
-    // because a derived name takes its suffix from the frame's own destination and an
-    // explicit manifest path goes through `convert`'s `resolve_output_path` rule.
-    if r.input.export_ir.is_some() {
-        return Err(NcError::Usage(
-            "input.export_ir (--export-ir) is not supported in roll mode: it names a \
-             single path that every frame would overwrite; export the IR plane per \
-             frame with `hanten convert` instead"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Roll pre-flight: reject an input assertion that can never yield a convertible
 /// frame **before** decoding the first (100+ MB) scan (the per-file gate lives inside
 /// `convert_frame`, after the decode).
@@ -4948,7 +4886,8 @@ fn validate_roll_recipe(
     frame_context: Option<&str>,
     own: Option<(&str, &recipe::RollSection)>,
 ) -> Result<()> {
-    reject_roll_unsupported(r)?;
+    // No destination list here: every destination is roll-capable, since a derived name
+    // takes its frame's suffix and a manifest path goes through `resolve_output_path`.
     reject_roll_unsupported_input(r)?;
     let names = match frame_context {
         Some(_) => KnobNames::KeyOnly,
@@ -5148,6 +5087,11 @@ fn resolve_frames(
     let own = |input: &Path| recipe::merge(stated.clone().for_frame(input), &args.knobs);
     let from_cli = InputFromCli::of(&args.knobs.input_opts);
     let out_dir = args.out_dir.as_path();
+    let film_rgb = |input: &Path, output: &Path| {
+        args.export_film_rgb
+            .is_some()
+            .then(|| film_rgb_export_name(input, output))
+    };
     let mut planned = Vec::new();
     match &args.frames {
         Some(manifest_path) => {
@@ -5247,6 +5191,7 @@ fn resolve_frames(
                     OutputTarget::resolve(&recipe, KnobNames::KeyOnly, false)?,
                 )?;
                 planned.push(PlannedFrame {
+                    film_rgb: film_rgb(&mf.input, &output),
                     input: mf.input,
                     output,
                     recipe,
@@ -5272,6 +5217,7 @@ fn resolve_frames(
                 let output = default_output_name(&input, out_dir, target);
                 let recipe = own(&input);
                 planned.push(PlannedFrame {
+                    film_rgb: film_rgb(&input, &output),
                     input,
                     output,
                     recipe,
@@ -5340,21 +5286,21 @@ fn restore_unknown(doc: &mut serde_json::Value, overlay: &serde_json::Value) {
     }
 }
 
-/// Guard every roll write target (per-frame outputs, `--report-file`)
+/// Guard every roll write target (per-frame outputs and exports, `--report-file`)
 /// against every input scan and against one another — so a same-stem collision or
 /// a target aimed at an input fails loudly up front rather than clobbering a scan
 /// or a just-written sibling. The roll-input analogue of
 /// [`ensure_write_targets_distinct`] (multiple inputs, case-insensitivity-aware).
 fn ensure_roll_targets_distinct(
     inputs: &[(&Path, &str)],
-    targets: &[(String, PathBuf)],
+    targets: &[(String, PathBuf, RollTarget)],
 ) -> Result<()> {
     let input_keys: Vec<(PathBuf, &str)> = inputs
         .iter()
         .map(|(p, what)| (collision_key(p), *what))
         .collect();
-    let mut seen: Vec<(&str, PathBuf)> = Vec::with_capacity(targets.len());
-    for (label, path) in targets {
+    let mut seen: Vec<(&str, PathBuf, RollTarget)> = Vec::with_capacity(targets.len());
+    for (label, path, kind) in targets {
         let key = collision_key(path);
         if let Some((_, what)) = input_keys.iter().find(|(ik, _)| keys_collide(ik, &key)) {
             return Err(NcError::Usage(format!(
@@ -5362,15 +5308,48 @@ fn ensure_roll_targets_distinct(
                 path.display()
             )));
         }
-        if let Some((other, _)) = seen.iter().find(|(_, k)| keys_collide(k, &key)) {
+        if let Some((other, _, other_kind)) = seen.iter().find(|(_, k, _)| keys_collide(k, &key)) {
+            let remedy = film_rgb_clash_remedy(*kind, *other_kind)
+                .map(|r| {
+                    format!(
+                        ": a frame's film RGB export is <input-stem>_film-rgb.tiff in its \
+                         output's folder, so {r}"
+                    )
+                })
+                .unwrap_or_default();
             return Err(NcError::Usage(format!(
-                "{label} ({}) collides with {other}",
+                "{label} ({}) collides with {other}{remedy}",
                 path.display()
             )));
         }
-        seen.push((label.as_str(), key));
+        seen.push((label.as_str(), key, *kind));
     }
     Ok(())
+}
+
+/// Who owns a roll write target; frames are numbered in plan order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RollTarget {
+    Output(usize),
+    FilmRgb(usize),
+    Other,
+}
+
+/// The fix for two clashing roll targets when a film RGB export is one of them. An
+/// export's name is derived from its frame's output, so only moving or renaming an
+/// output separates them.
+fn film_rgb_clash_remedy(a: RollTarget, b: RollTarget) -> Option<&'static str> {
+    use RollTarget::{FilmRgb, Output};
+    match (a, b) {
+        (Output(i), FilmRgb(j)) | (FilmRgb(j), Output(i)) if i == j => {
+            Some("rename this frame's output")
+        }
+        (Output(_), FilmRgb(_)) | (FilmRgb(_), Output(_)) => {
+            Some("rename that output, or give the two frames' outputs different folders")
+        }
+        (FilmRgb(_), FilmRgb(_)) => Some("give the two frames' outputs different folders"),
+        _ => None,
+    }
 }
 
 /// Map a successfully-converted frame's [`Report`] to its [`FrameReport`] entry.
@@ -5389,6 +5368,7 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             chain: report.chain.map(Box::new),
             hdr_linear_tiff: report.hdr_linear_tiff.map(Box::new),
             hdr_coded_tiff: report.hdr_coded_tiff.map(Box::new),
+            film_rgb_exported: report.film_rgb_exported,
         },
         memory: report.memory,
         warnings: report.warnings,
@@ -5570,6 +5550,14 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // As on `convert`: removed flags first, then the recipes, then the flags over them.
     reject_deprecated_input_flags(&args.knobs.input_opts)?;
     reject_removed_flags(&args.knobs, !args.recipe_in.is_empty(), true)?;
+    if let Some(Some(path)) = &args.export_film_rgb {
+        return Err(NcError::Usage(format!(
+            "--export-film-rgb takes no path on roll: each frame's film RGB is written as \
+             <input-stem>_film-rgb.tiff beside its output. Drop {}, or, if it is a scan, put \
+             the flag after the inputs",
+            path.display()
+        )));
+    }
     let loaded = load_recipes(&args.recipe_in)?;
     // The roll's recipe, flags applied: what the roll-wide warnings compare each frame
     // against, so a value a flag set is not read as a frame's break. Each frame resolves
@@ -5629,7 +5617,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // above), so `roll_warnings` is passed in to collect it.
     let planned = resolve_frames(&args, &stated, &shared, &mut roll_warnings, &log)?;
 
-    // Guard every write target (per-frame outputs, and the report file) against every
+    // Guard every write target (per-frame outputs and exports, the report file) against every
     // input and against one another before writing anything. The `--frames` manifest
     // is a read input too — a write target aimed at it (e.g. `--report-file` equal to
     // the manifest path) must be rejected, not silently clobbered — so include it in
@@ -5640,15 +5628,27 @@ fn run_roll(args: RollArgs) -> Result<()> {
         .collect();
     inputs.extend(args.frames.as_deref().map(|p| (p, "the --frames manifest")));
     inputs.extend(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
-    let mut targets: Vec<(String, PathBuf)> = Vec::new();
-    for pf in &planned {
+    let mut targets: Vec<(String, PathBuf, RollTarget)> = Vec::new();
+    for (i, pf) in planned.iter().enumerate() {
         targets.push((
             format!("output for {}", pf.input.display()),
             pf.output.clone(),
+            RollTarget::Output(i),
         ));
+        if let Some(film_rgb) = &pf.film_rgb {
+            targets.push((
+                format!("film RGB export for {}", pf.input.display()),
+                film_rgb.clone(),
+                RollTarget::FilmRgb(i),
+            ));
+        }
     }
     if let Some(rf) = args.report.report_file.as_deref() {
-        targets.push(("--report-file".to_string(), rf.to_path_buf()));
+        targets.push((
+            "--report-file".to_string(),
+            rf.to_path_buf(),
+            RollTarget::Other,
+        ));
     }
     ensure_roll_targets_distinct(&inputs, &targets)?;
 
@@ -5691,7 +5691,10 @@ fn run_roll(args: RollArgs) -> Result<()> {
             "roll",
             &pf.input,
             &pf.output,
-            Exports::default(),
+            Exports {
+                film_rgb: pf.film_rgb.as_deref(),
+                pre_encode: None,
+            },
             &pf.recipe,
             pf.input_from_cli,
             &read_files,
@@ -5890,8 +5893,8 @@ fn run_inspect(args: IoArgs) -> Result<()> {
         push_warning(
             &mut report,
             &log,
-            "input carries an IR plane; preserved but not used — the frame is too \
-             small to measure the holder on (use `convert --export-ir` to write it out)"
+            "input carries an IR plane, but the frame is too small to measure the \
+             holder on; the effective area is the inset alone"
                 .into(),
         );
     }
@@ -6571,7 +6574,7 @@ struct RollReuse {
 /// measured there (the roll's white); it runs on the frame's effective area as found.
 ///
 /// **A copy, and it must stay in step.** `convert_frame`'s front half is tangled with
-/// its report and IR notes, so this repeats its gates rather than sharing them: a
+/// its report, so this repeats its gates rather than sharing them: a
 /// refusal or measurement-region warning added there belongs here too, or gains get
 /// frozen from frames `convert` would refuse.
 fn decode_for_roll_white<T>(
@@ -7213,13 +7216,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // and measure sections when stated.
     let measured = MeasuredRecipe {
         recipe_version: recipe::RecipeVersion,
-        // The decode's input assertions only: an IR export path is one frame's output,
-        // and `roll` refuses it.
-        input: Some(InputParams {
-            export_ir: None,
-            ..recipe.input.clone()
-        })
-        .filter(|i| *i != InputParams::default()),
+        input: Some(recipe.input.clone()).filter(|i| *i != InputParams::default()),
         calibration: recipe::Calibration {
             film_base: Some(FilmBaseSource::Explicit(base.into())),
         },
@@ -7335,33 +7332,26 @@ fn emit_telemetry(
     // A run that failed before the write-target guard has not proven its sinks safe:
     // write only if none lands on a file the run read or might have written. The
     // output is the resolved path once known, else `-o` as typed or completed with
-    // any suffix; `--export-ir` the recipe's once merged, else the flag's.
+    // any suffix.
     let output = attempt.output.as_deref().unwrap_or(&args.output);
-    let export_ir =
-        attempt
-            .export_ir
-            .as_deref()
-            .or(args.knobs.input_opts.export_ir.as_deref().map(Path::new));
     let mut explicit = requested;
     if requested && !attempt.guarded {
-        let collision =
-            telemetry_sink_collision(args, output, export_ir, telemetry_log).or_else(|| {
-                let completed = [telemetry_file_target(args), telemetry_log];
-                (attempt.output.is_none()
-                    && completed
-                        .into_iter()
-                        .flatten()
-                        .any(|sink| completes(sink, &args.output)))
-                .then(|| format!("it may be --output ({}) completed", args.output.display()))
-            });
+        let collision = telemetry_sink_collision(args, output, telemetry_log).or_else(|| {
+            let completed = [telemetry_file_target(args), telemetry_log];
+            (attempt.output.is_none()
+                && completed
+                    .into_iter()
+                    .flatten()
+                    .any(|sink| completes(sink, &args.output)))
+            .then(|| format!("it may be --output ({}) completed", args.output.display()))
+        });
         if let Some(msg) = collision {
             warn(format!("telemetry: no event written: {msg}"));
             explicit = false;
         }
     }
     // The consented queue gets the event only where it cannot land on the run's files.
-    let managed =
-        managed.filter(|m| managed_queue_clear(args, attempt, output, export_ir, m.queue()));
+    let managed = managed.filter(|m| managed_queue_clear(args, attempt, output, m.queue()));
     if !explicit && managed.is_none() {
         return;
     }
@@ -7496,11 +7486,10 @@ fn managed_queue_clear(
     args: &ConvertArgs,
     attempt: &ConvertAttempt,
     output: &Path,
-    export_ir: Option<&Path>,
     queue: &Path,
 ) -> bool {
     let key = collision_key(queue);
-    let mut others: Vec<&Path> = write_targets(args, output, export_ir, None)
+    let mut others: Vec<&Path> = write_targets(args, output, None)
         .into_iter()
         .map(|(_, p)| p)
         .collect();
@@ -7518,11 +7507,10 @@ fn managed_queue_clear(
 fn telemetry_sink_collision(
     args: &ConvertArgs,
     output: &Path,
-    export_ir: Option<&Path>,
     telemetry_log: Option<&Path>,
 ) -> Option<String> {
     let is_sink = |label: &str| matches!(label, "--telemetry-file" | "the telemetry log");
-    let targets = write_targets(args, output, export_ir, telemetry_log);
+    let targets = write_targets(args, output, telemetry_log);
     let (sinks, mut others): (Vec<_>, Vec<_>) =
         targets.into_iter().partition(|(label, _)| is_sink(label));
     others.push(("the input scan", &args.input));
@@ -8097,7 +8085,6 @@ mod tests {
             "--output",
             "--dump-params",
             "--seed",
-            "--export-film-rgb",
             "--export-pre-encode",
             "--telemetry",
             "--telemetry-file",
@@ -8552,11 +8539,14 @@ mod tests {
     }
 
     #[test]
-    fn export_ir_and_seed_parse_into_the_right_homes() {
-        // `--export-ir` is an input/decode key (design-spec §9), not output.
-        let cfg = merged(base_recipe(), &parse_convert(&["--export-ir", "ir.tiff"]));
-        assert_eq!(cfg.input.export_ir.as_deref(), Some("ir.tiff"));
+    fn export_ir_is_refused_as_removed() {
+        let err = removed(&parse_convert(&["--export-ir", "ir.tiff"])).unwrap_err();
+        assert!(matches!(err, NcError::Usage(_)), "{err}");
+        assert!(err.message().contains("--export-ir was removed"), "{err}");
+    }
 
+    #[test]
+    fn seed_parses() {
         // The reserved `--seed` flag parses rather than being rejected by clap.
         let args = parse_convert(&["--seed", "42"]);
         assert_eq!(args.seed, Some(42));
@@ -9123,6 +9113,7 @@ mod tests {
             out_dir: dir.to_path_buf(),
             recipe_in: vec![],
             knobs: ConversionFlags::default(),
+            export_film_rgb: None,
             strict: false,
             memory: MemoryArgs::default(),
             report: ReportArgs::default(),
@@ -9523,14 +9514,42 @@ mod tests {
     }
 
     #[test]
-    fn reject_roll_unsupported_rejects_export_ir() {
-        let mut cfg = base_recipe();
-        assert!(reject_roll_unsupported(&cfg).is_ok());
-        cfg.input.export_ir = Some("ir.tiff".into());
-        assert!(matches!(
-            reject_roll_unsupported(&cfg),
-            Err(NcError::Usage(_))
-        ));
+    fn film_rgb_export_name_sits_beside_the_frames_output() {
+        let input = Path::new("/scans/frame 01.tif");
+        for (output, want) in [
+            ("/out/frame 01_positive.tiff", "/out/frame 01_film-rgb.tiff"),
+            ("out/sub/a.tiff", "out/sub/frame 01_film-rgb.tiff"),
+            ("/elsewhere/a.jpg", "/elsewhere/frame 01_film-rgb.tiff"),
+            ("a.tiff", "frame 01_film-rgb.tiff"),
+        ] {
+            assert_eq!(
+                film_rgb_export_name(input, Path::new(output)),
+                PathBuf::from(want),
+                "{output}"
+            );
+        }
+    }
+
+    #[test]
+    fn film_rgb_clash_remedy_follows_who_owns_the_pair() {
+        use RollTarget::{FilmRgb, Other, Output};
+        let rename = Some("rename this frame's output");
+        assert_eq!(film_rgb_clash_remedy(Output(0), FilmRgb(0)), rename);
+        assert_eq!(film_rgb_clash_remedy(FilmRgb(1), Output(1)), rename);
+        for (a, b) in [(Output(1), FilmRgb(0)), (FilmRgb(0), FilmRgb(1))] {
+            assert!(
+                film_rgb_clash_remedy(a, b)
+                    .unwrap()
+                    .contains("different folders")
+            );
+        }
+        for (a, b) in [
+            (Output(0), Output(1)),
+            (Other, FilmRgb(0)),
+            (FilmRgb(0), Other),
+        ] {
+            assert_eq!(film_rgb_clash_remedy(a, b), None, "{a:?} {b:?}");
+        }
     }
 
     #[test]
@@ -9541,7 +9560,11 @@ mod tests {
             (Path::new("/scans/a.tif"), "an input scan"),
             (Path::new("/scans/b.tif"), "an input scan"),
         ];
-        let clobber_input = vec![("output for a".to_string(), PathBuf::from("/scans/a.tif"))];
+        let clobber_input = vec![(
+            "output for a".to_string(),
+            PathBuf::from("/scans/a.tif"),
+            RollTarget::Other,
+        )];
         assert!(matches!(
             ensure_roll_targets_distinct(&inputs, &clobber_input),
             Err(NcError::Usage(_))
@@ -9550,10 +9573,12 @@ mod tests {
             (
                 "output for a".to_string(),
                 PathBuf::from("/out/img_positive.tiff"),
+                RollTarget::Other,
             ),
             (
                 "output for b".to_string(),
                 PathBuf::from("/out/img_positive.tiff"),
+                RollTarget::Other,
             ),
         ];
         assert!(matches!(
@@ -9565,10 +9590,12 @@ mod tests {
             (
                 "output for a".to_string(),
                 PathBuf::from("/out/a_positive.tiff"),
+                RollTarget::Other,
             ),
             (
                 "output for b".to_string(),
                 PathBuf::from("/out/b_positive.tiff"),
+                RollTarget::Other,
             ),
         ];
         assert!(ensure_roll_targets_distinct(&inputs, &ok).is_ok());
@@ -9614,6 +9641,7 @@ mod tests {
         let clobber_manifest = vec![(
             "--report-file".to_string(),
             PathBuf::from("/rolls/frames.json"),
+            RollTarget::Other,
         )];
         assert!(matches!(
             ensure_roll_targets_distinct(&inputs, &clobber_manifest),
@@ -9649,6 +9677,7 @@ mod tests {
                     chain: None,
                     hdr_linear_tiff: None,
                     hdr_coded_tiff: None,
+                    film_rgb_exported: None,
                 },
                 memory: None,
                 warnings: vec![],
@@ -9691,6 +9720,7 @@ mod tests {
             recipe: base_recipe(),
             overrides: None,
             input_from_cli: InputFromCli::none(),
+            film_rgb: None,
         };
         let warnings = vec!["a warning raised before the failure".to_string()];
         let mem = memory::preflight(

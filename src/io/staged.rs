@@ -538,12 +538,12 @@ pub fn stage<T>(
 /// revoked mid-run, the filesystem going read-only, a crash between two renames), and
 /// an already-renamed artifact cannot be un-renamed — its previous content is gone.
 /// So callers should order the set with the artifact whose *presence implies success*
-/// last; `cli` commits the primary output after the IR export for that reason.
+/// last; `cli` commits the primary output after the side exports for that reason.
 pub fn commit_all(artifacts: Vec<Staged>) -> Result<Vec<String>> {
     // Two artifacts resolving to the SAME file is not caught upstream: `cli`'s
     // `ensure_write_targets_distinct` compares the paths the user gave, and symlink
-    // resolution happens later, here. So `-o latest.tiff` (a dangling link to `ir.tiff`)
-    // plus `--export-ir ir.tiff` look distinct up front and then collide — the last commit
+    // resolution happens later, here. So `-o latest.tiff` (a dangling link to `film.tiff`)
+    // plus `--export-film-rgb film.tiff` look distinct up front and then collide — the last commit
     // silently overwrites the first while the run reports success. Reject the whole set.
     let keys: Vec<PathBuf> = artifacts.iter().map(|a| alias_key(&a.target)).collect();
     for (i, a) in artifacts.iter().enumerate() {
@@ -1043,8 +1043,8 @@ mod tests {
     #[test]
     fn two_artifacts_resolving_to_one_file_are_refused_as_a_set() {
         // `cli`'s collision guard compares the paths the *user* gave; symlink resolution
-        // happens later, here — so `-o latest.tiff` (dangling link to ir.tiff) plus
-        // `--export-ir ir.tiff` look distinct up front and then collide, with the last
+        // happens later, here — so `-o latest.tiff` (dangling link to film.tiff) plus
+        // `--export-film-rgb film.tiff` look distinct up front and then collide, with the last
         // commit silently overwriting the first.
         let dir = TempDir::new("dupe");
         let real = dir.join("shared.bin");

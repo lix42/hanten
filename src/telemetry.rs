@@ -425,7 +425,8 @@ pub struct ImageInfo {
 /// A gain map renders two renditions, so its `fit_range` and `fit_gamut` sum both
 /// branches, and the copy that splits them counts only toward `total`.
 /// `scene_correction` and `look` include the film base's one-pixel grade. The four
-/// chain stages are absent for the film master, and `ir_export` without `--export-ir`.
+/// chain stages are absent for the film master, and `ir_export` always (retired with
+/// `--export-ir`).
 /// `encode` includes the `--export-film-rgb` write, `destination` the
 /// `--export-pre-encode` one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -536,7 +537,7 @@ pub struct OutcomeInfo {
     pub error_kind: ErrorKind,
     /// The process exit code: 0 for a success.
     pub exit_code: u8,
-    /// Warnings raised before the run ended (clipping, IR-ignored, BigTIFF promote…).
+    /// Warnings raised before the run ended (clipping, no roll measurement, …).
     pub warnings: u32,
     /// Output samples the encoder examined (`EncodeReport::total_samples`); absent
     /// unless the frame finished.

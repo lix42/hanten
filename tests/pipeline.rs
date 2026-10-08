@@ -17,11 +17,8 @@ const NC: &str = env!("CARGO_BIN_EXE_hanten");
 
 /// A committed fixture by file name.
 ///
-/// `hdri-64bit.tif` carries an IR plane, so every conversion of it without
-/// `--export-ir` warns that the plane is "preserved but not used", and a `--strict` run
-/// then fails whatever else it tests. To prove a *specific* warning is strict-promotable,
-/// use the IR-free `hdr-48bit.tif` (or pass `--export-ir` when the test needs the plane)
-/// and add a no-override control run so the assertion is falsifiable.
+/// To prove a *specific* warning is strict-promotable, add a no-override control run so
+/// the assertion is falsifiable.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -404,10 +401,8 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
     let first = tmp.path("first.tif");
     let second = tmp.path("second.TIFF");
     for output in [&first, &second] {
-        // `hdr-48bit.tif` is the IR-free fixture, so `--strict` is a real assertion
-        // here: the run must produce *no* promotable warning at all. On the HDRi
-        // fixture every run trips the "IR preserved but not used" warning and this
-        // would prove nothing.
+        // `--strict` is a real assertion here: the run must produce *no* promotable
+        // warning at all.
         let (code, stdout, err) = run(&[
             &[
                 "convert",
@@ -822,22 +817,25 @@ fn an_artifact_set_refused_at_commit_leaves_no_output() {
     // the commit-time recheck.)
     let tmp = TempDir::new("set-refused");
     let out = tmp.path("latest.tiff");
-    let ir = tmp.path("ir.tiff");
-    std::os::unix::fs::symlink(&ir, &out).unwrap();
+    let film_rgb = tmp.path("film-rgb.tiff");
+    std::os::unix::fs::symlink(&film_rgb, &out).unwrap();
 
     let (code, _stdout, err) = run(&[
         "convert",
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--export-ir",
-        ir.to_str().unwrap(),
+        "--export-film-rgb",
+        film_rgb.to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
     ]);
     assert_eq!(code, 5, "{err}");
     assert!(err.contains("resolve to the same file"), "{err}");
-    assert!(!ir.exists(), "no artifact of an aborted set is committed");
+    assert!(
+        !film_rgb.exists(),
+        "no artifact of an aborted set is committed"
+    );
     assert!(
         staging_temps(&tmp.0).is_empty(),
         "no staging temps survive: {:?}",
@@ -871,15 +869,16 @@ fn an_interrupted_overwrite_leaves_the_previous_output_intact() {
     assert_eq!(code, 0, "first conversion should succeed: {err}");
     let original = std::fs::read(&out).expect("first output readable");
 
-    // A film RGB export dangling-linked to the IR export: both stage, the set does not.
-    let ir = tmp.path("ir.tiff");
+    // A film RGB export dangling-linked to the pre-encode export: both stage, the set
+    // does not.
+    let pre_encode = tmp.path("pre-encode.tiff");
     let film_rgb = tmp.path("film.tiff");
-    std::os::unix::fs::symlink(&ir, &film_rgb).unwrap();
+    std::os::unix::fs::symlink(&pre_encode, &film_rgb).unwrap();
     let (code, _o, err) = convert(
         "0.95,0.55,0.42",
         &[
-            "--export-ir",
-            ir.to_str().unwrap(),
+            "--export-pre-encode",
+            pre_encode.to_str().unwrap(),
             "--export-film-rgb",
             film_rgb.to_str().unwrap(),
         ],
@@ -900,22 +899,22 @@ fn a_successful_run_leaves_no_staging_temps() {
     // rename, so a normal conversion leaves exactly the artifacts and nothing else.
     let tmp = TempDir::new("no-litter");
     let out = tmp.path("out.tiff");
-    let ir = tmp.path("ir.tiff");
+    let film_rgb = tmp.path("film-rgb.tiff");
     let report = tmp.path("report.json");
     let (code, _stdout, err) = run(&[
         "convert",
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--export-ir",
-        ir.to_str().unwrap(),
+        "--export-film-rgb",
+        film_rgb.to_str().unwrap(),
         "--report-file",
         report.to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
     ]);
     assert_eq!(code, 0, "conversion should succeed: {err}");
-    for artifact in [&out, &ir, &report] {
+    for artifact in [&out, &film_rgb, &report] {
         assert!(artifact.exists(), "missing artifact {}", artifact.display());
     }
     assert!(
@@ -1302,49 +1301,78 @@ fn estimate_refuses_a_degenerate_base_from_either_source() {
 }
 
 #[test]
-fn export_ir_writes_plane_for_hdri_and_errors_for_hdr() {
-    let tmp = TempDir::new("ir");
-    // HDRi: the IR plane is written.
+fn the_retired_ir_export_is_refused_by_flag_and_by_key_on_both_commands() {
+    let tmp = TempDir::new("ir-retired");
+    let input = fixture("hdri-64bit.tif");
     let out = tmp.path("out.tiff");
     let ir = tmp.path("ir.tiff");
-    let (code, stdout, _err) = run(&[
-        "convert",
-        fixture("hdri-64bit.tif").to_str().unwrap(),
-        "-o",
+    let recipe = tmp.path("recipe.json");
+    std::fs::write(
+        &recipe,
+        r#"{"recipe_version": 3, "input": {"export_ir": "ir.tiff"}}"#,
+    )
+    .unwrap();
+    let (input, out, ir, recipe, dir) = (
+        input.to_str().unwrap(),
         out.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--export-ir",
         ir.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "HDRi export-ir should succeed:\n{stdout}");
-    assert!(is_tiff(&ir), "IR plane TIFF must be written");
-    assert_eq!(json(&stdout)["ir_exported"], ir.to_str().unwrap());
-
-    // HDR: no IR plane, so --export-ir fails loudly with exit 4 (Unsupported),
-    // before writing the main output.
-    let out_hdr = tmp.path("out-hdr.tiff");
-    let ir_hdr = tmp.path("ir-hdr.tiff");
-    let (code, _stdout, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        out_hdr.to_str().unwrap(),
-        "--export-ir",
-        ir_hdr.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-    ]);
-    assert_eq!(code, 4, "export-ir on an HDR scan is Unsupported (exit 4)");
-    assert!(
-        !out_hdr.exists(),
-        "no output should be written on the fast-fail path"
+        recipe.to_str().unwrap(),
+        tmp.0.to_str().unwrap(),
     );
-    assert!(err.to_lowercase().contains("ir"));
+    let base = ["--film-base", "0.9,0.55,0.42"];
+    for (args, needle) in [
+        (
+            [&["convert", input, "-o", out, "--export-ir", ir][..], &base].concat(),
+            "--export-ir was removed",
+        ),
+        (
+            [
+                &["roll", input, "--out-dir", dir, "--export-ir", ir][..],
+                &base,
+            ]
+            .concat(),
+            "--export-ir was removed",
+        ),
+        // The bare flag, with no value, reaches the same migration message.
+        (
+            [&["convert", input, "-o", out][..], &base, &["--export-ir"]].concat(),
+            "--export-ir was removed",
+        ),
+        (
+            [
+                &["roll", input, "--out-dir", dir][..],
+                &base,
+                &["--export-ir"],
+            ]
+            .concat(),
+            "--export-ir was removed",
+        ),
+        (
+            [
+                &["convert", input, "-o", out, "--params", recipe][..],
+                &base,
+            ]
+            .concat(),
+            "`input.export_ir` is not a recipe key any more",
+        ),
+        (
+            [
+                &["roll", input, "--out-dir", dir, "--params", recipe][..],
+                &base,
+            ]
+            .concat(),
+            "`input.export_ir` is not a recipe key any more",
+        ),
+    ] {
+        let (code, _stdout, err) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
+    assert!(!Path::new(out).exists() && !Path::new(ir).exists());
 }
 
 #[test]
-fn export_film_rgb_is_convert_only_and_guarded_as_a_write_target() {
+fn export_film_rgb_is_guarded_and_takes_no_path_on_roll() {
     let tmp = TempDir::new("film-rgb");
     let out = tmp.path("out.tiff");
     let input = fixture("hdr-48bit.tif");
@@ -1363,7 +1391,8 @@ fn export_film_rgb_is_convert_only_and_guarded_as_a_write_target() {
     assert!(err.contains("--export-film-rgb"), "{err}");
     assert!(!out.exists());
 
-    // `roll` has no such flag: every frame would overwrite the one path.
+    // On `roll` it derives each frame's name, so `convert`'s path form is refused rather
+    // than read as another input scan.
     let (code, _stdout, err) = run(&[
         "roll",
         input.to_str().unwrap(),
@@ -1375,7 +1404,244 @@ fn export_film_rgb_is_convert_only_and_guarded_as_a_write_target() {
         tmp.path("film.tiff").to_str().unwrap(),
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--export-film-rgb"), "{err}");
+    assert!(
+        err.contains("--export-film-rgb takes no path on roll"),
+        "{err}"
+    );
+    assert!(!tmp.path("roll").exists());
+}
+
+#[test]
+fn roll_exports_each_frames_film_rgb_as_convert_does() {
+    let tmp = TempDir::new("roll-film-rgb");
+    let hdr = fixture("hdr-48bit.tif");
+    let hdri = fixture("hdri-64bit.tif");
+    let out_dir = tmp.path("out");
+    let base = ["--film-base", "0.9,0.55,0.42"];
+    let (code, stdout, err) = run(&[
+        &[
+            "roll",
+            hdr.to_str().unwrap(),
+            hdri.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--export-film-rgb",
+        ][..],
+        &base,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    for (i, input) in [&hdr, &hdri].into_iter().enumerate() {
+        let stem = input.file_stem().unwrap().to_str().unwrap();
+        let exported = out_dir.join(format!("{stem}_film-rgb.tiff"));
+        assert_eq!(
+            report["frames"][i]["film_rgb_exported"],
+            exported.to_str().unwrap()
+        );
+        let single = tmp.path(&format!("{stem}-single.tiff"));
+        let (code, _o, err) = run(&[
+            &[
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                tmp.path(&format!("{stem}-out.tiff")).to_str().unwrap(),
+                "--export-film-rgb",
+                single.to_str().unwrap(),
+            ][..],
+            &base,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            std::fs::read(&exported).unwrap(),
+            std::fs::read(&single).unwrap(),
+            "{stem}: a roll frame's export must be its convert's, byte for byte"
+        );
+    }
+}
+
+#[test]
+fn a_roll_export_colliding_with_another_frames_output_is_refused_before_rendering() {
+    let tmp = TempDir::new("roll-film-rgb-collision");
+    let hdr = fixture("hdr-48bit.tif");
+    let hdri = fixture("hdri-64bit.tif");
+    let out_dir = tmp.path("out");
+    // The second frame's explicit output takes the first frame's export name, in
+    // another case: the guard compares the way a case-insensitive volume does.
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [
+                 {{ "input": {hdr:?} }},
+                 {{ "input": {hdri:?}, "output": "HDR-48BIT_FILM-RGB.tiff" }}
+               ] }}"#,
+            hdr = hdr.to_str().unwrap(),
+            hdri = hdri.to_str().unwrap(),
+        ),
+    );
+    let roll = |export: bool| {
+        let mut args = vec![
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+        ];
+        if export {
+            args.push("--export-film-rgb");
+        }
+        run(&args)
+    };
+    let (code, _stdout, err) = roll(true);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("film RGB export for")
+            && err.contains("collides with")
+            && err.contains("rename that output"),
+        "{err}"
+    );
+    assert!(
+        !out_dir.exists(),
+        "nothing is written before the guard passes"
+    );
+    // Control: without the export the same manifest renders.
+    let (code, _stdout, err) = roll(false);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn a_scan_listed_twice_with_film_rgb_exports_needs_separate_folders() {
+    // Both entries' exports are `<input-stem>_film-rgb.tiff` beside their outputs, so
+    // they clash however the outputs are named; the refusal says how to separate them.
+    let tmp = TempDir::new("roll-film-rgb-same-scan");
+    let hdr = fixture("hdr-48bit.tif");
+    let out_dir = tmp.path("out");
+    let manifest = |a: &str, b: &str| {
+        write_file(
+            &tmp.path("frames.json"),
+            &format!(
+                r#"{{ "frames": [
+                     {{ "input": {hdr:?}, "output": {a:?} }},
+                     {{ "input": {hdr:?}, "output": {b:?},
+                        "params": {{ "scene_correction": {{ "exposure": 0.5 }} }} }}
+                   ] }}"#,
+                hdr = hdr.to_str().unwrap(),
+            ),
+        )
+    };
+    let roll = |manifest: &Path| {
+        run(&[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--export-film-rgb",
+        ])
+    };
+    let (code, _stdout, err) = roll(&manifest("a.tiff", "b.tiff"));
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("collides with film RGB export for")
+            && err.contains("give the two frames' outputs different folders"),
+        "{err}"
+    );
+    assert!(
+        !out_dir.exists(),
+        "nothing is written before the guard passes"
+    );
+
+    // The remedy works: one output per folder, one export beside each.
+    let (code, stdout, err) = roll(&manifest("one/a.tiff", "two/b.tiff"));
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    for (i, dir) in ["one", "two"].into_iter().enumerate() {
+        let exported = out_dir.join(dir).join("hdr-48bit_film-rgb.tiff");
+        assert!(exported.exists(), "{}", exported.display());
+        assert_eq!(
+            report["frames"][i]["film_rgb_exported"],
+            exported.to_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn a_film_rgb_export_clash_names_a_remedy_only_where_one_works() {
+    let tmp = TempDir::new("roll-film-rgb-remedy");
+    let hdr = fixture("hdr-48bit.tif");
+    let folders = "different folders";
+    let roll = |extra: &[&str]| {
+        run(&[
+            &["roll", "--film-base", "0.9,0.55,0.42"][..],
+            extra,
+            &["--export-film-rgb"],
+        ]
+        .concat())
+    };
+
+    // A frame's output named as its own export: it follows the output into any
+    // folder, so only renaming the output separates them.
+    let manifest = write_file(
+        &tmp.path("same.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {hdr:?}, "output": "hdr-48bit_film-rgb.tiff" }} ] }}"#,
+            hdr = hdr.to_str().unwrap(),
+        ),
+    );
+    let out = tmp.path("same");
+    let (code, _o, err) = roll(&[
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("rename this frame's output"), "{err}");
+    assert!(!err.contains(folders), "{err}");
+    assert!(!out.exists());
+
+    // A --report-file on an export's path: the fix is another report path.
+    let out = tmp.path("report");
+    let report = out.join("hdr-48bit_film-rgb.tiff");
+    let (code, _o, err) = roll(&[
+        hdr.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+        "--report-file",
+        report.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--report-file") && err.contains("collides with"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("film RGB export is") && !err.contains(folders),
+        "{err}"
+    );
+    assert!(!out.exists());
+
+    // An earlier run's export picked up as an input scan.
+    let scans = tmp.path("scans");
+    std::fs::create_dir_all(&scans).unwrap();
+    std::fs::copy(&hdr, scans.join("hdr-48bit.tif")).unwrap();
+    std::fs::copy(&hdr, scans.join("hdr-48bit_film-rgb.tiff")).unwrap();
+    let (code, _o, err) = roll(&[
+        scans.to_str().unwrap(),
+        "--out-dir",
+        scans.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("would overwrite an input scan"), "{err}");
+    assert!(
+        !err.contains("film RGB export is") && !err.contains(folders),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2031,55 +2297,6 @@ fn assume_linear_flag_is_a_migration_error_through_the_binary() {
 }
 
 #[test]
-fn ir_plane_bit_identical_across_input_resolution() {
-    // H1: IR is measurement data, never color-transformed — so the exported IR
-    // plane must be byte-identical regardless of how the input color resolves
-    // (auto vs an explicit scanner-device assertion take different resolver paths).
-    let tmp = TempDir::new("ir-identity");
-    let src = fixture("hdri-64bit.tif");
-    let src = src.to_str().unwrap();
-
-    let out_auto = tmp.path("out-auto.tiff");
-    let ir_auto = tmp.path("ir-auto.tiff");
-    let (code, _o, err) = run(&[
-        "convert",
-        src,
-        "-o",
-        out_auto.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--export-ir",
-        ir_auto.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "auto convert: {err}");
-
-    let out_expl = tmp.path("out-expl.tiff");
-    let ir_expl = tmp.path("ir-expl.tiff");
-    let (code, _o, err) = run(&[
-        "convert",
-        src,
-        "-o",
-        out_expl.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--export-ir",
-        ir_expl.to_str().unwrap(),
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-    ]);
-    assert_eq!(code, 0, "explicit-assertion convert: {err}");
-
-    let a = std::fs::read(&ir_auto).unwrap();
-    let b = std::fs::read(&ir_expl).unwrap();
-    assert_eq!(
-        a, b,
-        "exported IR must be byte-identical across input resolution"
-    );
-}
-
-#[test]
 fn roll_frame_report_includes_resolved_input_color() {
     // P2: a roll frame report must carry the resolved input semantics (mirrors
     // single-frame `convert`), not drop them.
@@ -2585,20 +2802,16 @@ fn a_decode_failure_times_nothing_it_did_not_finish() {
 
 #[test]
 fn unsupported_input_names_the_stage_before_the_check_and_keeps_its_time() {
-    // `--export-ir` on an HDR scan (no IR plane) is refused right after decode:
-    // decode completed, so it is timed, and the refusal belongs to it.
+    // A generic TIFF with no input assertion has an ambiguous meaning, refused right
+    // after decode: decode completed, so it is timed, and the refusal belongs to it.
     let tmp = TempDir::new("tel-unsupported");
-    let ir = tmp.path("ir.tiff");
+    let src = tmp.path("generic.tif");
+    write_uniform_rgb48(&src, [30000, 20000, 15000], 8, 8);
     let (code, err, event) = convert_with_event(
         &tmp,
-        &fixture("hdr-48bit.tif"),
+        &src,
         &tmp.path("out.tiff"),
-        &[
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--export-ir",
-            ir.to_str().unwrap(),
-        ],
+        &["--film-base", "0.9,0.55,0.42"],
     );
     assert_eq!(code, 4, "{err}");
     assert_failure(&event, "decode", "unsupported", 4);
@@ -2685,75 +2898,23 @@ fn a_telemetry_file_over_the_params_recipe_is_refused_and_never_written() {
 }
 
 #[test]
-fn a_failure_event_never_lands_on_a_flag_export_ir_path() {
-    // Validation fails (no film base) before the recipe resolves `--export-ir`; the
-    // flag's path is still off-limits.
-    let tmp = TempDir::new("tel-onto-ir");
-    let ir = tmp.path("ir.tiff");
-    std::fs::write(&ir, b"an earlier IR export").unwrap();
+fn a_failure_event_never_lands_on_a_completed_output() {
+    // Validation fails (no film base) before the write-target guard. The path `-o out`
+    // would complete to is off-limits.
+    let tmp = TempDir::new("tel-onto-completed");
+    let completed = tmp.path("out.tiff");
+    std::fs::write(&completed, b"an earlier artifact").unwrap();
     let (code, _stdout, err) = run(&[
         "convert",
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
-        tmp.path("out.tiff").to_str().unwrap(),
-        "--export-ir",
-        ir.to_str().unwrap(),
+        tmp.path("out").to_str().unwrap(),
         "--telemetry-file",
-        ir.to_str().unwrap(),
+        completed.to_str().unwrap(),
     ]);
     assert_eq!(code, 2, "{err}");
-    assert_eq!(std::fs::read(&ir).unwrap(), b"an earlier IR export");
+    assert_eq!(std::fs::read(&completed).unwrap(), b"an earlier artifact");
     assert!(err.contains("telemetry: no event written"), "{err}");
-}
-
-#[test]
-fn a_failure_event_never_lands_on_a_recipe_export_ir_or_a_completed_output() {
-    // Validation fails (no film base) before the write-target guard. The recipe's
-    // `--export-ir` path and the path `-o out` would complete to are off-limits.
-    let tmp = TempDir::new("tel-onto-recipe-ir");
-    let input = fixture("hdri-64bit.tif");
-    let refuses = |sink: &Path, args: &[&str]| {
-        std::fs::write(sink, b"an earlier artifact").unwrap();
-        let (code, _stdout, err) = run(args);
-        assert_eq!(code, 2, "{err}");
-        assert_eq!(
-            std::fs::read(sink).unwrap(),
-            b"an earlier artifact",
-            "{sink:?}"
-        );
-        assert!(err.contains("telemetry: no event written"), "{err}");
-    };
-
-    let ir = tmp.path("ir.tiff");
-    let recipe = tmp.path("recipe.json");
-    let body = serde_json::json!({"recipe_version": 3, "input": {"export_ir": ir}});
-    std::fs::write(&recipe, body.to_string()).unwrap();
-    refuses(
-        &ir,
-        &[
-            "convert",
-            input.to_str().unwrap(),
-            "-o",
-            tmp.path("out2.tiff").to_str().unwrap(),
-            "--params",
-            recipe.to_str().unwrap(),
-            "--telemetry-file",
-            ir.to_str().unwrap(),
-        ],
-    );
-
-    let completed = tmp.path("out.tiff");
-    refuses(
-        &completed,
-        &[
-            "convert",
-            input.to_str().unwrap(),
-            "-o",
-            tmp.path("out").to_str().unwrap(),
-            "--telemetry-file",
-            completed.to_str().unwrap(),
-        ],
-    );
 }
 
 #[test]
@@ -2780,37 +2941,6 @@ fn a_failure_event_never_lands_on_the_input() {
         "the input was overwritten"
     );
     assert!(err.contains("telemetry: no event written"), "{err}");
-}
-
-#[test]
-fn telemetry_file_records_ir_export_timing() {
-    // An HDRi conversion with --export-ir carries the ir_export stage timing.
-    let tmp = TempDir::new("tel-ir");
-    let out = tmp.path("out.tiff");
-    let ir = tmp.path("ir.tiff");
-    let rec = tmp.path("run.json");
-    let (code, _stdout, err) = run(&[
-        "convert",
-        fixture("hdri-64bit.tif").to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--export-ir",
-        ir.to_str().unwrap(),
-        "--telemetry-file",
-        rec.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "HDRi export-ir + telemetry should succeed:\n{err}");
-    let record: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
-    assert_eq!(record["image"]["ir_present"], true);
-    assert!(
-        record["timing_ms"]["ir_export"]
-            .as_f64()
-            .is_some_and(f64::is_finite),
-        "ir_export timing must be present when --export-ir ran: {record}"
-    );
 }
 
 #[test]
@@ -3179,18 +3309,17 @@ fn telemetry_outcome_reports_clipping_and_warnings() {
 }
 
 #[test]
-fn telemetry_outcome_counts_ir_ignored_warning() {
-    // A separate warning source than clipping: converting an HDRi scan *without*
-    // --export-ir raises the "IR plane preserved but not used" warning, which must
-    // flow into outcome.warnings — proving the count isn't clipping-specific.
-    let tmp = TempDir::new("tel-outcome-ir");
+fn telemetry_outcome_counts_a_recipe_warning() {
+    // A separate warning source than clipping: a recipe with no roll measurement
+    // raises the "no roll measurement" warning, which must flow into
+    // outcome.warnings — proving the count isn't clipping-specific.
+    let tmp = TempDir::new("tel-outcome-recipe");
     let out = tmp.path("out.tiff");
     let (code, stdout, err) = run(&[
         "convert",
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--film-master", // f32 never clips, so the IR-ignored warning is isolated
         "--film-base",
         "0.9,0.55,0.42",
         "--telemetry-file",
@@ -3199,12 +3328,13 @@ fn telemetry_outcome_counts_ir_ignored_warning() {
         "none",
     ]);
     assert_eq!(code, 0, "HDRi convert should succeed:\n{err}");
+    assert!(err.contains("no roll measurement"), "{err}");
     let record = json(&stdout);
     let outcome = &record["outcome"];
-    assert_eq!(outcome["clipped"].as_u64().unwrap(), 0, "f32 must not clip");
+    assert_eq!(outcome["clipped"].as_u64().unwrap(), 0, "{outcome}");
     assert!(
         outcome["warnings"].as_u64().unwrap() >= 1,
-        "the IR-ignored warning must be counted in outcome.warnings: {outcome}"
+        "the recipe warning must be counted in outcome.warnings: {outcome}"
     );
 }
 
@@ -4083,36 +4213,6 @@ fn read_icc_tag(path: &Path) -> Vec<u8> {
         .unwrap_or_else(|e| panic!("{} has no ICCProfile tag: {e}", path.display()))
 }
 
-/// The samples of a single-channel TIFF, in whichever type it was written as.
-#[derive(Debug)]
-enum GraySamples {
-    U16(Vec<u16>),
-    F32(Vec<f32>),
-}
-
-/// Read a one-channel TIFF (the `--export-ir` plane): per-sample bit depth, TIFF
-/// `SampleFormat` code (1 = unsigned int, 3 = IEEE float), and the samples.
-fn read_gray_tiff(path: &Path) -> (u16, u16, GraySamples) {
-    use tiff::decoder::{Decoder, DecodingResult};
-    use tiff::tags::Tag;
-    let mut dec = Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()))
-        .unwrap()
-        .with_limits(tiff::decoder::Limits::unlimited());
-    let one = |tag: Tag, dec: &mut Decoder<_>| -> u16 {
-        let v = dec.get_tag_u16_vec(tag).unwrap();
-        assert_eq!(v.len(), 1, "{tag:?} must have one entry: {v:?}");
-        v[0]
-    };
-    let bits = one(Tag::BitsPerSample, &mut dec);
-    let format = one(Tag::SampleFormat, &mut dec);
-    let samples = match dec.read_image().unwrap() {
-        DecodingResult::U16(v) => GraySamples::U16(v),
-        DecodingResult::F32(v) => GraySamples::F32(v),
-        other => panic!("unexpected IR sample type: {other:?}"),
-    };
-    (bits, format, samples)
-}
-
 #[test]
 fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
     // The master round-trips unclamped finite ACEScg through a float TIFF and says
@@ -4249,71 +4349,6 @@ fn film_master_embeds_its_own_icc_distinct_from_the_display_destinations() {
 }
 
 #[test]
-fn film_master_ir_export_follows_the_destination_depth_and_carries_the_plane() {
-    // `--export-ir` writes the IR plane at the destination's depth, so under the film
-    // master it flips 16-bit → f32. Correct by construction (one depth for the whole
-    // run), but it is a user-visible container change, so pin it — together with the
-    // rule that the IR plane is *carried*, never converted: the f32 export's samples
-    // must equal a 16-bit destination's export, up to u16 quantization.
-    let tmp = TempDir::new("film-master-ir");
-    let input = fixture("hdri-64bit.tif");
-    let convert = |name: &str, extra: &[&str]| -> PathBuf {
-        let out = tmp.path(&format!("{name}.tiff"));
-        let ir = tmp.path(&format!("{name}-ir.tiff"));
-        let mut args = vec![
-            "convert",
-            input.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--export-ir",
-            ir.to_str().unwrap(),
-            "--report",
-            "none",
-        ];
-        args.extend_from_slice(extra);
-        let (code, _stdout, err) = run(&args);
-        assert_eq!(code, 0, "{name} should convert:\n{err}");
-        ir
-    };
-
-    // A 16-bit destination: a 16-bit unsigned-integer IR export.
-    let sdr_ir = convert("sdr", &[]);
-    let (sdr_bits, sdr_format, sdr_samples) = read_gray_tiff(&sdr_ir);
-    assert_eq!(
-        (sdr_bits, sdr_format),
-        (16, 1),
-        "a 16-bit destination's IR export is 16-bit unsigned integer"
-    );
-    let GraySamples::U16(sdr_u16) = sdr_samples else {
-        panic!("the SDR IR export must be u16, got {sdr_samples:?}");
-    };
-
-    // Under the film master the same flag writes f32 — its depth, unasked for.
-    let master_ir = convert("master", &["--film-master"]);
-    let (bits, format, master_samples) = read_gray_tiff(&master_ir);
-    assert_eq!(
-        (bits, format),
-        (32, 3),
-        "the film master's IR export follows its f32 depth"
-    );
-    let GraySamples::F32(master_f32) = master_samples else {
-        panic!("the film-master IR export must be f32");
-    };
-
-    // Same plane, carried not consumed: the f32 samples reproduce the u16 ones.
-    assert_eq!(master_f32.len(), sdr_u16.len());
-    for (i, (&f, &q)) in master_f32.iter().zip(&sdr_u16).enumerate() {
-        let requantized = (f.clamp(0.0, 1.0) * 65535.0).round() as u16;
-        assert!(
-            requantized.abs_diff(q) <= 1,
-            "IR sample {i}: f32 {f} requantizes to {requantized}, the u16 export was {q}"
-        );
-    }
-}
-
-#[test]
 fn film_master_telemetry_names_the_destination_and_the_written_depth() {
     // The record's `conversion.destination` is what distinguishes a master from a
     // display run, and `conversion.output_depth` says which depth was written; the
@@ -4425,13 +4460,8 @@ fn roll_frame_override_of_output_warns_and_is_strict_promotable() {
     // emits a frame of a different *image class* (a rendered u16 TIFF among unclamped
     // linear ACEScg masters).
     //
-    // **The fixture must be IR-free.** `hdri-64bit.tif` carries an IR plane, so every
-    // frame raises a per-frame "IR preserved but not used" warning, and
-    // `strict_failure` is already true via `frames.iter().any(|f| !f.warnings.is_empty())`
-    // — a no-override roll on that fixture exits 1 under `--strict` all by itself, which
-    // made the promotion assertion below unfalsifiable. `hdr-48bit.tif` has no IR
-    // plane, so `--strict` there exits 0 unless *this* warning fires, and the control
-    // run below pins that.
+    // `--strict` exits 0 unless *this* warning fires, and the control run below pins
+    // that.
     let tmp = TempDir::new("roll-preset-override");
     let input = fixture("hdr-48bit.tif");
     let recipe = write_file(
@@ -4765,10 +4795,8 @@ fn recipe_dumped_by_this_build_replays_clean_under_strict() {
     // The documented reproducibility path is `--dump-params` → replay, and it must
     // survive `--strict`: nothing else checks the one file the tool itself writes.
     //
-    // The IR-free fixture is required: `hdri-64bit.tif` emits the "IR preserved but
-    // not used" warning on every frame, which would fail `--strict` here regardless. The
-    // roll measurement is stated so the dump carries one; without it the replay warns
-    // that it fell back, and `--strict` rightly fails on that.
+    // The roll measurement is stated so the dump carries one; without it the replay
+    // warns that it fell back, and `--strict` rightly fails on that.
     let tmp = TempDir::new("dumpreplay");
     let first = tmp.path("first.tiff");
     let dump = tmp.path("params.json");
@@ -6891,52 +6919,39 @@ fn estimate_measures_an_unexposed_frame_over_its_effective_area() {
 }
 
 /// No conversion reads the IR plane: a stated base reads no holder, and the
-/// effective area reaches no pixel. So `--strict` fails on the carried plane unless
-/// `--export-ir` takes it.
+/// effective area reaches no pixel. Carrying the plane is the normal case, so it
+/// raises no warning and `--strict` passes on an HDRi scan.
 #[test]
-fn a_conversion_never_consumes_the_ir_plane() {
+fn a_carried_ir_plane_raises_no_warning() {
     let dir = TempDir::new("ir-convert");
     let scan = dir.path("scan.tif");
     write_hdri_unexposed(&scan, 41_000, [655, 655, 655]);
-    let convert = |extra: &[&str]| {
-        run(&[
-            &[
-                "convert",
-                "--film-base",
-                "0.53,0.26,0.16",
-                "--strict",
-                // The synthetic fixture carries no SilverFast XMP, so state the input
-                // semantics the provenance gate would otherwise resolve from it.
-                "--input-transfer",
-                "linear",
-                "--input-meaning",
-                "scanner-device",
-                scan.to_str().unwrap(),
-                "-o",
-                dir.path("out.tif").to_str().unwrap(),
-            ][..],
-            &MEASURED,
-            extra,
-        ]
-        .concat())
-    };
-    let (code, stdout, _err) = convert(&[]);
-    assert_eq!(code, 1, "an unconsumed IR plane must fail --strict");
+    let (code, stdout, err) = run(&[
+        &[
+            "convert",
+            "--film-base",
+            "0.53,0.26,0.16",
+            "--strict",
+            // The synthetic fixture carries no SilverFast XMP, so state the input
+            // semantics the provenance gate would otherwise resolve from it.
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            scan.to_str().unwrap(),
+            "-o",
+            dir.path("out.tif").to_str().unwrap(),
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
+    assert_eq!(code, 0, "--strict must pass on an HDRi scan:\n{err}");
     let report = json(&stdout);
+    // The holder march read the plane, and still no pixel depends on it.
     assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
     assert!(
-        report["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("preserved but not used")),
+        report["warnings"].as_array().is_none_or(Vec::is_empty),
         "{report}"
-    );
-
-    let (code, _stdout, err) = convert(&["--export-ir", dir.path("ir.tif").to_str().unwrap()]);
-    assert_eq!(
-        code, 0,
-        "--strict --export-ir must stay usable on an HDRi scan:\n{err}"
     );
 }
 
@@ -7046,12 +7061,6 @@ fn inspect_measures_a_holder_ring_and_counts_the_plane_as_read() {
         area["holder"]["left"].as_u64().unwrap() > 0,
         "and report a real depth for it: {report}"
     );
-    assert!(
-        report["warnings"].as_array().is_none_or(|ws| ws
-            .iter()
-            .all(|w| !w.as_str().unwrap().contains("preserved but not used"))),
-        "a plane the march read must not be reported as unused: {report}"
-    );
 }
 
 /// The measurement region is resolved and reported on **every** `convert`, so
@@ -7092,68 +7101,6 @@ fn convert_always_reports_the_measurement_region_and_the_inset_flag_moves_it() {
         std::fs::read(&a).unwrap(),
         std::fs::read(&b).unwrap(),
         "an unconsumed region must not move a pixel"
-    );
-}
-
-/// `--strict` must keep failing on the "IR preserved but not used" note when the
-/// plane never reaches a pixel — even when the effective-area march *measured* a
-/// holder with it. Nothing in a `convert` render reads the region (its one consumer,
-/// the auto reference density, retired), so a marched holder is reported, never used.
-#[test]
-fn strict_still_fails_when_the_ir_marched_region_reaches_no_pixel() {
-    let dir = TempDir::new("ir-region-strict");
-    let path = dir.path("ringed.tif");
-    const W: u32 = 200;
-    const H: u32 = 200;
-    let mut rgb = vec![0u16; (W * H * 3) as usize];
-    let mut ir = vec![41_000u16; (W * H) as usize];
-    for y in 0..H {
-        for x in 0..W {
-            let i = ((y * W + x) * 3) as usize;
-            let holder = x < 6 || y < 6 || x >= W - 6 || y >= H - 6;
-            rgb[i..i + 3].copy_from_slice(&if holder {
-                [655, 655, 655]
-            } else {
-                [12000, 7000, 4000]
-            });
-            if holder {
-                ir[(y * W + x) as usize] = 1_300;
-            }
-        }
-    }
-    write_hdri(&path, W, H, &rgb, &ir);
-
-    let out = dir.path("out.tif");
-    let case = |extra: &[&str]| -> (i32, String) {
-        let mut args = vec![
-            "convert",
-            "--film-base",
-            "0.9,0.6,0.5",
-            "--input-transfer",
-            "linear",
-            "--input-meaning",
-            "scanner-device",
-            // Under white, so no clipping warning of its own trips `--strict`: the IR
-            // note is the only candidate.
-            "--exposure=-3",
-        ];
-        args.extend(extra);
-        args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
-        let (code, _, err) = run(&args);
-        (code, err)
-    };
-
-    // Falsifiable control: without `--strict` the same run succeeds, so the failure
-    // below is the note being promoted and nothing else.
-    let (code, err) = case(&[]);
-    assert_eq!(code, 0, "{err}");
-    assert!(err.contains("preserved but not used"), "{err}");
-
-    let (code, err) = case(&["--strict"]);
-    assert_eq!(code, 1, "the note must still fail --strict: {err}");
-    assert!(
-        err.contains("preserved but not used"),
-        "and for the right reason: {err}"
     );
 }
 
@@ -7320,8 +7267,8 @@ fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
         "{err}"
     );
 
-    // At an inset that leaves a region, nothing renders from the holder cut, so "IR
-    // preserved but not used" holds whatever the white balance.
+    // At an inset that leaves a region, the holder is measured whatever the white
+    // balance.
     let out = dir.path("nf-stated.tiff");
     let (code, stdout, err) = run(&[
         "convert",
@@ -7340,14 +7287,6 @@ fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
     assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
-    assert!(
-        report["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("preserved but not used")),
-        "{report}"
-    );
 }
 
 /// A capped or unsettled holder march warns, so `--strict` can see it
@@ -7380,9 +7319,7 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
     }
     write_hdri(&path, W, H, &rgb, &ir);
 
-    // `--export-ir` keeps the unrelated "IR preserved but not used" note off the
-    // `--strict` run below, so the only thing that can fail it is the cap warning.
-    let (out, ir_out) = (dir.path("out.tif"), dir.path("ir.tif"));
+    let out = dir.path("out.tif");
     let convert_with = |extra: &[&str]| -> (i32, String, String) {
         let mut args = vec![
             "convert",
@@ -7392,8 +7329,6 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
             "linear",
             "--input-meaning",
             "scanner-device",
-            "--export-ir",
-            ir_out.to_str().unwrap(),
         ];
         args.extend(MEASURED);
         args.extend(extra);
@@ -7462,8 +7397,6 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
             "linear",
             "--input-meaning",
             "scanner-device",
-            "--export-ir",
-            dir.path("ir2.tif").to_str().unwrap(),
             "--strict",
             "-o",
             dir.path("out2.tif").to_str().unwrap(),
@@ -11494,13 +11427,11 @@ fn measure_roll_out_diagnoses_the_specific_fault_and_writes_a_file_roll_accepts(
     assert!(err.contains("is named twice"), "{err}");
     assert!(!err.contains("share the file name"), "{err}");
 
-    // An IR export path is one frame's output: it does not travel into the roll's
-    // recipe, which `roll` would then refuse.
+    // The input assertions travel into the roll's recipe.
     let recipe = write_file(
         &tmp.path("in.json"),
         r#"{ "recipe_version": 3,
-             "input": { "transfer": "linear", "meaning": "scanner-device",
-                        "export_ir": "ir.tif" },
+             "input": { "transfer": "linear", "meaning": "scanner-device" },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let r = recipe.to_str().unwrap();
@@ -11514,7 +11445,6 @@ fn measure_roll_out_diagnoses_the_specific_fault_and_writes_a_file_roll_accepts(
     assert_eq!(code, 0, "{err}");
     let written = written_recipe(&out);
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
-    assert!(written["input"]["export_ir"].is_null(), "{written}");
     let (code, _, err) = run(&[
         "roll",
         f,

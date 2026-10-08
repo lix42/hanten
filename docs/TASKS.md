@@ -168,6 +168,7 @@ graph TD
   nf-destinations --> nf-look
   analysis --> nf-verification
   nf-core --> nf-verification
+  nf-verification --> nf-core
   nf-reconstruction --> nf-verification
   nf-core --> nf-retire
   nf-verification --> nf-retire
@@ -331,6 +332,7 @@ graph TD
   end
   subgraph nf-core
     nf-core/buffer-strategy
+    nf-core/release-decoded-image
     nf-core/subcommands
     nf-core/recipe-schema
     nf-core/report-contract
@@ -763,6 +765,7 @@ graph TD
   nf-core/minimal-end-to-end --> nf-core/subcommands
   nf-core/subcommands --> core/recipe-composition
   nf-core/stage-skeleton --> nf-core/buffer-strategy
+  nf-verification/roll-side-exports --> nf-core/release-decoded-image
   nf-look/path-to-white --> nf-core/one-luma-dot
   nf-calibration/scale-ladder --> nf-look/path-to-white
   nf-calibration/scale-ladder --> nf-calibration/scale-gamma-loop
@@ -1209,7 +1212,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
   — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
 - `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
-  — `roll` refuses the per-frame exports because one path cannot serve every frame
+  — `roll` reuses `convert`'s film RGB export, one per frame
 - `nf-retire/legacy-custom` (new flow): `nf-core/minimal-end-to-end`, `nf-verification/reference-snapshot`
   — removes the second implementation of the print controls
 - `nf-retire/display-tones` (new flow): `nf-retire/legacy-custom`, `nf-display-stages/fit-range`
@@ -1252,6 +1255,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
   — the GPU spike decided the seams are the existing typed boundaries, not one
   per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
+- `nf-core/release-decoded-image` (new flow): `nf-verification/roll-side-exports`
+  — nothing reads the decoded image after the decode once `--export-ir` is retired
 - `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
   — `dot` is copied in four stages, and the look imports fit range's. Done
   2026-09-24: one copy in `pipeline::colorimetry`
@@ -1868,6 +1873,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is
   ≈0.9 GB each at 74.6 MP
+- [ ] [Release the decoded image after the
+  decode](tasks/nf-core/release-decoded-image.md) — free it once `fixed::decode` has
+  read it, lowering each frame's peak by 12–16 B/px; the memory model moves with it
 - [x] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — **done
   2026-09-24.** `colorimetry::dot` is the one f32 copy; the four private ones are
   gone and the look no longer imports fit range's. No pixel moved, no golden edited
@@ -2198,9 +2206,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
   `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32
   TIFF; `nctool metrics --space film-rgb` measures it per channel
-- [ ] [Per-frame side exports from
-  `roll`](tasks/nf-verification/roll-side-exports.md) — `--export-film-rgb` and
-  `--export-ir` per frame in `--out-dir`, which `roll` refuses today
+- [x] [Per-frame side exports from
+  `roll`](tasks/nf-verification/roll-side-exports.md) — **done 2026-10-08.**
+  `roll --export-film-rgb`
+  writes `<input-stem>_film-rgb.tiff` beside each frame's output; `--export-ir` and
+  `input.export_ir` retired
 
 ### nf-retire — [progress](progress/nf-retire.md)
 > Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded

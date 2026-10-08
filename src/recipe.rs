@@ -594,6 +594,10 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          decode's anchor rule is reference-free",
     ),
     (
+        &["input", "export_ir"],
+        "the IR plane is no longer exported; drop the key",
+    ),
+    (
         &["input", "color"],
         "it conflated transfer encoding with measurement meaning; use the independent \
          keys `input.transfer` (auto|linear) and `input.meaning` \
@@ -649,14 +653,20 @@ fn frame_lift_remedy(body: &serde_json::Value) -> Option<String> {
 }
 
 /// Drop the retired keys where an earlier build wrote their default, `null`, which
-/// replays identically: `roll.frame_slope`, `roll.frame_lift` and a `roll.frames` entry's
-/// `slope`. [`check_body`] refuses any other value; every recipe body runs this first.
-/// Returns whether it dropped any.
+/// replays identically: `input.export_ir`, `roll.frame_slope`, `roll.frame_lift` and a
+/// `roll.frames` entry's `slope`. [`check_body`] refuses any other value; every recipe
+/// body runs this first. Returns whether it dropped any.
 pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
-    let Some(roll) = body.get_mut("roll").and_then(|r| r.as_object_mut()) else {
-        return false;
-    };
     let mut stripped = false;
+    if let Some(input) = body.get_mut("input").and_then(|i| i.as_object_mut())
+        && input.get("export_ir").is_some_and(|v| v.is_null())
+    {
+        input.remove("export_ir");
+        stripped = true;
+    }
+    let Some(roll) = body.get_mut("roll").and_then(|r| r.as_object_mut()) else {
+        return stripped;
+    };
     for key in ["frame_slope", "frame_lift"] {
         if roll.get(key).is_some_and(|v| v.is_null()) {
             roll.remove(key);
@@ -1038,9 +1048,6 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     }
     if let Some(t) = input.film_type {
         r.input.film_type = t;
-    }
-    if let Some(p) = &input.export_ir {
-        r.input.export_ir = Some(p.clone());
     }
     // The film base: the three source flags are mutually exclusive (clap-enforced), and
     // whichever is given replaces the recipe's source entirely.
@@ -3169,7 +3176,10 @@ mod tests {
             };
             for key in fields.as_object().unwrap().keys() {
                 let diagnosed = table.iter().any(|(k, _)| k == key)
-                    || (section == "output" && OLD_OUTPUT_KEYS.contains(&key.as_str()));
+                    || (section == "output" && OLD_OUTPUT_KEYS.contains(&key.as_str()))
+                    || RETIRED_KEYS
+                        .iter()
+                        .any(|(path, _)| path[..] == [section.as_str(), key.as_str()]);
                 assert!(
                     shared.get(key).is_some() != diagnosed,
                     "`{section}.{key}` must be exactly one of shared or diagnosed"
@@ -4601,6 +4611,10 @@ mod tests {
                 r#"{"recipe_version": 3, "input": {"color": "linear"}}"#,
                 &["`input.color`", "`input.transfer`"],
             ),
+            (
+                r#"{"recipe_version": 3, "input": {"export_ir": "ir.tiff"}}"#,
+                &["`input.export_ir`", "no longer exported"],
+            ),
         ] {
             let err = check(json, true).unwrap_err();
             for needle in needles {
@@ -4610,6 +4624,19 @@ mod tests {
             let overlay = json.replace(r#""recipe_version": 3, "#, "");
             assert!(check(&overlay, false).unwrap_err().contains(needles[0]));
         }
+    }
+
+    #[test]
+    fn a_null_export_ir_replays_as_if_absent() {
+        // Every `--dump-params` written before the IR export retired carries it.
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"recipe_version": 3, "input": {"film_type": "silver", "export_ir": null}}"#,
+        )
+        .unwrap();
+        assert!(strip_retired_nulls(&mut v));
+        check_body(&v, true, "recipe r.json").unwrap();
+        let r: Recipe = serde_json::from_value(v).unwrap();
+        assert_eq!(r.input.film_type, crate::types::FilmType::Silver);
     }
 
     /// `convert` flags that are not conversion knobs, so they owe the recipe nothing:
@@ -4677,9 +4704,6 @@ mod tests {
             }),
             ("--base-region", &["--base-region", "0,0,10,10"], |r| {
                 matches!(r.calibration.film_base, Some(FilmBaseSource::Region(_)))
-            }),
-            ("--export-ir", &["--export-ir", "ir.tiff"], |r| {
-                r.input.export_ir.as_deref() == Some("ir.tiff")
             }),
             ("--measure-inset", &["--measure-inset", "0.1"], |r| {
                 r.measure.inset == 0.1
