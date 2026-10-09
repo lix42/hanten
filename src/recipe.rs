@@ -1726,7 +1726,7 @@ pub fn validate_roll_frames(
 ///
 /// **A probe, not a bound per knob** — legal values can multiply to zero or overflow:
 /// the film base and the corners of the reachable scan range (each channel at the scan
-/// floor or 1) through the real stages, which are monotone per channel. A base read
+/// floor or 1) through the real stages, whose extremes sit at those corners. A base read
 /// from a region is taken at 1, where the densest sample decodes densest.
 pub fn validate_render(
     r: &Recipe,
@@ -2693,8 +2693,8 @@ impl Recipe {
                  roll and use the recipe it writes (its `roll` section); or state the white \
                  balance you want (`scene_correction.white_balance`) and the roll's white \
                  (`roll.white_stops`, which sets the base slope) and exposure \
-                 (`roll.exposure`), or accept the fallback slope by stating `look.contrast` \
-                 and `look.saturation`; or use the `direct` rendering (`rendering`: \"direct\"), \
+                 (`roll.exposure`), or choose your own slope (`look.contrast` and \
+                 `look.saturation` off 1); or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
                 fell_back.join(" and "),
@@ -4604,7 +4604,7 @@ mod tests {
                 )
                 && w[0].contains("and exposure (`roll.exposure`)")
                 && w[0].contains(
-                    "accept the fallback slope by stating `look.contrast` and `look.saturation`"
+                    "or choose your own slope (`look.contrast` and `look.saturation` off 1)"
                 )
                 && w[0].contains("`rendering`: \"direct\"")
                 && w[0].contains("HDR float TIFF")

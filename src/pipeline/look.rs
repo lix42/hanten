@@ -542,32 +542,32 @@ struct Pull {
     start_stops: f32,
     /// Luminance where the pull starts, `DIFFUSE_WHITE · 2^start_stops`.
     start_luminance: f32,
-    /// The band edges as max/min ratios, `10^(contrast · s)`: a pixel outside the ramp
+    /// The band edges as max/min ratios, `10^(colour_slope · s)`: a pixel outside the ramp
     /// is classified without a logarithm.
     ratio_full: f32,
     ratio_none: f32,
     band: [f32; 2],
     /// The whole slope that shaped the pixel's colour: the decode's linearization times
     /// the saturation slope.
-    contrast: f32,
+    colour_slope: f32,
 }
 
 impl Pull {
-    fn new(p: &HighlightDesaturation, contrast: f32) -> Result<Self> {
-        if p.check().is_err() || !(contrast.is_finite() && contrast > 0.0) {
+    fn new(p: &HighlightDesaturation, colour_slope: f32) -> Result<Self> {
+        if p.check().is_err() || !(colour_slope.is_finite() && colour_slope > 0.0) {
             return Err(NcError::Other(format!(
-                "highlight desaturation was handed unusable parameters ({p:?} at total \
-                 contrast {contrast}); the recipe's validation should have refused them"
+                "highlight desaturation was handed unusable parameters ({p:?} at colour \
+                 slope {colour_slope}); the recipe's validation should have refused them"
             )));
         }
         Ok(Self {
             strength: p.strength,
             start_stops: p.start_stops,
             start_luminance: DIFFUSE_WHITE * p.start_stops.exp2(),
-            ratio_full: 10f32.powf(contrast * p.band[0]),
-            ratio_none: 10f32.powf(contrast * p.band[1]),
+            ratio_full: 10f32.powf(colour_slope * p.band[0]),
+            ratio_none: 10f32.powf(colour_slope * p.band[1]),
             band: p.band,
-            contrast,
+            colour_slope,
         })
     }
 
@@ -591,7 +591,7 @@ impl Pull {
         let key = if ratio <= self.ratio_full {
             1.0
         } else {
-            let s = ratio.log10() / self.contrast;
+            let s = ratio.log10() / self.colour_slope;
             ((self.band[1] - s) / (self.band[1] - self.band[0])).clamp(0.0, 1.0)
         };
         let brightness = if y >= DIFFUSE_WHITE {

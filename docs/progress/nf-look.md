@@ -31,8 +31,9 @@ default look is not the identity, and an empty look is spared because it is one.
 
 **`contrast` is done (2026-09-24): print contrast is `look.contrast`**, landed early by
 `nf-reconstruction/gamma-split` — a power pivoted at mid-grey, applied first in the
-stage. Highlight desaturation's band divides by the whole contrast (the decode's
-linearization × this), so it is unchanged whichever stage carries a roll's contrast. It
+stage (on luminance since `contrast-on-luminance`, below). Highlight desaturation's band
+divides by the decode's linearization × the look's saturation slope, so it is unchanged
+whichever stage carries a roll's contrast. It
 stays **one knob** holding whatever makes the roll right: under
 the rule `nf-calibration/anchor-comparison` chose (a bounded C) the solved per-roll value
 *is* `look.contrast`, with the decode's anchor unchanged; taste is editing that number.
@@ -110,8 +111,8 @@ visible by eye; the band's value is keeping the pull off colour.
 
 **`contrast-definition` is done (2026-09-29): `look.contrast` is a multiplier.**
 `--contrast` multiplies the base slope — the applied roll white's
-(`roll_white::slope_for`), else `look::DEFAULT_SLOPE` (2.0/1.8), or `direct`'s pinned
-2.0/1.8 — default 1, so it builds on the roll's as `--white-balance` does. Only the knob
+(`roll_white::slope_for`), else `look::DEFAULT_SLOPE`, or `direct`'s pinned slope (both
+≈1.414 since `pipeline_version` 9) — default 1, so it builds on the roll's as `--white-balance` does. Only the knob
 is "contrast"; absolute values are **slopes** (`LookSection::slope`, reported as
 `chain.look.{contrast, base_slope, base_from, slope}`, `chain.roll.slope`/
 `slope_applied`, `measure-roll`'s `white.slope`); the whole slope is internal. Recipes
@@ -120,6 +121,16 @@ with its conversion), and a per-frame override stating one must state a version.
 film master's look predicate is `recipe::LookKeys::asks_for_a_look`. For
 `no-roll-defaults`: moving `DEFAULT_SLOPE` moves every no-roll render, stated multiplier
 or not.
+
+**`contrast-on-luminance` is done (2026-10-09, `pipeline_version` 10): contrast moves
+luminance only; saturation is its own slope.** Contrast scales the pixel whole by
+`Y′ / Y`; saturation stretches log channel ratios (`(x_c / max_c)^s`, luminance restored).
+The saturation slope is the colour's base slope × the rendering's saturation
+(`look::DEFAULT_SATURATION` 1.15 under `default`, chosen by review; 1 under `direct`) ×
+`look.saturation` / `--saturation` (default 1). A thin frame's slope never reaches colour:
+its colour base is the roll white's, else the fallback (`chain.look.saturation_base_from`).
+For `envelope-hybrid-placement`: a per-frame slope stays out of colour only if it arrives
+as `roll.thin_slope` does. No flag gives an identity look under `default` any more.
 
 **`look-presets` is done (2026-09-25): there are no look presets.** Nothing in the look
 is coupled the way the old bundles were, and a named look is a `--params` layer
@@ -954,7 +965,7 @@ preset row; do not reuse the name.
 
 ## contrast-on-luminance
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A3b–A3d, D2):
@@ -1011,3 +1022,26 @@ preset row; do not reuse the name.
     permitted by the branch contract, with no violation, but the probe asserts 0 on real
     frames. At saturation 1 the count is 0. Decided (user): the probe now asserts only
     no violations and prints the both-bound count; `chain.rs`'s comment says so.
+- 2026-10-09: **review loop and done.** Codex, `nc-reviewer` and `/code-review`; fixes
+  verified against the code before landing:
+  - **Saturation normalises by the largest channel** (`(x_c / max_c)^s`), identical in
+    exact arithmetic to `(x_c / Y)^s`, but no slope can overflow: a first version
+    passed an overflowing pixel through, so a large `--saturation` left the most colourful
+    pixels unsaturated. `--saturation` left `PROBE_KNOBS`: it can no longer cause a render
+    fault.
+  - **The look's multipliers are checked before any `roll.frames` whole slope**
+    (`recipe::validate_look_multipliers`); `--saturation 0` beside a frame white got a
+    density-gamma remedy before.
+  - **The no-roll warning names the slope that fell back** (`for tone` / `for colour`) and
+    stays until both multipliers are chosen: `--contrast` alone no longer silences it,
+    since colour still falls back.
+  - The report gained `chain.look.saturation_base_from`; `validate_look` reads it rather
+    than re-deriving the thin case.
+  - Migration messages say "To keep the tone scale": a converted `look.contrast` no
+    longer reproduces the old colour.
+  - **Left open, for `nf-calibration/envelope-hybrid-placement`:** the thin-lift test's
+    0.05-stop tolerance could return to 0.02 if `roll_white::thin_lift` read the base's
+    luminance after the roll gains — exact now that the slope acts on luminance. It moves
+    thin frames, so it is that task's (it reworks the lifts), not a review fix. Also
+    unverified on real frames: a strongly out-of-gamut pixel whose luminance is just above
+    zero is scaled hard while one at or below zero passes through.
