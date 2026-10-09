@@ -361,8 +361,9 @@ pub struct MeasureRollArgs {
     pub no_small_lift: bool,
     /// The midtone neutral, a correction: `auto` (the default) writes the roll's midtone
     /// line when the roll has 10 frames or more and enough bands of brightness voted;
-    /// `on` writes it on a shorter roll too; `off` writes none. `convert --midtone-neutral
-    /// off` turns a written one off without re-measuring.
+    /// `on` writes it on a shorter roll of 3 or more frames, if enough bands count; `off`
+    /// writes none, and measures the whites without it. `convert --midtone-neutral off`
+    /// turns a written one off without re-measuring, the whites still measured after it.
     #[arg(
         long,
         value_enum,
@@ -601,15 +602,17 @@ pub struct DestinationOverrides {
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`,
-    /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`, `--small-lift
-    /// on`, `--thin-lift on`), which only a rendering applies — refused under a recipe's
-    /// film master too. A recipe's `roll` section is spared, since a measurement is not a
-    /// stage asked for, and so is a lift switched off.
+    /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
+    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`),
+    /// which only a rendering applies — refused under a recipe's film master too. A
+    /// recipe's `roll` section is spared, since a measurement is not a stage asked for,
+    /// and so is a switch turned off.
     #[arg(
         long = "film-master",
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
             "roll_exposure", "roll_frame_exposure", "roll_thin_slope", "roll_thin_exposure",
+            "roll_midtone_line",
         ]
     )]
     pub film_master: bool,
@@ -879,8 +882,8 @@ pub struct RollOverrides {
     )]
     pub roll_midtone_line: Option<MidtoneLine>,
     /// Whether the midtone line applies: `on` (the default) or `off`, which keeps it in
-    /// the recipe (recipe key `roll.midtone_neutral`). A correction with a switch, since
-    /// a roll dominated by one scene colour can mislead it.
+    /// the recipe (recipe key `roll.midtone_neutral`) and the whites measured after it. A
+    /// correction with a switch, since a roll dominated by one scene colour can mislead it.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub midtone_neutral: Option<recipe::Switch>,
 }
@@ -1827,8 +1830,8 @@ fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Resu
     };
     let message = if r.output == OutputSection::FilmMaster {
         // Under `direct` too, either remedy alone would meet the film master + `direct`
-        // refusal next, so each carries `--rendering default`. Only a lift switch typed
-        // `on` reaches here beside a typed `--film-master`; the other roll flags conflict.
+        // refusal next, so each carries `--rendering default`. Only a switch typed `on`
+        // reaches here beside a typed `--film-master`; the other roll flags conflict.
         let (master, choose) = if args.destination.film_master {
             ("--film-master writes", "drop --film-master")
         } else {
@@ -2473,8 +2476,8 @@ pub fn run() -> Result<()> {
         Command::Estimate(_) => Err(NcError::Usage(
             "`hanten estimate` was renamed `hanten measure-base`, with the same flags; \
              `--out PATH` now writes the measured base as a recipe for `--params`. To \
-             measure a roll's base with its white balance, white and exposure, use \
-             `hanten measure-roll --unexposed <unexposed.tif>`"
+             measure a roll's base with its white balance, midtone line, white and \
+             exposure, use `hanten measure-roll --unexposed <unexposed.tif>`"
                 .into(),
         )),
         Command::MeasureRoll(args) => run_measure_roll(args),
@@ -7229,23 +7232,22 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     log.info(format_args!("roll white balance {gains:?}"));
     // Unguarded, as reviewed: only the gains take the leader guard. A frame the pool kept
     // nothing of is not picture, as for the exposure.
-    let picture: Vec<Vec<f32>> = film_samples
+    let picture = film_samples
         .iter()
         .zip(&frames)
         .filter(|(_, f)| f.counts.kept > 0)
-        .map(|(s, _)| roll_white::acescg_sample(s))
-        .collect();
-    let mut midtone = midtone_neutral::measure(
-        &picture.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-        gains,
-        roll_white::pooled_white_stops(&picture, gains),
-        args.midtone_neutral == MidtoneMode::Auto,
-    );
-    drop(picture);
-    if args.midtone_neutral == MidtoneMode::Off {
-        midtone.line = None;
-        midtone.off_because = Some(midtone_neutral::OffBecause::Asked);
-    }
+        .map(|(s, _)| s);
+    let midtone = if args.midtone_neutral == MidtoneMode::Off {
+        midtone_neutral::Measured::asked(picture.filter(|s| !s.is_empty()).count())
+    } else {
+        let picture: Vec<Vec<f32>> = picture.map(|s| roll_white::acescg_sample(s)).collect();
+        midtone_neutral::measure(
+            &picture.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            gains,
+            roll_white::pooled_white_stops(&picture, gains),
+            args.midtone_neutral == MidtoneMode::Auto,
+        )
+    };
     match (midtone.line, midtone.off_because) {
         (Some(l), _) => log.info(format_args!("midtone line {l:?}")),
         (None, why) => log.info(format_args!("no midtone line: {why:?}")),

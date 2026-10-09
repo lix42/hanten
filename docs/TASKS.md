@@ -1938,7 +1938,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   the scene's light; `path-to-white`'s band needs it. **Done 2026-09-23**: `hanten
   measure-roll` (pooled p99, leader guard), and per-frame auto white balance retired
   on the new chain
-- [~] [A midtone neutral measured per
+- [x] [A midtone neutral measured per
   roll](tasks/nf-scene-correction/midtone-neutral.md) — the cast a poor development leaves
   in the midtones, removed by a per-roll line through the frames' votes; on by default
   with ten frames or more; each frame's white then measured on the corrected samples

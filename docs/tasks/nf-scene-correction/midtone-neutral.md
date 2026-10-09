@@ -44,8 +44,9 @@ Open:
   fixed: `correction-confidence`.
 - Whether the white rule's p97, cap +2.0 and floor +1.5 still hold once whites are
   measured after correction; they were tuned before it.
-- The recipe and report shape, and how a frame override or a stated `--white-balance`
-  combines with the line.
+- Settled: the recipe and report shape (`roll.midtone_line`, `roll.midtone_neutral`), and
+  how a frame override or a stated `--white-balance` combines with the line (roll-wide
+  line, frame-local switch; the line keys on the roll's own gains).
 - Highlight desaturation as a final cleanup on top.
 
 ## How to Verify
@@ -55,6 +56,8 @@ Open:
   spike's to within its patch numbers.
 - A review of the moved whites (two-pass measurement) on a cast roll and a good roll.
 - A drift-gate row; `docs/using-nc.md` states the step, its switch and its fallback.
+  Refreshed in place instead, no row (reason: `docs/progress/nf-scene-correction.md`,
+  2026-10-08).
 
 ## Dependencies
 

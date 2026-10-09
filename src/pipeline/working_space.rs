@@ -231,9 +231,15 @@ const fn invert(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::FilmBase;
 
     #[test]
     fn the_inverse_undoes_the_mapping() {
+        // `derive` is test-only, so the runtime keeps its own `invert`; they agree bit for bit.
+        assert_eq!(
+            ACESCG_TO_NC_FILM_RGB_V1,
+            crate::pipeline::colorimetry::derive::inverse(NC_FILM_RGB_V1_TO_ACESCG)
+        );
         let product = crate::pipeline::colorimetry::derive::multiply(
             ACESCG_TO_NC_FILM_RGB_V1,
             NC_FILM_RGB_V1_TO_ACESCG,
@@ -251,7 +257,6 @@ mod tests {
             "{back:?}"
         );
     }
-    use crate::types::FilmBase;
 
     // -- derivation helpers ----------------------------------------------------
     //

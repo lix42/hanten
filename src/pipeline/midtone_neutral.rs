@@ -28,8 +28,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
+use crate::pipeline::roll_white::scene_stops;
 
 /// The lowest band edge, in scene stops (log2 of ACEScg luma over mid-grey).
 pub const BAND_LOW_STOPS: f32 = -3.0;
@@ -113,7 +115,7 @@ impl MidtoneLine {
         } else {
             1.0
         };
-        let at = s.clamp(self.bands[0], self.bands[1]).min(join);
+        let at = s.min(join).clamp(self.bands[0], self.bands[1]);
         [
             (self.red[0] * at + self.red[1]) * fade,
             (self.blue[0] * at + self.blue[1]) * fade,
@@ -123,17 +125,16 @@ impl MidtoneLine {
     /// Remove the cast from one linear ACEScg pixel, **before** the white balance:
     /// `gains` are the roll's, which the line was measured after. Red and blue are
     /// divided by the cast, then all three scaled back to the pixel's luminance. A pixel
-    /// with no positive luminance is left alone.
+    /// with no finite positive luminance is left alone.
     pub fn correct(&self, px: &mut [f32; 3], gains: [f32; 3]) {
-        let luma =
-            |p: [f32; 3]| ACESCG_LUMA[0] * p[0] + ACESCG_LUMA[1] * p[1] + ACESCG_LUMA[2] * p[2];
+        let luma = |p: [f32; 3]| dot(p, ACESCG_LUMA);
         let balanced = [px[0] * gains[0], px[1] * gains[1], px[2] * gains[2]];
         let y = luma(*px);
         let yw = luma(balanced);
-        if !(y > 0.0 && yw > 0.0) {
+        if !(y > 0.0 && yw > 0.0 && y.is_finite() && yw.is_finite()) {
             return;
         }
-        let [cr, cb] = self.cast((yw / MID_GREY).log2());
+        let [cr, cb] = self.cast(scene_stops(yw));
         let off_cast = ((balanced[0] / balanced[1]).log2() - cr)
             .hypot((balanced[2] / balanced[1]).log2() - cb);
         // A channel at zero or below has no ratio; the spike corrected it in full.
@@ -176,6 +177,18 @@ pub struct Measured {
     pub bands: Vec<Band>,
     /// Why there is no line, when there is none.
     pub off_because: Option<OffBecause>,
+}
+
+impl Measured {
+    /// `--midtone-neutral off`: nothing measured over `frames` contributing frames.
+    pub fn asked(frames: usize) -> Self {
+        Self {
+            line: None,
+            frames,
+            bands: Vec::new(),
+            off_because: Some(OffBecause::Asked),
+        }
+    }
 }
 
 /// Why a roll gets no line.
@@ -248,8 +261,7 @@ fn frame_votes(frame: &[f32], gains: [f32; 3]) -> Vec<Option<[f64; 2]>> {
         if b.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
             continue;
         }
-        let y = ACESCG_LUMA[0] * b[0] + ACESCG_LUMA[1] * b[1] + ACESCG_LUMA[2] * b[2];
-        let s = (f64::from(y) / f64::from(MID_GREY)).log2();
+        let s = (f64::from(dot(b, ACESCG_LUMA)) / f64::from(MID_GREY)).log2();
         let at = ((s - f64::from(BAND_LOW_STOPS)) / f64::from(BAND_WIDTH_STOPS)).floor();
         if at >= 0.0 && at < BAND_COUNT as f64 {
             let (r, g, bl) = (f64::from(b[0]), f64::from(b[1]), f64::from(b[2]));
@@ -280,16 +292,24 @@ fn densest_cluster(points: &[[f64; 2]], min: usize) -> [f64; 2] {
     centre
 }
 
-/// The per-axis median of a non-empty set; the mean of the middle two when even.
+/// The per-axis median of a non-empty set; the mean of the middle two when even. By
+/// selection, not a sort: the same elements, since `total_cmp` is a total order.
 fn median2(points: &[[f64; 2]]) -> [f64; 2] {
+    let n = points.len();
+    let mut v = Vec::with_capacity(n);
     std::array::from_fn(|k| {
-        let mut v: Vec<f64> = points.iter().map(|p| p[k]).collect();
-        v.sort_unstable_by(f64::total_cmp);
-        let n = v.len();
+        v.clear();
+        v.extend(points.iter().map(|p| p[k]));
+        let (below, &mut mid, _) = v.select_nth_unstable_by(n / 2, f64::total_cmp);
         if n % 2 == 1 {
-            v[n / 2]
+            mid
         } else {
-            (v[n / 2 - 1] + v[n / 2]) / 2.0
+            let lower = below
+                .iter()
+                .copied()
+                .max_by(f64::total_cmp)
+                .expect("n is even and non-zero");
+            (lower + mid) / 2.0
         }
     })
 }
@@ -426,6 +446,51 @@ mod tests {
     }
 
     #[test]
+    fn the_median_by_selection_is_the_sorted_median() {
+        let sorted = |v: &mut Vec<f64>| {
+            v.sort_unstable_by(f64::total_cmp);
+            let n = v.len();
+            if n % 2 == 1 {
+                v[n / 2]
+            } else {
+                (v[n / 2 - 1] + v[n / 2]) / 2.0
+            }
+        };
+        for n in 1..40usize {
+            // Duplicates and both zeros included.
+            let points: Vec<[f64; 2]> = (0..n)
+                .map(|i| {
+                    let a = ((i * 37 % 11) as f64 - 5.0) * 0.1;
+                    [if a == 0.0 { -0.0 } else { a }, ((i * 13) % 7) as f64 * 0.3]
+                })
+                .collect();
+            let got = median2(&points);
+            for k in 0..2 {
+                let want = sorted(&mut points.iter().map(|p| p[k]).collect());
+                assert_eq!(got[k].to_bits(), want.to_bits(), "n {n} axis {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_join_below_the_bands_still_reads_the_line_inside_them() {
+        // A white so low the fade starts under the lowest band.
+        let l = MidtoneLine {
+            fade_end_stops: -2.0,
+            ..line()
+        };
+        let low = l.bands[0];
+        let at_low = [l.red[0] * low + l.red[1], l.blue[0] * low + l.blue[1]];
+        assert_eq!(l.cast(-4.0), at_low);
+        let fade = (l.fade_end_stops - -2.5) / FADE_STOPS;
+        let c = l.cast(-2.5);
+        assert!(
+            (c[0] - at_low[0] * fade).abs() < 1e-6 && (c[1] - at_low[1] * fade).abs() < 1e-6,
+            "{c:?}"
+        );
+    }
+
+    #[test]
     fn the_tint_gate_spares_strongly_coloured_light() {
         let l = line();
         let s = 0.0_f64;
@@ -449,8 +514,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pixel_without_luminance_is_left_alone() {
-        for px in [[0.0, 0.0, 0.0], [-0.1, 0.01, 0.0], [f32::NAN, 0.2, 0.2]] {
+    fn a_pixel_without_finite_positive_luminance_is_left_alone() {
+        for px in [
+            [0.0, 0.0, 0.0],
+            [-0.1, 0.01, 0.0],
+            [f32::NAN, 0.2, 0.2],
+            [f32::INFINITY, 0.1, 0.1],
+            [0.1, 0.1, f32::NAN],
+        ] {
             let mut out = px;
             line().correct(&mut out, [1.0; 3]);
             assert_eq!(out.map(f32::to_bits), px.map(f32::to_bits));

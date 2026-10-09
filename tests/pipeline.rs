@@ -9590,6 +9590,10 @@ fn the_roll_flags_are_refused_under_the_film_master() {
     for flag in [
         &["--roll-white-balance", "1.3,1,0.8"][..],
         &["--roll-white", "1.7"][..],
+        &[
+            "--roll-midtone-line",
+            "-0.05,0.04,-0.02,0.37,-2.75,1.75,1.9",
+        ][..],
     ] {
         let (code, _, err) = convert_48bit(
             &tmp.path("m.tiff"),
@@ -9822,6 +9826,13 @@ fn measure_roll_writes_a_midtone_line_on_a_long_roll_that_convert_applies() {
     assert!(forced["midtone_neutral"]["line"].is_object(), "{forced}");
     let (off, _, _) = measure(10, &["--midtone-neutral", "off"]);
     assert_eq!(off["midtone_neutral"]["off_because"], "asked", "{off}");
+    // Nothing is measured: the frames are counted, no band is.
+    assert_eq!(off["midtone_neutral"]["frames"], 10, "{off}");
+    assert_eq!(
+        off["midtone_neutral"]["bands"],
+        serde_json::json!([]),
+        "{off}"
+    );
 
     let (report, written, recipe) = measure(10, &[]);
     let line = &report["midtone_neutral"]["line"];
@@ -10413,24 +10424,30 @@ fn small_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
         ("direct.tiff", &["--rendering", "direct"][..]),
         ("master.tiff", &["--film-master"][..]),
     ] {
-        let off = ["--small-lift", "off", "--thin-lift", "off"];
+        let off = [
+            "--small-lift",
+            "off",
+            "--thin-lift",
+            "off",
+            "--midtone-neutral",
+            "off",
+        ];
         let (code, _, err) = convert_48bit(&tmp.path(name), &[extra, &off].concat());
         assert_eq!(code, 0, "{name}: {err}");
     }
-    // `on` asks for a lift the film master would ignore, and is named as typed.
-    let (code, _, err) = convert_48bit(
-        &tmp.path("on.tiff"),
-        &["--film-master", "--small-lift", "on"],
-    );
-    assert_eq!(code, 2, "{err}");
-    assert!(
-        err.contains(
-            "--small-lift on applies the roll's measurements through the rendering \
-                      stages, but --film-master writes"
-        ) && err.contains("drop --film-master"),
-        "{err}"
-    );
-    assert!(!err.contains("recipe's `output`"), "{err}");
+    // `on` asks for a correction the film master would ignore, and is named as typed.
+    for switch in ["--small-lift", "--midtone-neutral"] {
+        let (code, _, err) = convert_48bit(&tmp.path("on.tiff"), &["--film-master", switch, "on"]);
+        assert_eq!(code, 2, "{switch}: {err}");
+        assert!(
+            err.contains(&format!(
+                "{switch} on applies the roll's measurements through the rendering \
+                 stages, but --film-master writes"
+            )) && err.contains("drop --film-master"),
+            "{switch}: {err}"
+        );
+        assert!(!err.contains("recipe's `output`"), "{switch}: {err}");
+    }
 
     // On `roll`, one frame's exposure stated for all lifts every frame alike.
     let input = fixture("hdr-48bit.tif");

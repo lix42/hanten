@@ -587,7 +587,7 @@ fn midtone_pixel(px: [f32; 3], k: [i32; 6]) -> [f32; 3] {
     } else {
         1.0
     };
-    let at = s.clamp(l.bands[0], l.bands[1]).min(join);
+    let at = s.min(join).clamp(l.bands[0], l.bands[1]);
     let (cr, cb) = (
         (l.red[0] * at + l.red[1]) * fade,
         (l.blue[0] * at + l.blue[1]) * fade,

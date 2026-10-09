@@ -1419,7 +1419,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
 ## display-white
 
 **Status:** not started
-**Updated:** 2026-10-07
+**Updated:** 2026-10-08
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A8, G1): diffuse
   white renders at L* 79 and the band above it is mostly empty; reviews preferred the

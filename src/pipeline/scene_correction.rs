@@ -265,13 +265,17 @@ pub fn apply(
     }
 
     let mut buffer = WorkingBuffer::from_aces(image);
-    if let Some(m) = midtone {
-        pixels::map_in_place(buffer.rgb_mut(), |px| m.line.correct(px, m.roll_gains));
-    }
-    if gains != [1.0, 1.0, 1.0] {
+    let scale = gains != [1.0, 1.0, 1.0];
+    if midtone.is_some() || scale {
+        // One pass: the line, then the gains.
         pixels::map_in_place(buffer.rgb_mut(), |px| {
-            for c in 0..3 {
-                px[c] *= gains[c];
+            if let Some(m) = midtone {
+                m.line.correct(px, m.roll_gains);
+            }
+            if scale {
+                for c in 0..3 {
+                    px[c] *= gains[c];
+                }
             }
         });
     }

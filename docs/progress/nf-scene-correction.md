@@ -45,6 +45,13 @@ film-base reference has no scene subtraction to account for.
 lifted black (a faded look) is the one thing it could do that nothing does now. If anyone
 wants it, it is a look control.
 
+**A per-roll midtone line runs first (`midtone-neutral`, 2026-10-08).** `measure-roll`
+fits `roll.midtone_line` (10+ frames) and scene correction removes that cast before the
+roll's gains, keyed on those gains, with a tint gate sparing strongly coloured light;
+`roll.midtone_neutral` switches it per frame. Each frame's white is now measured after
+the gains and the line, so anything tuned on whites (the thin lift, `display-white`)
+reads corrected whites; the saturation check keeps the decoded white.
+
 ## stage
 
 **Status:** done
@@ -266,7 +273,7 @@ wants it, it is a look control.
 
 ## midtone-neutral
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-08
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
@@ -323,6 +330,22 @@ wants it, it is a look control.
   with the new whites). The new whites read a little dark; the user attributes that to
   diffuse white at L\* 79, which `nf-calibration/display-white` raises, not to the
   measurement.
+- 2026-10-08: **memory figure corrected**: after the frame loop `measure-roll` holds three
+  samples per frame (film RGB, its ACEScg copy, the pooled white's copy), ~160 MB at 36
+  frames (`pipeline::memory`), not the two (~110 MB) stated above.
+- 2026-10-08: **done.** Landed as one change: `pipeline::midtone_neutral` (line, gate,
+  measurement), applied first in scene correction in the same pass as the gains;
+  `measure-roll` writes `roll.midtone_line` and measures whites after the correction.
+  Review: Codex, `nc-reviewer`, the user's `/code-review` and ship's reviewer; fixes
+  included a non-finite pixel left alone (it turned NaN), the line held flat below its
+  lowest band, `measure-roll --midtone-neutral off` skipping the measurement (`bands: []`),
+  and the docs saying render-time off keeps whites measured with the line (re-measure with
+  `off` for that; a later `--params` layer's `null` cannot clear a line). Accepted as is: a
+  pixel with a channel ≤ 0 after the gains gets the full correction (the spike's rule, not
+  reviewed on saturated colour). For dependents: `display-white` and the thin-lift
+  thresholds now read whites after the correction; `midtone-neutral-fit` owns the fit
+  range and fade width; the bands are in pre-exposure stops, so a thin roll's rendered
+  shadows can fall below the lowest band (the spike's design, unreviewed on thin rolls).
 
 ## midtone-neutral-fit
 

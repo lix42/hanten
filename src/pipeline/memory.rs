@@ -366,10 +366,10 @@ pub enum RunProfile {
     ///
     /// Holds [`U16Tiff`](Self::U16Tiff)'s render-phase buffers — the decoded image
     /// and the decode's one output buffer with its cloned IR plane, mapped into ACEScg
-    /// in place — and nothing after them, so it peaks at the **render** phase. Two
-    /// samples of each frame (~1.5 MB each, `roll_white::FRAME_SAMPLE_PIXELS`) — the
-    /// guarded pool and the film-RGB sample the whites and the midtone line read — grow
-    /// across frames and are not in this per-frame model; a 36-frame roll holds ~110 MB.
+    /// in place — and nothing after them, so it peaks at the **render** phase. The
+    /// per-frame samples (~1.5 MB each, `roll_white::FRAME_SAMPLE_PIXELS`) are not in
+    /// this model: they peak after the frame loop at three per frame (film RGB, its
+    /// ACEScg copy, the pooled white's per-channel copy), ~160 MB on a 36-frame roll.
     MeasureRoll,
 }
 

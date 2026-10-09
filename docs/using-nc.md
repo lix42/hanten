@@ -770,8 +770,9 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stag
 ["identity","contrast+highlight-desaturation","reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
 ```
 
-Scene correction reports `"identity"`, `"white-balance"`, `"exposure"` or
-`"white-balance+exposure"`; the look the controls that ran joined by `+`, or
+Scene correction reports what ran joined by `+`, in order — `midtone-neutral`,
+`white-balance`, `exposure` (e.g. `"midtone-neutral+white-balance+exposure"`) — or
+`"identity"`; the look the controls that ran joined by `+`, or
 `"identity"`; fit range its operator and display black's curve; fit gamut the change of
 primaries and the gamut map, named for the destination's gamut. `--film-master` runs
 none of them (§8).
@@ -866,10 +867,10 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-exposure` / `--roll-frame-exposure` /
-  `--roll-thin-slope` / `--roll-thin-exposure` / `--small-lift on` / `--thin-lift on`, or
-  pass `--rendering default`. A recipe's `roll` section is not refused, nor is
-  `--small-lift off` or `--thin-lift off`, which ask for nothing (under the film master
-  too).
+  `--roll-thin-slope` / `--roll-thin-exposure` / `--roll-midtone-line` / `--small-lift on`
+  / `--thin-lift on` / `--midtone-neutral on`, or pass `--rendering default`. A recipe's
+  `roll` section is not refused, nor is `--small-lift off`, `--thin-lift off` or
+  `--midtone-neutral off`, which ask for nothing (under the film master too).
 
 ### Scene correction
 
@@ -1242,10 +1243,13 @@ a sunset-lit cloud) — the **tint gate**. On a roll from an exhausted developer
 the difference between violet midtones and neutral ones; on a well-developed roll it is
 small. It is written only on a roll of **10 frames or more** with at least 3 bands voted
 by 3 frames: `off_because` says `too-few-frames` or `too-few-bands` otherwise, and `asked`
-under `--midtone-neutral off`. `--midtone-neutral on` writes it on a shorter roll too. A
-roll dominated by one scene colour (sand, sea) can read that colour as the cast; turn it
-off for that roll at render with `--midtone-neutral off` (recipe `roll.midtone_neutral`
-`"off"`), which keeps the line in the recipe.
+(no band measured) under `--midtone-neutral off`. `--midtone-neutral on` writes it on a
+shorter roll too, of 3 frames or more, if enough bands count. A roll dominated by one
+scene colour (sand, sea) can read that colour as the cast; re-run `measure-roll
+--midtone-neutral off`, which also measures the whites without the line, and use its
+recipe alone: a `null` in a later `--params` layer does not clear an earlier line. At
+render, `--midtone-neutral off` (recipe `roll.midtone_neutral` `"off"`) drops only the
+line and keeps it in the recipe: the whites stay as measured after it.
 
 **The roll's white** is measured per frame, in **scene stops** above mid-grey: each
 frame's `white_stops` is the 97th percentile of its pixels' **brightest channel**, after

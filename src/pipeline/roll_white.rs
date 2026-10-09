@@ -84,7 +84,8 @@ use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::white_balance::{
-    green_anchored_gains, nearest_rank_index, percentile_levels, sample_region,
+    green_anchored_gains, nearest_rank_index, percentile_levels, percentile_levels_of,
+    sample_region,
 };
 use crate::pipeline::working_space::{acescg_to_film_rgb, film_rgb_to_acescg};
 use crate::types::{NcError, Result};
@@ -716,14 +717,12 @@ pub fn roll_gains(pool: &[f32]) -> Result<[f32; 3]> {
 /// highlights near the leader, and on 09-29 Ektar put this 0.23 stop under the reviewed
 /// value. Not the gains' own p99, which is guarded.
 pub fn pooled_white_stops(samples: &[Vec<f32>], gains: [f32; 3]) -> f32 {
-    let pooled: Vec<f32> = samples
+    let usable = samples
         .iter()
         .flat_map(|s| s.as_chunks::<3>().0.iter())
-        .filter(|px| !unusable(px))
-        .flatten()
-        .copied()
-        .collect();
-    let p = percentile_levels(&pooled, PERCENTILE);
+        .filter(|px| !unusable(px));
+    let cap = samples.iter().map(|s| s.len() / 3).sum();
+    let p = percentile_levels_of(usable, cap, PERCENTILE);
     let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum();
     scene_stops(luma)
 }
@@ -1129,6 +1128,75 @@ mod tests {
         assert!(near_saturation(d));
         let w = place_roll_white(&[Some(scene_stops(white)), Some(1.7)]).unwrap();
         assert_eq!(w.roles[0], FrameRole::Clamped);
+    }
+
+    /// A ramp of film-RGB pixels from mid-grey to +3 stops, tinted per channel.
+    fn ramp(tint: [f32; 3]) -> Vec<f32> {
+        (0..1001)
+            .flat_map(|i| {
+                let v = at(3.0 * i as f32 / 1000.0);
+                tint.map(|t| v * t)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn with_unit_gains_and_no_line_the_corrected_white_is_the_decoded_one() {
+        let s = ramp([1.0, 0.8, 0.6]);
+        let (w, c) = (
+            sample_white(&s).unwrap(),
+            corrected_white(&s, [1.0; 3], None).unwrap(),
+        );
+        // Only the 3×3 round trip's f32 roundings separate them.
+        assert!((c / w - 1.0).abs() < 1e-5, "{w} {c}");
+    }
+
+    #[test]
+    fn the_corrected_white_follows_the_gains() {
+        let grey = ramp([1.0; 3]);
+        let w = sample_white(&grey).unwrap();
+        // Equal gains scale every channel: the white moves by log2 of the gain.
+        let c = corrected_white(&grey, [1.5; 3], None).unwrap();
+        assert!((scene_stops(c) - scene_stops(w) - 1.5f32.log2()).abs() < 1e-5);
+        // Unequal gains act in ACEScg: the white is the brightest film channel of the
+        // corrected p97 pixel, mapped back.
+        let gains = [1.3, 1.0, 0.8];
+        let aces = film_rgb_to_acescg([w; 3]);
+        let back = acescg_to_film_rgb(std::array::from_fn(|c| aces[c] * gains[c]));
+        let c = corrected_white(&grey, gains, None).unwrap();
+        assert!(
+            (c / back[0].max(back[1]).max(back[2]) - 1.0).abs() < 1e-5,
+            "{c} {back:?}"
+        );
+    }
+
+    #[test]
+    fn the_pooled_white_is_the_scene_stop_of_the_balanced_lumas_p99() {
+        let px = [0.5, 0.4, 0.3];
+        let gains = [0.8, 1.0, 1.4];
+        let samples = vec![field(px, 50), field(px, 30)];
+        let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c] * gains[c]).sum();
+        let w = pooled_white_stops(&samples, gains);
+        assert!((w - scene_stops(luma)).abs() < 1e-6, "{w}");
+        // Read without a flattened copy, bit for bit as the copy read.
+        let samples = vec![
+            ramp([1.0, 0.8, 0.6]),
+            field([f32::NAN, 0.3, 0.3], 5),
+            ramp([0.5; 3]),
+        ];
+        let flat: Vec<f32> = samples
+            .iter()
+            .flat_map(|s| s.as_chunks::<3>().0.iter())
+            .filter(|px| !unusable(px))
+            .flatten()
+            .copied()
+            .collect();
+        let p = percentile_levels(&flat, PERCENTILE);
+        let want = scene_stops((0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum());
+        assert_eq!(
+            pooled_white_stops(&samples, gains).to_bits(),
+            want.to_bits()
+        );
     }
 
     #[test]
