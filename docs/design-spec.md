@@ -470,9 +470,11 @@ Every value Hanten sets on its own is one of three kinds
 (`nf-calibration/taste-vs-quality`). A **correction** brings the scan back to what the
 film recorded, on the whole roll alike; it has no switch, since without it the scan is
 wrong rather than differently liked (`direct` leaves out the whole roll section). The
-exception is a correction that can read a roll's scene as its cast — the midtone neutral,
-on a roll dominated by one colour — which has a switch, so a misread roll can be rendered
-without it. A
+exception is a correction that can read a roll's scene as its cast — the white balance and
+the midtone neutral, on a roll dominated by one colour — which has a switch, so a misread
+roll can be rendered without it. Nothing detects the misreading
+(`nf-scene-correction/correction-confidence`): `measure-roll` notes only when a roll has
+too few frames to trust either (`confidence` in its report; advice, outside `--strict`). A
 **guard** bounds a measurement, or keeps a preference off a frame it would harm. A
 **preference** is a choice a viewer may not share: on by default only when it won
 review, and each has its own switch at render that keeps the measured value in the
@@ -481,7 +483,7 @@ what does is whether the adjustment restores the roll or reacts to one frame.
 
 | adjustment | kind | why | off at render |
 |---|---|---|---|
-| roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour | — |
+| roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour | `--neutral-balance off`, `roll.neutral_balance` (the midtone line goes off with it) |
 | midtone neutral (`roll.midtone_line`) | correction | removes the cast a poor development leaves in the midtones, which the white balance, exact at the roll's p99, cannot; no bad frame on four reviewed rolls | `--midtone-neutral off`, `roll.midtone_neutral` |
 | the midtone line's data floor (10 frames, 3 voted bands) and tint gate | guard | keep the line off a roll too short to measure it, and off strongly coloured light (a sunset-lit cloud) | — |
 | roll exposure (`roll.exposure`) | correction | brings a thin or dense roll to a normal level with one gain, so frames keep their relative levels | — |
@@ -809,7 +811,7 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to mid-grey, within ±3 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to mid-grey, within ±3 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
 | `hanten params`  | Print the full default parameter set as JSON, in the §8 envelope (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
@@ -1130,9 +1132,11 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #     "exposure": { "ev": 0.455, "level_stops": -1.055, "bounded": false, … },
 #     "midtone_neutral": { "kind": "correction", "mode": "auto", "line": { "red": [...],
 #         "blue": [...], "bands": [-2.75, 2.25], "fade_end_stops": 1.9 }, "off_because": null, … },
+#     "confidence": { "white_balance": { "tier": "confident", "frames": 24, "confident_from": 16 },
+#         "midtone_neutral": { … } },
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5 --roll-exposure 0.455 --roll-midtone-line …" } }
 # roll.json: { "recipe_version": 3, "calibration": { "film_base": { "explicit": [...] } },
-#   "roll": { "white_balance": [...], "white_stops": 1.5, "exposure": 0.455,
+#   "roll": { "white_balance": [...], "neutral_balance": null, "white_stops": 1.5, "exposure": 0.455,
 #             "frame_exposure": null, "small_lift": null,
 #             "thin_slope": null, "thin_exposure": null, "thin_lift": null,
 #             "midtone_line": { … }, "midtone_neutral": null,
@@ -1512,6 +1516,11 @@ is refused (exit 2), since it asks for something the run will not do.
 - `--midtone-neutral on|off` ⇒ `roll.midtone_neutral` — whether the line applies. Frame-local.
   Off drops only the line: the whites stay measured after it (`measure-roll
   --midtone-neutral off` measures them without it).
+- `--neutral-balance on|off` ⇒ `roll.neutral_balance` — whether `roll.white_balance`
+  applies. Frame-local. Off keeps the gains in the recipe and takes the line with them,
+  which is measured after them; the whites stay as measured. A typed `--midtone-neutral
+  on` is refused against a typed or recipe off; a recipe's `"on"` (the default) is
+  spared, and a `roll` manifest frame's own off wins over the flag.
 
 Each switch is unset (`null`) by default, which is on, so `measure-roll`'s file layered
 last keeps an earlier `"off"`. Off keeps the measured values in the recipe, so one frame
@@ -1912,7 +1921,7 @@ invariant violations are **loud, `--strict`-promotable warnings** rather than ha
 errors, so a deliberate best-effort batch remains usable: (1) a shared
 `calibration.film_base` other than `explicit` re-estimates Dmin per frame; (2) a
 per-frame override that resolves a **roll-wide** value differently from the shared
-recipe — `calibration.film_base`, the applied `roll.white_balance` or `roll.exposure`, any
+recipe — `calibration.film_base`, the applied `roll.white_balance`, `roll.midtone_line` or `roll.exposure`, any
 `reconstruction` key, `rendering`, or a stated `output` — warns, naming both values
 (`cli::ROLL_WIDE`). A restatement does not; `frames[].overrides` records it.
 `roll.white_stops` is frame-local: it is how a clamped frame states its own white.
@@ -2075,6 +2084,7 @@ src/
     ├── working_image.rs    # the buffer every chain boundary carries
     ├── scene_correction.rs # midtone neutral, white balance, exposure
     ├── midtone_neutral.rs  # the roll's midtone line: measured, and removed per pixel
+    ├── correction_confidence.rs  # measure-roll: how far to trust the white balance and line
     ├── look.rs             # contrast, per-channel grade, highlight desaturation
     ├── fit_range.rs        # reinhard to the display's peak, display black
     ├── fit_gamut.rs        # into the destination's gamut, radial to its boundary

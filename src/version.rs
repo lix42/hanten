@@ -398,8 +398,9 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // `null` by default, retired with the IR export; no default pixel moved. Again by
         // `nf-scene-correction/midtone-neutral` (was `f06b2b04908795a4`):
         // `roll.midtone_line` and `roll.midtone_neutral`, `null` by default and applied only
-        // when a line is stated.
-        recipe: "5bec854cbb66f3ed",
+        // when a line is stated. Again by `nf-scene-correction/correction-confidence` (was
+        // `5bec854cbb66f3ed`): `roll.neutral_balance`, `null` by default (on).
+        recipe: "a3a656ca72f6df28",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

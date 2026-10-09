@@ -10103,6 +10103,317 @@ fn measure_roll_runs_the_polarity_check_on_picture_frames_only() {
 }
 
 #[test]
+fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_advised() {
+    let tmp = TempDir::new("neutral-balance");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frames: Vec<PathBuf> = (0..10)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.75 + 0.01 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    let recipe = tmp.path("measured.json");
+    let (code, stdout, err) = run(&[
+        &["measure-roll", "--params", input.to_str().unwrap()][..],
+        &names,
+        &["--out", recipe.to_str().unwrap()],
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let written = written_recipe(&recipe);
+
+    // Ten frames: both corrections are in doubt, in one note naming the switch, and no
+    // warning.
+    for c in ["white_balance", "midtone_neutral"] {
+        let a = &report["confidence"][c];
+        assert_eq!(a["tier"], "in-doubt", "{report}");
+        assert_eq!(a["frames"], 10, "{report}");
+        assert_eq!(a["confident_from"], 16, "{report}");
+    }
+    let advice = report["confidence"]["advice"].as_str().unwrap();
+    assert!(
+        advice.starts_with("the roll's white balance and midtone line were measured from 10")
+            && advice.contains("`--neutral-balance off`")
+            && advice.ends_with("if it has more"),
+        "{advice}"
+    );
+    assert_eq!(err.matches("hanten: note: ").count(), 1, "{err}");
+    assert!(err.contains(&format!("hanten: note: {advice}")), "{err}");
+    let warned = report["warnings"].as_array().into_iter().flatten();
+    assert!(
+        warned
+            .filter_map(|w| w.as_str())
+            .all(|w| !w.contains("measured from")),
+        "{report}"
+    );
+
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                names[0],
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                input.to_str().unwrap(),
+                "--params",
+                recipe.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        (code, stdout, err, out)
+    };
+    let (code, on, err, on_path) = convert("on.tiff", &[]);
+    assert_eq!(code, 0, "{err}");
+    let on = json(&on);
+    assert_eq!(on["chain"]["roll"]["white_balance_applied"], true, "{on}");
+    assert_eq!(on["chain"]["roll"]["midtone_neutral_applied"], true, "{on}");
+
+    // Off keeps the gains in the recipe, applies neither them nor the line, and renders as
+    // a recipe without both.
+    let (code, off, err, off_path) = convert("off.tiff", &["--neutral-balance", "off"]);
+    assert_eq!(code, 0, "{err}");
+    let off = json(&off);
+    let roll = &off["chain"]["roll"];
+    assert_eq!(
+        roll["white_balance"], written["roll"]["white_balance"],
+        "{off}"
+    );
+    assert_eq!(roll["white_balance_applied"], false, "{off}");
+    assert_eq!(roll["midtone_neutral_applied"], false, "{off}");
+    let sc = &off["chain"]["scene_correction"];
+    assert!(sc.get("midtone_line").is_none(), "{off}");
+    let without = tmp.path("without.json");
+    let mut stripped = written.clone();
+    stripped["roll"]["white_balance"] = serde_json::Value::Null;
+    stripped["roll"]["midtone_line"] = serde_json::Value::Null;
+    std::fs::write(&without, stripped.to_string()).unwrap();
+    let out = tmp.path("without.tiff");
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        input.to_str().unwrap(),
+        "--params",
+        without.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let off_px = std::fs::read(off_path).unwrap();
+    assert_eq!(off_px, std::fs::read(out).unwrap());
+    assert_ne!(off_px, std::fs::read(on_path).unwrap(), "not vacuous");
+
+    // A recipe's "on" is the default, so beside a typed off it is spared: the line goes off
+    // with the gains, as unset.
+    let stated_on = tmp.path("stated-on.json");
+    let mut on_recipe = written.clone();
+    on_recipe["roll"]["midtone_neutral"] = "on".into();
+    std::fs::write(&stated_on, on_recipe.to_string()).unwrap();
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        input.to_str().unwrap(),
+        "--params",
+        stated_on.to_str().unwrap(),
+        "-o",
+        tmp.path("stated-on.tiff").to_str().unwrap(),
+        "--neutral-balance",
+        "off",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(off_px, std::fs::read(tmp.path("stated-on.tiff")).unwrap());
+
+    // A typed `--midtone-neutral on` is refused, with remedies that work from where the
+    // off came from.
+    let (code, _, err, _) = convert(
+        "both.tiff",
+        &["--neutral-balance", "off", "--midtone-neutral", "on"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--midtone-neutral on asks for the roll's midtone line")
+            && err.contains("drop --midtone-neutral on, or drop --neutral-balance off"),
+        "{err}"
+    );
+    let stated_off = tmp.path("stated-off.json");
+    let mut off_recipe = written.clone();
+    off_recipe["roll"]["neutral_balance"] = "off".into();
+    std::fs::write(&stated_off, off_recipe.to_string()).unwrap();
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        input.to_str().unwrap(),
+        "--params",
+        stated_off.to_str().unwrap(),
+        "-o",
+        tmp.path("typed-on.tiff").to_str().unwrap(),
+        "--midtone-neutral",
+        "on",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("under the recipe's `roll.neutral_balance` \"off\"")
+            && err.contains("or pass --neutral-balance on"),
+        "{err}"
+    );
+    // Under `direct` it is diagnosed first, since the direct rule's `--rendering default`
+    // remedy would meet it next; dropping the `on` is its one remedy.
+    let (code, _, err, _) = convert(
+        "direct.tiff",
+        &[
+            "--rendering",
+            "direct",
+            "--neutral-balance",
+            "off",
+            "--midtone-neutral",
+            "on",
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--midtone-neutral on asks")
+            && err.trim_end().ends_with("drop --midtone-neutral on"),
+        "{err}"
+    );
+    assert!(!err.contains("--rendering default"), "{err}");
+
+    // `roll`: a manifest frame's "on" is spared too, so the warning's remedy works there.
+    let roll = |dir: &str, params: &str, extra: &[&str]| {
+        let manifest = tmp.path(&format!("{dir}.json"));
+        std::fs::write(
+            &manifest,
+            format!(
+                r#"{{ "frames": [ {{ "input": {:?}{params} }} ] }}"#,
+                names[0]
+            ),
+        )
+        .unwrap();
+        let out_dir = tmp.path(dir);
+        let (code, _, err) = run(&[
+            &[
+                "roll",
+                "--frames",
+                manifest.to_str().unwrap(),
+                "--out-dir",
+                out_dir.to_str().unwrap(),
+                "--params",
+                input.to_str().unwrap(),
+                "--params",
+                recipe.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        (code, err, out_dir.join("f0_positive.tiff"))
+    };
+    let off = ["--neutral-balance", "off"];
+    let (code, err, frame_on) = roll(
+        "roll-on",
+        r#", "params": { "roll": { "midtone_neutral": "on" } }"#,
+        &off,
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, err, plain) = roll("roll-off", "", &off);
+    assert_eq!(code, 0, "{err}");
+    let (code, err, applied) = roll("roll-applied", "", &[]);
+    assert_eq!(code, 0, "{err}");
+    let frame_on = std::fs::read(frame_on).unwrap();
+    assert_eq!(frame_on, std::fs::read(plain).unwrap());
+    assert_ne!(frame_on, std::fs::read(applied).unwrap(), "not vacuous");
+    let both = [&off[..], &["--midtone-neutral", "on"]].concat();
+    let (code, err, _) = roll("roll-both", "", &both);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--midtone-neutral on asks"), "{err}");
+
+    // Other gains a frame turns off are not a roll-wide break.
+    let restated = r#", "params": { "roll": { "white_balance": [1.1, 1, 0.9] } }"#;
+    let (code, err, _) = roll("roll-restated", restated, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("`roll.white_balance`"), "not vacuous: {err}");
+    let restated_off = r#", "params": { "roll": { "white_balance": [1.1, 1, 0.9],
+        "neutral_balance": "off" } }"#;
+    let (code, err, _) = roll("roll-restated-off", restated_off, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("`roll.white_balance`"), "{err}");
+}
+
+#[test]
+fn a_roll_of_sixteen_frames_is_confident_and_a_short_one_is_advised_but_passes_strict() {
+    let tmp = TempDir::new("confident-roll");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frames: Vec<PathBuf> = (0..16)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.75 + 0.01 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    // `--strict` refuses a roll measured without its leader.
+    let leader = tmp.path("leader.tif");
+    write_uniform_density(&leader, base, 1.5);
+    let measure = |frames: &[&str]| {
+        run(&[
+            &[
+                "measure-roll",
+                "--strict",
+                "--params",
+                input.to_str().unwrap(),
+            ][..],
+            frames,
+            &["--leader", leader.to_str().unwrap()],
+        ]
+        .concat())
+    };
+    // Sixteen frames: both confident and no warning, so `--strict` passes.
+    let (code, stdout, err) = measure(&names);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    for c in ["white_balance", "midtone_neutral"] {
+        assert_eq!(report["confidence"][c]["tier"], "confident", "{report}");
+        assert_eq!(report["confidence"][c]["frames"], 16, "{report}");
+    }
+    assert!(report.get("warnings").is_none(), "{report}");
+    assert!(report["confidence"].get("advice").is_none(), "{report}");
+    assert!(!err.contains("hanten: note:"), "{err}");
+    // Fifteen of them: in doubt, advised on, and still no warning, so `--strict` passes:
+    // a whole short roll has no more frames to give.
+    let (code, stdout, err) = measure(&names[..15]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["confidence"]["white_balance"]["tier"], "in-doubt",
+        "{report}"
+    );
+    assert!(
+        report["confidence"]["advice"]
+            .as_str()
+            .is_some_and(|a| a.contains("measured from 15 frames")),
+        "{report}"
+    );
+    assert!(err.contains("hanten: note: "), "{err}");
+    assert!(report.get("warnings").is_none(), "{report}");
+}
+
+#[test]
 fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     // A dim frame and a bright one, whose whites after the roll's white balance sit at
     // ~+1.7 and ~+2.3 stops: the roll's white is the dim frame's, and the bright one is
