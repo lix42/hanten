@@ -160,6 +160,7 @@ graph TD
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
+  nf-scene-correction --> io
   nf-look --> nf-calibration
   nf-reconstruction --> nf-calibration
   nf-calibration --> nf-look
@@ -223,6 +224,7 @@ graph TD
     io/scanner-density-calibration
     io/gray-primary-decode
     io/positive-input-mode
+    io/slide-film-input
   end
   subgraph film-base
     film-base/estimation
@@ -569,6 +571,8 @@ graph TD
   output/sdr-display-rendering --> output/sdr-jpeg-preset
   io/input-data-semantics --> io/positive-input-mode
   color/film-master-render-pipeline --> io/positive-input-mode
+  io/positive-input-mode --> io/slide-film-input
+  nf-scene-correction/stage --> io/slide-film-input
   analysis/comparison-review-tooling --> analysis/review-reference-cells
   analysis/comparison-review-tooling --> analysis/review-build-axis
   output/sdr-display-rendering --> output/linear-render
@@ -803,6 +807,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
   `algo/bw-support` explicitly excludes input-format work. Blocks `algo/bw-support`
 - `io/positive-input-mode` (post-MVP): `io/input-data-semantics`, `color/film-master-render-pipeline`
+- `io/slide-film-input` (post-MVP, **low priority**): `io/positive-input-mode`, `nf-scene-correction/stage`
 - `io/scanner-density-calibration` (post-MVP): `io/input-data-semantics`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
   — postponed 2026-09-12 pending the frames. Tier 1 (the non-calibrating diagnostic) is
   implementable without them, but tier 1 alone does not fulfil the task's goal — which is why
@@ -1443,7 +1448,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement
   feeds `io/streaming-tiled-io` STEP 0 (still a conditional GO).
 - [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work — so `algo/bw-support` is blocked behind this
-- [ ] [Positive-mode and ICC-embedded input](tasks/io/positive-input-mode.md) — convert an already-positive SilverFast scan through the display path; refused today with exit 4
+- [x] [Negatives scanned in positive mode](tasks/io/positive-input-mode.md) — convert a negative scanned in SilverFast's positive mode (same raw transmission, IT8 profile recorded, not applied), warning when a frame does not look like a negative under its base
+- [ ] [Slide film input](tasks/io/slide-film-input.md) — **low priority** (user, 2026-10-08): no slide scans to verify against. Convert positive (E-6) film: no film base or decode, enters at the working space; the embedded SilverFast IT8 profile is the likely scanner characterization
 - [ ] [Scanner density calibration](tasks/io/scanner-density-calibration.md) — turn the
   density-scale question into a shipped, reusable scanner profile. Tier 1 (unexposed
   frame only, no new user action) is a **non-calibrating diagnostic**: a scan value is a

@@ -3151,25 +3151,8 @@ fn container_color_facts(info: &DecodeInfo) -> ContainerColorFacts {
             .map(|x| x.gamma.clone())
             .unwrap_or_default(),
         embedded_icc: info.embedded_icc.clone(),
+        positive_mode: info.is_silverfast_positive_mode(),
     }
-}
-
-/// Reject a SilverFast **positive-mode** scan (`Negative=No`) loudly. Such a scan
-/// is still raw linear scanner data, so it passes the transfer/meaning gate — but
-/// converting it as a *negative* is silently wrong. This is a small,
-/// clearly-scoped check (distinct from the transfer/meaning resolution) so it is
-/// easy to lift when positive-mode support lands. `inspect` never calls it (it
-/// reports the `Negative` flag via `decode.silverfast_xmp` instead).
-fn reject_positive_mode(info: &DecodeInfo) -> Result<()> {
-    if info.is_silverfast_positive_mode() {
-        return Err(NcError::Unsupported(
-            "input is a SilverFast positive-mode scan (XMP Negative=No); converting it as a \
-             negative would be silently wrong. Positive-mode scans are not yet supported \
-             (follow-up); scan in negative mode, or convert a negative scan."
-                .into(),
-        ));
-    }
-    Ok(())
 }
 
 /// The merged input assertions plus their CLI/recipe provenance, for the resolver.
@@ -3352,7 +3335,7 @@ fn convert_frame(
     // touches the image; it runs whether or not telemetry is enabled, so the render
     // path is uniform.
     // `decode_for_roll_white` (`measure-roll`) repeats this front half — preflight,
-    // decode, input semantics, positive-mode refusal, effective area and its warnings —
+    // decode, input semantics, effective area and its warnings, the polarity check —
     // up to the chain; a gate added here belongs there too.
     let clock = &mut facts.clock;
     let (image, info) = clock.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
@@ -3386,11 +3369,6 @@ fn convert_frame(
     input_semantics::require_convertible(&input_meta)?;
     report.input_color = Some(input_report);
 
-    // A SilverFast positive-mode scan passes the transfer/meaning gate (it is raw
-    // linear scanner data) but must not be converted as a negative — reject it
-    // loudly with a distinct message rather than silently misconvert.
-    reject_positive_mode(info)?;
-
     // Stage 2 — film-base estimate. Resolved before the render so its quality
     // warning (a non-uniform region) is pushed — and so
     // echoed to stderr — *before* the fallible render runs, and ride out in the
@@ -3412,12 +3390,10 @@ fn convert_frame(
     // run-to-run noise even on an 18.7 MP frame, so there is nothing to save by
     // skipping it.
     //
-    // Nothing in a `convert` measures over it today — its one per-frame consumer, the
-    // auto reference density, retired (`nf-retire/dmax-machinery`), and the roll's
-    // white balance is measured over it by `hanten measure-roll` instead —
-    // so an **empty** region is a warning rather than a refusal, with no
-    // `report.effective_area`, because there is no region to report. A consumer added
-    // here must decide whether an empty region becomes fatal for it.
+    // Its one consumer here is the polarity check, a warning that an empty region
+    // skips — so an **empty** region is a warning rather than a refusal, with no
+    // `report.effective_area`. A consumer added here must decide whether an empty
+    // region becomes fatal for it.
     // Timed as a success whatever it returns: an empty region is a warning, not the
     // run's failure.
     let area = clock.time(StageKind::FilmBase, || {
@@ -3429,6 +3405,12 @@ fn convert_frame(
             for w in film_base::effective_area_warnings(&area) {
                 push_warning_buf(warnings, log, w);
             }
+            let polarity = clock.time(StageKind::FilmBase, || {
+                film_base::polarity_warning(&image, area.region, &base.base)
+            })?;
+            if let Some(w) = polarity {
+                push_warning_buf(warnings, log, w);
+            }
         }
         // Rebuilt from the error's own text rather than `Display`, which prefixes the
         // kind (`usage: …`) — a warning must not carry it.
@@ -3437,8 +3419,8 @@ fn convert_frame(
                 warnings,
                 log,
                 format!(
-                    "{} Nothing in this conversion measures over the region, so the \
-                     render is unaffected and the report omits `effective_area` \
+                    "{} The render does not read the region, so it is unaffected; the \
+                     polarity check is skipped and the report omits `effective_area` \
                      (--measure-inset has no effect on this run).",
                     e.message()
                 ),
@@ -6675,10 +6657,19 @@ struct RollReuse {
     flag: String,
 }
 
+/// Which scan [`decode_for_roll_white`] reads. Only a picture frame gets the polarity
+/// warning: its thresholds were measured on picture frames, and a leader can show the
+/// cut tongue or backlight.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RollScan {
+    Leader,
+    Frame,
+}
+
 /// One input decoded into linear ACEScg at the recipe's decode, plus its effective
 /// area: the front half of `convert_frame`, gated the same way
-/// (memory preflight, input semantics, positive-mode refusal) and stopping before
-/// scene correction — the point the roll's gains will be applied at.
+/// (memory preflight, input semantics, polarity warning on a [`RollScan::Frame`]) and
+/// stopping before scene correction — the point the roll's gains will be applied at.
 ///
 /// `on_film` reads the decode's film RGB just before the working-space map, for what is
 /// measured there (the roll's white); it runs on the frame's effective area as found.
@@ -6687,8 +6678,11 @@ struct RollReuse {
 /// its report, so this repeats its gates rather than sharing them: a
 /// refusal or measurement-region warning added there belongs here too, or gains get
 /// frozen from frames `convert` would refuse.
+// One over clippy's argument cap; the scan kind is one more one-off value.
+#[allow(clippy::too_many_arguments)]
 fn decode_for_roll_white<T>(
     input: &Path,
+    scan: RollScan,
     recipe: &Recipe,
     base: &FilmBase,
     budget: memory::Budget,
@@ -6736,8 +6730,13 @@ fn decode_for_roll_white<T>(
         );
     }
     input_semantics::require_convertible(&input_meta)?;
-    reject_positive_mode(&info)?;
     let area = film_base::effective_area(&image, recipe.measure.inset);
+    if scan == RollScan::Frame
+        && let Ok(a) = &area
+        && let Some(w) = film_base::polarity_warning(&image, a.region, base)?
+    {
+        push_warning_buf(warnings, log, format!("{}: {w}", input.display()));
+    }
     let (film, decoded) = fixed::decode(&image, base, &recipe.reconstruction)?;
     drop(image);
     let measured = on_film(&film, &area)?;
@@ -7076,6 +7075,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             // Each error keeps its kind, and so its exit code (a memory refusal stays 6).
             let (aces, _, film_peak, _, memory) = decode_for_roll_white(
                 path,
+                RollScan::Leader,
                 &recipe,
                 &base,
                 budget,
@@ -7130,6 +7130,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     for input in &args.inputs {
         let (aces, area, film_sample, decoded, memory) = decode_for_roll_white(
             input,
+            RollScan::Frame,
             &recipe,
             &base,
             budget,

@@ -1286,11 +1286,14 @@ and keys are listed at the end of this section.
   - `--input-profile <icc>` stays **rejected for normal conversion** (exit 4):
     input-side ICC application has no validated placement and is reserved for the
     deferred `scanner-profile-before-density-experiment`.
-  - A SilverFast **positive-mode** scan (XMP `Silverfast:Negative = No`) is raw
-    linear scanner data, so it passes the transfer/meaning gate — but converting
-    it as a negative would be silently wrong, so `convert` **rejects it loudly**
-    (exit 4) with a distinct "positive-mode not yet supported" message.
-    Positive-mode support (and embedded-ICC handling) is a follow-up.
+  - A SilverFast **positive-mode** scan (XMP `Silverfast:Negative = No`) in raw mode
+    holds the same linear scanner transmission as a negative-mode scan, so a negative
+    scanned that way converts as one; the tag is recorded as evidence. A slide carries
+    the same tags, so each picture frame is checked against its base instead: more than
+    1% of the effective area above 1.5x the base warns that it does not look like a
+    negative (`film_base::polarity_warning`). A slide read against its clear leader
+    passes, and a channel whose base is ≥ ~0.667 of full scale cannot fire. Slide film
+    is `io/slide-film-input`.
   `hanten inspect`, the `convert` report, **and each `hanten roll` frame report** expose
   the resolved `input_color`: both axes with per-axis evidence, whether an ICC is
   embedded plus the safe summary, and `transfer_decoded` (whether any
@@ -1361,12 +1364,11 @@ holder is that deep, so a cap is an IR misread and errs only toward an over-cut 
 edges perpendicular to it can cap with it); a holder that really is deeper is
 covered by raising the inset, which is added on top of the cap.
 
-**Nothing in `convert` measures over the area today** — its one consumer there, the
-per-frame reference density, retired with `nf-retire/dmax-machinery` — so an *empty*
-region is always a warning on `convert` (with no reported area), never a refusal.
-`measure.inset` stays live for `hanten measure-base` and `hanten measure-roll`, which
-measure over the area. A marched holder moves the reported rectangle but no rendered
-pixel.
+**On `convert` the area feeds only the polarity warning** (`film_base::polarity_warning`),
+which an *empty* region skips — so an empty region is a warning there (with no reported
+area), never a refusal. `measure.inset` stays live for `hanten measure-base` and
+`hanten measure-roll`, which measure over the area. A marched holder moves no rendered
+pixel, but it can change whether the polarity warning fires, and so a `--strict` exit.
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key

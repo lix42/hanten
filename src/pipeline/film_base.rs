@@ -23,6 +23,10 @@
 //! Nothing searches for a rebate: the inset passes over it blind. The effective-area
 //! measurement is not a [`FilmBaseSource`] — it runs only in the measurement commands,
 //! and a conversion takes their result as an explicit base.
+//!
+//! The effective area also feeds [`polarity_warning`] on every `convert`, `roll` and
+//! `measure-roll` picture frame, so a change to the area or inset moves that warning
+//! and a `--strict` exit.
 
 use serde::Serialize;
 
@@ -240,6 +244,70 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
         warnings,
         percentile: Some(AREA_PERCENTILE),
     })
+}
+
+/// How many times the base a sample must transmit to count against the frame being a
+/// negative, in [`polarity_warning`].
+const POLARITY_RATIO: f32 = 1.5;
+
+/// The share of the effective area above [`POLARITY_RATIO`] × the base, on any
+/// channel, at which [`polarity_warning`] fires.
+///
+/// Measured 2026-10-08, each roll against its unexposed frame's base: no picture frame
+/// of 11 negative-mode rolls (`polarity_probe`, which covers rolls with an `unexposed`
+/// frame in the manifest) has any above 1.5×, nor, by hand against its frame 1256, the
+/// Portra roll scanned in both modes; the worst reaches 1.45% above 1.25×. A slide
+/// measured against its own unexposed (black) film is mostly above.
+const POLARITY_MAX_SHARE: f32 = 0.01;
+
+/// A warning when the frame does not look like a negative under `base`: a negative's
+/// base is the most transparent film on it, so almost nothing may transmit more. Fires
+/// for a positive (slide) scan, a base that is not this film's, or backlight past the
+/// film's edge inside the area. A slide read against its clear leader passes.
+/// Blind on a channel whose base is ≥ 1/1.5 of full scale: no sample can exceed it.
+pub fn polarity_warning(
+    image: &LinearImage,
+    region: [u32; 4],
+    base: &FilmBase,
+) -> Result<Option<String>> {
+    let share = share_above_base(image, region, base, POLARITY_RATIO)?
+        .into_iter()
+        .fold(0.0f32, f32::max);
+    Ok((share > POLARITY_MAX_SHARE).then(|| {
+        format!(
+            "this does not look like a negative under the film base: {:.2}% of the \
+             effective area transmits more than {POLARITY_RATIO}x the base on at least \
+             one channel, where a negative's base is its most transparent film. Either \
+             the base is not this film's (measure it from this roll's unexposed frame), \
+             the area shows backlight past the film's edge (raise --measure-inset), or \
+             the scan is a positive, which Hanten does not support",
+            share * 100.0
+        )
+    }))
+}
+
+/// Per channel, the share of `region`'s samples that transmit more than `ratio` × the
+/// base. Counts, not floating-point sums, so the result is order-independent.
+fn share_above_base(
+    image: &LinearImage,
+    region: [u32; 4],
+    base: &FilmBase,
+    ratio: f32,
+) -> Result<[f32; 3]> {
+    check_rect(image, region)?;
+    let [x, y, w, h] = region;
+    let limit = <[f32; 3]>::from(*base).map(|b| b * ratio);
+    let mut above = [0u64; 3];
+    for row in y..y + h {
+        let start = (row as usize * image.width as usize + x as usize) * 3;
+        for px in image.rgb[start..start + w as usize * 3].as_chunks::<3>().0 {
+            for ((a, v), l) in above.iter_mut().zip(px).zip(limit) {
+                *a += u64::from(*v > l);
+            }
+        }
+    }
+    let n = (w as u64 * h as u64) as f32;
+    Ok(above.map(|a| a as f32 / n))
 }
 
 /// The remedy [`guard_base`] names for a degenerate base from a stated source.
@@ -1185,6 +1253,35 @@ pub(crate) mod golden {
 mod tests {
     use super::*;
 
+    #[test]
+    fn share_above_base_counts_per_channel_over_the_region_only() {
+        let mut img = solid(10, 10, [0.2, 0.2, 0.2]);
+        // A quarter of the region over the base on red only; outside it, everything.
+        fill_rect(&mut img, [0, 0, 2, 10], [1.0, 1.0, 1.0]);
+        fill_rect(&mut img, [2, 0, 2, 5], [0.5, 0.2, 0.2]);
+        let base = FilmBase::from([0.3, 0.3, 0.3]);
+        let share = share_above_base(&img, [2, 0, 4, 10], &base, 1.5).unwrap();
+        assert_eq!(share, [0.25, 0.0, 0.0]);
+        assert!(share_above_base(&img, [8, 8, 4, 4], &base, 1.5).is_err());
+    }
+
+    #[test]
+    fn polarity_warning_fires_only_past_the_share() {
+        let base = FilmBase::from([0.3, 0.3, 0.3]);
+        let mut img = solid(100, 100, [0.2, 0.2, 0.2]);
+        // 1% over 1.5x the base on one channel is still a negative's noise.
+        fill_rect(&mut img, [0, 0, 1, 100], [0.2, 0.2, 0.5]);
+        assert_eq!(
+            polarity_warning(&img, [0, 0, 100, 100], &base).unwrap(),
+            None
+        );
+        fill_rect(&mut img, [1, 0, 1, 100], [0.2, 0.2, 0.5]);
+        let w = polarity_warning(&img, [0, 0, 100, 100], &base)
+            .unwrap()
+            .unwrap();
+        assert!(w.contains("2.00% of the effective area"), "{w}");
+    }
+
     /// Build an `w`x`h` image filled with a flat RGB color.
     fn solid(w: u32, h: u32, rgb: [f32; 3]) -> LinearImage {
         let mut buf = Vec::with_capacity((w * h * 3) as usize);
@@ -2092,5 +2189,73 @@ mod tests {
         let at = with_uniform_ir(solid(60, 60, [0.2; 3]), IR_USABLE_MIN_INTERIOR);
         assert!(!ir_separability(&below).unwrap().usable);
         assert!(ir_separability(&at).unwrap().usable);
+    }
+}
+
+/// Probe: [`share_above_base`] on every manifest roll's picture frames, against the
+/// base measured from its unexposed frame. Prints derived numbers only.
+#[cfg(test)]
+mod polarity_probe {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+    fn share_above_base_on_real_rolls() {
+        let root = std::env::var("NC_ASSETS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nc-assets"));
+        let Ok(text) = std::fs::read_to_string(root.join("manifest.json")) else {
+            eprintln!("SKIP: no manifest");
+            return;
+        };
+        let m: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for (roll, entry) in m["rolls"].as_object().unwrap() {
+            let frames = entry["frames"].as_array().unwrap();
+            let of = |role: &str| -> Vec<PathBuf> {
+                frames
+                    .iter()
+                    .filter(|f| f["role"] == role)
+                    .map(|f| root.join(f["file"].as_str().unwrap()))
+                    .collect()
+            };
+            let base = match of("unexposed").first() {
+                Some(p) => {
+                    let (img, _) = crate::io::decode::decode_within(p, u64::MAX).unwrap();
+                    measure_area(
+                        &img,
+                        &effective_area(&img, crate::types::DEFAULT_MEASURE_INSET).unwrap(),
+                    )
+                    .unwrap()
+                    .base
+                }
+                None => {
+                    println!("{roll}: no unexposed frame, skipped");
+                    continue;
+                }
+            };
+            println!(
+                "\n=== {roll} base ({:.4}, {:.4}, {:.4})",
+                base.r, base.g, base.b
+            );
+            for p in of("real") {
+                let (img, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
+                let region = effective_area(&img, crate::types::DEFAULT_MEASURE_INSET)
+                    .unwrap()
+                    .region;
+                let s: Vec<String> = [1.0f32, 1.1, 1.25, 1.5]
+                    .iter()
+                    .map(|&r| {
+                        let v = share_above_base(&img, region, &base, r).unwrap();
+                        format!("x{r}: {:.4}/{:.4}/{:.4}", v[0], v[1], v[2])
+                    })
+                    .collect();
+                println!(
+                    "{}  {}",
+                    p.file_name().unwrap().to_string_lossy(),
+                    s.join("  ")
+                );
+            }
+        }
     }
 }

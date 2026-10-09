@@ -2504,17 +2504,21 @@ fn silverfast_xmp_nonlinear_gamma_is_rejected() {
     assert_eq!(json(&stdout)["input_color"]["transfer"], "unknown");
 }
 
+/// [`write_rgb16`]'s flat frame, tagged as a SilverFast positive-mode raw scan.
+fn write_positive_mode(path: &Path) {
+    let attrs = r#"Silverfast:Company="LaserSoft Imaging" Silverfast:HDRScan="Yes" Silverfast:Gamma="1" Silverfast:Negative="No""#;
+    write_rgb16(path, Some(&silverfast_xmp(attrs)), None, false);
+}
+
 #[test]
-fn silverfast_positive_mode_is_rejected() {
-    // A positive-mode scan (XMP Negative=No) passes the transfer/meaning gate but
-    // must be rejected loudly with the distinct positive-mode message rather than
-    // silently converted as a negative.
+fn silverfast_positive_mode_converts_as_a_negative() {
+    // A negative scanned in positive mode is the same raw transmission as one scanned
+    // in negative mode: it converts, and the report records the tag.
     let tmp = TempDir::new("xmp-pos");
     let src = tmp.path("pos.tif");
-    let attrs = r#"Silverfast:Company="LaserSoft Imaging" Silverfast:HDRScan="Yes" Silverfast:Gamma="1" Silverfast:Negative="No""#;
-    write_rgb16(&src, Some(&silverfast_xmp(attrs)), None, false);
+    write_positive_mode(&src);
     let out = tmp.path("out.tiff");
-    let (code, _stdout, err) = run(&[
+    let (code, stdout, err) = run(&[
         "convert",
         src.to_str().unwrap(),
         "-o",
@@ -2522,9 +2526,123 @@ fn silverfast_positive_mode_is_rejected() {
         "--film-base",
         "0.9,0.55,0.42",
     ]);
-    assert_eq!(code, 4, "positive-mode scan must be rejected: {err}");
-    assert!(err.contains("positive-mode"), "stderr: {err}");
-    assert!(!out.exists());
+    assert_eq!(code, 0, "a positive-mode scan must convert: {err}");
+    assert!(is_tiff(&out));
+    let report = json(&stdout);
+    assert!(
+        report["input_color"]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["detail"].as_str().unwrap().contains("positive-mode")),
+        "the report must record the positive-mode tag: {stdout}"
+    );
+    assert!(
+        !err.contains("does not look like a negative"),
+        "stderr: {err}"
+    );
+}
+
+#[test]
+fn a_frame_brighter_than_its_base_warns_it_is_not_a_negative() {
+    // Every sample transmits ~3x the stated base: a slide, or the wrong base. Both
+    // render wrong, so the run warns — and still writes, since it may be intended.
+    let tmp = TempDir::new("polarity");
+    let src = tmp.path("pos.tif");
+    write_positive_mode(&src);
+    let out = tmp.path("out.tiff");
+    let (code, stdout, err) = run(&[
+        "convert",
+        src.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.1,0.1,0.1",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("does not look like a negative"),
+        "stderr: {err}"
+    );
+    assert!(
+        json(&stdout)["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w
+                .as_str()
+                .unwrap()
+                .contains("does not look like a negative")),
+        "the warning must ride in the report: {stdout}"
+    );
+
+    // The check reads the samples, not the tag: a `Negative=Yes` scan warns the same.
+    let neg = tmp.path("neg.tif");
+    write_rgb16(&neg, Some(&silverfast_xmp(XMP_NEG)), None, false);
+    let (code, _stdout, err) = run(&[
+        "convert",
+        neg.to_str().unwrap(),
+        "-o",
+        tmp.path("neg-out.tiff").to_str().unwrap(),
+        "--film-base",
+        "0.1,0.1,0.1",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("does not look like a negative"),
+        "stderr: {err}"
+    );
+}
+
+#[test]
+fn roll_and_measure_roll_warn_a_frame_brighter_than_its_base() {
+    // `roll` and `measure-roll` run the same polarity check as `convert`, per frame.
+    let tmp = TempDir::new("polarity-roll");
+    let src = tmp.path("neg.tif");
+    write_rgb16(&src, Some(&silverfast_xmp(XMP_NEG)), None, false);
+    let recipe = write_file(
+        &tmp.path("low-base.json"),
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.1,0.1,0.1]}}}"#,
+    );
+
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        src.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let prefix = format!("{}: ", src.display());
+    assert!(
+        report["warnings"].as_array().unwrap().iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.starts_with(&prefix) && w.contains("does not look like a negative")
+        }),
+        "measure-roll must warn, naming the input: {report}"
+    );
+
+    let (code, stdout, err) = run(&[
+        "roll",
+        src.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert!(
+        report["frames"][0]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w
+                .as_str()
+                .unwrap()
+                .contains("does not look like a negative")),
+        "the roll frame report must carry the warning: {report}"
+    );
 }
 
 #[test]
@@ -2570,14 +2688,14 @@ fn silverfast_malformed_gamma_is_ambiguous_and_rejected() {
 #[test]
 fn silverfast_unrecognized_negative_value_still_converts_a_negative() {
     // F3 end-to-end: a genuine negative whose `Negative` reads as an unrecognized
-    // token (not "yes"/"no") must NOT be misread as positive-mode and rejected —
-    // an unrecognized value is `None`, not an explicit "No", so it still converts.
+    // token (not "yes"/"no") must NOT be read as positive-mode — an unrecognized
+    // value is `None`, not an explicit "No", so no positive-mode evidence is recorded.
     let tmp = TempDir::new("xmp-weirdneg");
     let src = tmp.path("n.tif");
     let attrs = r#"Silverfast:Company="LaserSoft Imaging" Silverfast:HDRScan="Yes" Silverfast:Gamma="1" Silverfast:Negative="y""#;
     write_rgb16(&src, Some(&silverfast_xmp(attrs)), None, false);
     let out = tmp.path("out.tiff");
-    let (code, _stdout, err) = run(&[
+    let (code, stdout, err) = run(&[
         "convert",
         src.to_str().unwrap(),
         "-o",
@@ -2585,11 +2703,16 @@ fn silverfast_unrecognized_negative_value_still_converts_a_negative() {
         "--film-base",
         "0.9,0.55,0.42",
     ]);
-    assert_eq!(
-        code, 0,
-        "an unrecognized Negative value must not trigger positive-mode rejection: {err}"
-    );
+    assert_eq!(code, 0, "{err}");
     assert!(is_tiff(&out));
+    assert!(
+        json(&stdout)["input_color"]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| !e["detail"].as_str().unwrap().contains("positive-mode")),
+        "an unrecognized Negative value must not read as positive mode: {stdout}"
+    );
 }
 
 // --- telemetry (opt-in performance + context record) -------------------------
@@ -7153,8 +7276,8 @@ fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
         run(&args)
     };
 
-    // Nothing measures over the region: a warning, a written file, and no
-    // `effective_area` — there is no region to report.
+    // The render does not read the region and the polarity check is skipped: a
+    // warning, a written file, and no `effective_area`.
     let out = dir.path("unread.tif");
     let (code, stdout, err) = convert_with(&[], &out);
     assert_eq!(code, 0, "an unread region must not fail the run: {err}");
@@ -9929,6 +10052,54 @@ fn measure_roll_writes_a_midtone_line_on_a_long_roll_that_convert_applies() {
             && err.contains("--roll-white-balance (recipe `roll.white_balance`)"),
         "{err}"
     );
+}
+
+#[test]
+fn measure_roll_runs_the_polarity_check_on_picture_frames_only() {
+    // A leader can show backlight past the strip's end; the check's thresholds were
+    // measured on picture frames, so the leader is spared. The same scan as a picture
+    // frame warns, so the leader really would.
+    let tmp = TempDir::new("measure-roll-leader-polarity");
+    let base = [0.4f32, 0.3, 0.2];
+    let recipe = roll_white_recipe(&tmp, "0.4,0.3,0.2");
+    let frame = tmp.path("frame.tif");
+    write_uniform_density(&frame, base, 1.0);
+    // A dense leader whose bottom quarter transmits twice the base.
+    let leader = tmp.path("leader.tif");
+    write_split_density(&leader, base, 1.5, -0.3, 16);
+    let polarity = |r: &serde_json::Value, input: &Path| {
+        r["warnings"].as_array().is_some_and(|w| {
+            w.iter().any(|w| {
+                let w = w.as_str().unwrap();
+                w.starts_with(&format!("{}: ", input.display()))
+                    && w.contains("does not look like a negative")
+            })
+        })
+    };
+
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        frame.to_str().unwrap(),
+        "--leader",
+        leader.to_str().unwrap(),
+        "--strict",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert!(!polarity(&report, &leader), "{report}");
+    assert!(!polarity(&report, &frame), "{report}");
+
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        leader.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert!(polarity(&report, &leader), "{report}");
 }
 
 #[test]

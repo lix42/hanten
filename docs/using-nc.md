@@ -1641,6 +1641,18 @@ is recognized but unsupported — `convert` rejects it even when explicitly asse
 `--input-profile` is reserved and currently rejected: input-side ICC application
 has no validated placement in the pipeline yet.
 
+**SilverFast positive mode.** A negative scanned in SilverFast's positive mode (XMP
+`Negative=No`, often with the scanner's IT8 profile embedded) converts like one scanned
+in negative mode: in HDR/HDRi raw mode the samples are the same linear transmission,
+and the embedded profile is recorded but not applied. `input_color.evidence` records the
+tag. Measure the film base from an unexposed frame as usual. Slide (positive) film is
+not supported, and nothing in the file tells the two apart, so `convert`, `roll` and
+`measure-roll` check each picture frame against the base and warn when it does not look
+like a negative (see Troubleshooting). The check catches a slide only when its base came
+from the slide's black unexposed film: read from its clear leader, the slide converts
+silently as a negative. It is also blind on a channel whose base is at or above about
+two-thirds of full scale, as a B&W negative's can be on every channel.
+
 ### IR (HDRi 64-bit input)
 
 The IR plane is decoded and **preserved, but no rendered pixel depends on it**.
@@ -1692,7 +1704,8 @@ A region `hanten` resolves on every frame it decodes, so that a measurement read
 picture rather than the film holder: on an uncropped scan the holder is maximum
 density, so a whole-frame statistic measures the holder instead. `hanten measure-base`
 (its film base, §4) and `hanten measure-roll` (§7) measure over it; a `convert`
-resolves and reports it but reads nothing over it. The area is two cuts, in order:
+resolves and reports it, and reads it only for the polarity warning. The area is two
+cuts, in order:
 
 1. **The film holder**, measured per edge from the IR plane — the same separability
    verdict above. Nothing to configure.
@@ -1801,11 +1814,12 @@ Two things this does *not* do:
   `measure-base` wants an unexposed frame, where the whole area is unexposed film; on a
   picture frame, give it a region (`--base-region`).
 
-Every command that decodes resolves the area and reports it; a conversion reads
-nothing over it. So if the two cuts leave **nothing**, `measure-base` (with no source
-flag) refuses (exit 2), but `convert` and `roll` warn rather than refuse, and the report
-omits `effective_area` — there is no region to report, and `--measure-inset` has no
-effect on that run.
+Every command that decodes resolves the area and reports it; a conversion reads it
+only for the polarity warning (below), never for a rendered pixel. So if the two cuts
+leave **nothing**, `measure-base` (with no source flag) refuses (exit 2), but `convert`
+and `roll` warn rather than refuse, skip the polarity check, and the report omits
+`effective_area` — there is no region to report, and `--measure-inset` has no effect on
+that run.
 
 ---
 
@@ -1992,6 +2006,16 @@ is the way to get a value in the first place.
 **"the effective area is not uniform … it does not look like unexposed film"**
 `measure-base` was given a picture frame. Give it the roll's unexposed frame, or, if the
 roll has none, a region of unexposed film on another frame (`--base-region`).
+
+**"this does not look like a negative under the film base: … transmits more than 1.5x the base"**
+On a negative the film base is the most transparent film there is, yet more than 1% of
+the effective area lets through over 1.5 times its light on some channel. Either the
+base is not this roll's (a leader, another roll, or a region over the picture), the area
+shows backlight past the film's edge (the end of a strip, a partial frame), or the scan
+is a slide, which Hanten does not support. Re-measure the base on this roll's unexposed
+frame, or raise `--measure-inset` past the bare backlight. The image is still written
+(`--strict` fails the run on it). The absence of this warning proves nothing: see
+§9, *SilverFast positive mode*, for what it cannot see.
 
 **"base-region … is not uniform (worst per-channel relative spread …)"**
 Your rectangle mixes unexposed film with image content. Check the coordinates, or run

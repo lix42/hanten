@@ -33,8 +33,11 @@ What other epics need to know about `io`:
   `input.transfer` (linear / unknown) and `input.meaning` (scanner-device /
   colorimetric / unknown), resolved from the **SilverFast XMP packet** (TIFF tag
   700: `Company="LaserSoft Imaging"` + `HDRScan="Yes"`, with `Gamma` feeding
-  transfer). Only `Linear` + `ScannerDevice` may convert (else exit 4);
-  positive-mode scans (`Negative=No`) are rejected loudly. **The provenance rule
+  transfer). Only `Linear` + `ScannerDevice` may convert (else exit 4). A
+  positive-mode raw scan (`Negative=No`) holds the same transmission and converts as
+  a negative; `film_base::polarity_warning` flags a frame that does not look like
+  one (`positive-input-mode`; blind on a channel whose base is ≥ ~0.667, and a
+  slide read against its clear leader passes). **The provenance rule
   is grounded on exactly one scanner/software combination** (Plustek OpticFilm
   8300i + SilverFast 9.2.x) — re-validate it before trusting it on other sources.
   Embedded ICC is recorded but never applied. Neither axis says anything about
@@ -575,13 +578,71 @@ pre-change binary: byte-identical primary, sidecar differing only in
 
 ## positive-input-mode
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done (2026-10-09)
+**Updated:** 2026-10-09
 
 - Goal: convert an already-positive SilverFast scan (`Negative=No`, embedded ICC)
   through the display path with no reconstruction. `input-data-semantics` detects and
   refuses it today (exit 4) and deferred this "to file formally"; a positive roll is in
   the asset set.
+- 2026-10-08: **the roll is a negative, not a positive** — the goal is now negatives
+  scanned in SilverFast's positive mode; slide film moved to `slide-film-input`.
+  - Evidence: `HDRScan=Yes`, `Gamma=1`, orange-mask channel ratios. The roll is
+    **twin scans of the same frames in both modes**: 1255-1288 `Negative=No` with the
+    profile embedded, 1293-1325 `Negative=Yes` (Kodak 400, no profile). Pairs:
+    1255/1293 leaders, 1256/1294 unexposed, 1259/1297, 1284/1320, 1288/1325; 1266 has
+    no twin. The manifest lists every frame `real`.
+  - **Twin check — positive mode costs nothing:** unexposed bases 0.4850/0.2176/0.1360
+    (positive) vs 0.4856/0.2186/0.1370 (negative), within 0.7%, so the scanner
+    exposes alike. `measure-roll` over matched frames: gains 0.720/1/1.010 vs
+    0.709/1/1.004, white 1.937 vs 1.930 stops, exposure 1.173 vs 1.150 EV; each pair's
+    SDR output means agree within ~0.01.
+  - The embedded `SFprofT (OpticFilm 8300i)` is the IT8 slide profile negative-mode
+    scans name as `InputProfileName` without embedding; its TRCs are gamma 2.2
+    (`curv` 0x0233) against linear data, so it describes no sample here. Still
+    recorded, never applied.
+  - **Decision (user):** accept silently, warn when a frame does not look like a
+    negative. The tag is evidence on `input_color`'s meaning axis; the refusal is gone
+    from `convert`, `roll` and `measure-roll` (`measure-base` never had it).
+  - **Polarity check** (`film_base::polarity_warning`): more than 1% of the effective
+    area above 1.5× the base warns, on every frame measured against a base. The share
+    is a direction test, not a colour one, so it holds for B&W; a slide read against
+    its clear leader passes it. Thresholds from `polarity_probe` — see the constants.
+  - Verified: negatives byte-identical to the base build (3 rolls, SDR and HDR linear,
+    the worst-case 1641 included). The 4 positive-mode picture frames run through
+    `measure-roll --unexposed 1256` and `roll` (SDR and HDR linear), exit 0, no
+    polarity warning.
+  - SDR clips ~5% (highlights) on these frames, against 0% on 2026-09-20-Portra400 —
+    and the same on their negative-mode twins, so it is the scenes (highlights 1.2-1.6
+    above base at p0.01, vs 0.8-1.2), not the scan mode.
+- 2026-10-09: **correction — the polarity check does not hold for every B&W negative.**
+  Decoded samples top out at 1.0, so on a channel whose base is ≥ 1/1.5 (~0.667) of
+  full scale nothing can count and the check is blind; a B&W negative scanned with its
+  base near full scale is blind on every channel. Thresholds unchanged; the limit is
+  stated on `polarity_warning` and in `using-nc.md`. `measure-roll` now runs the check
+  on picture frames only, not the `--leader` scan (cut tongue, backlight past the
+  strip's end).
+- 2026-10-09: **done.** Landed as: the `Negative=No` refusal removed from `convert`,
+  `roll` and `measure-roll`; the tag recorded as `input_color` evidence; each picture
+  frame checked by `film_base::polarity_warning` against its base, a warning (so
+  `--strict` fails), never a refusal. Verified: negatives byte-identical to the base
+  build; the positive-mode frames convert like their negative-mode twins; three
+  review rounds (Codex, nc-reviewer, `/code-review`) closed; all CI gates green after
+  rebasing over #250.
+  - For dependents: the check is blind on a channel whose base is ≥ ~0.667, and a
+    slide read against its clear leader passes it — `slide-film-input` cannot lean on
+    it to detect a slide. Not in scope and still open: the manifest lists every frame
+    of `Portra4000-2026-08-05-positive` as `real`; 1255/1293 are leaders and
+    1256/1294 unexposed (`asset-manifest` skill).
+
+## slide-film-input
+
+**Status:** not started
+**Updated:** 2026-10-08
+
+- Goal: convert positive (slide / E-6) film. Filed **low priority** (user) from
+  `positive-input-mode`, whose roll turned out to be a negative scanned in positive
+  mode; no slide scans exist to verify against.
 
 ## multi-frame-memory-growth
 

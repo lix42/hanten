@@ -19,7 +19,7 @@
 //! neutral). With the anchor a reference-free convention, exposure here is where
 //! brightness is set.
 //!
-//! **Where an already-positive scan will enter** (`io/positive-input-mode`): ahead of
+//! **Where an already-positive scan will enter** (`io/slide-film-input`): ahead of
 //! this stage, at the working space — a positive is brought to linear ACEScg and
 //! then corrected like a negative, because a slide needs white balance and exposure
 //! as much as a negative does. So [`AcesCgImage`] is the chain's entry for both, and
