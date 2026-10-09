@@ -25,7 +25,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `nf-calibration/level-target-zero` §5's `roll.json` and §7's `measure-roll` report were
 > re-run on their real rolls, and at `nf-verification/roll-side-exports` §5's default
 > recipe, §8's film RGB export (now on `roll` too), §9's IR section and §11's flag tables.
-> The staleness signal is
+> At `nf-scene-correction/midtone-neutral` (whites now measured after the roll's colour
+> correction) §5's default recipe and `roll.json` and §7's scene-correction and roll report
+> examples were re-run. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -54,7 +56,7 @@ shape every workflow below:
 - **Calibrate once, apply many.** The film base (`Dmin`) is a property of the
   *roll* — film stock, development, scanner — not of an individual frame. You
   measure it once and reuse it, which is what keeps a whole roll color-consistent;
-  the roll's white balance, white and exposure are measured once the same way
+  the roll's white balance, midtone line, white and exposure are measured once the same way
   (`hanten measure-roll`, §7). **`Dmin` has no default: every `convert` must say
   where the film base comes from**, because it sets the black point and the colour
   balance together.
@@ -138,7 +140,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten params` | Print the full default recipe as JSON, in the stamped `{meta, params}` envelope every written recipe has (§5) — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`. | Yes |
-| `hanten measure-roll` | **"What does this roll share?"** — its white balance, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
+| `hanten measure-roll` | **"What does this roll share?"** — its white balance, midtone line, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` ([§11](#telemetry-upload)). | No |
 
 Every image command (`inspect`, `measure-base`, `measure-roll`, `convert`, `roll`)
@@ -195,7 +197,7 @@ usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per r
 ```
 
 One command measures everything a roll shares — the film base from its **unexposed
-frame**, and its white balance, white and exposure over its picture frames (§7) — and writes it
+frame**, and its white balance, midtone line, white and exposure over its picture frames (§7) — and writes it
 as one recipe:
 
 ```sh
@@ -213,13 +215,15 @@ abridged):
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
     "roll": {
       "white_balance": [0.886392, 1.0, 1.188019],
-      "white_stops": 1.9509047,
+      "white_stops": 1.7573359,
       "exposure": 1.0854688,
       "frame_exposure": null,
       "small_lift": null,
       "thin_slope": null,
       "thin_exposure": null,
       "thin_lift": null,
+      "midtone_line": null,
+      "midtone_neutral": null,
       "frames": { "971.tif": { "white_stops": 2.0, "exposure": null,
                                "thin_slope": null, "thin_exposure": null } }
     },
@@ -235,7 +239,8 @@ Like every recipe file Hanten writes, it is the recipe (`params`) beside the bui
 wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by file name, the frames whose white is
 above the roll's cap, the low-key frames given a small lift (`"exposure"`; none on
 this roll), and the thin frames given a `"thin_slope"` and `"thin_exposure"` beside it
-(§7). `reconstruction` is the decode the gains were measured through, written
+(§7). `roll.midtone_line` is `null` here because a three-frame roll is too short to
+measure it (§7). `reconstruction` is the decode the gains were measured through, written
 even at its defaults, because the gains hold only under it. If your `--params` recipe
 stated `input` or `measure` keys, the file carries them too.
 
@@ -379,6 +384,7 @@ hanten params
     "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
                      "frame_exposure": null, "small_lift": null,
                      "thin_slope": null, "thin_exposure": null, "thin_lift": null,
+                     "midtone_line": null, "midtone_neutral": null,
                      "frames": {} },
     "measure":     { "inset": 0.05 },
     "reconstruction": {
@@ -611,8 +617,9 @@ completed, so `"output": "b-brighter"` writes `b-brighter.tiff` on a default rol
 
 A frame renders exactly as `convert --params` would with the shared recipe and its
 override merged. Some keys describe the *roll*, not the frame:
-`calibration.film_base`, `roll.white_balance`, `roll.exposure`, `reconstruction` (every key),
-`rendering` and `output`. An override that changes one is applied but warns, naming
+`calibration.film_base`, `roll.white_balance`, `roll.midtone_line`, `roll.exposure`,
+`reconstruction` (every key), `rendering` and `output`. (A frame may turn the midtone
+line off, `"roll": {"midtone_neutral": "off"}`, without a warning.) An override that changes one is applied but warns, naming
 both values (and `--strict` turns the warning into a failing exit), because the frame
 then renders apart from its siblings — a roll is one piece of film through one
 process. What counts is what the frame renders: restating the roll's value does not
@@ -763,8 +770,9 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stag
 ["identity","contrast+highlight-desaturation","reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
 ```
 
-Scene correction reports `"identity"`, `"white-balance"`, `"exposure"` or
-`"white-balance+exposure"`; the look the controls that ran joined by `+`, or
+Scene correction reports what ran joined by `+`, in order — `midtone-neutral`,
+`white-balance`, `exposure` (e.g. `"midtone-neutral+white-balance+exposure"`) — or
+`"identity"`; the look the controls that ran joined by `+`, or
 `"identity"`; fit range its operator and display black's curve; fit gamut the change of
 primaries and the gamut map, named for the destination's gamut. `--film-master` runs
 none of them (§8).
@@ -859,15 +867,18 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-exposure` / `--roll-frame-exposure` /
-  `--roll-thin-slope` / `--roll-thin-exposure` / `--small-lift on` / `--thin-lift on`, or
-  pass `--rendering default`. A recipe's `roll` section is not refused, nor is
-  `--small-lift off` or `--thin-lift off`, which ask for nothing (under the film master
-  too).
+  `--roll-thin-slope` / `--roll-thin-exposure` / `--roll-midtone-line` / `--small-lift on`
+  / `--thin-lift on` / `--midtone-neutral on`, or pass `--rendering default`. A recipe's
+  `roll` section is not refused, nor is `--small-lift off`, `--thin-lift off` or
+  `--midtone-neutral off`, which ask for nothing (under the film master too).
 
 ### Scene correction
 
 The first stage applies white balance and exposure as per-channel gains on linear
-ACEScg — after the decode's 3×3, before the look — and clamps nothing:
+ACEScg — after the decode's 3×3, before the look — and clamps nothing. Before the gains
+it removes the roll's **midtone cast** when the recipe carries one (`roll.midtone_line`,
+measured by `measure-roll`, below); the report's `chain.scene_correction` then also
+states the line.
 
 | Flag | Recipe key | |
 |---|---|---|
@@ -1064,11 +1075,13 @@ empty. What can still clip is content brighter than fit range's headroom, which 
 the encoder above display white as a neutral: counted in `loss`, and failed by
 `--strict`.
 
-### `measure-roll` — a roll's white balance, white and exposure, measured once
+### `measure-roll` — a roll's white balance, midtone line, white and exposure, measured once
 
-It measures three things a whole roll shares. The **white balance** removes the cast of
+It measures what a whole roll shares. The **white balance** removes the cast of
 the film, the development and the scanner, and keeps the scene's light: one sunset
-frame barely moves a statistic taken over every frame. The **roll's white** sets the
+frame barely moves a statistic taken over every frame. The **midtone line** removes the
+cast a poor development leaves in the midtones, which the white balance — exact only at
+the roll's brightest percent — cannot (below). The **roll's white** sets the
 look's base slope, so the roll's highlights reach white with mid-grey held where it is.
 The **roll's exposure** brings an under- or over-exposed roll to a normal level.
 Give it the roll's picture frames, its leader, and its film base — measured here from
@@ -1082,26 +1095,34 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
               "ceiling": [0.6092257, 0.47875258, 0.30749768], "film_peak": 1.0815561, … },
   "frames": [ { "input": "frames/1774.tif", "region": [167, 167, 4579, 3009],
                 "holder_applied": false, "sampled": 131072, "kept": 131065, "guarded": 7,
-                "unusable": 0, "white_stops": 0.52260643,
+                "unusable": 0, "white_stops": 0.64702564,
+                "decoded_white_stops": 0.52260643,
                 "leader_distance_stops": 2.0644333, "level_stops": -1.7618053,
                 "white_role": "under", "spread_stops": 3.7179117,
                 "base_share": 0.38004303, "lift_ev": 0.0, … }, … ],
   "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
+  "midtone_neutral": { "kind": "correction", "mode": "auto",
+                       "line": { "red": [-0.023591928, -0.024393905],
+                                 "blue": [-0.044650972, -0.06559556],
+                                 "bands": [-2.75, 2.25], "fade_end_stops": 1.114628 },
+                       "frames": 35, "bands": [ … ], "off_because": null,
+                       "min_frames": 10, "min_bands": 3, "fade_stops": 1.0,
+                       "gate_log2": [0.6, 0.9] },
   "white": { "stops": 1.5, "bound": "floor", "slope": 1.6492873,
-             "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
+             "clamped": [ { "input": "frames/1815.tif", "white_stops": 2.2324193,
                             "slope": 1.2369655,
-                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-exposure 1.0553794" }, … ],
+                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-exposure 1.0553794 --roll-midtone-line -0.023591928,-0.024393905,-0.044650972,-0.06559556,-2.75,2.25,1.114628" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
   "exposure": { "ev": 1.0553794, "level_stops": -1.0553794, "bounded": false,
                 "target_stops": 0.0, "bound_ev": 3.0 },
-  "small_lift": { "kind": "taste", "written": true, "lifted": 19, "bound_ev": 0.3,
+  "small_lift": { "kind": "taste", "written": true, "lifted": 17, "bound_ev": 0.3,
                   "full_stops": 0.9, "none_stops": 1.5, "flat_spread_stops": 1.0 },
   "thin_lift": { "kind": "taste", "written": true, "lifted": 0, "base_stops": -3.707272,
                  "white_stops": 0.9,
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
                  "slope_bound": 2.4 },
-  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 1.0553794" },
+  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 1.0553794 --roll-midtone-line -0.023591928,-0.024393905,-0.044650972,-0.06559556,-2.75,2.25,1.114628" },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
@@ -1127,6 +1148,8 @@ measured value is never mistaken for a chosen one:
 | `--roll-thin-slope SLOPE` | `roll.thin_slope` | a thin frame's base slope, in place of the one `roll.white_stops` places (`--contrast` multiplies it) |
 | `--roll-thin-exposure EV` | `roll.thin_exposure` | the exposure solved with the thin slope, added to the roll's in place of the small lift; refused without `roll.thin_slope` (exit 2) |
 | `--thin-lift on\|off` | `roll.thin_lift` | whether the thin lift applies; off, the frame renders its small lift |
+| `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
+| `--midtone-neutral on\|off` | `roll.midtone_neutral` | whether the midtone line applies; off keeps it in the recipe |
 | — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …}}`, any `null`: a frame's own white, in place of the roll's, and its lifts. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope` and `roll.thin_exposure`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
@@ -1161,9 +1184,13 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"taste_applied":[]}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"taste_applied":[]}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
+
+With `--roll-midtone-line` too, `chain.roll` states the line with
+`"midtone_neutral_applied": true`, `chain.scene_correction` carries it as `midtone_line`,
+and the stage list reads `midtone-neutral+white-balance+exposure`.
 
 `slope_applied` stays `true` with `--contrast` stated: the contrast multiplies the
 roll's slope (`chain.look.base_from` is `roll`). The film master and `direct` apply
@@ -1206,9 +1233,29 @@ version 2 recipe's `look.contrast` is refused with its conversion — §5.)
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,
 green-anchored.
 
+**The midtone line** is the cast left after the white balance, as a line against scene
+brightness. Per half-stop band, each frame votes the most common colour of its pixels
+there; the roll's value per band is the median vote, and a line through the bands
+weighted by frames voting gives red and blue a correction. At render it applies in full
+up to a stop below `fade_end_stops`, fades to nothing there, stays flat outside `bands`,
+and spares strongly coloured light (a pixel 0.6 → 0.9 log2 off the line's cast, such as
+a sunset-lit cloud) — the **tint gate**. On a roll from an exhausted developer it is
+the difference between violet midtones and neutral ones; on a well-developed roll it is
+small. It is written only on a roll of **10 frames or more** with at least 3 bands voted
+by 3 frames: `off_because` says `too-few-frames` or `too-few-bands` otherwise, and `asked`
+(no band measured) under `--midtone-neutral off`. `--midtone-neutral on` writes it on a
+shorter roll too, of 3 frames or more, if enough bands count. A roll dominated by one
+scene colour (sand, sea) can read that colour as the cast; re-run `measure-roll
+--midtone-neutral off`, which also measures the whites without the line, and use its
+recipe alone: a `null` in a later `--params` layer does not clear an earlier line. At
+render, `--midtone-neutral off` (recipe `roll.midtone_neutral` `"off"`) drops only the
+line and keeps it in the recipe: the whites stay as measured after it.
+
 **The roll's white** is measured per frame, in **scene stops** above mid-grey: each
-frame's `white_stops` is the 97th percentile of its pixels' **brightest channel**, before
-the working-space matrix, which leaves speculars above white. The brightest channel
+frame's `white_stops` is the 97th percentile of its pixels' **brightest channel**, after
+the roll's white balance and midtone line, in the decode's film RGB (before the
+working-space matrix), which leaves speculars above white. `decoded_white_stops` is the
+same before that correction. The brightest channel
 rather than red, so a blue sky or a green-lit highlight reads as bright as it is. The roll's white is the brightest frame
 white at or under the **cap** (+2.0), raised to at least the **floor** (+1.5); `bound`
 says which limit set it (`none`, `floor`, or `cap` when every frame is above it).
@@ -1221,7 +1268,7 @@ slope is derived from it at render time.
   cap as its white in `roll.frames`, and its own `flag` is for `convert`. An ordinary
   bright scene lands here too, so this is reported, not warned about.
 - **A frame near its leader warns.** A white within 0.5 stop of the leader
-  (`leader_distance_stops`, the same brightest-channel measure) is near film saturation, where the film compresses
+  (`leader_distance_stops`, from `decoded_white_stops`: saturation is the film's, before any correction) is near film saturation, where the film compresses
   highlights and the decode renders them flat. Without `--leader` nothing is checked.
 - **The contrast lifts an underexposed roll's white only as far as the floor**; its level
   is the roll's exposure's (below).
@@ -1231,7 +1278,7 @@ slope is derived from it at render time.
   exposure plus `--exposure` at 0.5 and slope 1.65, the white lands about 0.8 stop past
   diffuse white. That is an exposure doing its job, not a mismeasured white.
 - The cap, floor and margin are provisional: they were chosen by review on nine rolls
-  with no deliberately bad frames.
+  with no deliberately bad frames, on whites measured before the colour correction.
 
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
 `level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
@@ -1245,8 +1292,9 @@ film base. If the roll really is that far off, add `--exposure` when converting
 −0.6 stop, which left midtones darker than SilverFast's; it measures +0.62 to +2.34 EV on
 the eleven archive rolls.
 
-**The roll's white balance, exposure and white are corrections; the two lifts below are
-preferences** (taste). A correction restores what the roll recorded and has no switch.
+**The roll's white balance, midtone line, exposure and white are corrections; the two
+lifts below are preferences** (taste). A correction restores what the roll recorded and
+has no switch — except the midtone line, which can misread a roll's scene as its cast.
 A preference is on by default because review preferred it, and each has its own off
 switch at render that keeps its value in the recipe, so a frame or a roll can be
 compared with and without it and turned back on. The report's `chain.roll.taste_applied`

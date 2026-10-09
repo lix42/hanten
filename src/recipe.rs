@@ -57,8 +57,11 @@ use crate::pipeline::look::{
     ChannelGradeFault, DesaturationFault, HighlightDesaturation, IDENTITY_CHANNEL_GRADE,
     LookParams, LookSection, MAX_START_STOPS,
 };
+use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::roll_white;
-use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
+use crate::pipeline::scene_correction::{
+    MidtoneCorrection, SceneCorrectionParams, SceneFault, WhiteBalance,
+};
 use crate::pipeline::working_space::map_nc_film_rgb_v1;
 use crate::rendering::{Base, Rendering};
 use crate::types::{
@@ -227,7 +230,7 @@ pub struct RollSection {
     pub frame_exposure: Option<f32>,
     /// Whether `frame_exposure` applies: a taste switch (design-spec §6). Unset (`null`) is
     /// on, so a measured file layered last never undoes an earlier `"off"`.
-    pub small_lift: Option<Lift>,
+    pub small_lift: Option<Switch>,
     /// A thin frame's own slope (`roll_white::thin_lift`), in place of the one `white_stops`
     /// places, while [`Self::thin_lift`] is on. A slope, not a white: it is chosen, not
     /// measured.
@@ -237,7 +240,13 @@ pub struct RollSection {
     pub thin_exposure: Option<f32>,
     /// Whether the thin pair applies: a taste switch like `small_lift`. Off, a thin frame
     /// renders its small lift.
-    pub thin_lift: Option<Lift>,
+    pub thin_lift: Option<Switch>,
+    /// The roll's midtone cast (`pipeline::midtone_neutral`), removed in scene correction
+    /// while [`Self::midtone_neutral`] is on. One line for the roll: a `frames` entry
+    /// cannot carry one.
+    pub midtone_line: Option<MidtoneLine>,
+    /// Whether `midtone_line` applies. Unset (`null`) is on, like the lifts' switches.
+    pub midtone_neutral: Option<Switch>,
     /// The frames with their own values — a white clamped to the cap, a lift
     /// (`roll_white::small_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
     /// recipe still applies after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
@@ -259,11 +268,11 @@ pub struct FrameRoll {
     pub thin_exposure: Option<f32>,
 }
 
-/// `roll.small_lift` / `--small-lift` and `roll.thin_lift` / `--thin-lift`: whether a
-/// taste adjustment applies.
+/// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift` and
+/// `roll.midtone_neutral` / `--midtone-neutral`: whether an automatic adjustment applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum Lift {
+pub enum Switch {
     On,
     Off,
 }
@@ -279,7 +288,7 @@ impl RollSection {
     /// The thin slope as it applies: `None` under `--thin-lift off`.
     pub fn applied_thin_slope(&self) -> Option<f32> {
         self.thin_slope
-            .filter(|_| self.thin_lift != Some(Lift::Off))
+            .filter(|_| self.thin_lift != Some(Switch::Off))
     }
 
     /// The thin exposure as it applies: only beside an applied thin slope.
@@ -292,13 +301,19 @@ impl RollSection {
     /// replaces it.
     pub fn applied_small_exposure(&self) -> Option<f32> {
         self.frame_exposure
-            .filter(|_| self.small_lift != Some(Lift::Off) && self.applied_thin_slope().is_none())
+            .filter(|_| self.small_lift != Some(Switch::Off) && self.applied_thin_slope().is_none())
     }
 
     /// The frame's own exposure as it applies: the thin lift's, else the small lift's.
     pub fn applied_frame_exposure(&self) -> Option<f32> {
         self.applied_thin_exposure()
             .or(self.applied_small_exposure())
+    }
+
+    /// The midtone line as it applies: `None` under `--midtone-neutral off`.
+    pub fn applied_midtone_line(&self) -> Option<MidtoneLine> {
+        self.midtone_line
+            .filter(|_| self.midtone_neutral != Some(Switch::Off))
     }
 
     /// The taste adjustments that apply, by their switch's key (design-spec §6).
@@ -489,6 +504,10 @@ pub struct RollReport {
     pub frame_exposure_applied: bool,
     /// Whether the thin lift set the look's base slope and its exposure.
     pub thin_lift_applied: bool,
+    /// The section's midtone line, as stated.
+    pub midtone_line: Option<MidtoneLine>,
+    /// Whether it reached scene correction (not under `--midtone-neutral off`).
+    pub midtone_neutral_applied: bool,
     /// The taste adjustments applied, by their switch's key ([`RollSection::taste_applied`]):
     /// each is a choice, off by `roll.<key>` `"off"`.
     pub taste_applied: Vec<&'static str>,
@@ -1100,6 +1119,12 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(lift) = args.roll.thin_lift {
         r.roll.thin_lift = Some(lift);
     }
+    if let Some(line) = args.roll.roll_midtone_line {
+        r.roll.midtone_line = Some(line);
+    }
+    if let Some(switch) = args.roll.midtone_neutral {
+        r.roll.midtone_neutral = Some(switch);
+    }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
     if let Some(gains) = args.scene.white_balance {
@@ -1401,6 +1426,18 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             return Err(NcError::Usage(format!(
                 "{name} is the exposure solved with a thin frame's slope, and applies \
                  only beside it: state {thin_slope} too, or drop it"
+            )));
+        }
+    }
+    if let Some(line) = p.midtone_line {
+        let name = knob_name(names, "roll", "--roll-midtone-line", "midtone_line");
+        line.check()
+            .map_err(|e| NcError::Usage(format!("{name}: {e}")))?;
+        if p.white_balance.is_none() {
+            return Err(NcError::Usage(format!(
+                "{name} is measured after the roll's white balance, and applies only beside \
+                 it: state {} too (`hanten measure-roll` writes both), or drop it",
+                knob_name(names, "roll", "--roll-white-balance", "white_balance")
             )));
         }
     }
@@ -2237,6 +2274,7 @@ impl Recipe {
         let (headroom_stops, display_black) = self.resolved_fit_range();
         SharedParams {
             scene_correction: self.resolved_scene_correction(),
+            midtone: self.resolved_midtone(),
             look: LookParams {
                 section: self.resolved_look(),
                 linearization: self.reconstruction.linearization,
@@ -2314,6 +2352,16 @@ impl Recipe {
         }
     }
 
+    /// The roll's midtone line as scene correction receives it: the applied roll's line,
+    /// keyed on the roll's gains. [`validate`] refuses a line without gains.
+    pub fn resolved_midtone(&self) -> Option<MidtoneCorrection> {
+        let roll = self.applied_roll();
+        roll.applied_midtone_line().map(|line| MidtoneCorrection {
+            line,
+            roll_gains: roll.white_balance.unwrap_or([1.0; 3]),
+        })
+    }
+
     /// The look's slope and its parts: the base — the applied roll's white, else the
     /// rendering's [`Base::slope`] — times the `look.contrast` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
@@ -2366,7 +2414,8 @@ impl Recipe {
             || r.exposure.is_some()
             || r.frame_exposure.is_some()
             || r.thin_slope.is_some()
-            || r.thin_exposure.is_some())
+            || r.thin_exposure.is_some()
+            || r.midtone_line.is_some())
         .then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
@@ -2384,6 +2433,8 @@ impl Recipe {
             exposure_applied: applies && r.exposure.is_some(),
             frame_exposure_applied: applies && r.applied_small_exposure().is_some(),
             thin_lift_applied: applies && r.applied_thin_slope().is_some(),
+            midtone_line: r.midtone_line,
+            midtone_neutral_applied: applies && r.applied_midtone_line().is_some(),
             taste_applied: if applies {
                 r.taste_applied()
             } else {
@@ -2835,7 +2886,8 @@ mod tests {
             json["roll"],
             serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null,
                 "frame_exposure": null, "small_lift": null, "thin_slope": null,
-                "thin_exposure": null, "thin_lift": null, "frames": {}})
+                "thin_exposure": null, "thin_lift": null, "midtone_line": null,
+                "midtone_neutral": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -4748,7 +4800,7 @@ mod tests {
                 |r| r.roll.frame_exposure == Some(0.2),
             ),
             ("--small-lift", &["--small-lift", "off"], |r| {
-                r.roll.small_lift == Some(Lift::Off)
+                r.roll.small_lift == Some(Switch::Off)
             }),
             ("--roll-thin-slope", &["--roll-thin-slope", "2.1"], |r| {
                 r.roll.thin_slope == Some(2.1)
@@ -4759,7 +4811,26 @@ mod tests {
                 |r| r.roll.thin_exposure == Some(0.6),
             ),
             ("--thin-lift", &["--thin-lift", "off"], |r| {
-                r.roll.thin_lift == Some(Lift::Off)
+                r.roll.thin_lift == Some(Switch::Off)
+            }),
+            (
+                "--roll-midtone-line",
+                &[
+                    "--roll-midtone-line",
+                    "-0.06,0.04,-0.02,0.37,-2.75,1.75,1.87",
+                ],
+                |r| {
+                    r.roll.midtone_line
+                        == Some(MidtoneLine {
+                            red: [-0.06, 0.04],
+                            blue: [-0.02, 0.37],
+                            bands: [-2.75, 1.75],
+                            fade_end_stops: 1.87,
+                        })
+                },
+            ),
+            ("--midtone-neutral", &["--midtone-neutral", "off"], |r| {
+                r.roll.midtone_neutral == Some(Switch::Off)
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3

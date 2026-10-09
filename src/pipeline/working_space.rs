@@ -171,22 +171,92 @@ pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage {
     let mut image = film.into_linear();
     let m = &NC_FILM_RGB_V1_TO_ACESCG;
 
-    pixels::map_in_place(&mut image.rgb, |px| {
-        // Compute in f64 for precision, then store f32. Read the source triple
-        // first so the in-place write of channel 0 doesn't feed channels 1/2.
-        let (r, g, b) = (px[0] as f64, px[1] as f64, px[2] as f64);
-        px[0] = (m[0][0] * r + m[0][1] * g + m[0][2] * b) as f32;
-        px[1] = (m[1][0] * r + m[1][1] * g + m[1][2] * b) as f32;
-        px[2] = (m[2][0] * r + m[2][1] * g + m[2][2] * b) as f32;
-    });
+    pixels::map_in_place(&mut image.rgb, |px| *px = multiply(m, *px));
 
     AcesCgImage::new(image)
+}
+
+/// One pixel through the mapping, as [`map_nc_film_rgb_v1`] maps it.
+pub(crate) fn film_rgb_to_acescg(px: [f32; 3]) -> [f32; 3] {
+    multiply(&NC_FILM_RGB_V1_TO_ACESCG, px)
+}
+
+/// One ACEScg pixel back to film RGB, through the mapping's inverse: for a measurement
+/// taken in film RGB after a correction made in ACEScg (`roll_white::corrected_white`).
+pub(crate) fn acescg_to_film_rgb(px: [f32; 3]) -> [f32; 3] {
+    multiply(&ACESCG_TO_NC_FILM_RGB_V1, px)
+}
+
+/// The inverse of [`NC_FILM_RGB_V1_TO_ACESCG`], derived at compile time rather than
+/// pinned: it is a measurement aid, never applied to an image.
+const ACESCG_TO_NC_FILM_RGB_V1: [[f64; 3]; 3] = invert(&NC_FILM_RGB_V1_TO_ACESCG);
+
+/// `m · px` in binary64, stored `f32`.
+fn multiply(m: &[[f64; 3]; 3], px: [f32; 3]) -> [f32; 3] {
+    let (r, g, b) = (px[0] as f64, px[1] as f64, px[2] as f64);
+    [
+        (m[0][0] * r + m[0][1] * g + m[0][2] * b) as f32,
+        (m[1][0] * r + m[1][1] * g + m[1][2] * b) as f32,
+        (m[2][0] * r + m[2][1] * g + m[2][2] * b) as f32,
+    ]
+}
+
+/// A 3×3 inverse by adjugate over determinant.
+const fn invert(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    const fn c(a: f64, b: f64, c: f64, d: f64) -> f64 {
+        a * d - b * c
+    }
+    let det = m[0][0] * c(m[1][1], m[1][2], m[2][1], m[2][2])
+        - m[0][1] * c(m[1][0], m[1][2], m[2][0], m[2][2])
+        + m[0][2] * c(m[1][0], m[1][1], m[2][0], m[2][1]);
+    [
+        [
+            c(m[1][1], m[1][2], m[2][1], m[2][2]) / det,
+            -c(m[0][1], m[0][2], m[2][1], m[2][2]) / det,
+            c(m[0][1], m[0][2], m[1][1], m[1][2]) / det,
+        ],
+        [
+            -c(m[1][0], m[1][2], m[2][0], m[2][2]) / det,
+            c(m[0][0], m[0][2], m[2][0], m[2][2]) / det,
+            -c(m[0][0], m[0][2], m[1][0], m[1][2]) / det,
+        ],
+        [
+            c(m[1][0], m[1][1], m[2][0], m[2][1]) / det,
+            -c(m[0][0], m[0][1], m[2][0], m[2][1]) / det,
+            c(m[0][0], m[0][1], m[1][0], m[1][1]) / det,
+        ],
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::FilmBase;
+
+    #[test]
+    fn the_inverse_undoes_the_mapping() {
+        // `derive` is test-only, so the runtime keeps its own `invert`; they agree bit for bit.
+        assert_eq!(
+            ACESCG_TO_NC_FILM_RGB_V1,
+            crate::pipeline::colorimetry::derive::inverse(NC_FILM_RGB_V1_TO_ACESCG)
+        );
+        let product = crate::pipeline::colorimetry::derive::multiply(
+            ACESCG_TO_NC_FILM_RGB_V1,
+            NC_FILM_RGB_V1_TO_ACESCG,
+        );
+        for (i, row) in product.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((v - want).abs() < 1e-14, "[{i}][{j}] = {v}");
+            }
+        }
+        let px = [0.31, 0.18, 0.07];
+        let back = acescg_to_film_rgb(film_rgb_to_acescg(px));
+        assert!(
+            px.iter().zip(back).all(|(a, b)| (a - b).abs() < 1e-6),
+            "{back:?}"
+        );
+    }
 
     // -- derivation helpers ----------------------------------------------------
     //

@@ -9590,6 +9590,10 @@ fn the_roll_flags_are_refused_under_the_film_master() {
     for flag in [
         &["--roll-white-balance", "1.3,1,0.8"][..],
         &["--roll-white", "1.7"][..],
+        &[
+            "--roll-midtone-line",
+            "-0.05,0.04,-0.02,0.37,-2.75,1.75,1.9",
+        ][..],
     ] {
         let (code, _, err) = convert_48bit(
             &tmp.path("m.tiff"),
@@ -9771,22 +9775,179 @@ fn write_picture_density(path: &Path, base: [f32; 3], d: f32) {
     write_split_density(path, base, d, d - 0.3, 16);
 }
 
+/// A frame whose density ramps from `lo` to `hi` down its rows: several bands of
+/// brightness, so the midtone line has votes.
+fn write_ramp_density(path: &Path, base: [f32; 3], lo: f32, hi: f32) {
+    let (w, h) = (64, 64);
+    let pixels: Vec<u16> = (0..h)
+        .flat_map(|y| {
+            let d = lo + (hi - lo) * y as f32 / (h - 1) as f32;
+            let px = base.map(|b| (b * 10f32.powf(-d) * 65535.0).round() as u16);
+            (0..w).flat_map(move |_| px)
+        })
+        .collect();
+    write_hdri(path, w, h, &pixels, &vec![40_000; (w * h) as usize]);
+}
+
+#[test]
+fn measure_roll_writes_a_midtone_line_on_a_long_roll_that_convert_applies() {
+    let tmp = TempDir::new("measure-roll-midtone");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frames: Vec<PathBuf> = (0..10)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.75 + 0.01 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    let measure = |n: usize, extra: &[&str]| {
+        let out = tmp.path(&format!("roll-{n}-{}.json", extra.join("")));
+        let (code, stdout, err) = run(&[
+            &["measure-roll", "--params", input.to_str().unwrap()][..],
+            &names[..n],
+            extra,
+            &["--out", out.to_str().unwrap()],
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), written_recipe(&out), out)
+    };
+
+    // The data floor: nine frames get no line under `auto`, and do under `on`.
+    let (short, written, _) = measure(9, &[]);
+    assert_eq!(
+        short["midtone_neutral"]["off_because"], "too-few-frames",
+        "{short}"
+    );
+    assert!(written["roll"]["midtone_line"].is_null(), "{written}");
+    let (forced, _, _) = measure(9, &["--midtone-neutral", "on"]);
+    assert!(forced["midtone_neutral"]["line"].is_object(), "{forced}");
+    let (off, _, _) = measure(10, &["--midtone-neutral", "off"]);
+    assert_eq!(off["midtone_neutral"]["off_because"], "asked", "{off}");
+    // Nothing is measured: the frames are counted, no band is.
+    assert_eq!(off["midtone_neutral"]["frames"], 10, "{off}");
+    assert_eq!(
+        off["midtone_neutral"]["bands"],
+        serde_json::json!([]),
+        "{off}"
+    );
+
+    let (report, written, recipe) = measure(10, &[]);
+    let line = &report["midtone_neutral"]["line"];
+    assert!(line.is_object(), "ten frames and several bands: {report}");
+    assert_eq!(report["midtone_neutral"]["kind"], "correction");
+    assert_eq!(written["roll"]["midtone_line"], *line, "{written}");
+    assert!(
+        report["midtone_neutral"]["bands"].as_array().unwrap().len() >= 3,
+        "{report}"
+    );
+    let flag = report["reuse"]["flag"].as_str().unwrap();
+    assert!(flag.contains("--roll-midtone-line "), "{flag}");
+
+    // The recipe and the reported flag render the same pixels, and the line reaches them.
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                names[0],
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                input.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), std::fs::read(out).unwrap())
+    };
+    let (by_recipe, recipe_px) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
+    // A lifted frame takes its own flags, the roll's plus its lift.
+    let own = report["frames"][0]["flag"].as_str().unwrap_or(flag);
+    assert!(own.contains("--roll-midtone-line "), "{own}");
+    let flag: Vec<&str> = own.split_whitespace().collect();
+    let (_, flag_px) = convert("flag.tiff", &flag);
+    assert_eq!(
+        recipe_px, flag_px,
+        "the flag's text round-trips the line exactly"
+    );
+    let roll = &by_recipe["chain"]["roll"];
+    assert_eq!(roll["midtone_line"], *line, "{by_recipe}");
+    assert_eq!(roll["midtone_neutral_applied"], true, "{by_recipe}");
+    assert_eq!(
+        by_recipe["chain"]["scene_correction"]["midtone_line"],
+        *line
+    );
+
+    // Off at render keeps the line in the recipe and renders as if it were not there.
+    let (off, off_px) = convert(
+        "off.tiff",
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--midtone-neutral",
+            "off",
+        ],
+    );
+    assert_eq!(
+        off["chain"]["roll"]["midtone_neutral_applied"], false,
+        "{off}"
+    );
+    assert!(
+        off["chain"]["scene_correction"]
+            .get("midtone_line")
+            .is_none(),
+        "{off}"
+    );
+    let without = tmp.path("without.json");
+    let mut stripped = written.clone();
+    stripped["roll"]["midtone_line"] = serde_json::Value::Null;
+    std::fs::write(&without, stripped.to_string()).unwrap();
+    let (_, without_px) = convert("without.tiff", &["--params", without.to_str().unwrap()]);
+    assert_eq!(off_px, without_px);
+    assert_ne!(off_px, recipe_px, "not vacuous: the line moved pixels");
+
+    // A line is measured after the roll's gains, and refused without them.
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "-o",
+        tmp.path("bare.tiff").to_str().unwrap(),
+        "--roll-midtone-line",
+        "-0.06,0.04,-0.02,0.37,-2.75,1.75,1.87",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-midtone-line (recipe `roll.midtone_line`) is measured after")
+            && err.contains("--roll-white-balance (recipe `roll.white_balance`)"),
+        "{err}"
+    );
+}
+
 #[test]
 fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
-    // A dim frame (~+1.7 stops) and a bright one (~+3.0): the roll's white is the dim
-    // frame's, and the bright one is clamped to the cap — disclosed with both contrasts,
-    // and handed to `roll` as a per-frame contrast. It warns only when its leader is
-    // near: a frame merely above the cap is an ordinary bright scene.
+    // A dim frame and a bright one, whose whites after the roll's white balance sit at
+    // ~+1.7 and ~+2.3 stops: the roll's white is the dim frame's, and the bright one is
+    // clamped to the cap — disclosed with both contrasts, and handed to `roll` as a
+    // per-frame contrast. It warns only when its leader is near: a frame merely above the
+    // cap is an ordinary bright scene.
     let tmp = TempDir::new("measure-roll-white");
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
     let (dim, bright) = (tmp.path("dim.tif"), tmp.path("bright.tif"));
-    write_uniform_density(&dim, base, 0.904);
-    write_uniform_density(&bright, base, 1.122);
+    write_uniform_density(&dim, base, 1.01);
+    write_uniform_density(&bright, base, 1.17);
     let (near, far) = (tmp.path("near.tif"), tmp.path("far.tif"));
     // The near leader is 0.1 stop over the bright frame — inside the guard, which would
     // leave the frame no pixel if its white were measured after it.
-    write_uniform_density(&near, base, 1.139);
+    write_uniform_density(&near, base, 1.187);
     write_uniform_density(&far, base, 1.5);
     let measure = |leader: &Path| {
         let (code, stdout, err) = run(&[
@@ -9861,9 +10022,11 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         report_near["frames"][1]["kept"], 0,
         "the guard took every pixel, and the frame still warned: {report_near}"
     );
+    // The decoded white, which the saturation check reads, is the guard's to leave alone;
+    // the corrected one follows the gains, which the emptied frame no longer feeds.
     assert_eq!(
-        report_near["frames"][1]["white_stops"],
-        report["frames"][1]["white_stops"]
+        report_near["frames"][1]["decoded_white_stops"],
+        report["frames"][1]["decoded_white_stops"]
     );
     // An emptied frame is not picture, so it has no say in the roll's exposure.
     assert!(
@@ -10261,24 +10424,30 @@ fn small_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
         ("direct.tiff", &["--rendering", "direct"][..]),
         ("master.tiff", &["--film-master"][..]),
     ] {
-        let off = ["--small-lift", "off", "--thin-lift", "off"];
+        let off = [
+            "--small-lift",
+            "off",
+            "--thin-lift",
+            "off",
+            "--midtone-neutral",
+            "off",
+        ];
         let (code, _, err) = convert_48bit(&tmp.path(name), &[extra, &off].concat());
         assert_eq!(code, 0, "{name}: {err}");
     }
-    // `on` asks for a lift the film master would ignore, and is named as typed.
-    let (code, _, err) = convert_48bit(
-        &tmp.path("on.tiff"),
-        &["--film-master", "--small-lift", "on"],
-    );
-    assert_eq!(code, 2, "{err}");
-    assert!(
-        err.contains(
-            "--small-lift on applies the roll's measurements through the rendering \
-                      stages, but --film-master writes"
-        ) && err.contains("drop --film-master"),
-        "{err}"
-    );
-    assert!(!err.contains("recipe's `output`"), "{err}");
+    // `on` asks for a correction the film master would ignore, and is named as typed.
+    for switch in ["--small-lift", "--midtone-neutral"] {
+        let (code, _, err) = convert_48bit(&tmp.path("on.tiff"), &["--film-master", switch, "on"]);
+        assert_eq!(code, 2, "{switch}: {err}");
+        assert!(
+            err.contains(&format!(
+                "{switch} on applies the roll's measurements through the rendering \
+                 stages, but --film-master writes"
+            )) && err.contains("drop --film-master"),
+            "{switch}: {err}"
+        );
+        assert!(!err.contains("recipe's `output`"), "{switch}: {err}");
+    }
 
     // On `roll`, one frame's exposure stated for all lifts every frame alike.
     let input = fixture("hdr-48bit.tif");

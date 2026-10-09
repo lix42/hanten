@@ -1917,7 +1917,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   written for three dye layers and says nothing about where mono pools
 
 ### nf-scene-correction — [progress](progress/nf-scene-correction.md)
-> Photographic corrections as a named stage: white balance and exposure.
+> Photographic corrections as a named stage: white balance, exposure and the midtone neutral.
 
 - [x] [Scene correction as a named stage](tasks/nf-scene-correction/stage.md)
   — white balance and exposure resolved once and reported, instead of a fused
@@ -1938,7 +1938,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   the scene's light; `path-to-white`'s band needs it. **Done 2026-09-23**: `hanten
   measure-roll` (pooled p99, leader guard), and per-frame auto white balance retired
   on the new chain
-- [ ] [A midtone neutral measured per
+- [x] [A midtone neutral measured per
   roll](tasks/nf-scene-correction/midtone-neutral.md) — the cast a poor development leaves
   in the midtones, removed by a per-roll line through the frames' votes; on by default
   with ten frames or more; each frame's white then measured on the corrected samples

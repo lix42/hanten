@@ -45,6 +45,13 @@ film-base reference has no scene subtraction to account for.
 lifted black (a faded look) is the one thing it could do that nothing does now. If anyone
 wants it, it is a look control.
 
+**A per-roll midtone line runs first (`midtone-neutral`, 2026-10-08).** `measure-roll`
+fits `roll.midtone_line` (10+ frames) and scene correction removes that cast before the
+roll's gains, keyed on those gains, with a tint gate sparing strongly coloured light;
+`roll.midtone_neutral` switches it per frame. Each frame's white is now measured after
+the gains and the line, so anything tuned on whites (the thin lift, `display-white`)
+reads corrected whites; the saturation check keeps the decoded white.
+
 ## stage
 
 **Status:** done
@@ -266,8 +273,8 @@ wants it, it is a look control.
 
 ## midtone-neutral
 
-**Status:** not started
-**Updated:** 2026-10-07
+**Status:** done
+**Updated:** 2026-10-08
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
   `../temp/roll-neutral-spike/TODO.md` B1, B2, detection switch). Five review rounds
@@ -281,6 +288,64 @@ wants it, it is a look control.
   sit within ~0.23, 1883's underside at 0.73. Neutral patches unchanged (09-20 8.8, 09-29
   3.4); 1883 underside a\* 16.8 → 12.9 (today's WB 9.8); the user preferred the gate on
   1879, 1883 and 1886 and saw no difference elsewhere.
+- 2026-10-08: **implemented** (`pipeline::midtone_neutral`; worktree branch). Decisions,
+  with the user:
+  - **Two-pass whites in this task**, mapped back to film RGB: each frame's film-RGB sample
+    is taken to ACEScg, corrected (line, then gains) and mapped back through the 3×3's
+    inverse, and the reviewed p97-of-the-brightest-channel rule runs there. The
+    saturation check keeps the **decoded** white (`frames[].decoded_white_stops`):
+    saturation is the film's. Whites moved, old → new: 09-28 +1.50 (floor) → +1.98, 09-14
+    +1.82 → +1.93, 09-20 +1.68 → +1.79, 07-15 +1.95 → +1.76, 07-23 +1.79 → +1.63, 09-09 and
+    09-29 within 0.02, the floor rolls unchanged. Short rolls move too: the gains alone
+    correct them.
+  - **Switch**: `measure-roll --midtone-neutral auto|on|off` (auto = the data floor); at
+    render `--midtone-neutral on|off` / `roll.midtone_neutral`, line kept while off. A
+    correction with a switch, an exception design-spec §6 now states (a beach roll can
+    misread). `recipe::Lift` became `Switch`, since it now switches a correction.
+  - **Roll-wide line** (`ROLL_WIDE`: a manifest that changes it warns), frame-local switch.
+  - The line keys on the **roll's own gains**, so a stated `--white-balance` does not move
+    it; a line without `roll.white_balance` is refused.
+- 2026-10-08: **matching the spike**, three findings:
+  - **The leader guard must not touch the line.** The spike's gains were guarded, its
+    votes and fade end (`s_w`) were not. Guarded, 09-29's fade end sat 0.23 stop low and
+    09-11 / 09-18 lost their top bands (red offset off by 0.05). So votes and fade end read
+    an unguarded per-frame sample (the same one the whites use); only the gains are guarded.
+  - **The band floor is a share** of the frame's sample (the spike's 300 of ~225,000, step
+    8), not 300 pixels: at 2^17 samples a fixed 300 dropped sparse top bands.
+  - Result: every coefficient within 0.006 of the spike's on the seven rolls ≥ 10 frames,
+    identical band ranges, and no line on the 3- and 4-frame rolls. Rendering, the spike's
+    hook and `--roll-midtone-line` differ by ≤ 1 u16 (09-29 2033, 09-20 1883, 09-18 1774);
+    the branch-measured line against the spike's moves pixels ≤ 257 u16 (p99 ≤ 42), against
+    an effect of up to 10,572. `MIN_BANDS` 3 is not reviewed: every reviewed roll counted 9+.
+- 2026-10-08: **drift gate refreshed in place, no row** (the task file asked for a row): the
+  two keys are `null` by default and no earlier recipe can state them, the precedent of
+  three earlier `roll` keys. A recipe from `measure-roll` does render differently now
+  (whites, line), as `level-target-zero`'s did without a bump. Memory: `measure-roll` holds
+  two samples per frame (~110 MB at 36 frames; `pipeline::memory`), and frees the pool
+  after the gains. Golden: `golden_midtone_neutral_is_correct_within_its_libm_window`
+  enumerates ±1 ULP on each of the six `f32` libm calls (729 combinations per pixel).
+  Pending: the moved-whites review (`../temp/whites-review/`).
+- 2026-10-08: **moved whites accepted** (user, `../temp/whites-review/`: 09-28 Portra 400
+  dark and 09-14 Ektar, whole rolls, SDR Display P3; main / line with main's whites / line
+  with the new whites). The new whites read a little dark; the user attributes that to
+  diffuse white at L\* 79, which `nf-calibration/display-white` raises, not to the
+  measurement.
+- 2026-10-08: **memory figure corrected**: after the frame loop `measure-roll` holds three
+  samples per frame (film RGB, its ACEScg copy, the pooled white's copy), ~160 MB at 36
+  frames (`pipeline::memory`), not the two (~110 MB) stated above.
+- 2026-10-08: **done.** Landed as one change: `pipeline::midtone_neutral` (line, gate,
+  measurement), applied first in scene correction in the same pass as the gains;
+  `measure-roll` writes `roll.midtone_line` and measures whites after the correction.
+  Review: Codex, `nc-reviewer`, the user's `/code-review` and ship's reviewer; fixes
+  included a non-finite pixel left alone (it turned NaN), the line held flat below its
+  lowest band, `measure-roll --midtone-neutral off` skipping the measurement (`bands: []`),
+  and the docs saying render-time off keeps whites measured with the line (re-measure with
+  `off` for that; a later `--params` layer's `null` cannot clear a line). Accepted as is: a
+  pixel with a channel ≤ 0 after the gains gets the full correction (the spike's rule, not
+  reviewed on saturated colour). For dependents: `display-white` and the thin-lift
+  thresholds now read whites after the correction; `midtone-neutral-fit` owns the fit
+  range and fade width; the bands are in pre-exposure stops, so a thin roll's rendered
+  shadows can fall below the lowest band (the spike's design, unreviewed on thin rolls).
 
 ## midtone-neutral-fit
 
