@@ -321,7 +321,7 @@ decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 →
 | **fixed decode** | density → the negative as a print sees it; `FilmRgbImage` (§7) | `algo::fixed` |
 | **NC film RGB v1** | the pinned 3×3 into linear ACEScg; `AcesCgImage` (§7.5) | `pipeline::working_space` |
 | **scene correction** | photographic corrections toward what the scene was: the roll's midtone neutral, white balance, exposure. Scene-referred, linear | `pipeline::scene_correction` |
-| **look** | creative and optional: contrast, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
+| **look** | creative and optional: contrast, saturation, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
 | **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place display black (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
 | **fit gamut** | change primaries into the destination's gamut and move out-of-gamut colour to its boundary, keeping hue | `pipeline::fit_gamut` |
 | **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere | `pipeline::color`, `io::encode`, `io::jpeg` |
@@ -377,10 +377,13 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   flare or fog subtraction: base fog is in the measured
   film base, lens glare is part of the photograph, and display black does the black
   point's one job (`nf-scene-correction/flare-removal`).
-- **The look** owes three controls the old chain never had as controls:
+- **The look** owes four controls the old chain never had as controls:
   - **Contrast** — the print-contrast half of the old single `gamma`, as a slope
-    pivoted at mid-grey. Its base is the roll's, set by the roll's white (§8 `roll`), or
+    pivoted at mid-grey, on luminance only. Its base is the roll's, set by the roll's white (§8 `roll`), or
     a thin frame's own slope (`roll.thin_slope`), and the knob multiplies it, so one taste carries across rolls as one number.
+  - **Saturation** — colour's own slope: log channel ratios stretched, luminance kept,
+    so contrast and colour move apart. Its base is the base slope (never a thin frame's)
+    times the rendering's saturation, and the knob multiplies it (§9 `look`).
   - **A per-channel grade pivoted at mid-grey** — the photographer-facing counterpart
     of the decode's `density.scale`. Acting on working-space channels after the 3×3,
     it corrects a cast that grows with brightness, which white balance cannot. Pivoted
@@ -507,8 +510,8 @@ What a preference carries, so a GUI can preview it with and without, and toggle 
   `"kind": "taste"`.
 
 **Explicit knobs build on the base, under either rendering.** `--white-balance`
-multiplies the base gains and `--contrast` the base slope, each with identity 1; every
-other knob replaces its base value.
+multiplies the base gains, and `--contrast` and `--saturation` their base slopes, each
+with identity 1; every other knob replaces its base value.
 
 ### The film master is the reconstruction output
 
@@ -646,7 +649,7 @@ out_c = 10^(−lin·A) × 10^(lin·offset_c) × (10^(D_c))^(lin · scale_c)
 | anchor `A` | one gain on all channels | **exactly exposure** — a scalar commutes with the 3×3 |
 | `offset[3]` | a per-channel gain, constant at every brightness | white balance, but in film-layer space *before* the 3×3, so not the same operator (≈2.6 % apart on a neutral) |
 | `scale[3]` | a per-channel exponent: how fast each channel grows with exposure | the pivoted per-channel grade — same symptom, different basis |
-| linearization | overall slope | the look's contrast — the same on neutrals, different on saturated colour |
+| linearization | overall slope | the look's contrast on luminance, its saturation slope on colour |
 
 A counterpart acts after the 3×3, so it addresses the symptom rather than the error.
 Only the products `linearization · scale_c` enter, pinned by the convention
@@ -966,6 +969,7 @@ re-derives it from the recipe:
     "scene_correction": { "white_balance": [1.0, 1.0, 1.0], "exposure": 0.0 },
     "look": { "contrast": 1.0, "base_slope": 1.413675, "base_from": "fallback",
               "saturation": 1.0, "saturation_base_slope": 1.6257261,
+              "saturation_base_from": "fallback",
               "slope": 1.413675, "saturation_slope": 1.6257261, "channel_grade": [1.0, 1.0],
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
     "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
@@ -1609,8 +1613,8 @@ the encode instead.
 - `--rendering default|direct` ⇒ `rendering` (default `"default"`) — the base every
   stage knob starts from (§6, `crate::rendering`). A knob written `null` is unstated and
   takes its rendering's value; a stated one builds on it (the white balance multiplies
-  the base gains and `look.contrast` the base slope; every other knob replaces its base
-  value). `direct` with the film master is refused. The report states it in
+  the base gains, and `look.contrast` and `look.saturation` their base slopes; every
+  other knob replaces its base value). `direct` with the film master is refused. The report states it in
   `chain.rendering`.
 
 ### Scene correction (`scene_correction`)
@@ -1686,7 +1690,8 @@ stage is a bit-exact identity. Controls run in the order listed.
   bit-exact identity. It assumes a roll-level white balance ahead of it.
 
 The report's `chain.look` states `contrast`, `base_slope`, `base_from` (`roll`,
-`thin`, `fallback` or `direct`), `saturation`, `saturation_base_slope`, the resulting
+`thin`, `fallback` or `direct`), `saturation`, `saturation_base_slope`,
+`saturation_base_from` (as `base_from`, never `thin`), the resulting
 `slope` and `saturation_slope`, and the section as run.
 
 ### Fit range (`fit_range`)
@@ -2103,7 +2108,7 @@ src/
     ├── scene_correction.rs # midtone neutral, white balance, exposure
     ├── midtone_neutral.rs  # the roll's midtone line: measured, and removed per pixel
     ├── correction_confidence.rs  # measure-roll: how far to trust the white balance and line
-    ├── look.rs             # contrast, per-channel grade, highlight desaturation
+    ├── look.rs             # contrast, saturation, per-channel grade, highlight desaturation
     ├── fit_range.rs        # reinhard to the display's peak, display black
     ├── fit_gamut.rs        # into the destination's gamut, radial to its boundary
     ├── hdr.rs              # the HDR hand-off: peak clamp, PQ/HLG transfer

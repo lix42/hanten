@@ -170,16 +170,19 @@ fn run(args: &[&str]) -> (i32, String, String) {
     spawn(args, &[])
 }
 
-/// Identity roll gains and exposure and a stated contrast, for a `--strict` test whose
-/// subject is not the roll: without them the `default` rendering warns that it fell back,
-/// or that the roll has no exposure, and `--strict` fails on that instead.
-const MEASURED: [&str; 6] = [
+/// Identity roll gains and exposure and a stated contrast and saturation, for a `--strict`
+/// test whose subject is not the roll: without them the `default` rendering warns that it
+/// fell back, or that the roll has no exposure, and `--strict` fails on that instead. Off
+/// the identity, so a `--dump-params` of the run replays quiet too.
+const MEASURED: [&str; 8] = [
     "--roll-white-balance",
     "1,1,1",
     "--roll-exposure",
     "0",
     "--contrast",
     "1.1111112",
+    "--saturation",
+    "1.05",
 ];
 
 /// Like [`run`], but with extra environment variables set for the child (used to
@@ -6889,6 +6892,35 @@ fn film_master_refuses_a_stated_headroom_and_accepts_the_reset() {
         code, 0,
         "the default headroom must reset, not refuse:\n{err}"
     );
+}
+
+#[test]
+fn film_master_refuses_a_stated_saturation_and_accepts_its_identity() {
+    // The film master runs no look, so `--saturation` off 1 is refused; 1 is the identity.
+    let tmp = TempDir::new("master-saturation");
+    let scan = fixture("hdr-48bit.tif");
+    let run_master = |saturation: &str| {
+        let out = tmp.path(&format!("master-{saturation}.tiff"));
+        run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "--film-base",
+            "1,1,1",
+            "--film-master",
+            "--saturation",
+            saturation,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+    };
+    let (code, _o, err) = run_master("1.2");
+    assert_eq!(code, 2, "expected a usage error, got:\n{err}");
+    assert!(
+        err.contains("cannot apply the look") && err.contains("--saturation 1"),
+        "{err}"
+    );
+    let (code, _o, err) = run_master("1");
+    assert_eq!(code, 0, "the identity must be accepted:\n{err}");
 }
 
 /// IR-assisted holder detection is decided by measuring the IR plane, not by a

@@ -1004,7 +1004,7 @@ pub struct LookOverrides {
     pub highlight_desaturation_start: Option<f32>,
     /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
-    /// the whole slope, `--density-gamma` times the look's slope (recipe key
+    /// `--density-gamma` times the look's saturation slope (recipe key
     /// `look.highlight_desaturation.band`, default `0.015,0.025`).
     #[arg(
         long = "highlight-desaturation-band",
@@ -1250,9 +1250,9 @@ pub struct ChainResult {
     /// roll's gains included. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_correction: Option<scene_correction::SceneCorrection>,
-    /// The look's controls as applied: the `contrast` multiplier, the base slope it
-    /// multiplied and where that came from, the resulting `slope`, the grade and highlight
-    /// desaturation. Absent for the film master.
+    /// The look's controls as applied: each multiplier (`contrast`, `saturation`) with the
+    /// base slope it multiplied, where that came from and the resulting slope, then the
+    /// grade and highlight desaturation. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub look: Option<recipe::LookReport>,
     /// Fit range's operator by name, with the headroom, white point and display peak
@@ -2845,7 +2845,8 @@ fn removed_frame_slope_message(slope: &str, args: &ConversionFlags, on_roll: boo
     };
     format!(
         "--roll-frame-slope was removed: a thin frame's lift is its own pair, beside the small \
-         lift. To render as before, {remedy}; or re-run `hanten measure-roll`."
+         lift. To keep the tone scale, {remedy}; colour follows the roll's white (else the fallback slope) and \
+         --saturation. Or re-run `hanten measure-roll`."
     )
 }
 
@@ -4437,7 +4438,11 @@ fn convert_attempt(
         recipe::validate_roll_frames(
             &stated_roll,
             recipe.reconstruction.linearization,
-            [recipe.look.contrast, recipe.look.saturation],
+            [
+                recipe.look.contrast,
+                recipe.base().saturation,
+                recipe.look.saturation,
+            ],
             KnobNames::FlagAndKey,
         )?;
     }

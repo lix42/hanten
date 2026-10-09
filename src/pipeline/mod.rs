@@ -6,7 +6,8 @@
 //! decode (`algo::fixed`) feeds it through the NC film RGB v1 mapping
 //! ([`working_space`]), and it renders into the destination `crate::destination`
 //! resolves; the film master skips it. Scene correction applies white balance and
-//! exposure, the look contrast, the per-channel grade and highlight desaturation, fit
+//! exposure, the look contrast, saturation, the per-channel grade and highlight
+//! desaturation, fit
 //! range compresses the scene's range against the destination's peak and places black,
 //! and fit gamut maps into the destination's gamut; the stage epics fill the rest.
 //! [`white_balance`] holds the white-balance statistics the roll measurement

@@ -32,7 +32,7 @@ use crate::types::{NcError, Result};
 /// ```text
 /// b  = smoothstep in stops: 0 at `start_stops` → 1 at diffuse white, held above
 /// w  = 1 at s ≤ band[0] → 0 at s ≥ band[1], linear in s,
-///      s = log10(max/min) / (linearization · slope), over ACEScg channels
+///      s = log10(max/min) / (linearization · saturation_slope), over ACEScg channels
 /// rgb ← rgb + strength · b · w · (Y − rgb)            Y = ACEScg luminance
 /// ```
 ///
@@ -40,8 +40,8 @@ use crate::types::{NcError, Result};
 ///   *coloured* surface is neutralised as hard as a bright white one — the sunset case
 ///   `docs/spike/highlight-desaturation.md` found on one marked patch. `s` is the
 ///   negative's own density spread — the log ratio over **the whole slope that shaped
-///   the pixel**, the decode's linearization times [`LookSection::slope`], which runs
-///   first — so the band means the same on a flat roll and a contrasty one.
+///   its colour**, the decode's linearization times [`LookSection::saturation_slope`] —
+///   so the band means the same on a flat roll and a contrasty one.
 /// - **The band assumes a roll-level white balance ahead of it**
 ///   (`hanten measure-roll`): `s` measures distance from R = G = B, which is distance
 ///   from white only once the roll's cast is gone (`docs/spike/desaturation-band.md`).
@@ -170,8 +170,8 @@ pub struct LookSection {
     ///   slope 1.41 moves the picture 1.41 stops, as paper contrast expands a printing
     ///   exposure.
     /// - **A pixel whose luminance is not finite and positive passes through.** A channel
-    ///   at or below zero is scaled with the rest, which keeps the pixel's ratios. A
-    ///   scale that overflows is left infinite, for fit range to refuse by name.
+    ///   at or below zero is scaled with the rest, which keeps the pixel's ratios. An
+    ///   overflowing scale leaves the pixel non-finite, for fit range to refuse.
     ///
     /// `1` is the identity, bit-exact.
     pub slope: f32,
@@ -189,8 +189,9 @@ pub struct LookSection {
     ///   kept, so it never moves a neutral or the tone scale.
     /// - **Highlight desaturation divides by it** (times the decode's linearization): its
     ///   band measures the negative's density spread, which this slope stretches.
-    /// - **A pixel is saturated whole or not at all**, as the grade is: every channel and
-    ///   both luminances finite and positive, and the result finite.
+    /// - **A pixel is saturated whole or not at all**, as the grade is: only when every
+    ///   channel is finite and positive. Any finite slope then saturates it — the stretch
+    ///   is normalised so it cannot overflow.
     ///
     /// `1` is the identity, bit-exact.
     pub saturation_slope: f32,
@@ -474,9 +475,13 @@ fn apply_contrast(px: &mut [f32; 3], contrast: f32) {
     *px = px.map(|c| c * scale);
 }
 
-/// [`LookSection::saturation_slope`] on one pixel, saturated whole or not at all — the
-/// guard [`apply_channel_grade`] states, for the same reason: the restore couples the
-/// channels.
+/// [`LookSection::saturation_slope`] on one pixel: `(x_c / Y)^s`, luminance restored.
+///
+/// Normalised by the largest channel instead of `Y` — the scale cancels in the restore
+/// — so every stretched value is in `(0, 1]` with the largest exactly 1: no slope can
+/// overflow it, and `Y(stretched)` is at least the smallest luma weight. A pixel with a
+/// non-finite or non-positive channel passes through whole, the guard
+/// [`apply_channel_grade`] states.
 fn apply_saturation(px: &mut [f32; 3], s: f32) {
     let usable = |v: f32| v.is_finite() && v > 0.0;
     if !px.iter().all(|&c| usable(c)) {
@@ -486,12 +491,9 @@ fn apply_saturation(px: &mut [f32; 3], s: f32) {
     if !usable(y) {
         return;
     }
-    let stretched = px.map(|c| (c / y).powf(s));
-    let y_stretched = dot(stretched, ACESCG_LUMA);
-    if !usable(y_stretched) {
-        return;
-    }
-    let restore = y / y_stretched;
+    let max = px[0].max(px[1]).max(px[2]);
+    let stretched = px.map(|c| (c / max).powf(s));
+    let restore = y / dot(stretched, ACESCG_LUMA);
     let out = stretched.map(|c| c * restore);
     if out.iter().all(|c| c.is_finite()) {
         *px = out;
@@ -545,8 +547,8 @@ struct Pull {
     ratio_full: f32,
     ratio_none: f32,
     band: [f32; 2],
-    /// The whole slope that shaped the pixel: the decode's linearization times the
-    /// look's slope, which has already run.
+    /// The whole slope that shaped the pixel's colour: the decode's linearization times
+    /// the saturation slope.
     contrast: f32,
 }
 
@@ -920,9 +922,9 @@ mod tests {
 
     #[test]
     fn highlight_desaturation_sees_the_same_neutral_highlights_either_way() {
-        // The band divides by the whole contrast — linearization times the look's — so
-        // a roll whose contrast moves from the decode into the look keys the same
-        // pixels the same way. Near-white highlights, from half a stop under diffuse
+        // The band divides by linearization × the saturation slope (here equal to the
+        // slope), so a roll whose contrast moves from the decode into the look keys the
+        // same pixels the same way. Near-white highlights, from half a stop under diffuse
         // white to most of a stop over it, at three density spreads: 0.01 (s ≈ 0.007,
         // below the band: full pull under any nearby divisor) and 0.025 / 0.03
         // (s ≈ 0.018 / 0.021, on the ramp, where the key depends on the divisor).
@@ -948,12 +950,12 @@ mod tests {
         let split = graded(&scan, LINEARIZATION, section);
         let right = widest(&split);
         // Falsifiability, through the stage: the same split with the band divided by the
-        // linearization alone (the look told `LINEARIZATION / slope`, so the product it
-        // forms is `LINEARIZATION`) keys the ramp pixels differently.
+        // linearization alone (the look told `LINEARIZATION / saturation_slope`, so the
+        // product it forms is `LINEARIZATION`) keys the ramp pixels differently.
         let wrong = widest(&graded_with(
             &scan,
             LINEARIZATION,
-            LINEARIZATION / section.slope,
+            LINEARIZATION / section.saturation_slope,
             section,
         ));
         // Measured 8.6e-5 right and 1.3e-2 wrong.
@@ -1059,18 +1061,32 @@ mod tests {
     #[test]
     fn saturation_passes_a_pixel_through_whole_at_the_gamut_edge() {
         let bits = |p: [f32; 3]| p.map(f32::to_bits);
-        for (px, s) in [
-            ([0.0, 0.3, 0.3], 4.0),
-            ([-0.01, 0.3, 0.3], 4.0),
-            ([f32::NAN, 0.3, 0.3], 4.0),
-            ([f32::INFINITY, 0.3, 0.3], 4.0),
-            // A finite pixel whose stretch overflows: blue over luminance is ~18, and
-            // 18^40 is past f32.
-            ([0.001, 0.001, 1.0], 40.0),
+        for px in [
+            [0.0, 0.3, 0.3],
+            [-0.01, 0.3, 0.3],
+            [f32::NAN, 0.3, 0.3],
+            [f32::INFINITY, 0.3, 0.3],
         ] {
             let mut out = px;
+            apply_saturation(&mut out, 4.0);
+            assert_eq!(bits(out), bits(px), "{px:?}");
+        }
+    }
+
+    #[test]
+    fn an_extreme_saturation_still_saturates_and_keeps_luminance() {
+        // Blue over luminance is ~18, so an unnormalised 18^s overflows f32 from s ≈ 31.
+        // The most colourful pixel must saturate at least as far as a duller one.
+        let vivid = [0.001, 0.001, 1.0];
+        for s in [40.0, 1e6, 1e38] {
+            let mut out = vivid;
             apply_saturation(&mut out, s);
-            assert_eq!(bits(out), bits(px), "{px:?} at {s}");
+            assert!(out.iter().all(|c| c.is_finite()), "{out:?} at {s}");
+            assert_ne!(out, vivid, "{s}");
+            let (y, got) = (luminance(vivid), luminance(out));
+            assert!(((got - y) / y).abs() < 1e-5, "at {s}: {got} vs {y}");
+            // The limit: everything on the largest channel, red and green gone.
+            assert!(out[0] < 1e-6 && out[1] < 1e-6, "{out:?} at {s}");
         }
     }
 

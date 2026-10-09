@@ -1142,20 +1142,22 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
 
 /// Film RGB for the saturation: a shadow, a saturated midtone and a highlight above
 /// diffuse white. Each pixel makes three libm calls (`powf` on each channel over the
-/// luminance), and all three enter the luminance restore.
+/// largest), and all three enter the luminance restore.
 const LOOK_SATURATION_FILM: [f32; 9] = [0.02, 0.018, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2];
 
 /// The saturation alone: contrast 1, desaturation off.
 const LOOK_SATURATION_SLOPE: f32 = 1.4;
 
-/// Captured 2026-10-09 when saturation landed (`nf-look/contrast-on-luminance`).
+/// Captured 2026-10-09 when saturation landed (`nf-look/contrast-on-luminance`);
+/// recaptured the same day when the stretch was normalised by the largest channel, so
+/// no slope overflows it.
 const LOOK_SATURATION: [u32; 9] = [
-    0x3c9f289a, 0x3c93c9ff, 0x3c6c6e41, 0x3ee4ef7f, 0x3e9a11d1, 0x3db5c2dc, 0x3ff283a1, 0x3fcd8760,
+    0x3c9f289a, 0x3c93c9fe, 0x3c6c6e41, 0x3ee4ef7c, 0x3e9a11cf, 0x3db5c2db, 0x3ff283a0, 0x3fcd8760,
     0x3f904854,
 ];
 
 /// The saturation for one pixel, written out independently of the stage, with its
-/// three libm results supplied: `(x_c / Y)^s`.
+/// three libm results supplied: `(x_c / max)^s`.
 fn look_saturation_pixel(px: [f32; 3], stretched: [f32; 3]) -> [f32; 3] {
     let restore = look_luminance(px) / look_luminance(stretched);
     stretched.map(|c| c * restore)
@@ -1185,9 +1187,9 @@ fn golden_look_saturation_is_correct_within_its_libm_window() {
             px.iter().all(|&c| c > 0.0),
             "pixel {p} must reach every power"
         );
-        let y = look_luminance(px);
+        let max = px[0].max(px[1]).max(px[2]);
         let stretched = px.map(|x| {
-            let base = x / y;
+            let base = x / max;
             let rounded = f64::from(base).powf(f64::from(s)) as f32;
             assert!(
                 ulps_between(base.powf(s), rounded) <= LIBM_MAX_ERROR_ULPS,
