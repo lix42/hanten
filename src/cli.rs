@@ -963,11 +963,11 @@ pub struct LookOverrides {
     /// rest of the picture.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
-    /// Saturation, as a multiplier on the base slope's colour (recipe key
-    /// `look.saturation`; 1 keeps it): each pixel's colour ratios are raised to the power
-    /// `base × SATURATION` with its luminance kept. The base is `--contrast`'s, except a
-    /// thin frame's slope (`--roll-thin-slope`), which never reaches colour; so 1 renders
-    /// the colour a per-channel contrast at the base gave, whatever `--contrast` is.
+    /// Saturation, as a multiplier on the default colour (recipe key `look.saturation`; 1
+    /// keeps it): each pixel's colour ratios are raised to the power
+    /// `base × 1.15 × SATURATION` with its luminance kept (`direct`: × 1 in place of 1.15).
+    /// The base is `--contrast`'s, except a thin frame's slope (`--roll-thin-slope`), which
+    /// never reaches colour; so colour does not move with `--contrast`.
     #[arg(long, value_name = "SATURATION", allow_hyphen_values = true)]
     pub saturation: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green

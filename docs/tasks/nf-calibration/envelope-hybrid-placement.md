@@ -22,8 +22,10 @@ Known (`docs/spike/poor-development.md`, 2026-10-04/05):
   per-frame midtone-pinned are good alternatives to offer.
 - **It generalises the small and thin lifts**: at α 0.6 night and thin frames render near
   today's thin lift.
-- **It needs contrast on luminance**: it was approved with saturation held; with today's
-  per-channel contrast its steeper frames would also gain saturation, which lost review.
+- **It needs contrast on luminance**, now built (`nf-look/contrast-on-luminance`). Colour
+  follows the base slope × `look::DEFAULT_SATURATION` (1.15), and a thin frame's slope
+  never reaches it. A per-frame slope stays out of colour only if it arrives the way
+  `roll.thin_slope` does. A per-frame `white_stops` sets the colour's base too.
 
 Open:
 

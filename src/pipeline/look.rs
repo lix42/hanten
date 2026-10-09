@@ -1,6 +1,6 @@
 //! **Stage 2 of the new rendering chain — the look.**
 //!
-//! The creative stage: contrast, the per-channel grade and highlight desaturation
+//! The creative stage: contrast, saturation, the per-channel grade and highlight desaturation
 //! today, and later print emulation and per-stock normalization. Scene-referred and
 //! linear. Each control lands here with its own task under `nf-look`, as its own key in
 //! the recipe's `look` section — not one CDL-style object, whose slope and offset would
@@ -126,6 +126,12 @@ pub const MID_GREY: f32 = 0.18;
 pub const DEFAULT_SLOPE: f32 =
     crate::pipeline::roll_white::slope_for(crate::pipeline::roll_white::FALLBACK_WHITE_STOPS);
 
+/// The `default` rendering's colour over the base slope's: the saturation slope is the
+/// base times this times the `look.saturation` knob, so the knob's 1 is this default.
+/// Chosen by review on three rolls against held colour and ×1.3, with SilverFast CCR
+/// beside them (`nf-look/contrast-on-luminance`, 2026-10-09). `direct` pins its own.
+pub const DEFAULT_SATURATION: f32 = 1.15;
+
 /// A [`LookSection::slope`] the value rule refuses.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SlopeFault(pub f32);
@@ -246,7 +252,7 @@ impl Default for LookSection {
     fn default() -> Self {
         Self {
             slope: DEFAULT_SLOPE,
-            saturation_slope: DEFAULT_SLOPE,
+            saturation_slope: DEFAULT_SLOPE * DEFAULT_SATURATION,
             channel_grade: IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: HighlightDesaturation::default(),
         }

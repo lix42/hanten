@@ -12593,9 +12593,16 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
 
 /// The roll white whose slope is exactly 1 (`log2(1/0.18)`, the binary's own value
 /// printed so it parses back to the same `f32`): the look's contrast is then the
-/// identity, for a test that wants the look to do nothing else.
+/// identity, and with [`scene_saturation`] its colour too.
 fn scene_contrast_white() -> String {
     (1.0f32 / 0.18).log2().to_string()
+}
+
+/// The `--saturation` that, beside [`scene_contrast_white`], makes the saturation slope
+/// exactly 1: the reciprocal of the `default` rendering's `look::DEFAULT_SATURATION`
+/// (1.15), which `1.15 × it` rounds back to 1 in `f32`.
+fn scene_saturation() -> String {
+    (1.0f32 / 1.15f32).to_string()
 }
 
 /// The look's contrast (`nf-look/contrast-definition`): a multiplier on the base slope,
@@ -12670,7 +12677,11 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     assert!((slope - base * 1.2).abs() < 1e-6, "{report}");
     // A slope of exactly 1 is the identity, reported as such.
     let white = scene_contrast_white();
-    let (unity, report) = convert("unity.tiff", &["--roll-white", &white]);
+    let saturation = scene_saturation();
+    let (unity, report) = convert(
+        "unity.tiff",
+        &["--roll-white", &white, "--saturation", &saturation],
+    );
     assert_eq!(applied(&report), "identity", "{report}");
     assert_ne!(unity, default);
 
@@ -12744,7 +12755,9 @@ fn contrast_leaves_colour_alone_and_saturation_reaches_the_pixels() {
     let (flat, report) = convert("flat.tiff", &[]);
     let look = &report["chain"]["look"];
     assert_eq!(look["saturation"], 1.0, "{report}");
-    assert_eq!(look["saturation_slope"], look["slope"], "{report}");
+    // The default's colour is the base slope's times `look::DEFAULT_SATURATION`.
+    let ratio = look["saturation_slope"].as_f64().unwrap() / look["slope"].as_f64().unwrap();
+    assert!((ratio - 1.15).abs() < 1e-6, "{report}");
     let (steep, report) = convert("steep.tiff", &["--contrast", "1.5"]);
     assert_ne!(flat, steep, "not vacuous");
     // The colour stays where saturation put it.
@@ -12849,6 +12862,7 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
     let tmp = TempDir::new("look-channel-grade");
     let input = fixture("hdr-48bit.tif").display().to_string();
     let white = scene_contrast_white();
+    let saturation = scene_saturation();
     let convert = |name: &str, extra: &[&str]| {
         let out = tmp.path(name);
         let mut argv = vec![
@@ -12858,9 +12872,11 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.55,0.42",
-            // Contrast and desaturation off, so `applied` reads the grade alone.
+            // Contrast, saturation and desaturation off, so `applied` reads the grade alone.
             "--roll-white",
             &white,
+            "--saturation",
+            &saturation,
             "--highlight-desaturation",
             "0",
         ];
@@ -15304,8 +15320,10 @@ fn a_channel_rendered_black_everywhere_warns() {
     assert_ne!(code, 0, "--strict must refuse: {err}");
 
     // One channel, through the white balance.
+    // Saturation held low: a red-less picture saturated further leaves Display P3, and the
+    // gamut map's pull toward neutral puts red back.
     let mut one = roll;
-    one.push("--white-balance=1e-30,1,1");
+    one.extend(["--white-balance=1e-30,1,1", "--saturation", "0.5"]);
     let (code, stdout, err) = convert("red", &one);
     assert_eq!(code, 0, "{err}");
     assert!(

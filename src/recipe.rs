@@ -377,9 +377,9 @@ pub struct LookKeys {
     /// for "unset", reads as 1.
     #[serde(deserialize_with = "null_is_identity")]
     pub contrast: f32,
-    /// `look.saturation`, `--saturation`: a multiplier on the base slope's colour — the
-    /// slope `contrast` multiplies, but never a thin frame's — so `1` keeps the chroma a
-    /// per-channel power at that base gave, whatever the contrast.
+    /// `look.saturation`, `--saturation`: a multiplier on the rendering's colour — the
+    /// base slope `contrast` multiplies (never a thin frame's) times the rendering's
+    /// [`Base::saturation`] — so `1` keeps the default, whatever the contrast.
     pub saturation: f32,
     /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
     pub channel_grade: [f32; 2],
@@ -487,8 +487,9 @@ pub struct ResolvedSlope {
     pub base_from: SlopeBase,
     /// `look.saturation`, the multiplier.
     pub saturation: f32,
-    /// The base slope, except that a thin frame's slope never reaches colour: there it
-    /// is the slope the frame's white places.
+    /// What `saturation` multiplies: the base slope — except that a thin frame's never
+    /// reaches colour, so there the slope the white places — times the rendering's
+    /// [`Base::saturation`].
     pub saturation_base_slope: f32,
     /// What the look stage receives. Not serialized: the report's section states them.
     #[serde(skip)]
@@ -2508,7 +2509,8 @@ impl Recipe {
 
     /// The look's slopes and their parts: the base — the applied roll's white, else the
     /// rendering's [`Base::slope`] — times the `look.contrast` multiplier, and the same
-    /// base without a thin frame's slope times the `look.saturation` multiplier.
+    /// base without a thin frame's slope, times the rendering's [`Base::saturation`] and
+    /// the `look.saturation` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
         let roll = self.applied_roll();
         let white_slope = roll.white_stops.map(roll_white::slope_for);
@@ -2518,10 +2520,11 @@ impl Recipe {
             (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
             (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
         };
-        let saturation_base_slope = match base_from {
+        let colour_slope = match base_from {
             SlopeBase::Thin => white_slope.unwrap_or(self.base().slope),
             _ => base_slope,
         };
+        let saturation_base_slope = colour_slope * self.base().saturation;
         ResolvedSlope {
             contrast: self.look.contrast,
             base_slope,
@@ -2768,7 +2771,7 @@ impl Recipe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::look::DEFAULT_SLOPE;
+    use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE};
 
     fn parse(json: &str) -> std::result::Result<Recipe, serde_json::Error> {
         serde_json::from_str(json)
@@ -3760,8 +3763,8 @@ mod tests {
         );
         // The thin slope never reaches colour: saturation keeps the white's base.
         let s = frame(&["--saturation", "1.2"]).resolved_slope();
-        assert_eq!(s.saturation_base_slope, roll_slope.0);
-        assert_eq!(s.saturation_slope, roll_slope.0 * 1.2);
+        assert_eq!(s.saturation_base_slope, roll_slope.0 * DEFAULT_SATURATION);
+        assert_eq!(s.saturation_slope, roll_slope.0 * DEFAULT_SATURATION * 1.2);
         // Another frame keeps the roll's.
         let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
         assert_eq!(other.resolved_slope().base_from, SlopeBase::Roll);
@@ -4026,9 +4029,9 @@ mod tests {
                 base_slope: from_white,
                 base_from: SlopeBase::Roll,
                 saturation: 1.0,
-                saturation_base_slope: from_white,
+                saturation_base_slope: from_white * DEFAULT_SATURATION,
                 slope: from_white,
-                saturation_slope: from_white,
+                saturation_slope: from_white * DEFAULT_SATURATION,
             }
         );
         // Alone, the gains reach the stage exactly: the identity multiplies nothing in.
@@ -4046,9 +4049,9 @@ mod tests {
                 base_slope: from_white,
                 base_from: SlopeBase::Roll,
                 saturation: 1.0,
-                saturation_base_slope: from_white,
+                saturation_base_slope: from_white * DEFAULT_SATURATION,
                 slope: from_white * 1.2,
-                saturation_slope: from_white,
+                saturation_slope: from_white * DEFAULT_SATURATION,
             }
         );
         assert_eq!(stated.shared_params().look.section.slope, from_white * 1.2);

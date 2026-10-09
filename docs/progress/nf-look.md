@@ -954,9 +954,59 @@ preset row; do not reuse the name.
 
 ## contrast-on-luminance
 
-**Status:** not started
-**Updated:** 2026-10-07
+**Status:** in progress
+**Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A3b–A3d, D2):
   with saturation held, steep slopes won 10 of 12 frames; the amount of saturation waits
   for cast-corrected colour.
+- 2026-10-09: **built; default saturation 1.15 chosen by review (user).** Decisions, on a
+  plan:
+  - **Contrast acts on luminance**: `Y′ = 0.18 · (Y / 0.18)^slope`, and the pixel is scaled
+    whole by `Y′ / Y`. A neutral keeps its bits on the golden's mid-grey pixel. A pixel
+    whose luminance is not finite and positive passes through. A scale that overflows is
+    left infinite, because `recipe::validate_render`'s probe needs that overflow to name
+    the knob (a first version guarded it and lost the probe).
+  - **Saturation is its own slope** on log channel ratios, `(x_c / Y)^s` with luminance
+    restored. It is applied whole or not at all, as the grade is. This form was chosen
+    over a linear scale about `Y` because it makes no negatives, and because at `s` =
+    slope it gives exactly a per-channel power's ratios. Highlight desaturation's band now
+    divides by `linearization × saturation slope`. Mutation-checked: dividing by the
+    contrast slope fails `highlight_desaturation_keys_a_pixel_alike_at_any_contrast`.
+  - **`look.saturation` / `--saturation` is a multiplier, default 1**, as contrast is. The
+    saturation slope is the base slope × the rendering's `Base::saturation` × the knob.
+    `default` uses `look::DEFAULT_SATURATION` = 1.15; `direct` pins 1. A thin frame's
+    slope never reaches colour: there the base is the white's. The user asked for the
+    1.15 to be internal, so that the knob's 1 is the default.
+  - **No recipe migration**: `pipeline_version` 10 with a new drift row. The recipe
+    fingerprint now hashes `Base::saturation` too, and has a perturbation check. Without
+    it, moving the default would have tripped nothing.
+  - **Review** (`../temp/saturation-review/`, its `scripts/` rebuild it):
+    - Set-up: 11 frames from 09-18 Gold, 09-20 Portra and 09-29 Ektar (every one with a
+      CCR export), measured whole from the archive with this build. Arms held, ×1.15,
+      ×1.3 and CCR. Today's per-roll placement; display black and highlight desaturation
+      off (user choice).
+    - Numbers (CIELAB C\*, sRGB):
+
+      | | held | ×1.15 | ×1.3 | CCR |
+      |---|---|---|---|---|
+      | frame mean C\* | 12.3 | 14.1 | 15.9 | 14.6 (own crop) |
+      | marked colour patches | 21.4 | 23.7 | 25.8 | |
+      | marked whites' leftover cast | 7.7 | 8.8 | 10.0 | |
+
+    - At most 2.5 % of a frame (the 1883 sunset) falls outside sRGB, so this is not the
+      spike's 21 %, which came from steeper slopes. Saturation amplifies whites' leftover
+      cast in proportion.
+  - **Gotchas:**
+    - **No flag gives an identity look under `default` any more.** Tests that want one now
+      add `--saturation 0.86956525` (`tests/pipeline.rs`, `scene_saturation`), whose
+      product with 1.15 rounds to 1.
+    - `a_channel_rendered_black_everywhere_warns` needs `--saturation 0.5`. A red-less
+      picture saturated further leaves Display P3, and the gamut map's pull toward
+      neutral puts red back.
+    - The thin-lift test's "base held" tolerance moved from 0.02 to 0.05 stops. Its solve
+      reads the base's luma before the roll gains (documented as approximate in
+      `roll_white::thin_lift`).
+  - **`branch_probe` (ignored) now finds 123 both-bound pixels** on 09-11 Portra. They are
+    permitted by the branch contract, with no violation, but the probe asserts 0 on real
+    frames. At saturation 1 the count is 0. Left for a decision; not changed here.

@@ -438,7 +438,8 @@ knob starts from, and each has one principle (`crate::rendering`):
 |---|---|---|
 | roll section | not applied, and reported as not applied | applied |
 | white balance | identity | the roll's gains |
-| base slope (`look.contrast` multiplies it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
+| base slope (`look.contrast` and `look.saturation` multiply it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
+| saturation over the base slope's colour (`look.saturation` multiplies it) | 1, pinned | 1.15 |
 | highlight desaturation | off | 0.8 |
 | display black | 6 stops below mid-grey, pinned | 6 |
 | fit range | reinhard at 6 stops of headroom, pinned | 6 stops |
@@ -857,6 +858,7 @@ top level, one section per stage in chain order, the destination last:
   "scene_correction": { "white_balance": {"explicit": [1.0, 1.0, 1.0]}, "exposure": 0.0 },
   "look": {
     "contrast": 1.0,
+    "saturation": 1.0,
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": null, "start_stops": null, "band": null}
   },
@@ -956,14 +958,15 @@ re-derives it from the recipe:
                 "linearization": 1.8, "scale": [1.0, 0.84, 0.73], "offset": [0.0, 0.0, 0.0] },
     "stages": [
       { "stage": "scene_correction", "applied": "identity" },
-      { "stage": "look", "applied": "contrast+highlight-desaturation" },
+      { "stage": "look", "applied": "contrast+saturation+highlight-desaturation" },
       { "stage": "fit_range", "applied": "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1" },
       { "stage": "fit_gamut", "applied": "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2" }
     ],
     "rendering": "default",
     "scene_correction": { "white_balance": [1.0, 1.0, 1.0], "exposure": 0.0 },
-    "look": { "contrast": 1.0, "base_slope": 1.413675, "base_from": "fallback", "slope": 1.413675,
-              "channel_grade": [1.0, 1.0],
+    "look": { "contrast": 1.0, "base_slope": 1.413675, "base_from": "fallback",
+              "saturation": 1.0, "saturation_base_slope": 1.6257261,
+              "slope": 1.413675, "saturation_slope": 1.6257261, "channel_grade": [1.0, 1.0],
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
     "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
                    "display_peak": 1.0,
@@ -1634,19 +1637,32 @@ would restate white balance and a flare subtraction. At every control's identity
 stage is a bit-exact identity. Controls run in the order listed.
 - `--contrast <f>` ⇒ `look.contrast` (`nf-look/contrast-definition`) — a multiplier on
   the base slope, finite and positive, default `1`. The look applies the **slope**,
-  `base × contrast`, pivoted at mid-grey: `out_c = 0.18 · (in_c / 0.18)^slope` on each
-  ACEScg channel; slope 1 reproduces the scene's contrast, and non-positive and
-  non-finite samples pass through. The base is a thin frame's slope
+  `base × contrast`, pivoted at mid-grey **on luminance** (`nf-look/contrast-on-luminance`):
+  `Y′ = 0.18 · (Y / 0.18)^slope` on ACEScg luminance and `out = in · Y′ / Y`, so a
+  pixel's colour ratios do not move with contrast; slope 1 reproduces the scene's
+  contrast, and a pixel whose luminance is not finite and positive passes through. The
+  base is a thin frame's slope
   (`roll.thin_slope`, while `roll.thin_lift` is on), else the applied roll's (`log2(1/0.18) / roll.white_stops`),
   else the fallback, the same formula at a white
   of +1.75 (`look::DEFAULT_SLOPE` ≈ 1.414, whole slope 2.54; `nf-calibration/no-roll-defaults`
   chose it by review over 2.0 and the white rule's floor), and `direct`'s pinned ≈ 1.414.
-  On a neutral the look's slope is a steeper decode exactly; saturated colour differs
-  slightly from a single-slope decode, because the power acts after the 3×3. Scene correction runs first, so an exposure of `e` stops
-  leaves the look as `e · slope` stops. The **whole slope**, `linearization · slope`, is
-  internal (what highlight desaturation's band divides by) and must be a normal `f32`;
-  no report states it, since it moves when the linearization is recalibrated even when
-  the picture does not.
+  On a neutral the look's slope is a steeper decode exactly. Scene correction runs
+  first, so an exposure of `e` stops leaves the look as `e · slope` stops. The **whole
+  slope**, `linearization · slope`, is internal and must be a normal `f32`; no report
+  states it, since it moves when the linearization is recalibrated even when the picture
+  does not.
+- `--saturation <f>` ⇒ `look.saturation` (`nf-look/contrast-on-luminance`) — a multiplier
+  on the rendering's colour, finite and positive, default `1`. The look applies the
+  **saturation slope**, `base × rendering saturation × saturation`, where the base is the
+  contrast's except that a thin frame's slope never reaches colour (there it is the
+  white's, else the fallback), and the rendering saturation is `default`'s **1.15**
+  (`look::DEFAULT_SATURATION`, by review on three rolls against held colour, ×1.3 and
+  SilverFast CCR) or `direct`'s pinned 1: `q_c = (x_c / Y)^s`, then
+  `out = q · Y / Y(q)`, so log ratios between channels scale by `s` and luminance is
+  kept. At a rendering saturation of 1 the chroma is what a per-channel power at the
+  base slope gave. A pixel is saturated whole or not at all,
+  as the grade is. `linearization · saturation slope` is what highlight desaturation's
+  band divides by and must be a normal `f32`.
 - `--channel-grade R,B` ⇒ `look.channel_grade` (`nf-look/per-channel-grade`) = `[r, b]` —
   red and blue exponents of a power pivoted at mid-grey,
   `p_c = 0.18 · (x_c / 0.18)^g_c` with `g = [r, 1, b]` (green fixed at 1: a common
@@ -1662,14 +1678,16 @@ stage is a bit-exact identity. Controls run in the order listed.
   `--highlight-desaturation-start`, `--highlight-desaturation-band`. Per pixel on
   scene-referred ACEScg: `rgb ← rgb + strength · b · w · (Y − rgb)`, where `b` is a
   smoothstep in stops from `start_stops` (default −1) up to diffuse white, held above
-  it, and `w` a linear band over `s = log10(max/min) / (linearization · slope)` — the
-  negative's density spread, the same on a flat roll and a contrasty one — full pull at
+  it, and `w` a linear band over `s = log10(max/min) / (linearization · saturation
+  slope)` — the negative's density spread, the same at any contrast or saturation — full
+  pull at
   `s ≤ s0`, none at `s ≥ s1` (unset: `0.015, 0.025`). Luminance is kept. `strength` is
   in `[0, 1]`, unset `0.8` under `default` and `0` under `direct`; `0` is off, a
   bit-exact identity. It assumes a roll-level white balance ahead of it.
 
 The report's `chain.look` states `contrast`, `base_slope`, `base_from` (`roll`,
-`thin`, `fallback` or `direct`), the resulting `slope`, and the section as run.
+`thin`, `fallback` or `direct`), `saturation`, `saturation_base_slope`, the resulting
+`slope` and `saturation_slope`, and the section as run.
 
 ### Fit range (`fit_range`)
 Fits the scene's range into the display's, with the display's **peak** as the
