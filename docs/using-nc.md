@@ -215,6 +215,7 @@ abridged):
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
     "roll": {
       "white_balance": [0.886392, 1.0, 1.188019],
+      "neutral_balance": null,
       "white_stops": 1.7573359,
       "exposure": 1.0854688,
       "frame_exposure": null,
@@ -381,7 +382,8 @@ hanten params
     "input":       { "transfer": "auto", "meaning": "auto",
                      "film_type": "unknown" },
     "calibration": { "film_base": null },
-    "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
+    "roll":        { "white_balance": null, "neutral_balance": null,
+                     "white_stops": null, "exposure": null,
                      "frame_exposure": null, "small_lift": null,
                      "thin_slope": null, "thin_exposure": null, "thin_lift": null,
                      "midtone_line": null, "midtone_neutral": null,
@@ -619,7 +621,8 @@ A frame renders exactly as `convert --params` would with the shared recipe and i
 override merged. Some keys describe the *roll*, not the frame:
 `calibration.film_base`, `roll.white_balance`, `roll.midtone_line`, `roll.exposure`,
 `reconstruction` (every key), `rendering` and `output`. (A frame may turn the midtone
-line off, `"roll": {"midtone_neutral": "off"}`, without a warning.) An override that changes one is applied but warns, naming
+line off, `"roll": {"midtone_neutral": "off"}`, or the white balance with it,
+`"roll": {"neutral_balance": "off"}`, without a warning.) An override that changes one is applied but warns, naming
 both values (and `--strict` turns the warning into a failing exit), because the frame
 then renders apart from its siblings — a roll is one piece of film through one
 process. What counts is what the frame renders: restating the roll's value does not
@@ -868,9 +871,10 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-exposure` / `--roll-frame-exposure` /
   `--roll-thin-slope` / `--roll-thin-exposure` / `--roll-midtone-line` / `--small-lift on`
-  / `--thin-lift on` / `--midtone-neutral on`, or pass `--rendering default`. A recipe's
-  `roll` section is not refused, nor is `--small-lift off`, `--thin-lift off` or
-  `--midtone-neutral off`, which ask for nothing (under the film master too).
+  / `--thin-lift on` / `--midtone-neutral on` / `--neutral-balance on`, or pass
+  `--rendering default`. A recipe's `roll` section is not refused, nor is
+  `--small-lift off`, `--thin-lift off`, `--midtone-neutral off` or
+  `--neutral-balance off`, which ask for nothing (under the film master too).
 
 ### Scene correction
 
@@ -1108,6 +1112,9 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                        "frames": 35, "bands": [ … ], "off_because": null,
                        "min_frames": 10, "min_bands": 3, "fade_stops": 1.0,
                        "gate_log2": [0.6, 0.9] },
+  "confidence": { "white_balance": { "tier": "confident", "frames": 35, "confident_from": 16 },
+                  "midtone_neutral": { "tier": "confident", "frames": 35,
+                                       "confident_from": 16 } },
   "white": { "stops": 1.5, "bound": "floor", "slope": 1.6492873,
              "clamped": [ { "input": "frames/1815.tif", "white_stops": 2.2324193,
                             "slope": 1.2369655,
@@ -1150,6 +1157,7 @@ measured value is never mistaken for a chosen one:
 | `--thin-lift on\|off` | `roll.thin_lift` | whether the thin lift applies; off, the frame renders its small lift |
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
 | `--midtone-neutral on\|off` | `roll.midtone_neutral` | whether the midtone line applies; off keeps it in the recipe |
+| `--neutral-balance on\|off` | `roll.neutral_balance` | whether the roll's white balance applies; off keeps the gains in the recipe and turns the midtone line off with them, since it is measured after them. A typed `--midtone-neutral on` against a typed or recipe off is refused (exit 2); a recipe's `"on"` is spared, and a `roll` manifest frame's own off wins over the flag |
 | — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …}}`, any `null`: a frame's own white, in place of the roll's, and its lifts. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope` and `roll.thin_exposure`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
@@ -1251,6 +1259,16 @@ recipe alone: a `null` in a later `--params` layer does not clear an earlier lin
 render, `--midtone-neutral off` (recipe `roll.midtone_neutral` `"off"`) drops only the
 line and keeps it in the recipe: the whites stay as measured after it.
 
+**How far to trust them.** `confidence` grades the white balance and the line by how many
+frames they were measured from: `confident` from 16 frames (`confident_from`), else
+`in-doubt`, with one note (`confidence.advice`, and a `hanten: note:` line). It is advice, not
+a warning, so `--strict` ignores it: a whole short roll has no more frames to give. A random 10 frames
+of a roll moved its white balance as much as the cast a whole roll leaves on its neutral
+patches; 16 frames, within it. Nothing detects a roll dominated by one colour (sand,
+sea), which misleads the white balance most: compare a frame with `--neutral-balance off`
+(recipe `roll.neutral_balance` `"off"`), which keeps the gains in the recipe and turns
+the line off with them; the whites stay as measured after both.
+
 **The roll's white** is measured per frame, in **scene stops** above mid-grey: each
 frame's `white_stops` is the 97th percentile of its pixels' **brightest channel**, after
 the roll's white balance and midtone line, in the decode's film RGB (before the
@@ -1294,7 +1312,8 @@ the eleven archive rolls.
 
 **The roll's white balance, midtone line, exposure and white are corrections; the two
 lifts below are preferences** (taste). A correction restores what the roll recorded and
-has no switch — except the midtone line, which can misread a roll's scene as its cast.
+has no switch — except the white balance and the midtone line, which can misread a roll's
+scene as its cast.
 A preference is on by default because review preferred it, and each has its own off
 switch at render that keeps its value in the recipe, so a frame or a roll can be
 compared with and without it and turned back on. The report's `chain.roll.taste_applied`

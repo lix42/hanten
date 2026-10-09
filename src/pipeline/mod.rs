@@ -21,6 +21,7 @@ pub mod chain;
 mod chain_golden;
 pub mod color;
 pub mod colorimetry;
+pub mod correction_confidence;
 pub mod film_base;
 pub mod fit_gamut;
 pub mod fit_range;

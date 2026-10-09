@@ -19,8 +19,8 @@
 //! **The switch is a data floor, not a detector**: no statistic separated poor
 //! development from good, and the line did no visible harm on good rolls, so it is on
 //! unless the roll has fewer than [`MIN_FRAMES`] frames or [`MIN_BANDS`] voted bands.
-//! What it cannot tell from a cast is a roll dominated by one scene colour (beach, sky):
-//! `nf-scene-correction/correction-confidence`.
+//! What it cannot tell from a cast is a roll dominated by one scene colour (beach, sky),
+//! and no statistic found does ([`super::correction_confidence`]).
 //!
 //! Its values (band width, cluster radius, fade width, gate) are the spike's, reviewed
 //! on four rolls; `nf-scene-correction/midtone-neutral-fit` settles the fit range and fade

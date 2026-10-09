@@ -1953,10 +1953,11 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Settle the midtone line's fit range against the
   chart](tasks/nf-scene-correction/midtone-neutral-fit.md) — fit range and fade width
   chosen on the ColorChecker's neutral row, not patch medians
-- [ ] [How far to trust a roll's
-  corrections](tasks/nf-scene-correction/correction-confidence.md) — a per-correction score
-  and suggested alternative in the report: apply when confident, warn when in doubt, turn
-  off when sure it is wrong
+- [x] [How far to trust a roll's
+  corrections](tasks/nf-scene-correction/correction-confidence.md) — `measure-roll` grades
+  the white balance and the midtone line by frame count (in doubt under 16, with an
+  advisory note) and the white balance gets a switch (`--neutral-balance`); nothing turns one off on its
+  own, since no signal found detects a roll of one dominant colour
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to

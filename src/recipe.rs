@@ -217,6 +217,9 @@ pub struct Calibration {
 pub struct RollSection {
     /// The roll's white-balance gains, green-anchored, as `measure-roll` reports them.
     pub white_balance: Option<[f32; 3]>,
+    /// Whether `white_balance` applies; off takes the midtone line with it, which is
+    /// measured after the gains. Unset (`null`) is on, like the lifts' switches.
+    pub neutral_balance: Option<Switch>,
     /// The roll's white, in scene stops above mid-grey — the measurement, not the
     /// slope derived from it ([`roll_white::slope_for`]), so a measured value is never
     /// mistaken for a chosen one.
@@ -268,8 +271,9 @@ pub struct FrameRoll {
     pub thin_exposure: Option<f32>,
 }
 
-/// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift` and
-/// `roll.midtone_neutral` / `--midtone-neutral`: whether an automatic adjustment applies.
+/// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift`,
+/// `roll.midtone_neutral` / `--midtone-neutral` and `roll.neutral_balance` /
+/// `--neutral-balance`: whether an automatic adjustment applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Switch {
@@ -310,10 +314,18 @@ impl RollSection {
             .or(self.applied_small_exposure())
     }
 
-    /// The midtone line as it applies: `None` under `--midtone-neutral off`.
+    /// The gains as they apply: `None` under `--neutral-balance off`.
+    pub fn applied_white_balance(&self) -> Option<[f32; 3]> {
+        self.white_balance
+            .filter(|_| self.neutral_balance != Some(Switch::Off))
+    }
+
+    /// The midtone line as it applies: `None` under `--midtone-neutral off`, or with the
+    /// gains it was measured after.
     pub fn applied_midtone_line(&self) -> Option<MidtoneLine> {
-        self.midtone_line
-            .filter(|_| self.midtone_neutral != Some(Switch::Off))
+        self.midtone_line.filter(|_| {
+            self.midtone_neutral != Some(Switch::Off) && self.applied_white_balance().is_some()
+        })
     }
 
     /// The taste adjustments that apply, by their switch's key (design-spec §6).
@@ -493,7 +505,8 @@ pub struct RollReport {
     /// This frame's thin lift, as stated.
     pub thin_slope: Option<f32>,
     pub thin_exposure: Option<f32>,
-    /// Whether the gains reached scene correction (not under `direct` or the film master).
+    /// Whether the gains reached scene correction (not under `direct`, the film master or
+    /// `--neutral-balance off`).
     pub white_balance_applied: bool,
     /// Whether the look's base slope is the roll's.
     pub slope_applied: bool,
@@ -506,7 +519,8 @@ pub struct RollReport {
     pub thin_lift_applied: bool,
     /// The section's midtone line, as stated.
     pub midtone_line: Option<MidtoneLine>,
-    /// Whether it reached scene correction (not under `--midtone-neutral off`).
+    /// Whether it reached scene correction (not under `--midtone-neutral off` or
+    /// `--neutral-balance off`).
     pub midtone_neutral_applied: bool,
     /// The taste adjustments applied, by their switch's key ([`RollSection::taste_applied`]):
     /// each is a choice, off by `roll.<key>` `"off"`.
@@ -1125,6 +1139,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(switch) = args.roll.midtone_neutral {
         r.roll.midtone_neutral = Some(switch);
     }
+    if let Some(switch) = args.roll.neutral_balance {
+        r.roll.neutral_balance = Some(switch);
+    }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
     if let Some(gains) = args.scene.white_balance {
@@ -1441,6 +1458,9 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             )));
         }
     }
+    // A `"midtone_neutral": "on"` beside `"neutral_balance": "off"` is spared: "on" is the
+    // default, and the line goes off with the gains as it does unset. Only a typed
+    // `--midtone-neutral on` is refused (`cli::reject_a_line_without_its_gains`).
     Ok(())
 }
 
@@ -1732,8 +1752,12 @@ const PROBE_KNOBS: [ProbeKnob; 14] = [
         section: "roll",
         flag: "--roll-white-balance",
         key: "white_balance",
-        stated: |r| r.roll.white_balance.is_some(),
-        reset: |r| r.roll.white_balance = None,
+        stated: |r| r.roll.applied_white_balance().is_some(),
+        // The line applies only beside the gains, so it goes with them.
+        reset: |r| {
+            r.roll.white_balance = None;
+            r.roll.midtone_line = None;
+        },
     },
 ];
 
@@ -1772,12 +1796,24 @@ fn render_fault_message(
         }
         _ => knob_name(names, k.section, k.flag, k.key),
     };
-    // The thin slope's reset drops its exposure too, which applies only beside it: named
-    // as the pair, and whether it is one.
-    let name = |k: &ProbeKnob| match PROBE_KNOBS.iter().find(|e| e.key == "thin_exposure") {
-        Some(exposure) if k.key == "thin_slope" && (exposure.stated)(r) => {
-            (format!("{} with its {}", one(k), one(exposure)), true)
-        }
+    // A reset that drops a knob applying only beside it names the pair, and whether it is
+    // one: the thin slope's exposure, and the roll gains' midtone line (stated, since
+    // `validate` refuses a line without gains even switched off).
+    let name = |k: &ProbeKnob| match (k.section, k.key) {
+        (_, "thin_slope") => match PROBE_KNOBS.iter().find(|e| e.key == "thin_exposure") {
+            Some(exposure) if (exposure.stated)(r) => {
+                (format!("{} with its {}", one(k), one(exposure)), true)
+            }
+            _ => (one(k), false),
+        },
+        ("roll", "white_balance") if r.roll.midtone_line.is_some() => (
+            format!(
+                "{} with its {}",
+                one(k),
+                knob_name(names, "roll", "--roll-midtone-line", "midtone_line")
+            ),
+            true,
+        ),
         _ => (one(k), false),
     };
     let stated: Vec<&ProbeKnob> = PROBE_KNOBS.iter().filter(|k| (k.stated)(r)).collect();
@@ -1854,7 +1890,7 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
     // f32, or two exposures whose sum is not.
     let roll = &r.roll;
     let frame = roll.applied_frame_exposure();
-    if roll.white_balance.is_none() && roll.exposure.is_none() && frame.is_none() {
+    if roll.applied_white_balance().is_none() && roll.exposure.is_none() && frame.is_none() {
         return Ok(());
     }
     // Every exposure the stage sums, each named.
@@ -1883,7 +1919,7 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
             )));
         }
     };
-    let white_balance = match roll.white_balance {
+    let white_balance = match roll.applied_white_balance() {
         Some(_) => format!(
             "{} times {}",
             knob_name(names, "roll", "--roll-white-balance", "white_balance"),
@@ -2339,7 +2375,7 @@ impl Recipe {
             exposure,
         } = self.scene_correction;
         let roll = self.applied_roll();
-        let white_balance = match roll.white_balance {
+        let white_balance = match roll.applied_white_balance() {
             Some(gains) => std::array::from_fn(|c| gains[c] * stated[c]),
             None => stated,
         };
@@ -2352,14 +2388,12 @@ impl Recipe {
         }
     }
 
-    /// The roll's midtone line as scene correction receives it: the applied roll's line,
-    /// keyed on the roll's gains. [`validate`] refuses a line without gains.
+    /// The applied roll's line, keyed on its gains; none when either is off or unset.
     pub fn resolved_midtone(&self) -> Option<MidtoneCorrection> {
         let roll = self.applied_roll();
-        roll.applied_midtone_line().map(|line| MidtoneCorrection {
-            line,
-            roll_gains: roll.white_balance.unwrap_or([1.0; 3]),
-        })
+        roll.applied_midtone_line()
+            .zip(roll.applied_white_balance())
+            .map(|(line, roll_gains)| MidtoneCorrection { line, roll_gains })
     }
 
     /// The look's slope and its parts: the base — the applied roll's white, else the
@@ -2424,7 +2458,7 @@ impl Recipe {
             frame_exposure: r.frame_exposure,
             thin_slope: r.thin_slope,
             thin_exposure: r.thin_exposure,
-            white_balance_applied: applies && r.white_balance.is_some(),
+            white_balance_applied: applies && r.applied_white_balance().is_some(),
             slope_applied: applies
                 && matches!(
                     self.resolved_slope().base_from,
@@ -2517,7 +2551,7 @@ impl Recipe {
         let mut warnings = Vec::new();
         let WhiteBalance::Explicit(stated) = self.scene_correction.white_balance;
         if !typed.white_balance
-            && let Some(roll) = self.roll.white_balance
+            && let Some(roll) = self.roll.applied_white_balance()
             && stated != [1.0, 1.0, 1.0]
         {
             let product: [f32; 3] = std::array::from_fn(|c| roll[c] * stated[c]);
@@ -2884,7 +2918,8 @@ mod tests {
         );
         assert_eq!(
             json["roll"],
-            serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null,
+            serde_json::json!({"white_balance": null, "neutral_balance": null,
+                "white_stops": null, "exposure": null,
                 "frame_exposure": null, "small_lift": null, "thin_slope": null,
                 "thin_exposure": null, "thin_lift": null, "midtone_line": null,
                 "midtone_neutral": null, "frames": {}})
@@ -4832,6 +4867,9 @@ mod tests {
             ("--midtone-neutral", &["--midtone-neutral", "off"], |r| {
                 r.roll.midtone_neutral == Some(Switch::Off)
             }),
+            ("--neutral-balance", &["--neutral-balance", "off"], |r| {
+                r.roll.neutral_balance == Some(Switch::Off)
+            }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3
             }),
@@ -5112,6 +5150,36 @@ mod tests {
         // Each named remedy renders.
         assert_eq!(render_err(V3, &roll), None);
         assert_eq!(render_err(V3, &[&roll[..], &thin[..2]].concat()), None);
+    }
+
+    #[test]
+    fn the_roll_gains_are_named_with_their_line() {
+        let gains = ["--roll-white-balance", "1e30,1e30,1e30"];
+        let line = [
+            "--roll-midtone-line",
+            "-0.06,0.04,-0.02,0.37,-2.75,1.75,1.87",
+        ];
+        let err = render_err(V3, &[&gains[..], &line].concat()).unwrap();
+        assert!(
+            err.ends_with(
+                "It renders with --roll-white-balance (recipe `roll.white_balance`) with its \
+                 --roll-midtone-line (recipe `roll.midtone_line`) at their defaults"
+            ),
+            "{err}"
+        );
+        // The remedy renders, and so does the switch that keeps both in the recipe.
+        assert_eq!(render_err(V3, &[]), None);
+        let off = ["--neutral-balance", "off"];
+        assert_eq!(render_err(V3, &[&gains[..], &line, &off].concat()), None);
+        // A line switched off is still named: the gains alone would leave it refused.
+        let line_off = ["--midtone-neutral", "off"];
+        let err = render_err(V3, &[&gains[..], &line, &line_off].concat()).unwrap();
+        assert!(err.contains("with its --roll-midtone-line"), "{err}");
+        let lone = merged(
+            V3,
+            &[&["--film-base", "0.9,0.55,0.42"][..], &line, &line_off].concat(),
+        );
+        assert!(validate(&lone, KnobNames::FlagAndKey).is_err());
     }
 
     #[test]

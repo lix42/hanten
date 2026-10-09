@@ -40,8 +40,8 @@ use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral, roll_white,
-    scene_correction, working_space,
+    color, correction_confidence, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral,
+    roll_white, scene_correction, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
@@ -603,8 +603,8 @@ pub struct DestinationOverrides {
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`,
     /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
-    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`),
-    /// which only a rendering applies — refused under a recipe's film master too. A
+    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`,
+    /// `--neutral-balance on`), which only a rendering applies — refused under a recipe's film master too. A
     /// recipe's `roll` section is spared, since a measurement is not a stage asked for,
     /// and so is a switch turned off.
     #[arg(
@@ -886,6 +886,13 @@ pub struct RollOverrides {
     /// correction with a switch, since a roll dominated by one scene colour can mislead it.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub midtone_neutral: Option<recipe::Switch>,
+    /// Whether the roll's white balance applies: `on` (the default) or `off`, which keeps
+    /// the gains in the recipe (recipe key `roll.neutral_balance`) and takes the midtone
+    /// line with them, since it is measured after them (a typed `--midtone-neutral on` is
+    /// refused beside it); the whites stay as measured. A correction with a switch, since a
+    /// roll dominated by one scene colour can mislead it.
+    #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
+    pub neutral_balance: Option<recipe::Switch>,
 }
 
 impl RollOverrides {
@@ -908,6 +915,10 @@ impl RollOverrides {
             (
                 "--midtone-neutral on",
                 self.midtone_neutral == Some(recipe::Switch::On),
+            ),
+            (
+                "--neutral-balance on",
+                self.neutral_balance == Some(recipe::Switch::On),
             ),
         ]
         .into_iter()
@@ -1806,6 +1817,37 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a typed `--midtone-neutral on` when the roll's white balance is off: the line is
+/// measured after the gains and goes off with them. Only the typed `on` is refused, since a
+/// recipe's `"on"` is the default. It runs before [`reject_roll_flags_nothing_applies`],
+/// whose `--rendering default` remedy would meet it next; where nothing applies the roll,
+/// dropping the `on` is the one remedy that works.
+fn reject_a_line_without_its_gains(args: &ConversionFlags, r: &Recipe) -> Result<()> {
+    use recipe::Switch::{Off, On};
+    if args.roll.midtone_neutral != Some(On) || r.roll.neutral_balance != Some(Off) {
+        return Ok(());
+    }
+    let nothing_applies =
+        r.output == OutputSection::FilmMaster || r.rendering == crate::rendering::Rendering::Direct;
+    let (off, other) = if args.roll.neutral_balance == Some(Off) {
+        ("--neutral-balance off", "drop --neutral-balance off")
+    } else {
+        (
+            "the recipe's `roll.neutral_balance` \"off\"",
+            "pass --neutral-balance on",
+        )
+    };
+    let remedy = if nothing_applies {
+        "drop --midtone-neutral on".to_string()
+    } else {
+        format!("drop --midtone-neutral on, or {other}")
+    };
+    Err(NcError::Usage(format!(
+        "--midtone-neutral on asks for the roll's midtone line, which is measured after its \
+         white balance and goes off with it under {off}: {remedy}"
+    )))
+}
+
 /// Refuse typed roll flags when nothing will apply them: a recipe's film master (a typed
 /// `--film-master` conflicts at the parser) or a `direct` rendering. The film master is
 /// named first. A presence rule, so it runs before `recipe::validate`, whose value rules
@@ -2413,6 +2455,14 @@ impl Log {
     fn warn(&self, msg: &str) {
         if !self.quiet {
             stdio::stderr_line(format_args!("hanten: warning: {msg}"));
+        }
+    }
+
+    /// Advisory line — shown unless `--quiet`. Not a warning: its report field is not
+    /// `warnings`, so `--strict` ignores it.
+    fn note(&self, msg: &str) {
+        if !self.quiet {
+            stdio::stderr_line(format_args!("hanten: note: {msg}"));
         }
     }
 
@@ -4355,6 +4405,7 @@ fn convert_attempt(
     let stated_roll = loaded.recipe.roll.clone();
     let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), &args.knobs);
     // Flag-presence rules, ahead of every value rule that could refuse first.
+    reject_a_line_without_its_gains(&args.knobs, &recipe)?;
     reject_roll_flags_nothing_applies(&args.knobs, &recipe)?;
     let typed = &args.knobs.roll;
     if typed.roll_frame_exposure.is_some()
@@ -5004,9 +5055,11 @@ const ROLL_WIDE: &[RollWide] = &[
         key: "roll.white_balance",
         breaks: "this frame is balanced with other gains than the roll's",
         // Only gains that reach both: a frame that leaves them out entirely is the
-        // `rendering` or `output` row's.
+        // `rendering` or `output` row's. A frame's own `neutral_balance` off is frame-local.
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+                || f.roll.applied_white_balance().is_none()
+            {
                 return Ok(None);
             }
             changed(&f.roll.white_balance, &r.roll.white_balance)
@@ -5017,7 +5070,9 @@ const ROLL_WIDE: &[RollWide] = &[
         breaks: "this frame's midtones are corrected apart from the roll's (a frame's own \
                  is `roll.midtone_neutral` \"off\")",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+                || f.roll.applied_midtone_line().is_none()
+            {
                 return Ok(None);
             }
             changed(&f.roll.midtone_line, &r.roll.midtone_line)
@@ -5621,6 +5676,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // before the flags.
     let stated = loaded.recipe;
     let shared = recipe::merge(stated.clone(), &args.knobs);
+    reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
     reject_a_lift_for_every_frame(&args.knobs, &shared)?;
 
@@ -6376,6 +6432,9 @@ struct MeasureRollReport {
     white_balance: RollWhiteBalance,
     /// The roll's midtone line (`nf-scene-correction/midtone-neutral`).
     midtone_neutral: MeasuredMidtone,
+    /// How far to trust the white balance and the line
+    /// (`nf-scene-correction/correction-confidence`).
+    confidence: MeasuredConfidence,
     /// The roll's white and the slope that places it (`nf-calibration/roll-white-rule`).
     white: MeasuredRollWhite,
     /// The roll's exposure (`nf-calibration/roll-exposure`).
@@ -6389,6 +6448,79 @@ struct MeasureRollReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
     elapsed_ms: f64,
+}
+
+/// The report's `confidence`: each measured correction's grade
+/// ([`correction_confidence::assess`]), and advice when one is in doubt. Advisory, not a
+/// warning: `--strict` ignores it, since a whole short roll has no more frames to give.
+#[derive(Debug, Serialize)]
+struct MeasuredConfidence {
+    white_balance: correction_confidence::Assessment,
+    /// Absent when no line was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    midtone_neutral: Option<correction_confidence::Assessment>,
+    /// [`Self::advice_for`], also printed as a `note:` line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    advice: Option<String>,
+}
+
+impl MeasuredConfidence {
+    fn new(
+        white_balance: correction_confidence::Assessment,
+        midtone_neutral: Option<correction_confidence::Assessment>,
+    ) -> Self {
+        let mut c = Self {
+            white_balance,
+            midtone_neutral,
+            advice: None,
+        };
+        c.advice = c.advice_for();
+        c
+    }
+
+    /// One message naming every correction in doubt, its frame count, and what to compare.
+    fn advice_for(&self) -> Option<String> {
+        let doubt = |a: &correction_confidence::Assessment| {
+            (a.tier == correction_confidence::Tier::InDoubt).then_some(a.frames)
+        };
+        let gains = doubt(&self.white_balance);
+        let line = self.midtone_neutral.as_ref().and_then(doubt);
+        let (what, it) = match (gains, line) {
+            (None, None) => return None,
+            (Some(g), Some(l)) if g == l => (
+                format!("the roll's white balance and midtone line were measured from {g} frames"),
+                "them",
+            ),
+            (Some(g), Some(l)) => (
+                format!(
+                    "the roll's white balance was measured from {g} frames and its midtone \
+                     line from {l}"
+                ),
+                "them",
+            ),
+            (Some(g), None) => (
+                format!("the roll's white balance was measured from {g} frames"),
+                "it",
+            ),
+            (None, Some(l)) => (
+                format!("the roll's midtone line was measured from {l} frames"),
+                "it",
+            ),
+        };
+        let compare = match (gains, self.midtone_neutral) {
+            (Some(_), Some(_)) => {
+                "`--neutral-balance off` (`convert`, `roll`), which turns the line off with it"
+            }
+            (Some(_), None) => "`--neutral-balance off` (`convert`, `roll`)",
+            (None, _) => "`--midtone-neutral off` (`convert`, `roll`)",
+        };
+        Some(format!(
+            "{what}: under {}, which frames a roll holds can move {it} as far as the cast a \
+             whole roll leaves, so trust {it} less. Compare a frame rendered with {compare}, \
+             or measure with more of the roll's frames if it has more",
+            self.white_balance.confident_from
+        ))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -7253,6 +7385,15 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         (Some(l), _) => log.info(format_args!("midtone line {l:?}")),
         (None, why) => log.info(format_args!("no midtone line: {why:?}")),
     }
+    let confidence = MeasuredConfidence::new(
+        correction_confidence::assess(frames.iter().filter(|f| f.counts.kept > 0).count()),
+        midtone
+            .line
+            .map(|_| correction_confidence::assess(midtone.frames)),
+    );
+    if let Some(advice) = &confidence.advice {
+        log.note(advice);
+    }
     let colour = RollColour {
         gains,
         line: midtone.line,
@@ -7408,6 +7549,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             fade_stops: midtone_neutral::FADE_STOPS,
             gate_log2: midtone_neutral::GATE_LOG2,
         },
+        confidence,
         reuse: RollReuse {
             flag: reuse_flag(colour, white.stops, exposure.ev, Written::default()),
         },
@@ -7751,6 +7893,41 @@ fn elapsed_ms(started: Instant) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_confidence_advice_names_only_what_is_in_doubt_with_its_own_count() {
+        let warning = |gains: usize, line: Option<usize>| {
+            MeasuredConfidence::new(
+                correction_confidence::assess(gains),
+                line.map(correction_confidence::assess),
+            )
+            .advice
+        };
+        assert_eq!(warning(16, Some(16)), None);
+        assert_eq!(warning(16, None), None);
+        let w = warning(16, Some(15)).unwrap();
+        assert!(
+            w.starts_with("the roll's midtone line was measured from 15 frames")
+                && w.contains("`--midtone-neutral off`")
+                && !w.contains("white balance")
+                && !w.contains("16 frames"),
+            "{w}"
+        );
+        let w = warning(10, Some(9)).unwrap();
+        assert!(
+            w.starts_with(
+                "the roll's white balance was measured from 10 frames and its midtone line \
+                 from 9"
+            ) && w.contains("`--neutral-balance off`"),
+            "{w}"
+        );
+        let w = warning(10, None).unwrap();
+        assert!(
+            w.starts_with("the roll's white balance was measured from 10 frames:")
+                && !w.contains("line"),
+            "{w}"
+        );
+    }
 
     /// `recipe::merge` with a parsed `convert`'s flags.
     fn merged(base: Recipe, args: &ConvertArgs) -> Recipe {
@@ -9365,8 +9542,9 @@ mod tests {
         "roll.thin_slope",
         "roll.thin_exposure",
         "roll.thin_lift",
-        // Whether the roll's midtone line applies: a frame may turn it off.
+        // Whether the roll's white balance and midtone line apply: a frame may turn them off.
         "roll.midtone_neutral",
+        "roll.neutral_balance",
         // Resolved per frame; a manifest stating it is refused, not warned about.
         "roll.frames",
         "measure",
@@ -9455,6 +9633,45 @@ mod tests {
                 w[0]
             );
         }
+    }
+
+    #[test]
+    fn gains_and_a_line_that_do_not_apply_on_the_frame_do_not_warn() {
+        let line = MidtoneLine {
+            red: [-0.06, 0.04],
+            blue: [-0.02, 0.37],
+            bands: [-2.75, 1.75],
+            fade_end_stops: 1.87,
+        };
+        let mut shared = base_recipe();
+        shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
+        shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
+        shared.roll.midtone_line = Some(line);
+        let mut frame = shared.clone();
+        frame.roll.white_balance = Some([1.1, 1.0, 0.9]);
+        frame.roll.midtone_line = Some(MidtoneLine {
+            fade_end_stops: 1.5,
+            ..line
+        });
+        let breaks = |f: &Recipe, s: &Recipe| roll_wide_breaks(Path::new("a.tif"), f, s).unwrap();
+        assert_eq!(breaks(&frame, &shared).len(), 2, "not vacuous");
+        // The frame's own off, and the roll's off the frame inherits.
+        let mut own_off = frame.clone();
+        own_off.roll.neutral_balance = Some(recipe::Switch::Off);
+        assert!(breaks(&own_off, &shared).is_empty());
+        let mut roll_off = shared.clone();
+        roll_off.roll.neutral_balance = Some(recipe::Switch::Off);
+        let mut inherits = frame.clone();
+        inherits.roll.neutral_balance = Some(recipe::Switch::Off);
+        assert!(breaks(&inherits, &roll_off).is_empty());
+        // A line switched off on the frame: only the gains differ.
+        let mut line_off = frame;
+        line_off.roll.midtone_neutral = Some(recipe::Switch::Off);
+        let w = breaks(&line_off, &shared);
+        assert!(
+            w.len() == 1 && w[0].contains("`roll.white_balance`"),
+            "{w:?}"
+        );
     }
 
     #[test]

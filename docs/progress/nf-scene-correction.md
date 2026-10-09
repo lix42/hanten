@@ -52,6 +52,13 @@ roll's gains, keyed on those gains, with a tint gate sparing strongly coloured l
 the gains and the line, so anything tuned on whites (the thin lift, `display-white`)
 reads corrected whites; the saturation check keeps the decoded white.
 
+**How far to trust them (`correction-confidence`, 2026-10-09).** `measure-roll` grades the
+white balance and the line by frame count only: under 16 frames each is `in-doubt`, with
+an advisory `confidence.advice` (and a `hanten: note:` line) that `--strict` ignores.
+Nothing detects a roll of one dominant colour. `roll.neutral_balance` (`--neutral-balance`)
+turns the roll's gains off at render time, frame-local, and takes the line with them;
+read the gains through `RollSection::applied_white_balance`, never the stated field.
+
 ## stage
 
 **Status:** done
@@ -359,8 +366,8 @@ reads corrected whites; the saturation check keeps the decoded white.
 
 ## correction-confidence
 
-**Status:** not started
-**Updated:** 2026-10-07
+**Status:** done
+**Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the sea probe (`../temp/beach-probe/`, Artifact
   https://claude.ai/artifact/FEa5gytdqhFfUnKvVhjzKa): frames the user marked as sea pull
@@ -368,3 +375,52 @@ reads corrected whites; the saturation check keeps the decoded white.
   a random-draw max of 190, patch cast 110 → 465). The user's direction: corrections stay
   on by default; warn when in doubt, turn off only when sure, and score each in the
   report. `--rendering direct` is not yet a safe fallback (patch casts 340–500).
+- 2026-10-09: **research** (`../temp/correction-confidence/`, report Artifact
+  https://claude.ai/artifact/YQ5QoxGL7v56pmZpk1zzFZ). A Python port of `measure-roll`'s
+  white balance and line over the spike's cached samples (agrees with the binary within 16
+  on the gains, 18 on the line at any stop, log2 × 1000) scored subsets of the ten archive
+  rolls by the cast left on their marked neutral patches: the sea / sand marks, random
+  draws of 4–17 frames, and 80 built one-colour subsets (the 10 or 16 frames leaning
+  furthest along each of eight hues). Findings:
+  - **Only 09-14's sea frames are clearly harmed** among the marks (453 vs 91–242 for
+    same-size draws); 09-09's are not, 09-18's mildly. The built subsets are harmed 38 of
+    80 times, so the failure is easy to cause.
+  - **No in-roll signal separates harmed subsets from draws**: frames sharing a main hue
+    AUC 0.76, residual grey-world 0.69, the spike's drift ÷ scatter 0.62, the rest ≤ 0.6;
+    the line pulling against the gains (the hypothesis) runs the other way, since sea
+    frames agree with each other. A stock prior (gains against the other rolls of the
+    stock) scores 0.87, but whole rolls already sit 34–452 from their stock's others.
+  - **Noise is as large as the bias**: draws of 10 move the gains 93 (median) / 263
+    (p90) from the whole roll's, 16 frames 57 / 142, against a whole roll's own patch cast
+    of 67–201. Leave-one-out stability does not predict a draw's error (Spearman 0.12).
+  - **Fallbacks lose**: neutral gains leave more cast than the measured white balance on
+    7 of 10 rolls with patches, a stock default on 6 of 7.
+- 2026-10-09: **re-scoped (user)**: no automatic turn-off, only warnings; the white balance
+  gets a manual switch; the weak one-colour signals stay out of the report (a report field
+  is a scripting contract); confident from **16 frames**. The note is advisory, outside
+  `--strict` (user, later: a whole 10- or 12-frame roll can never reach 16, so strict
+  would fail with no remedy).
+  Switch named `--neutral-balance` / `roll.neutral_balance` (user), the highlight
+  counterpart of `--midtone-neutral`. This answers `roll-white-balance`'s open small-roll
+  question.
+- 2026-10-09: **implemented.** `pipeline::correction_confidence` (`assess`, the frame
+  count); `measure-roll` reports `confidence.white_balance` and, with a line,
+  `confidence.midtone_neutral`, and notes once when either is in doubt (`confidence.advice`
+  and a `hanten: note:` stderr line, outside `warnings`, so `--strict` ignores it).
+  `RollSection::applied_white_balance` gates the gains, and `applied_midtone_line` now also
+  needs applied gains, so every reader of the gains (scene correction, the line's key, the
+  render-fault probe, the overlap warning, `chain.roll.white_balance_applied`) follows the
+  switch. A typed `--midtone-neutral on` beside `--neutral-balance off` is refused (exit
+  2); a recipe's `"on"`, the default, is spared. The switch is frame-local and render-time only: `measure-roll` has no `off`, since a recipe
+  without gains trips `convert`'s "no roll measurement" warning. Drift gate refreshed in
+  place (`roll.neutral_balance`, `null` = on; no default pixel moved). Design-spec §6 and
+  `docs/using-nc.md` state the switch and the grade.
+- 2026-10-09: **done.** Review loop (Codex, `nc-reviewer`, the user's `/code-review`):
+  the conflict rule became a presence rule (only a typed `--midtone-neutral on` against an
+  off; a `roll` manifest frame's own off wins over the flag); the note names only the
+  correction in doubt, with its own count; `roll`'s roll-wide gains and line rows skip a
+  frame that does not apply them; the render-fault remedy names the gains with their line.
+  Verified: CI gates green; through the binary, 8 trimmed frames of 09-18 note, its 35
+  archive frames are confident. For dependents: detecting a one-colour roll and a fallback
+  better than neutral gains stay open in the task file (needs one-colour rolls or the
+  ColorChecker rolls as evidence; `neutrality-gate` may change the fallback).

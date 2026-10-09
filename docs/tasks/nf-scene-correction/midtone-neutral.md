@@ -40,8 +40,8 @@ Open:
 - Fit range (every voted band, or below the fade) and fade width: ship the spike's values;
   `midtone-neutral-fit` settles them against the ColorChecker frames.
 - The tint gate's fade (0.6 → 0.9) is the one setting tried, on two rolls.
-- The beach case (a roll dominated by one scene colour) is detected and reported, not
-  fixed: `correction-confidence`.
+- The beach case (a roll dominated by one scene colour): `correction-confidence` found no
+  signal that detects it; the user turns the corrections off.
 - Whether the white rule's p97, cap +2.0 and floor +1.5 still hold once whites are
   measured after correction; they were tuned before it.
 - Settled: the recipe and report shape (`roll.midtone_line`, `roll.midtone_neutral`), and
