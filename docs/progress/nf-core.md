@@ -1266,6 +1266,17 @@ SDR/HDR split splits *from*.
   quantize term on Linux (on macOS it was real before this change); and `ir_verified`,
   which the decode's output never carried (`working_image.rs`, `buffer-strategy`).
 
+### 2026-10-09 — a provisional per-pixel floor
+
+- Codex (P1) on the PR, and the user's call: rather than block the merge on the macOS
+  measurement, `ALLOWANCE_PER_PIXEL_BYTES` (4 B/px) joins the allowance for every
+  profile that renders, covering the ~4 B/px macOS ran above Linux before this change.
+  `DecodeOnly` is spared: its buffers did not change. Estimates at 74.65 MP rise by
+  0.30 GB (SDR TIFF 2.321 GB, float TIFF 1.978 GB, gain map 4.296 GB), +40–72% over the
+  Linux peaks; the "within 25%" check gives the conversions 50% while the floor stands.
+- Still owed: the macOS peak on a real 74.65 MP scan. It decides whether the floor
+  stays, shrinks, or becomes a higher `ALLOWANCE_PERCENT`.
+
 ## one-luma-dot
 
 **Status:** done

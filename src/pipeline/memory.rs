@@ -238,12 +238,12 @@
 //!
 //! | destination | 5.83 MP | 18.66 MP | 74.65 MP | 74.65 MP model | margin |
 //! |---|---|---|---|---|---|
-//! | SDR TIFF | 0.135 GB | 0.417 GB | 1.649 GB | 2.023 GB | +22.7% |
-//! | linear float TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 1.679 GB | +24.4% |
-//! | PQ TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 2.023 GB | +49.8% |
-//! | `--film-master` | 0.111 GB | 0.342 GB | 1.350 GB | 1.679 GB | +24.4% |
-//! | gain-map JPEG | 0.221 GB | 0.693 GB | 2.750 GB | 3.997 GB | +45.4% |
-//! | `measure-roll`, one frame | 0.112 GB | 0.343 GB | 1.351 GB | 1.679 GB | +24.3% |
+//! | SDR TIFF | 0.135 GB | 0.417 GB | 1.649 GB | 2.321 GB | +40.8% |
+//! | linear float TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 1.978 GB | +46.5% |
+//! | PQ TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 2.321 GB | +71.9% |
+//! | `--film-master` | 0.111 GB | 0.342 GB | 1.350 GB | 1.978 GB | +46.5% |
+//! | gain-map JPEG | 0.221 GB | 0.693 GB | 2.750 GB | 4.296 GB | +56.2% |
+//! | `measure-roll`, one frame | 0.112 GB | 0.343 GB | 1.351 GB | 1.978 GB | +46.4% |
 //!
 //! Each fell by the scan's 16 B/px against the previous build on the same frame (the
 //! float TIFFs by 14, their peak now the decode phase). `accounted` is 0.94–1.00x of
@@ -255,13 +255,14 @@
 //! in the tests are single observations, which is why the assertions are
 //! `estimate >= measured` rather than equality.
 //!
-//! **[`ALLOWANCE_PERCENT`] is unconfirmed on macOS.** It was set above the worst
-//! per-pixel overhead measured on macOS against the 32 B/px base the float TIFF had
-//! then, **13.3%** (36.0–36.25 vs 32 B/px). On Linux today's base runs about 2% over
-//! from 18.66 MP up. But macOS peaked ~4 B/px above Linux on every destination, and 4
-//! B/px is ~22% of the float TIFF's 18 B/px base: if that holds, the estimate falls
-//! under a macOS float-TIFF peak somewhere around 100 MP. Re-measure on the largest real scan
-//! before trusting the margin. A small frame runs further over its accounted buffers
+//! **The allowance is unconfirmed on macOS.** [`ALLOWANCE_PERCENT`] was set above the
+//! worst per-pixel overhead measured on macOS against the 32 B/px base the float TIFF
+//! had then, **13.3%** (36.0–36.25 vs 32 B/px). On Linux today's base runs about 2%
+//! over from 18.66 MP up. But macOS peaked ~4 B/px above Linux on every destination,
+//! ~22% of the float TIFF's 18 B/px base, which 15% alone would let fall under a macOS
+//! float-TIFF peak somewhere around 100 MP. [`ALLOWANCE_PER_PIXEL_BYTES`] adds those 4
+//! B/px as a provisional floor, so the table's margins over Linux are wide; measuring
+//! the largest real scan on macOS decides what replaces it. A small frame runs further over its accounted buffers
 //! (6% on the 5.83 MP film master on Linux); [`ALLOWANCE_FIXED_BYTES`] carries that.
 //!
 //! For the pre-fix three-image render peak (3.808 GB on the same 74.65 MP frame)
@@ -307,7 +308,7 @@ const WORKING_CHANNELS: u64 = 3;
 /// Sized against the worst *real* workload: a `convert` on the largest scan on hand
 /// (74.65 MP HDRi) with a full-frame `--base-region` — the measure-once-reuse-`Dmin`
 /// workflow design-spec §8 recommends — which accounts 34 B/px = 2.54 GB and
-/// estimates **3.05 GB** with the allowance. 6 GiB admits it, and scans well beyond
+/// estimates **3.35 GB** with the allowance. 6 GiB admits it, and scans well beyond
 /// it, while still catching the multi-GiB runaway the old 4 GiB *input* limit
 /// permitted unchecked. A machine that wants a tighter or looser ceiling sets
 /// `--max-memory`; the rejection message says so, and the RAM-aware warn tier is what
@@ -316,11 +317,19 @@ pub const DEFAULT_MAX_MEMORY_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// Proportional part of the allowance added to the accounted buffers, in percent.
 /// Set above the worst per-pixel overhead measured on macOS, **13.3%**, against a
-/// larger base than today's, and unconfirmed there since (the module doc's
-/// calibration section). Above the overhead, not at it, so the estimate keeps a real
-/// margin rather than tracking one machine's allocator exactly: the gate must err
-/// toward rejecting, never toward an OOM. A small frame's larger relative overhead falls to [`ALLOWANCE_FIXED_BYTES`].
+/// larger base than today's (the module doc's calibration section). Above the
+/// overhead, not at it, so the estimate keeps a real margin rather than tracking one
+/// machine's allocator exactly: the gate must err toward rejecting, never toward an
+/// OOM. A small frame's larger relative overhead falls to [`ALLOWANCE_FIXED_BYTES`].
 const ALLOWANCE_PERCENT: u64 = 15;
+
+/// Per-pixel part of the allowance, for every profile that renders: the ~4 B/px macOS
+/// peaked above Linux before `nf-core/release-decoded-image`, which 15% of today's
+/// 18–22 B/px base no longer covers. **Provisional**: a floor until the macOS peak is
+/// measured on this build (the module doc's calibration section), which decides
+/// whether it stays, shrinks, or becomes a higher percentage. [`RunProfile::DecodeOnly`]
+/// is spared: its buffers did not change and its macOS rows sit inside the 15%.
+const ALLOWANCE_PER_PIXEL_BYTES: u64 = 4;
 
 /// Fixed part of the allowance: the binary, static data, lcms2 profiles and
 /// transforms, and the `tiff` writer's buffers — costs that don't scale with the
@@ -725,8 +734,8 @@ pub fn estimate_peak(
             // that final copy make it up to ~3x its length under the retention rule.
             // The 5 B/px is a content assumption fitted to measured JPEGs (at most
             // 0.55 B/px: a thin grainy frame pushed +5 EV), not an enumeration; past it,
-            // the margin is the allowance (~8.5 B/px at 74.65 MP: 15% of 45 B/px plus
-            // the fixed part).
+            // the margin is the allowance (~12.5 B/px at 74.65 MP: 15% of 45 B/px, the
+            // per-pixel floor and the fixed part).
             let byte_staging = mul(pixels, 5)?;
             (
                 sum(render, sampled)?,
@@ -739,8 +748,12 @@ pub fn estimate_peak(
         .max(film_base_bytes)
         .max(render_bytes)
         .max(encode_bytes);
+    let per_pixel = match profile {
+        RunProfile::DecodeOnly => 0,
+        _ => mul(pixels, ALLOWANCE_PER_PIXEL_BYTES)?,
+    };
     let allowance = sum(
-        accounted_bytes / 100 * ALLOWANCE_PERCENT,
+        sum(accounted_bytes / 100 * ALLOWANCE_PERCENT, per_pixel)?,
         ALLOWANCE_FIXED_BYTES,
     )?;
     Ok(PeakEstimate {
@@ -1167,11 +1180,25 @@ mod tests {
 
     #[test]
     fn allowance_is_applied_on_top_of_the_accounted_buffers() {
+        let px = 1000u64 * 1000;
         let e = estimate_peak(&shape(1000, 1000, true), convert_u16(), SamplePlan::none()).unwrap();
+        let expected = e.accounted_bytes
+            + e.accounted_bytes / 100 * ALLOWANCE_PERCENT
+            + px * ALLOWANCE_PER_PIXEL_BYTES
+            + ALLOWANCE_FIXED_BYTES;
+        assert_eq!(e.estimated_peak_bytes, expected);
+        assert!(e.estimated_peak_bytes > e.accounted_bytes);
+
+        // Decode-only runs carry no per-pixel term.
+        let e = estimate_peak(
+            &shape(1000, 1000, true),
+            RunProfile::DecodeOnly,
+            SamplePlan::none(),
+        )
+        .unwrap();
         let expected =
             e.accounted_bytes + e.accounted_bytes / 100 * ALLOWANCE_PERCENT + ALLOWANCE_FIXED_BYTES;
         assert_eq!(e.estimated_peak_bytes, expected);
-        assert!(e.estimated_peak_bytes > e.accounted_bytes);
     }
 
     #[test]
@@ -1189,7 +1216,7 @@ mod tests {
                 convert_u16(),
                 SamplePlan::none(),
                 1_642_291_200u64,
-                2_022_852_608u64,
+                2_321_451_008u64,
             ),
             (
                 big(),
@@ -1204,7 +1231,7 @@ mod tests {
                 convert_u16(),
                 SamplePlan::none(),
                 410_458_752,
-                606_245_285,
+                680_874_149,
             ),
             (
                 standard,
@@ -1219,7 +1246,7 @@ mod tests {
                 RunProfile::GainMapJpeg,
                 SamplePlan::none(),
                 839_574_720,
-                1_099_728_653,
+                1_174_357_517,
             ),
         ] {
             let e = estimate_peak(&shape, profile, sampling).unwrap();
@@ -1280,16 +1307,17 @@ mod tests {
         // …and not wildly over, where being over actually matters: on the full-size
         // frames (the only ones near a plausible budget) the estimate stays within
         // 25% of measured. Small frames are deliberately looser — the fixed
-        // allowance dominates them (see the module doc).
-        for (profile, measured) in [
-            (RunProfile::DecodeOnly, 1_503_330_304u64),
-            (u16_out, 1_649_000_448),
-            (f32_out, 1_350_287_360),
+        // allowance dominates them (see the module doc). The conversions get 50%
+        // while `ALLOWANCE_PER_PIXEL_BYTES` is a provisional floor over Linux peaks.
+        for (profile, measured, percent) in [
+            (RunProfile::DecodeOnly, 1_503_330_304u64, 25),
+            (u16_out, 1_649_000_448, 50),
+            (f32_out, 1_350_287_360, 50),
         ] {
             let e = estimate_peak(&big(), profile, SamplePlan::none()).unwrap();
             assert!(
-                e.estimated_peak_bytes < measured / 4 * 5,
-                "{profile:?}: estimate {} more than 25% over measured {measured}",
+                e.estimated_peak_bytes < measured / 100 * (100 + percent),
+                "{profile:?}: estimate {} more than {percent}% over measured {measured}",
                 e.estimated_peak_bytes
             );
         }
@@ -1319,12 +1347,12 @@ mod tests {
     #[test]
     fn minimum_viable_budget_is_the_fixed_allowance() {
         // The fixed allowance is unconditional, so it is a floor: a 1x1 image
-        // estimates at 128 MiB + its 18 bytes, and any budget at or below the floor
+        // estimates at 128 MiB + its 22 bytes, and any budget at or below the floor
         // rejects *every* possible input. Documented here (and in the rejection
         // message) so the floor isn't a surprise.
         let tiny = shape(1, 1, false);
         let e = estimate_peak(&tiny, convert_u16(), SamplePlan::none()).unwrap();
-        assert_eq!(e.estimated_peak_bytes, ALLOWANCE_FIXED_BYTES + 18);
+        assert_eq!(e.estimated_peak_bytes, ALLOWANCE_FIXED_BYTES + 22);
 
         let err = preflight(
             &tiny,
@@ -1348,7 +1376,7 @@ mod tests {
                 &tiny,
                 convert_u16(),
                 SamplePlan::none(),
-                Budget::resolve(Some(ALLOWANCE_FIXED_BYTES + 18)),
+                Budget::resolve(Some(ALLOWANCE_FIXED_BYTES + 22)),
                 None,
             )
             .is_ok()
