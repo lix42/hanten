@@ -417,7 +417,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         pipeline_version: 10,
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
-        recipe: "e6e991809c836329",
+        recipe: "0b84aff6f83ea9a2",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
