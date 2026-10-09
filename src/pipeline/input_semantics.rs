@@ -62,6 +62,9 @@ pub struct ContainerColorFacts {
     /// by itself establish scanner-device or colorimetric meaning and is never
     /// applied before density in Step 1.
     pub embedded_icc: Option<Vec<u8>>,
+    /// The scan was made in SilverFast's positive mode (`Negative=No`). Evidence only:
+    /// it changes no axis. In raw mode the tag records the scan dialog, not the samples.
+    pub positive_mode: bool,
 }
 
 /// Authoritative raw-mode structural evidence.
@@ -293,6 +296,14 @@ pub fn resolve(facts: &ContainerColorFacts, a: &InputAssertions) -> Result<Input
             "embedded ICC profile present (scanner device characterization); retained \
              for inspection, not applied before density and not sufficient on its own \
              to establish measurement meaning",
+        ));
+    }
+
+    if facts.positive_mode {
+        evidence.push(InputEvidence::new(
+            InputAxis::Meaning,
+            EvidenceKind::Descriptive,
+            "SilverFast positive-mode scan (Negative=No)",
         ));
     }
 
@@ -701,6 +712,7 @@ mod tests {
             raw_mode: raw.then_some(RawMode::SilverFastHdr),
             gamma,
             embedded_icc: icc,
+            positive_mode: false,
         }
     }
 
@@ -968,6 +980,49 @@ mod tests {
         let m = resolve(&facts(false, None, Some(icc)), &InputAssertions::auto()).unwrap();
         assert_eq!(m.meaning, MeasurementMeaning::Unknown);
         assert!(require_convertible(&m).is_err());
+    }
+
+    #[test]
+    fn positive_mode_is_recorded_and_changes_no_axis() {
+        let negative = resolve(&facts(true, Some(1.0), None), &InputAssertions::auto()).unwrap();
+        let positive = resolve(
+            &ContainerColorFacts {
+                positive_mode: true,
+                ..facts(true, Some(1.0), None)
+            },
+            &InputAssertions::auto(),
+        )
+        .unwrap();
+        assert_eq!(positive.transfer, negative.transfer);
+        assert_eq!(positive.meaning, negative.meaning);
+        assert_eq!(positive.evidence.len(), negative.evidence.len() + 1);
+        assert!(
+            positive
+                .evidence
+                .last()
+                .unwrap()
+                .detail
+                .contains("positive-mode")
+        );
+        // Recorded without raw-mode structure too, and still changes no axis.
+        let plain = resolve(&facts(false, None, None), &InputAssertions::auto()).unwrap();
+        let tagged = resolve(
+            &ContainerColorFacts {
+                positive_mode: true,
+                ..facts(false, None, None)
+            },
+            &InputAssertions::auto(),
+        )
+        .unwrap();
+        assert_eq!(tagged.transfer, plain.transfer);
+        assert_eq!(tagged.meaning, plain.meaning);
+        assert_eq!(tagged.evidence.len(), plain.evidence.len() + 1);
+        assert!(
+            tagged
+                .evidence
+                .iter()
+                .any(|e| e.detail.contains("positive-mode"))
+        );
     }
 
     #[test]

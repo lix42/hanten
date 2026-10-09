@@ -119,10 +119,9 @@ impl DecodeInfo {
             .is_some_and(SilverfastXmp::is_raw_mode)
     }
 
-    /// Whether the scan is a SilverFast **positive-mode** scan (`Negative=No`).
-    /// Such a scan is still raw linear — it passes the transfer/meaning gate — but
-    /// converting it as a negative is silently wrong, so `convert` rejects it (a
-    /// separate, clearly-scoped check; positive-mode support is a follow-up).
+    /// Whether the scan is a SilverFast **positive-mode** scan (`Negative=No`). In raw
+    /// mode the samples are the same scanner transmission as a negative-mode scan's;
+    /// the tag is reported, and a slide may be flagged by `film_base::polarity_warning`.
     pub fn is_silverfast_positive_mode(&self) -> bool {
         self.silverfast_xmp.as_ref().and_then(|x| x.negative) == Some(false)
     }
@@ -145,8 +144,8 @@ fn parse_silverfast_xmp(xml: &str) -> Option<SilverfastXmp> {
     })?;
     // Yes/No flag: `Some(true)`/`Some(false)` for an explicit yes/no, `None` for a
     // missing or *unrecognized* value — an unrecognized value must NOT masquerade
-    // as an explicit "No" (that would fail a genuine negative scan as positive-mode
-    // or a raw scan as non-HDR).
+    // as an explicit "No" (that would mislabel a scan as positive-mode in the
+    // evidence, or a raw scan as non-HDR).
     let yes_no = |name| match node.attribute((SILVERFAST_XMP_NS, name)) {
         Some(v) if v.trim().eq_ignore_ascii_case("yes") => Some(true),
         Some(v) if v.trim().eq_ignore_ascii_case("no") => Some(false),
