@@ -1203,11 +1203,79 @@ SDR/HDR split splits *from*.
 
 ## release-decoded-image
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-10-08
 
 - 2026-10-08: filed from `nf-verification/roll-side-exports`, which retired `--export-ir`,
   the last reader of the decoded image after the decode. Goal: release it early.
+
+### 2026-10-08 — the decode rewrites the scan in place
+
+- **Dropping the scan after `fixed::decode` was not enough.** The decode wrote a new
+  buffer and cloned the IR plane, so during the decode the frame held the scan, the new
+  RGB buffer and two IR planes: 32 B/px for HDRi, the old render phase's figure. An
+  early `drop` would have moved the peak from render to the decode and saved only the
+  6 B/px quantize term on a u16 TIFF.
+- **So `fixed::decode` takes the `LinearImage` by value** and maps its RGB in place
+  (`pixels::map_in_place`); the IR plane moves onto the `FilmRgbImage`. Each output
+  sample reads only its own input sample, so the arithmetic, and every bit, is the
+  same. It re-validates the buffer lengths through `LinearImage::new`, since the fields
+  are public (a wrong IR length used to panic on an `expect`; it is now an error). Callers
+  that reuse a scan (test producers, `branch_probe`) clone it.
+- **The IR plane's route is unchanged**: it still rides the chain and leaves through
+  `into_parts`. Only the clone went; where the plane should travel stays
+  `buffer-strategy`'s.
+- **Model** (`pipeline/memory.rs`): render is the chain's one buffer, 16 + 12·s B/px;
+  encode 22 + 12·s (u16) or 16 + 12·s (f32); the gain map 40 render / 45 encode. With
+  nothing sampled, the **float TIFF and `measure-roll` now peak at the decode phase**
+  (18 B/px: the f32 image beside the u16 read buffers), which
+  `which_phase_peaks_is_per_profile_and_measured_not_assumed` pins.
+- **Measured (Linux x86_64, `wait4`, synthetic HDRi frames 5.83 / 18.66 / 74.65 MP,
+  explicit base)**, before → after at 74.65 MP: SDR TIFF 2.843 → 1.649 GB, float TIFF
+  and film master 2.395 → 1.350 GB, PQ TIFF 2.544 → 1.350 GB, gain map 3.944 →
+  2.750 GB — the scan's 16 B/px (14 on the float TIFFs, whose peak is now the decode).
+  The new model sits +22.7% (SDR) and +24.4% (float) over the 74.65 MP peaks. The full
+  set is in the module doc and `estimate_stays_conservative_against_the_measured_peaks`.
+- **Byte-identical**: 42 outputs (seven destinations × three inputs, with
+  `--export-film-rgb`) and a `measure-roll` recipe compared with `cmp` against the
+  previous build.
+- **Gotcha, measuring on Linux:** a `posix_spawn` child's `ru_maxrss` includes the parent's
+  peak, so generating a big synthetic scan in the measuring process reports its peak
+  for every run (all four TIFFs read 4.215 GB). Generate first, measure in a fresh
+  process.
+- **Owed before done: the macOS peak on a real 74.65 MP scan** (`scripts/real-scan-verify`
+  `resource`, or `/usr/bin/time -l` on an SDR TIFF, a float TIFF and a gain map). Before
+  this change macOS peaked ~4 B/px above Linux on every destination; if that holds,
+  the float TIFF's estimate sits within about 1% of its macOS peak, and
+  `ALLOWANCE_PERCENT` or the decode row may need to move.
+
+### 2026-10-09 — review round
+
+- Two `/code-review` passes. Fixed: the design-spec §8 memory example (regenerated from
+  a real half-frame `--base-region` run), `io/decode.rs`'s IR-drop figure (22 → 18
+  B/px), the `ALLOWANCE_PERCENT` justification (now says it is unconfirmed on macOS
+  against the smaller base), the default-budget doc (rewritten to 34 B/px, 3.05 GB),
+  the gain-map allowance arithmetic (~8.5 B/px with the fixed part), a misleading
+  `cli.rs` comment, and the peak-phase test, which now pins RGB-only scans too: there
+  `U16Tiff`'s decode and encode tie at 18 B/px.
+- `measure-roll` measured (Linux, one synthetic frame): 0.112 / 0.343 / 1.351 GB at
+  5.83 / 18.66 / 74.65 MP, `accounted` 0.995x at the largest; rows added to the module
+  doc and the conservative-estimate test.
+- Not changed: `ALLOWANCE_PERCENT` itself (waits on the macOS numbers: whether the
+  ~4 B/px is per pixel or proportional decides the fix); the PQ/HLG TIFFs' unused
+  quantize term on Linux (on macOS it was real before this change); and `ir_verified`,
+  which the decode's output never carried (`working_image.rs`, `buffer-strategy`).
+
+### 2026-10-09 — a provisional per-pixel floor
+
+- Codex (P1) on the PR, and the user's call: rather than block the merge on the macOS
+  measurement, `ALLOWANCE_PER_PIXEL_BYTES` (4 B/px) joins the allowance for every
+  profile that renders, covering the ~4 B/px macOS ran above Linux before this change.
+  `DecodeOnly` is spared: its buffers did not change. Estimates at 74.65 MP rise by
+  0.30 GB (SDR TIFF 2.321 GB, float TIFF 1.978 GB, gain map 4.296 GB), +40–72% over the
+  Linux peaks; the "within 25%" check gives the conversions 50% while the floor stands.
+- Still owed: the macOS peak on a real 74.65 MP scan. It decides whether the floor
+  stays, shrinks, or becomes a higher `ALLOWANCE_PERCENT`.
 
 ## one-luma-dot
 

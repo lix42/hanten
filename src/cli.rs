@@ -4073,11 +4073,12 @@ fn render_frame(
     } = frame;
     let decode_params = recipe.reconstruction;
 
-    // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3 — with the
-    // film RGB export, if asked for, staged between them. It writes the decode's buffer
-    // before the in-place 3×3, so it adds no image buffer; it is timed as `encode`.
+    // Reconstruction: the fixed decode, which consumes the scan, then the pinned NC
+    // film RGB v1 3×3. The film RGB export, if asked for, is staged between them: it
+    // writes the decode's buffer before the in-place 3×3, so it adds no image buffer,
+    // and it is timed as `encode`.
     let (film, decoded) = clock.time(StageKind::Reconstruction, || {
-        fixed::decode(&image, &base, &decode_params)
+        fixed::decode(image, &base, &decode_params)
     })?;
     let mut pending: Vec<staged::Staged> = Vec::new();
     if let Some(path) = exports.film_rgb {
@@ -6737,8 +6738,7 @@ fn decode_for_roll_white<T>(
     {
         push_warning_buf(warnings, log, format!("{}: {w}", input.display()));
     }
-    let (film, decoded) = fixed::decode(&image, base, &recipe.reconstruction)?;
-    drop(image);
+    let (film, decoded) = fixed::decode(image, base, &recipe.reconstruction)?;
     let measured = on_film(&film, &area)?;
     Ok((
         working_space::map_nc_film_rgb_v1(film),

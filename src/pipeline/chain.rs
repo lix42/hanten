@@ -785,7 +785,7 @@ mod tests {
                 crate::algo::FilmRgbImage::fixture(img.clone())
             }),
             ("fixed::decode", |img, base| {
-                crate::algo::fixed::decode(img, base, &Default::default())
+                crate::algo::fixed::decode(img.clone(), base, &Default::default())
                     .unwrap()
                     .0
             }),
