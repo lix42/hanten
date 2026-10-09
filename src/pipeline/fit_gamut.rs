@@ -260,7 +260,7 @@ mod tests {
         let aces = map_nc_film_rgb_v1(FilmRgbImage::fixture(image.unwrap()));
         let input = aces.rgb().to_vec();
         let (corrected, _) =
-            scene_correction::apply(aces, &SceneCorrectionParams::default()).unwrap();
+            scene_correction::apply(aces, &SceneCorrectionParams::default(), None).unwrap();
         let graded = look::apply(corrected, &LookParams::off()).unwrap();
         let params = FitRangeParams {
             headroom_stops: 0.0,

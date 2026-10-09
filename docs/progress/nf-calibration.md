@@ -1424,6 +1424,11 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A8, G1): diffuse
   white renders at L* 79 and the band above it is mostly empty; reviews preferred the
   white near L* 90–92.
+- 2026-10-08: `nf-scene-correction/midtone-neutral` measures whites after the roll's colour
+  correction. That moves the roll white either way (09-28 +1.50 → +1.98, 09-14 +1.82 →
+  +1.93, 07-15 +1.95 → +1.76), and the reviewed rolls rendered a little darker. The user
+  accepted it on the expectation that this task
+  brightens white. Review this task against those whites.
 
 ## thin-lift-confirmation (cross-reference)
 

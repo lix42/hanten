@@ -30,6 +30,7 @@ pub mod hdr;
 pub mod input_semantics;
 pub mod look;
 pub mod memory;
+pub mod midtone_neutral;
 pub mod pixels;
 pub mod roll_white;
 pub mod scene_correction;

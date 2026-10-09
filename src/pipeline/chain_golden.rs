@@ -64,6 +64,7 @@ use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
+use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
@@ -460,7 +461,7 @@ fn golden_working_space_mapping_is_bit_identical() {
 }
 
 fn scene_correct(params: &SceneCorrectionParams) -> Vec<f32> {
-    let (out, _) = scene_correction::apply(aces(), params).unwrap();
+    let (out, _) = scene_correction::apply(aces(), params, None).unwrap();
     out.into_buffer().into_linear().rgb
 }
 
@@ -530,6 +531,130 @@ fn golden_scene_correction_fractional_exposure_is_correct_within_its_libm_window
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }
 
+/// A roll's midtone line, 09-29 Ektar's shape, and its gains.
+const MIDTONE_LINE: MidtoneLine = MidtoneLine {
+    red: [-0.06, 0.04],
+    blue: [-0.02, 0.37],
+    bands: [-2.75, 1.75],
+    fade_end_stops: 1.87,
+};
+const MIDTONE_GAINS: [f32; 3] = [1.21, 1.0, 1.15];
+
+/// Linear ACEScg before the roll's gains, one pixel per path: (0) full correction near
+/// the cast, (1) in the fade, (2) in the tint gate's ramp, (3) beyond the gate, (4) below
+/// the bands, (5) above the fade end, (6) black, (7) a negative channel.
+const MIDTONE_IN: [[f32; 3]; 8] = [
+    [0.110_140_89, 0.122_633_845, 0.134_977_9],
+    [0.387_237_16, 0.470_422_95, 0.491_791_43],
+    [0.258_885_35, 0.183_441_53, 0.205_293_3],
+    [0.286_974_1, 0.170_991_85, 0.191_360_6],
+    [0.010_110_895, 0.010_613_627, 0.012_390_925],
+    [0.841_515_54, 1.018_233_8, 0.885_420_7],
+    [0.0, 0.0, 0.0],
+    [-0.01, 0.1, 0.05],
+];
+
+/// The captured output, as this host rounds it (2026-10-07, `nf-scene-correction/midtone-neutral`).
+const MIDTONE_OUT: [u32; 24] = [
+    0x3ddc95d3, 0x3e00e87c, 0x3dda0ec1, 0x3ec82532, 0x3ef22d01, 0x3ee1b3c7, 0x3e84bbeb, 0x3e3d8bb1,
+    0x3e3afbce, 0x3e92ee45, 0x3e2f187d, 0x3e43f408, 0x3c175d35, 0x3c37268a, 0x3c1f42e7, 0x3f576d90,
+    0x3f82557c, 0x3f62aaee, 0x00000000, 0x00000000, 0x00000000, 0xbc172858, 0x3dce16ca, 0x3d1c5b42,
+];
+
+/// [`MidtoneLine::correct`] written out independently, its six `f32` libm results each
+/// moved `k[n]` ULPs off the correctly rounded value.
+fn midtone_pixel(px: [f32; 3], k: [i32; 6]) -> [f32; 3] {
+    let step = |n: usize, v: f32| match k[n] {
+        _ if !v.is_finite() => v,
+        -1 => v.next_down(),
+        1 => v.next_up(),
+        _ => v,
+    };
+    let log2 = |n: usize, x: f32| step(n, f64::from(x).log2() as f32);
+    let exp2 = |n: usize, x: f32| step(n, f64::from(x).exp2() as f32);
+    let luma = |p: [f32; 3]| ACESCG_LUMA[0] * p[0] + ACESCG_LUMA[1] * p[1] + ACESCG_LUMA[2] * p[2];
+    let g = MIDTONE_GAINS;
+    let l = MIDTONE_LINE;
+    let b = [px[0] * g[0], px[1] * g[1], px[2] * g[2]];
+    let (y, yw) = (luma(px), luma(b));
+    if !(y > 0.0 && yw > 0.0) {
+        return px;
+    }
+    let s = log2(0, yw / 0.18);
+    let join = l.fade_end_stops - 1.0;
+    let fade = if s > join {
+        ((l.fade_end_stops - s) / 1.0).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let at = s.clamp(l.bands[0], l.bands[1]).min(join);
+    let (cr, cb) = (
+        (l.red[0] * at + l.red[1]) * fade,
+        (l.blue[0] * at + l.blue[1]) * fade,
+    );
+    let (dr, db) = (log2(1, b[0] / b[1]) - cr, log2(2, b[2] / b[1]) - cb);
+    let off = step(3, f64::from(dr).hypot(f64::from(db)) as f32);
+    let gate = if off.is_finite() {
+        ((0.9 - off) / (0.9 - 0.6)).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let mut out = px;
+    out[0] *= exp2(4, -cr * gate);
+    out[2] *= exp2(5, -cb * gate);
+    let y2 = luma(out);
+    if y2 > 0.0 {
+        let r = y / y2;
+        out = out.map(|c| c * r);
+    }
+    out
+}
+
+#[test]
+fn golden_midtone_neutral_is_correct_within_its_libm_window() {
+    let combos = (0..3_u32.pow(6)).map(|n| {
+        std::array::from_fn::<i32, 6, _>(|call| (n / 3_u32.pow(call as u32) % 3) as i32 - 1)
+    });
+    let combos: Vec<[i32; 6]> = combos.collect();
+    let mut widest = 0;
+    for (p, &px) in MIDTONE_IN.iter().enumerate() {
+        let mut got = px;
+        MIDTONE_LINE.correct(&mut got, MIDTONE_GAINS);
+        let centre = midtone_pixel(px, [0; 6]);
+        for c in 0..3 {
+            let (i, want) = (p * 3 + c, MIDTONE_OUT[p * 3 + c]);
+            assert_eq!(
+                centre[c].to_bits(),
+                want,
+                "sample {i}: capture integrity {centre:?}"
+            );
+            let window = combos
+                .iter()
+                .map(|&k| ulps_between(midtone_pixel(px, k)[c], centre[c]))
+                .max()
+                .unwrap();
+            widest = widest.max(window);
+            let drift = ulps_between(got[c], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `scene-correction (midtone)` sample {i}: {drift} ULP from the capture, \
+                 outside the {window} ULP a conforming libm can reach"
+            );
+        }
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+    // Beyond the gate, above the fade end and black: untouched, bit for bit.
+    for p in [3, 5, 6] {
+        let mut got = MIDTONE_IN[p];
+        MIDTONE_LINE.correct(&mut got, MIDTONE_GAINS);
+        assert_stage_bits(
+            "scene-correction (midtone, untouched)",
+            &got,
+            &bits(&MIDTONE_IN[p]),
+        );
+    }
+}
+
 // --- fit range -----------------------------------------------------------------
 
 /// Fit range at `headroom_stops` against `peak`.
@@ -559,7 +684,7 @@ fn film_base() -> AcesCgImage {
 /// fit range under `params` — the only way to mint fit range's and fit gamut's input.
 fn through_fit_range(params: &FitRangeParams) -> fit_range::RangeFittedImage {
     let (corrected, _) =
-        scene_correction::apply(finite_aces(), &SceneCorrectionParams::default()).unwrap();
+        scene_correction::apply(finite_aces(), &SceneCorrectionParams::default(), None).unwrap();
     let graded = look::apply(corrected, &LookParams::off()).unwrap();
     fit_range::apply(graded, params).unwrap()
 }
@@ -836,7 +961,7 @@ fn look_pixel(px: [f32; 3], log10_ratio: Option<f32>, log2_luminance: Option<f32
 #[test]
 fn golden_look_highlight_desaturation_is_correct_within_its_libm_window() {
     let (corrected, _) =
-        scene_correction::apply(look_input(), &SceneCorrectionParams::default()).unwrap();
+        scene_correction::apply(look_input(), &SceneCorrectionParams::default(), None).unwrap();
     let out = look::apply(corrected, &look_params())
         .unwrap()
         .into_buffer()
@@ -961,7 +1086,8 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
         LinearImage::new(4, 1, LOOK_CONTRAST_FILM.to_vec(), None).unwrap(),
     ));
     let before = input.rgb().to_vec();
-    let (corrected, _) = scene_correction::apply(input, &SceneCorrectionParams::default()).unwrap();
+    let (corrected, _) =
+        scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
     let params = look_contrast_params();
     assert_eq!(params.applied(), "contrast");
     let out = look::apply(corrected, &params)
@@ -1026,7 +1152,8 @@ fn golden_look_channel_grade_is_correct_within_its_libm_window() {
         LinearImage::new(3, 1, LOOK_GRADE_FILM.to_vec(), None).unwrap(),
     ));
     let before = input.rgb().to_vec();
-    let (corrected, _) = scene_correction::apply(input, &SceneCorrectionParams::default()).unwrap();
+    let (corrected, _) =
+        scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
     let mut params = LookParams::off();
     params.section.channel_grade = LOOK_GRADE_EXPONENTS;
     assert_eq!(params.applied(), "channel-grade");
@@ -1175,6 +1302,7 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
                 white_balance,
                 exposure: -1.0,
             },
+            midtone: None,
             look: LookParams::off(),
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             display_black: DisplayBlack::Off,
@@ -1217,6 +1345,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
         SceneCorrection {
             white_balance: [1.25, 1.0, 0.5],
             exposure: -1.0,
+            midtone_line: None,
         },
         "chain (threaded): the scene correction the render reports"
     );
@@ -1269,6 +1398,7 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
     let params = |look| ChainParams {
         shared: SharedParams {
             scene_correction: scene_correction.clone(),
+            midtone: None,
             look,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             display_black: DisplayBlack::Off,
@@ -1276,7 +1406,7 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
         target: SDR_P3,
     };
     // Both pixels take a pure-IEEE path (full pull, or untouched), so pin them exactly.
-    let (corrected, _) = scene_correction::apply(input(), &scene_correction).unwrap();
+    let (corrected, _) = scene_correction::apply(input(), &scene_correction, None).unwrap();
     let corrected = corrected.into_buffer().into_linear().rgb;
     for (p, q) in corrected.chunks(3).enumerate() {
         assert_clear_of_look_edges(&format!("threaded look pixel {p}"), [q[0], q[1], q[2]]);

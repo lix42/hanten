@@ -25,15 +25,17 @@
 //!
 //! - A frame's white is the [`WHITE_PERCENTILE`] of its pixels' **brightest channel**
 //!   over its effective area, which keeps the specular headroom above white, in **scene
-//!   stops** above mid-grey — on the decode's film RGB, before the working-space 3×3
-//!   ([`frame_white`]).
+//!   stops** above mid-grey — on the decode's film RGB, before the working-space 3×3,
+//!   **after the roll's colour correction** (its gains and its midtone line, mapped back
+//!   through the 3×3: [`corrected_white`]). The rule's cap and floor were tuned on whites
+//!   measured before it.
 //! - The roll's white is the brightest frame white at or under [`WHITE_CAP_STOPS`],
 //!   raised to at least [`WHITE_FLOOR_STOPS`]; if every frame is above the cap, it is the
 //!   cap. A frame above the cap is **clamped**: it renders at the cap's slope, not the
 //!   roll's, and the report discloses it — an ordinary bright scene is clamped too, so it
 //!   is not a warning.
-//! - A frame whose white is within [`SATURATION_MARGIN_STOPS`] of the leader is near film
-//!   saturation, and that warns. Without a leader there is no check.
+//! - A frame whose white **as decoded** is within [`SATURATION_MARGIN_STOPS`] of the
+//!   leader is near film saturation, and that warns. Without a leader there is no check.
 //!
 //! **A frame's white is measured before the leader guard.** The guard drops pixels
 //! within [`LEADER_GUARD_DENSITY`] (≈0.6 stop) of the leader — exactly the highlights of
@@ -80,9 +82,11 @@ use serde::Serialize;
 
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
+use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::white_balance::{
     green_anchored_gains, nearest_rank_index, percentile_levels, sample_region,
 };
+use crate::pipeline::working_space::{acescg_to_film_rgb, film_rgb_to_acescg};
 use crate::types::{NcError, Result};
 
 /// The per-channel percentile of the roll's pooled pixels taken as its white.
@@ -303,8 +307,24 @@ fn nearest_rank_of(mut values: Vec<f32>, p: f32) -> f32 {
     *values.select_nth_unstable_by(at, f32::total_cmp).1
 }
 
-/// A frame's white: the [`WHITE_PERCENTILE`] of its usable pixels' brightest channel over
-/// `region`, **guard or no guard**; `None` when no pixel is usable.
+/// The frame's sample over `region`: the pixels [`sample_white`] reads, in the same
+/// positions as [`pool_frame`]'s.
+pub fn frame_sample(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Vec<f32>> {
+    sample_region(rgb, width, region, FRAME_SAMPLE_PIXELS)
+}
+
+/// A film-RGB sample ([`frame_sample`]) mapped to ACEScg, pixel for pixel as the decode
+/// maps it.
+pub fn acescg_sample(film: &[f32]) -> Vec<f32> {
+    film.as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|px| film_rgb_to_acescg(*px))
+        .collect()
+}
+
+/// A frame's white: the [`WHITE_PERCENTILE`] of its sample's usable pixels' brightest
+/// channel ([`frame_sample`]), **guard or no guard**; `None` when no pixel is usable.
 ///
 /// **The brightest channel, not one channel**, so a highlight reads bright whatever its
 /// colour. The review measured red; on a blue- or green-lit highlight red under-reads —
@@ -314,13 +334,47 @@ fn nearest_rank_of(mut values: Vec<f32>, p: f32) -> f32 {
 /// rolls). A saturated coloured highlight now sets the white; highlight desaturation
 /// leaves such a pixel's colour alone (`pipeline::look`).
 ///
-/// `rgb` is the decode's **film RGB**, before the working-space 3×3 — the domain the rule
-/// was reviewed in. The ACEScg values after the 3×3 mix the channels, and with them the
-/// roll's uncorrected cast: measured there, red moved frames −0.5 to +0.6 stop, by stock,
-/// off the reviewed values.
-pub fn frame_white(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f32>> {
-    let peaks = usable_peaks(&sample_region(rgb, width, region, FRAME_SAMPLE_PIXELS)?);
-    Ok((!peaks.is_empty()).then(|| nearest_rank_of(peaks, WHITE_PERCENTILE)))
+/// The sample is the decode's **film RGB**, before the working-space 3×3 — the domain the
+/// rule was reviewed in. The ACEScg values after the 3×3 mix the channels, and with them
+/// the roll's uncorrected cast: measured there, red moved frames −0.5 to +0.6 stop, by
+/// stock, off the reviewed values.
+///
+/// `measure-roll` measures it twice from one sample: as decoded, for the saturation check
+/// against the leader, and after the roll's colour correction ([`corrected_white`]), for
+/// the rule.
+pub fn sample_white(sample: &[f32]) -> Option<f32> {
+    let peaks = usable_peaks(sample);
+    (!peaks.is_empty()).then(|| nearest_rank_of(peaks, WHITE_PERCENTILE))
+}
+
+/// `sample_white` over `region` of a whole frame, as the tests state one.
+#[cfg(test)]
+fn frame_white(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f32>> {
+    Ok(sample_white(&frame_sample(rgb, width, region)?))
+}
+
+/// A frame's white **after the roll's colour correction**: each film-RGB pixel of
+/// `sample` mapped to ACEScg, corrected by the midtone `line` (if any) and the roll's
+/// `gains`, and mapped back, so the rule keeps the domain it was reviewed in.
+///
+/// Measured before correction, any colour correction moved every frame's white, hence
+/// the roll's slope (`docs/spike/poor-development.md`, "Measurement order"). No loop:
+/// the look's slope is channel-equal and pivoted at mid-grey, so a neutral white stays
+/// neutral.
+pub fn corrected_white(sample: &[f32], gains: [f32; 3], line: Option<&MidtoneLine>) -> Option<f32> {
+    let corrected: Vec<f32> = sample
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|px| {
+            let mut aces = film_rgb_to_acescg(*px);
+            if let Some(line) = line {
+                line.correct(&mut aces, gains);
+            }
+            acescg_to_film_rgb(std::array::from_fn(|c| aces[c] * gains[c]))
+        })
+        .collect();
+    sample_white(&corrected)
 }
 
 /// A frame's level: the log-average luma over `region` of its pixels with finite channels
@@ -382,7 +436,7 @@ pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
     })
 }
 
-/// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`frame_white`], scene
+/// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`sample_white`], scene
 /// stops) and the roll's exposure as applied, so the key is where the white renders.
 pub fn small_lift(white_stops: f32, roll_ev: f32) -> f32 {
     let rendered = white_stops + roll_ev;
@@ -520,7 +574,7 @@ pub fn thin_lift(
 }
 
 /// The median of the leader's brightest channel over its centre half, in the same
-/// film-RGB measure as [`frame_white`] — what a frame's saturation distance is measured
+/// film-RGB measure as [`sample_white`] — what a frame's saturation distance is measured
 /// against; `None` when no pixel is usable. The caller refuses that only after
 /// [`leader_guard`] has had the chance to name the empty channel.
 pub fn leader_peak(rgb: &[f32], width: u32, height: u32) -> Result<Option<f32>> {
@@ -652,6 +706,26 @@ pub fn roll_gains(pool: &[f32]) -> Result<[f32; 3]> {
         ));
     }
     green_anchored_gains(percentile_levels(pool, PERCENTILE), "roll white balance")
+}
+
+/// Where the midtone line fades to zero: the scene stop of the luma of the roll's pooled
+/// per-channel [`PERCENTILE`] after `gains`, over every frame's ACEScg sample
+/// ([`acescg_sample`]).
+///
+/// **No leader guard**, as reviewed: the guard drops a poorly developed roll's real
+/// highlights near the leader, and on 09-29 Ektar put this 0.23 stop under the reviewed
+/// value. Not the gains' own p99, which is guarded.
+pub fn pooled_white_stops(samples: &[Vec<f32>], gains: [f32; 3]) -> f32 {
+    let pooled: Vec<f32> = samples
+        .iter()
+        .flat_map(|s| s.as_chunks::<3>().0.iter())
+        .filter(|px| !unusable(px))
+        .flatten()
+        .copied()
+        .collect();
+    let p = percentile_levels(&pooled, PERCENTILE);
+    let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum();
+    scene_stops(luma)
 }
 
 #[cfg(test)]
