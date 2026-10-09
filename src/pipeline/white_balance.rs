@@ -49,18 +49,20 @@ pub(crate) fn sample_region(
     Ok(sampled)
 }
 
-/// Per-channel *finite* samples of an already-sampled `rgb`, each channel sorted
-/// ascending (`total_cmp`). Non-finite samples are excluded per sample, so a bad
-/// pixel can't poison a statistic. The full sort makes every downstream statistic
-/// order-defined, hence deterministic.
-fn wb_channel_samples(rgb: &[f32]) -> [Vec<f32>; 3] {
-    let cap = rgb.len() / 3;
+/// Per-channel *finite* samples of already-sampled `pixels` (at most `cap`), each
+/// channel sorted ascending (`total_cmp`). Non-finite samples are excluded per sample,
+/// so a bad pixel can't poison a statistic. The full sort makes every downstream
+/// statistic order-defined, hence deterministic.
+fn wb_channel_samples<'a>(
+    pixels: impl IntoIterator<Item = &'a [f32; 3]>,
+    cap: usize,
+) -> [Vec<f32>; 3] {
     let mut channels = [
         Vec::with_capacity(cap),
         Vec::with_capacity(cap),
         Vec::with_capacity(cap),
     ];
-    for px in rgb.as_chunks::<3>().0 {
+    for px in pixels {
         for (c, channel) in channels.iter_mut().enumerate() {
             if px[c].is_finite() {
                 channel.push(px[c]);
@@ -93,13 +95,23 @@ const STATE_GAINS_INSTEAD: &str = "state explicit gains instead (`--white-balanc
 /// finite samples; `NaN` for a channel with none. The caller judges usability, via
 /// [`green_anchored_gains`].
 pub(crate) fn percentile_levels(rgb: &[f32], p: f32) -> [f32; 3] {
-    channel_levels(rgb, |sorted| nearest_rank(sorted, p))
+    percentile_levels_of(rgb.as_chunks::<3>().0, rgb.len() / 3, p)
+}
+
+/// [`percentile_levels`] over `pixels` (at most `cap`), with no flattened copy.
+pub(crate) fn percentile_levels_of<'a>(
+    pixels: impl IntoIterator<Item = &'a [f32; 3]>,
+    cap: usize,
+    p: f32,
+) -> [f32; 3] {
+    channel_levels(wb_channel_samples(pixels, cap), |sorted| {
+        nearest_rank(sorted, p)
+    })
 }
 
 /// Per-channel `level(sorted finite samples)`; `NaN` for a channel with none — the
 /// one place an estimator's empty-channel rule lives.
-fn channel_levels(rgb: &[f32], level: impl Fn(&[f32]) -> f32) -> [f32; 3] {
-    let channels = wb_channel_samples(rgb);
+fn channel_levels(channels: [Vec<f32>; 3], level: impl Fn(&[f32]) -> f32) -> [f32; 3] {
     std::array::from_fn(|c| {
         if channels[c].is_empty() {
             f32::NAN

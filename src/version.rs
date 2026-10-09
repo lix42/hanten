@@ -395,8 +395,11 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // `nf-calibration/taste-vs-quality` (was `50987e7d7708865b`): the lift keys renamed
         // and split, all `null` by default; no default pixel moved. Again by
         // `nf-verification/roll-side-exports` (was `f3594e984e5e431b`): `input.export_ir`,
-        // `null` by default, retired with the IR export; no default pixel moved.
-        recipe: "f06b2b04908795a4",
+        // `null` by default, retired with the IR export; no default pixel moved. Again by
+        // `nf-scene-correction/midtone-neutral` (was `f06b2b04908795a4`):
+        // `roll.midtone_line` and `roll.midtone_neutral`, `null` by default and applied only
+        // when a line is stated.
+        recipe: "5bec854cbb66f3ed",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

@@ -723,9 +723,12 @@ mod tests {
             ..DecodeParams::default()
         };
         let (film, _) = fixed::decode(image, &FilmBase::from(BASE), &params).unwrap();
-        let (corrected, _) =
-            scene_correction::apply(map_nc_film_rgb_v1(film), &SceneCorrectionParams::default())
-                .unwrap();
+        let (corrected, _) = scene_correction::apply(
+            map_nc_film_rgb_v1(film),
+            &SceneCorrectionParams::default(),
+            None,
+        )
+        .unwrap();
         let params = LookParams {
             section,
             linearization: look_linearization,
@@ -1312,6 +1315,7 @@ mod tests {
             let (image, _) = crate::pipeline::scene_correction::apply(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),
                 &crate::pipeline::scene_correction::SceneCorrectionParams::default(),
+                None,
             )
             .unwrap();
             assert!(apply(image, &params).is_err(), "{g:?}");

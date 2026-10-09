@@ -80,7 +80,7 @@ impl FilmRgbImage {
 
     /// Read-only view of the interleaved film positive. Rendering takes the whole image
     /// across the boundary instead; `measure-roll` reads it to measure a frame's white in
-    /// film RGB, where it was reviewed (`pipeline::roll_white::frame_white`).
+    /// film RGB, where it was reviewed (`pipeline::roll_white::sample_white`).
     pub fn rgb(&self) -> &[f32] {
         &self.rgb
     }

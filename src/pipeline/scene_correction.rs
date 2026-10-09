@@ -1,11 +1,13 @@
 //! **Stage 1 of the rendering chain — scene correction.**
 //!
-//! Photographic corrections toward what the scene was: **white balance** and
-//! **exposure**. There is no flare/fog subtraction here: base fog is already in the
+//! Photographic corrections toward what the scene was: the roll's **midtone neutral**,
+//! **white balance** and **exposure**. There is no flare/fog subtraction here: base fog is already in the
 //! measured film base, lens glare is part of the photograph, and placing black is fit
 //! range's display black (`nf-scene-correction/flare-removal`, closed). Scene-referred
-//! and linear: each is a per-channel gain on linear ACEScg, so the two fold into one
-//! multiply and nothing is clamped.
+//! and linear: white balance and exposure are per-channel gains on linear ACEScg, so the
+//! two fold into one multiply and nothing is clamped. The midtone neutral
+//! ([`crate::pipeline::midtone_neutral`]) runs first, per pixel, keyed on the roll's own
+//! gains, which it was measured after: a stated white balance does not move it.
 //!
 //! Written fresh, per CLAUDE.md's migration rule, rather than from the removed chain's
 //! `render_split::apply_shared_controls`, which fused the same arithmetic with the
@@ -17,7 +19,7 @@
 //! neutral). With the anchor a reference-free convention, exposure here is where
 //! brightness is set.
 //!
-//! **Where an already-positive scan will enter** (`io/positive-input-mode`): ahead of
+//! **Where an already-positive scan will enter** (`io/slide-film-input`): ahead of
 //! this stage, at the working space — a positive is brought to linear ACEScg and
 //! then corrected like a negative, because a slide needs white balance and exposure
 //! as much as a negative does. So [`AcesCgImage`] is the chain's entry for both, and
@@ -27,6 +29,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::pixels;
 use crate::pipeline::working_image::WorkingBuffer;
 use crate::pipeline::working_space::AcesCgImage;
@@ -84,6 +87,15 @@ impl Default for SceneCorrectionParams {
             exposure: 0.0,
         }
     }
+}
+
+/// The roll's midtone line as the stage applies it: the line, and the roll's
+/// white-balance gains it was measured after (`roll.white_balance`). Not a recipe key of
+/// `scene_correction`: it comes from the recipe's `roll` section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MidtoneCorrection {
+    pub line: MidtoneLine,
+    pub roll_gains: [f32; 3],
 }
 
 /// A value [`SceneCorrectionParams::check`] refuses, carried as data so each caller
@@ -170,6 +182,9 @@ pub struct SceneCorrection {
     pub white_balance: [f32; 3],
     /// The exposure applied, in stops.
     pub exposure: f32,
+    /// The roll's midtone line, when it applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub midtone_line: Option<MidtoneLine>,
 }
 
 impl SceneCorrection {
@@ -180,16 +195,18 @@ impl SceneCorrection {
     /// read as `"identity"`.
     pub fn applied(&self) -> &'static str {
         let exposure_gain = self.exposure.exp2();
-        if self.white_balance.map(|wb| wb * exposure_gain) == [1.0, 1.0, 1.0] {
-            return "identity";
-        }
-        let white_balance = self.white_balance != [1.0, 1.0, 1.0];
-        let exposure = exposure_gain != 1.0;
-        match (white_balance, exposure) {
-            (false, false) => "identity",
-            (true, false) => "white-balance",
-            (false, true) => "exposure",
-            (true, true) => "white-balance+exposure",
+        let gains = self.white_balance.map(|wb| wb * exposure_gain) != [1.0, 1.0, 1.0];
+        let white_balance = gains && self.white_balance != [1.0, 1.0, 1.0];
+        let exposure = gains && exposure_gain != 1.0;
+        match (self.midtone_line.is_some(), white_balance, exposure) {
+            (false, false, false) => "identity",
+            (false, true, false) => "white-balance",
+            (false, false, true) => "exposure",
+            (false, true, true) => "white-balance+exposure",
+            (true, false, false) => "midtone-neutral",
+            (true, true, false) => "midtone-neutral+white-balance",
+            (true, false, true) => "midtone-neutral+exposure",
+            (true, true, true) => "midtone-neutral+white-balance+exposure",
         }
     }
 }
@@ -216,7 +233,8 @@ impl fmt::Debug for SceneReferredImage {
     }
 }
 
-/// Apply scene correction: `v_c ← v_c · wb_c · 2^exposure` per channel.
+/// Apply scene correction: the `midtone` line if any ([`MidtoneLine::correct`]), then
+/// `v_c ← v_c · wb_c · 2^exposure` per channel.
 ///
 /// The identity configuration returns the buffer untouched, bit for bit. Otherwise
 /// nothing is clamped (clamping happens only at the encoder) and a non-finite sample
@@ -225,6 +243,7 @@ impl fmt::Debug for SceneReferredImage {
 pub fn apply(
     image: AcesCgImage,
     params: &SceneCorrectionParams,
+    midtone: Option<&MidtoneCorrection>,
 ) -> Result<(SceneReferredImage, SceneCorrection)> {
     let WhiteBalance::Explicit(white_balance) = params.white_balance;
     let gains = params.gains().map_err(|_| {
@@ -236,17 +255,34 @@ pub fn apply(
         ))
     })?;
 
+    if let Some(m) = midtone {
+        m.line.check().map_err(|e| {
+            NcError::Other(format!(
+                "scene correction cannot apply the midtone line: {e}. The recipe's \
+                 validation refuses it first, so reaching here is a wiring fault"
+            ))
+        })?;
+    }
+
     let mut buffer = WorkingBuffer::from_aces(image);
-    if gains != [1.0, 1.0, 1.0] {
+    let scale = gains != [1.0, 1.0, 1.0];
+    if midtone.is_some() || scale {
+        // One pass: the line, then the gains.
         pixels::map_in_place(buffer.rgb_mut(), |px| {
-            for c in 0..3 {
-                px[c] *= gains[c];
+            if let Some(m) = midtone {
+                m.line.correct(px, m.roll_gains);
+            }
+            if scale {
+                for c in 0..3 {
+                    px[c] *= gains[c];
+                }
             }
         });
     }
     let resolved = SceneCorrection {
         white_balance,
         exposure: params.exposure,
+        midtone_line: midtone.map(|m| m.line),
     };
     Ok((SceneReferredImage(buffer), resolved))
 }
@@ -273,7 +309,7 @@ mod tests {
         image: AcesCgImage,
         params: &SceneCorrectionParams,
     ) -> Result<(Vec<f32>, SceneCorrection)> {
-        let (out, resolved) = apply(image, params)?;
+        let (out, resolved) = apply(image, params, None)?;
         Ok((out.into_buffer().into_linear().rgb, resolved))
     }
 
@@ -352,6 +388,49 @@ mod tests {
             // The label and the pixels agree: "identity" exactly when nothing moved.
             assert_eq!(want == "identity", bits(&out) == before, "{params:?}");
         }
+    }
+
+    #[test]
+    fn the_midtone_line_runs_first_keyed_on_the_rolls_own_gains() {
+        let line = MidtoneLine {
+            red: [-0.06, 0.04],
+            blue: [-0.02, 0.37],
+            bands: [-2.75, 1.75],
+            fade_end_stops: 1.87,
+        };
+        let midtone = MidtoneCorrection {
+            line,
+            roll_gains: [1.21, 1.0, 1.15],
+        };
+        let rgb = [0.11, 0.12, 0.135, 0.3, 0.2, 0.2, 0.0, 0.0, 0.0];
+        // The folded gains carry a stated white balance too; the line must not see it.
+        let params = SceneCorrectionParams {
+            white_balance: WhiteBalance::Explicit([1.21 * 1.1, 1.0, 1.15]),
+            exposure: 0.5,
+        };
+        let gains = params.gains().unwrap();
+        let (out, resolved) = apply(aces_from(3, 1, &rgb), &params, Some(&midtone)).unwrap();
+        let out = out.into_buffer().into_linear().rgb;
+        let mapped = aces_from(3, 1, &rgb);
+        for (i, px) in mapped.rgb().as_chunks::<3>().0.iter().enumerate() {
+            let mut want = *px;
+            line.correct(&mut want, midtone.roll_gains);
+            let want: Vec<u32> = (0..3).map(|c| (want[c] * gains[c]).to_bits()).collect();
+            assert_eq!(bits(&out[i * 3..i * 3 + 3]), want, "pixel {i}");
+        }
+        assert_eq!(resolved.applied(), "midtone-neutral+white-balance+exposure");
+        assert_eq!(resolved.midtone_line, Some(line));
+        let (_, alone) = apply(
+            aces_from(3, 1, &rgb),
+            &SceneCorrectionParams::default(),
+            Some(&midtone),
+        )
+        .unwrap();
+        assert_eq!(
+            alone.applied(),
+            "midtone-neutral",
+            "never `identity` while the line ran"
+        );
     }
 
     #[test]

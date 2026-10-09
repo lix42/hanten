@@ -37,10 +37,11 @@ use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
+use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, film_base, gain_encode, gain_ratio, hdr, look, roll_white, scene_correction,
-    working_space,
+    color, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral, roll_white,
+    scene_correction, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
@@ -95,8 +96,9 @@ pub enum Command {
     /// Removed: renamed `measure-base`. Hidden, and kept only to emit a migration error.
     #[command(hide = true, disable_help_flag = true)]
     Estimate(RemovedCommandArgs),
-    /// Measure what a roll shares — its white balance, white and exposure, and with --unexposed
-    /// its film base — once; emit JSON, and write it as a recipe with --out.
+    /// Measure what a roll shares — its white balance, midtone line, white and exposure,
+    /// and with --unexposed its film base — once; emit JSON, and write it as a recipe with
+    /// --out.
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
@@ -304,6 +306,15 @@ pub struct MeasureBaseArgs {
     pub report: ReportArgs,
 }
 
+/// `measure-roll --midtone-neutral`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum MidtoneMode {
+    Auto,
+    On,
+    Off,
+}
+
 /// `measure-roll`: the roll's picture frames, its leader, and the recipe they are
 /// decoded under (`nf-scene-correction/roll-white-balance`).
 #[derive(Args, Debug)]
@@ -321,9 +332,10 @@ pub struct MeasureRollArgs {
     #[arg(long, value_name = "PATH")]
     pub leader: Option<PathBuf>,
     /// The roll's recipe (`"recipe_version": 3`): the film base and
-    /// the decode the gains, the white and the exposure are measured under. Its `scene_correction` and
-    /// `look` values are not read — this command measures the white balance, the white and
-    /// the exposure — though the recipe must still load (a retired or unknown key there is
+    /// the decode the gains, the white and the exposure are measured under. Its
+    /// `scene_correction` and `look` values are not read — this command measures the white
+    /// balance, the midtone line, the white and the exposure — though the recipe must still
+    /// load (a retired or unknown key there is
     /// refused). Repeatable, and `-` reads stdin, as on `convert`. `--out` always writes the
     /// decode (`reconstruction`), since the gains hold only under it, and the recipe's
     /// `input` and `measure` keys when stated.
@@ -347,6 +359,19 @@ pub struct MeasureRollArgs {
     /// written one off without re-measuring.
     #[arg(long)]
     pub no_small_lift: bool,
+    /// The midtone neutral, a correction: `auto` (the default) writes the roll's midtone
+    /// line when the roll has 10 frames or more and enough bands of brightness voted;
+    /// `on` writes it on a shorter roll of 3 or more frames, if enough bands count; `off`
+    /// writes none, and measures the whites without it. `convert --midtone-neutral off`
+    /// turns a written one off without re-measuring, the whites still measured after it.
+    #[arg(
+        long,
+        value_enum,
+        ignore_case = true,
+        default_value = "auto",
+        value_name = "AUTO|ON|OFF"
+    )]
+    pub midtone_neutral: MidtoneMode,
     /// Removed: it left out both lifts. Hidden, kept only for its migration error.
     #[arg(long = "no-frame-lift", hide = true)]
     pub removed_no_frame_lift: bool,
@@ -577,15 +602,17 @@ pub struct DestinationOverrides {
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`,
-    /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`, `--small-lift
-    /// on`, `--thin-lift on`), which only a rendering applies — refused under a recipe's
-    /// film master too. A recipe's `roll` section is spared, since a measurement is not a
-    /// stage asked for, and so is a lift switched off.
+    /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
+    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`),
+    /// which only a rendering applies — refused under a recipe's film master too. A
+    /// recipe's `roll` section is spared, since a measurement is not a stage asked for,
+    /// and so is a switch turned off.
     #[arg(
         long = "film-master",
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
             "roll_exposure", "roll_frame_exposure", "roll_thin_slope", "roll_thin_exposure",
+            "roll_midtone_line",
         ]
     )]
     pub film_master: bool,
@@ -827,7 +854,7 @@ pub struct RollOverrides {
     /// Whether the small lift applies: `on` (the default) or `off`, which keeps it in the
     /// recipe (recipe key `roll.small_lift`). A taste adjustment.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
-    pub small_lift: Option<recipe::Lift>,
+    pub small_lift: Option<recipe::Switch>,
     /// A thin frame's own slope, in place of the one `--roll-white` places (recipe key
     /// `roll.thin_slope`; a `roll.frames` entry's `thin_slope`): the steeper slope `hanten
     /// measure-roll` gives a thin frame. `--contrast` multiplies it.
@@ -842,7 +869,23 @@ pub struct RollOverrides {
     /// frame with its small lift and keeps the thin one in the recipe (recipe key
     /// `roll.thin_lift`). A taste adjustment.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
-    pub thin_lift: Option<recipe::Lift>,
+    pub thin_lift: Option<recipe::Switch>,
+    /// The roll's midtone line as `hanten measure-roll` measured it (recipe key
+    /// `roll.midtone_line`): red's and blue's slope and offset, the lowest and highest
+    /// voted band, and the scene stop where the correction fades to zero. It removes the
+    /// cast a poor development leaves in the midtones, keyed on `--roll-white-balance`.
+    #[arg(
+        long,
+        value_name = "RS,RO,BS,BO,LO,HI,END",
+        value_parser = parse_midtone_line,
+        allow_hyphen_values = true
+    )]
+    pub roll_midtone_line: Option<MidtoneLine>,
+    /// Whether the midtone line applies: `on` (the default) or `off`, which keeps it in
+    /// the recipe (recipe key `roll.midtone_neutral`) and the whites measured after it. A
+    /// correction with a switch, since a roll dominated by one scene colour can mislead it.
+    #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
+    pub midtone_neutral: Option<recipe::Switch>,
 }
 
 impl RollOverrides {
@@ -856,8 +899,16 @@ impl RollOverrides {
             ("--roll-thin-slope", self.roll_thin_slope.is_some()),
             ("--roll-thin-exposure", self.roll_thin_exposure.is_some()),
             // `off` asks for nothing, so no branch refuses it.
-            ("--small-lift on", self.small_lift == Some(recipe::Lift::On)),
-            ("--thin-lift on", self.thin_lift == Some(recipe::Lift::On)),
+            (
+                "--small-lift on",
+                self.small_lift == Some(recipe::Switch::On),
+            ),
+            ("--thin-lift on", self.thin_lift == Some(recipe::Switch::On)),
+            ("--roll-midtone-line", self.roll_midtone_line.is_some()),
+            (
+                "--midtone-neutral on",
+                self.midtone_neutral == Some(recipe::Switch::On),
+            ),
         ]
         .into_iter()
         .filter_map(|(flag, typed)| typed.then_some(flag))
@@ -1381,6 +1432,17 @@ fn parse_rgb(s: &str) -> std::result::Result<[f32; 3], String> {
     Ok(v)
 }
 
+/// Parse `--roll-midtone-line`'s seven numbers, in [`MidtoneLine`]'s field order.
+fn parse_midtone_line(s: &str) -> std::result::Result<MidtoneLine, String> {
+    let [rs, ro, bs, bo, lo, hi, end] = parse_floats::<7>(s)?;
+    Ok(MidtoneLine {
+        red: [rs, ro],
+        blue: [bs, bo],
+        bands: [lo, hi],
+        fade_end_stops: end,
+    })
+}
+
 /// Parse `LO,HI` into two `f32`s.
 fn parse_lo_hi(s: &str) -> std::result::Result<[f32; 2], String> {
     parse_floats::<2>(s)
@@ -1768,8 +1830,8 @@ fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Resu
     };
     let message = if r.output == OutputSection::FilmMaster {
         // Under `direct` too, either remedy alone would meet the film master + `direct`
-        // refusal next, so each carries `--rendering default`. Only a lift switch typed
-        // `on` reaches here beside a typed `--film-master`; the other roll flags conflict.
+        // refusal next, so each carries `--rendering default`. Only a switch typed `on`
+        // reaches here beside a typed `--film-master`; the other roll flags conflict.
         let (master, choose) = if args.destination.film_master {
             ("--film-master writes", "drop --film-master")
         } else {
@@ -2414,8 +2476,8 @@ pub fn run() -> Result<()> {
         Command::Estimate(_) => Err(NcError::Usage(
             "`hanten estimate` was renamed `hanten measure-base`, with the same flags; \
              `--out PATH` now writes the measured base as a recipe for `--params`. To \
-             measure a roll's base with its white balance, white and exposure, use \
-             `hanten measure-roll --unexposed <unexposed.tif>`"
+             measure a roll's base with its white balance, midtone line, white and \
+             exposure, use `hanten measure-roll --unexposed <unexposed.tif>`"
                 .into(),
         )),
         Command::MeasureRoll(args) => run_measure_roll(args),
@@ -3089,25 +3151,8 @@ fn container_color_facts(info: &DecodeInfo) -> ContainerColorFacts {
             .map(|x| x.gamma.clone())
             .unwrap_or_default(),
         embedded_icc: info.embedded_icc.clone(),
+        positive_mode: info.is_silverfast_positive_mode(),
     }
-}
-
-/// Reject a SilverFast **positive-mode** scan (`Negative=No`) loudly. Such a scan
-/// is still raw linear scanner data, so it passes the transfer/meaning gate — but
-/// converting it as a *negative* is silently wrong. This is a small,
-/// clearly-scoped check (distinct from the transfer/meaning resolution) so it is
-/// easy to lift when positive-mode support lands. `inspect` never calls it (it
-/// reports the `Negative` flag via `decode.silverfast_xmp` instead).
-fn reject_positive_mode(info: &DecodeInfo) -> Result<()> {
-    if info.is_silverfast_positive_mode() {
-        return Err(NcError::Unsupported(
-            "input is a SilverFast positive-mode scan (XMP Negative=No); converting it as a \
-             negative would be silently wrong. Positive-mode scans are not yet supported \
-             (follow-up); scan in negative mode, or convert a negative scan."
-                .into(),
-        ));
-    }
-    Ok(())
 }
 
 /// The merged input assertions plus their CLI/recipe provenance, for the resolver.
@@ -3290,7 +3335,7 @@ fn convert_frame(
     // touches the image; it runs whether or not telemetry is enabled, so the render
     // path is uniform.
     // `decode_for_roll_white` (`measure-roll`) repeats this front half — preflight,
-    // decode, input semantics, positive-mode refusal, effective area and its warnings —
+    // decode, input semantics, effective area and its warnings, the polarity check —
     // up to the chain; a gate added here belongs there too.
     let clock = &mut facts.clock;
     let (image, info) = clock.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
@@ -3324,11 +3369,6 @@ fn convert_frame(
     input_semantics::require_convertible(&input_meta)?;
     report.input_color = Some(input_report);
 
-    // A SilverFast positive-mode scan passes the transfer/meaning gate (it is raw
-    // linear scanner data) but must not be converted as a negative — reject it
-    // loudly with a distinct message rather than silently misconvert.
-    reject_positive_mode(info)?;
-
     // Stage 2 — film-base estimate. Resolved before the render so its quality
     // warning (a non-uniform region) is pushed — and so
     // echoed to stderr — *before* the fallible render runs, and ride out in the
@@ -3350,12 +3390,10 @@ fn convert_frame(
     // run-to-run noise even on an 18.7 MP frame, so there is nothing to save by
     // skipping it.
     //
-    // Nothing in a `convert` measures over it today — its one per-frame consumer, the
-    // auto reference density, retired (`nf-retire/dmax-machinery`), and the roll's
-    // white balance is measured over it by `hanten measure-roll` instead —
-    // so an **empty** region is a warning rather than a refusal, with no
-    // `report.effective_area`, because there is no region to report. A consumer added
-    // here must decide whether an empty region becomes fatal for it.
+    // Its one consumer here is the polarity check, a warning that an empty region
+    // skips — so an **empty** region is a warning rather than a refusal, with no
+    // `report.effective_area`. A consumer added here must decide whether an empty
+    // region becomes fatal for it.
     // Timed as a success whatever it returns: an empty region is a warning, not the
     // run's failure.
     let area = clock.time(StageKind::FilmBase, || {
@@ -3367,6 +3405,12 @@ fn convert_frame(
             for w in film_base::effective_area_warnings(&area) {
                 push_warning_buf(warnings, log, w);
             }
+            let polarity = clock.time(StageKind::FilmBase, || {
+                film_base::polarity_warning(&image, area.region, &base.base)
+            })?;
+            if let Some(w) = polarity {
+                push_warning_buf(warnings, log, w);
+            }
         }
         // Rebuilt from the error's own text rather than `Display`, which prefixes the
         // kind (`usage: …`) — a warning must not carry it.
@@ -3375,8 +3419,8 @@ fn convert_frame(
                 warnings,
                 log,
                 format!(
-                    "{} Nothing in this conversion measures over the region, so the \
-                     render is unaffected and the report omits `effective_area` \
+                    "{} The render does not read the region, so it is unaffected; the \
+                     polarity check is skipped and the report omits `effective_area` \
                      (--measure-inset has no effect on this run).",
                     e.message()
                 ),
@@ -4969,6 +5013,17 @@ const ROLL_WIDE: &[RollWide] = &[
         },
     },
     RollWide {
+        key: "roll.midtone_line",
+        breaks: "this frame's midtones are corrected apart from the roll's (a frame's own \
+                 is `roll.midtone_neutral` \"off\")",
+        compare: |f, r| {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+                return Ok(None);
+            }
+            changed(&f.roll.midtone_line, &r.roll.midtone_line)
+        },
+    },
+    RollWide {
         key: "roll.exposure",
         breaks: "this frame is exposed apart from the roll's measured exposure (a frame's \
                  own adjustment is `scene_correction.exposure`, which adds to it)",
@@ -5440,7 +5495,7 @@ fn reject_a_thin_slope_over_a_small_lift(
     let Some(ev) = r
         .roll
         .frame_exposure
-        .filter(|_| r.roll.small_lift != Some(recipe::Lift::Off))
+        .filter(|_| r.roll.small_lift != Some(recipe::Switch::Off))
     else {
         return Ok(());
     };
@@ -5467,7 +5522,7 @@ fn reject_a_small_lift_beside_a_thin_one(
     if !r.applies_roll_to_scene_correction() {
         return Ok(());
     }
-    let off = if r.roll.small_lift == Some(recipe::Lift::Off) {
+    let off = if r.roll.small_lift == Some(recipe::Switch::Off) {
         format!("{} and {}", names.thin_off, names.small_on)
     } else {
         names.thin_off.to_owned()
@@ -6319,6 +6374,8 @@ struct MeasureRollReport {
     leader: Option<MeasuredLeader>,
     frames: Vec<MeasuredFrame>,
     white_balance: RollWhiteBalance,
+    /// The roll's midtone line (`nf-scene-correction/midtone-neutral`).
+    midtone_neutral: MeasuredMidtone,
     /// The roll's white and the slope that places it (`nf-calibration/roll-white-rule`).
     white: MeasuredRollWhite,
     /// The roll's exposure (`nf-calibration/roll-exposure`).
@@ -6357,10 +6414,15 @@ struct MeasuredFrame {
     #[serde(flatten)]
     counts: roll_white::FrameCounts,
     /// The frame's white — the percentile of its pixels' brightest channel, before the
-    /// leader guard — in scene stops above mid-grey; absent when no pixel was usable.
+    /// leader guard and after the roll's colour correction — in scene stops above
+    /// mid-grey; absent when no pixel was usable.
     #[serde(skip_serializing_if = "Option::is_none")]
     white_stops: Option<f32>,
-    /// How far the white sits under the leader, in scene stops; only with `--leader`.
+    /// The same before the roll's colour correction: what the saturation check reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decoded_white_stops: Option<f32>,
+    /// How far the decoded white sits under the leader, in scene stops; only with
+    /// `--leader`.
     #[serde(skip_serializing_if = "Option::is_none")]
     leader_distance_stops: Option<f32>,
     /// The frame's level — the log-average of its luma — in scene stops from mid-grey;
@@ -6465,6 +6527,21 @@ struct ClampedFrame {
     flag: String,
 }
 
+/// The midtone line, why there is none, and its rule.
+#[derive(Debug, Serialize)]
+struct MeasuredMidtone {
+    /// `correction` (design-spec §6), switched off at render by `--midtone-neutral off`.
+    kind: &'static str,
+    mode: MidtoneMode,
+    #[serde(flatten)]
+    measured: midtone_neutral::Measured,
+    /// Under `auto`, a roll with fewer frames gets no line.
+    min_frames: usize,
+    min_bands: usize,
+    fade_stops: f32,
+    gate_log2: [f32; 2],
+}
+
 /// The roll's exposure and the rule that measured it.
 #[derive(Debug, Serialize)]
 struct MeasuredRollExposure {
@@ -6476,13 +6553,28 @@ struct MeasuredRollExposure {
     bound_ev: f32,
 }
 
-/// The `convert` flags that freeze `gains`, the white `white_stops`, the exposure `ev`
-/// and a frame's `written` lifts — `reuse.flag`, and a clamped or lifted frame's own.
-fn reuse_flag(gains: [f32; 3], white_stops: f32, ev: f32, written: Written) -> String {
+/// The roll's colour correction: its white-balance gains and its midtone line.
+#[derive(Clone, Copy)]
+struct RollColour {
+    gains: [f32; 3],
+    line: Option<MidtoneLine>,
+}
+
+/// The `convert` flags that freeze the roll's `colour`, the white `white_stops`, the
+/// exposure `ev` and a frame's `written` lifts — `reuse.flag`, and a clamped or lifted
+/// frame's own.
+fn reuse_flag(colour: RollColour, white_stops: f32, ev: f32, written: Written) -> String {
+    let gains = colour.gains;
     let mut flag = format!(
         "--roll-white-balance {},{},{} --roll-white {white_stops} --roll-exposure {ev}",
         gains[0], gains[1], gains[2]
     );
+    if let Some(l) = colour.line {
+        flag += &format!(
+            " --roll-midtone-line {},{},{},{},{},{},{}",
+            l.red[0], l.red[1], l.blue[0], l.blue[1], l.bands[0], l.bands[1], l.fade_end_stops
+        );
+    }
     if let Some(lift) = written.exposure {
         flag += &format!(" --roll-frame-exposure {lift}");
     }
@@ -6566,10 +6658,19 @@ struct RollReuse {
     flag: String,
 }
 
+/// Which scan [`decode_for_roll_white`] reads. Only a picture frame gets the polarity
+/// warning: its thresholds were measured on picture frames, and a leader can show the
+/// cut tongue or backlight.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RollScan {
+    Leader,
+    Frame,
+}
+
 /// One input decoded into linear ACEScg at the recipe's decode, plus its effective
 /// area: the front half of `convert_frame`, gated the same way
-/// (memory preflight, input semantics, positive-mode refusal) and stopping before
-/// scene correction — the point the roll's gains will be applied at.
+/// (memory preflight, input semantics, polarity warning on a [`RollScan::Frame`]) and
+/// stopping before scene correction — the point the roll's gains will be applied at.
 ///
 /// `on_film` reads the decode's film RGB just before the working-space map, for what is
 /// measured there (the roll's white); it runs on the frame's effective area as found.
@@ -6578,8 +6679,11 @@ struct RollReuse {
 /// its report, so this repeats its gates rather than sharing them: a
 /// refusal or measurement-region warning added there belongs here too, or gains get
 /// frozen from frames `convert` would refuse.
+// One over clippy's argument cap; the scan kind is one more one-off value.
+#[allow(clippy::too_many_arguments)]
 fn decode_for_roll_white<T>(
     input: &Path,
+    scan: RollScan,
     recipe: &Recipe,
     base: &FilmBase,
     budget: memory::Budget,
@@ -6627,8 +6731,13 @@ fn decode_for_roll_white<T>(
         );
     }
     input_semantics::require_convertible(&input_meta)?;
-    reject_positive_mode(&info)?;
     let area = film_base::effective_area(&image, recipe.measure.inset);
+    if scan == RollScan::Frame
+        && let Ok(a) = &area
+        && let Some(w) = film_base::polarity_warning(&image, a.region, base)?
+    {
+        push_warning_buf(warnings, log, format!("{}: {w}", input.display()));
+    }
     let (film, decoded) = fixed::decode(image, base, &recipe.reconstruction)?;
     let measured = on_film(&film, &area)?;
     Ok((
@@ -6644,7 +6753,7 @@ fn decode_for_roll_white<T>(
 fn measured_roll_white(
     frames: &mut [MeasuredFrame],
     guarded: bool,
-    gains: [f32; 3],
+    colour: RollColour,
     ev: f32,
 ) -> Result<MeasuredRollWhite> {
     let stops: Vec<Option<f32>> = frames.iter().map(|f| f.white_stops).collect();
@@ -6668,7 +6777,7 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 slope: cap_slope,
-                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev, Written::default()),
+                flag: reuse_flag(colour, roll_white::WHITE_CAP_STOPS, ev, Written::default()),
             })
             .collect(),
         rule: WhiteRule {
@@ -6686,7 +6795,7 @@ fn measured_roll_white(
 fn frame_flags(
     frames: &mut [MeasuredFrame],
     white: &mut MeasuredRollWhite,
-    gains: [f32; 3],
+    colour: RollColour,
     ev: f32,
     lifts: Lifts,
 ) {
@@ -6694,14 +6803,14 @@ fn frame_flags(
         let clamp = own_white(f, white);
         let written = f.written(lifts);
         f.flag = (clamp.is_some() || written != Written::default())
-            .then(|| reuse_flag(gains, clamp.unwrap_or(white.stops), ev, written));
+            .then(|| reuse_flag(colour, clamp.unwrap_or(white.stops), ev, written));
     }
     for c in &mut white.clamped {
         let written = frames
             .iter()
             .find(|f| f.input == c.input)
             .map_or(Written::default(), |f| f.written(lifts));
-        c.flag = reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev, written);
+        c.flag = reuse_flag(colour, roll_white::WHITE_CAP_STOPS, ev, written);
     }
 }
 
@@ -6761,7 +6870,7 @@ fn refuse_shared_file_names(inputs: &[PathBuf]) -> Result<()> {
 }
 
 /// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` its film
-/// base ([`measure_base`]), then its white balance, white and exposure over its picture frames;
+/// base ([`measure_base`]), then its white balance, midtone line, white and exposure over its picture frames;
 /// report them, and with `--out` write them as one recipe `roll --params` renders alone.
 fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
@@ -6966,6 +7075,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             // Each error keeps its kind, and so its exit code (a memory refusal stays 6).
             let (aces, _, film_peak, _, memory) = decode_for_roll_white(
                 path,
+                RollScan::Leader,
                 &recipe,
                 &base,
                 budget,
@@ -7013,22 +7123,29 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     };
 
     let mut pool = Vec::new();
+    // Each frame's film-RGB sample, unguarded: the midtone line's votes and fade end, and
+    // the frame's white once the roll's colour correction is known.
+    let mut film_samples = Vec::with_capacity(args.inputs.len());
     let mut frames = Vec::with_capacity(args.inputs.len());
     for input in &args.inputs {
-        let (aces, area, white, decoded, memory) = decode_for_roll_white(
+        let (aces, area, film_sample, decoded, memory) = decode_for_roll_white(
             input,
+            RollScan::Frame,
             &recipe,
             &base,
             budget,
             &log,
             &mut warnings,
             |film, area| match area {
-                Ok(a) => roll_white::frame_white(film.rgb(), film.width(), a.region)
+                Ok(a) => roll_white::frame_sample(film.rgb(), film.width(), a.region)
                     .map_err(|e| e.prefixed(input.display())),
                 // Refused just below, with the input named.
-                Err(_) => Ok(None),
+                Err(_) => Ok(Vec::new()),
             },
         )?;
+        // As decoded: the leader's saturation is the film's, before any correction.
+        let white = roll_white::sample_white(&film_sample);
+        film_samples.push(film_sample);
         let area = area.map_err(|e| {
             NcError::Usage(format!(
                 "{}: {} (every frame is measured over its effective area)",
@@ -7088,7 +7205,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             region: area.region,
             holder_applied: area.holder_applied,
             counts,
-            white_stops: white.map(roll_white::scene_stops),
+            // Replaced by the corrected white once the roll's colour is measured.
+            white_stops: None,
+            decoded_white_stops: white.map(roll_white::scene_stops),
             leader_distance_stops,
             // A frame the pool kept nothing of (the leader guard emptied it, or no pixel was
             // usable) is not picture; a leader would pull the roll's exposure toward itself.
@@ -7108,7 +7227,42 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         decode.get_or_insert(decoded);
     }
     let gains = roll_white::roll_gains(&pool)?;
+    // Freed before the midtone line's ACEScg copy of the samples is made.
+    let pooled = pool.len() / 3;
+    drop(pool);
     log.info(format_args!("roll white balance {gains:?}"));
+    // Unguarded, as reviewed: only the gains take the leader guard. A frame the pool kept
+    // nothing of is not picture, as for the exposure.
+    let picture = film_samples
+        .iter()
+        .zip(&frames)
+        .filter(|(_, f)| f.counts.kept > 0)
+        .map(|(s, _)| s);
+    let midtone = if args.midtone_neutral == MidtoneMode::Off {
+        midtone_neutral::Measured::asked(picture.filter(|s| !s.is_empty()).count())
+    } else {
+        let picture: Vec<Vec<f32>> = picture.map(|s| roll_white::acescg_sample(s)).collect();
+        midtone_neutral::measure(
+            &picture.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            gains,
+            roll_white::pooled_white_stops(&picture, gains),
+            args.midtone_neutral == MidtoneMode::Auto,
+        )
+    };
+    match (midtone.line, midtone.off_because) {
+        (Some(l), _) => log.info(format_args!("midtone line {l:?}")),
+        (None, why) => log.info(format_args!("no midtone line: {why:?}")),
+    }
+    let colour = RollColour {
+        gains,
+        line: midtone.line,
+    };
+    // The second pass: each frame's white after the roll's colour correction.
+    for (f, sample) in frames.iter_mut().zip(&film_samples) {
+        f.white_stops = roll_white::corrected_white(sample, gains, colour.line.as_ref())
+            .map(roll_white::scene_stops);
+    }
+    drop(film_samples);
     let levels: Vec<Option<f32>> = frames.iter().map(|f| f.level_stops).collect();
     let exposure = roll_white::roll_exposure(&levels)?;
     log.info(format_args!(
@@ -7145,7 +7299,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             }
         });
     }
-    let mut white = measured_roll_white(&mut frames, args.leader.is_some(), gains, exposure.ev)?;
+    let mut white = measured_roll_white(&mut frames, args.leader.is_some(), colour, exposure.ev)?;
     // The thin lift starts from the frame's render without it: its own slope (a clamp's,
     // else the roll's) and the roll's exposure plus its small lift.
     let (mut thin_bounded, mut thin_unlifted) = (Vec::new(), Vec::new());
@@ -7178,7 +7332,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             Some(_) => {}
         }
     }
-    frame_flags(&mut frames, &mut white, gains, exposure.ev, lifts);
+    frame_flags(&mut frames, &mut white, colour, exposure.ev, lifts);
     let small_lift = MeasuredSmallLift {
         kind: "taste",
         written: lifts.small,
@@ -7222,6 +7376,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         },
         roll: Some(recipe::RollSection {
             white_balance: Some(gains),
+            midtone_line: midtone.line,
             white_stops: Some(white.stops),
             exposure: Some(exposure.ev),
             frames: frame_table(&frames, &white, lifts),
@@ -7242,10 +7397,19 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         white_balance: RollWhiteBalance {
             gains,
             percentile: roll_white::PERCENTILE,
-            pooled: pool.len() / 3,
+            pooled,
+        },
+        midtone_neutral: MeasuredMidtone {
+            kind: "correction",
+            mode: args.midtone_neutral,
+            measured: midtone,
+            min_frames: midtone_neutral::MIN_FRAMES,
+            min_bands: midtone_neutral::MIN_BANDS,
+            fade_stops: midtone_neutral::FADE_STOPS,
+            gate_log2: midtone_neutral::GATE_LOG2,
         },
         reuse: RollReuse {
-            flag: reuse_flag(gains, white.stops, exposure.ev, Written::default()),
+            flag: reuse_flag(colour, white.stops, exposure.ev, Written::default()),
         },
         white,
         exposure: MeasuredRollExposure {
@@ -9201,6 +9365,8 @@ mod tests {
         "roll.thin_slope",
         "roll.thin_exposure",
         "roll.thin_lift",
+        // Whether the roll's midtone line applies: a frame may turn it off.
+        "roll.midtone_neutral",
         // Resolved per frame; a manifest stating it is refused, not warned about.
         "roll.frames",
         "measure",
@@ -9244,12 +9410,20 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
         type Change = (&'static str, fn(&mut Recipe));
-        let changes: [Change; 9] = [
+        let changes: [Change; 10] = [
             ("calibration.film_base", |r| {
                 r.calibration.film_base = Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4]))
             }),
             ("roll.white_balance", |r| {
                 r.roll.white_balance = Some([1.1, 1.0, 0.9])
+            }),
+            ("roll.midtone_line", |r| {
+                r.roll.midtone_line = Some(MidtoneLine {
+                    red: [-0.06, 0.04],
+                    blue: [-0.02, 0.37],
+                    bands: [-2.75, 1.75],
+                    fade_end_stops: 1.87,
+                })
             }),
             ("roll.exposure", |r| r.roll.exposure = Some(0.5)),
             ("reconstruction.scale", |r| {
