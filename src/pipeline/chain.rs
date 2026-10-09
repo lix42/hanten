@@ -1028,6 +1028,7 @@ mod tests {
                 // tests' grid onto the HDR cube's faces.
                 section: LookSection {
                     slope: 2.0 / 1.8,
+                    saturation_slope: 2.0 / 1.8,
                     ..LookSection::default()
                 },
                 linearization: crate::algo::fixed::LINEARIZATION,

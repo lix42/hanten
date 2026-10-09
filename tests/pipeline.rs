@@ -7818,7 +7818,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             applied,
             [
                 "identity",
-                "contrast+highlight-desaturation",
+                "contrast+saturation+highlight-desaturation",
                 "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
@@ -8285,12 +8285,12 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 
     // (5) A stage refuses a key it does not have.
     let (code, err) = run_with(
-        r#"{"recipe_version": 3, "look": {"saturation": 1.1},
+        r#"{"recipe_version": 3, "look": {"vibrance": 1.1},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "look.json",
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("saturation"), "{err}");
+    assert!(err.contains("vibrance"), "{err}");
 
     // (6) The decode's slope before the split is refused by name, with the split's
     // remedy — never read as the linearization it no longer is.
@@ -11115,8 +11115,10 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
             .as_f64()
             .unwrap()
     };
+    // About, not exactly: the solve reads the base's luma before the roll's gains
+    // (`roll_white::thin_lift`).
     assert!(
-        (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.02,
+        (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.05,
         "the base held: {} vs {}",
         base_stops(&steep_report),
         base_stops(&small_report)
@@ -12504,7 +12506,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     let (plain, report) = convert("plain.tiff", &[]);
     assert_eq!(
         look(&report)["applied"],
-        "contrast+highlight-desaturation",
+        "contrast+saturation+highlight-desaturation",
         "{report}"
     );
     assert_eq!(
@@ -12515,7 +12517,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     // default, and with the other two knobs inert — a moved band or start changes
     // nothing when off.
     let (off, report) = convert("off.tiff", &["--highlight-desaturation", "0"]);
-    assert_eq!(look(&report)["applied"], "contrast", "{report}");
+    assert_eq!(look(&report)["applied"], "contrast+saturation", "{report}");
     assert_ne!(plain, off, "the default must move the fixture's highlights");
     let (off_moved, _) = convert(
         "off-moved.tiff",
@@ -12636,7 +12638,7 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     let fallback = (1.0_f64 / 0.18).log2() / 1.75;
 
     let (default, report) = convert("default.tiff", &[]);
-    assert_eq!(applied(&report), "contrast", "{report}");
+    assert_eq!(applied(&report), "contrast+saturation", "{report}");
     let (k, base, from, slope) = look(&report);
     assert!(
         k == 1.0 && (base - fallback).abs() < 1e-6 && from == "fallback",
@@ -12690,6 +12692,118 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
         reset, default,
         "the flag's 1 must win over the recipe's 1.5"
     );
+}
+
+/// Contrast on luminance, saturation its own knob (`nf-look/contrast-on-luminance`): with
+/// fit range and the gamut map's work out of the way, a pixel's colour ratios survive any
+/// contrast, `--saturation` stretches them, and the flag and the recipe key are one knob.
+#[test]
+fn contrast_leaves_colour_alone_and_saturation_reaches_the_pixels() {
+    let tmp = TempDir::new("look-saturation");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--range",
+            "hdr",
+            "--transfer",
+            "linear",
+            "--gamut",
+            "bt2020",
+            "--display-tone-headroom",
+            "0",
+            "--display-black",
+            "off",
+            "--highlight-desaturation",
+            "0",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (read_f32_tiff(&out).0, json(&stdout))
+    };
+    // log2(r/g) per pixel, where every channel is positive.
+    let ratios = |v: &[f32]| -> Vec<f32> {
+        v.chunks(3)
+            .filter(|p| p.iter().all(|&c| c > 0.0))
+            .map(|p| (p[0] / p[1]).log2())
+            .collect()
+    };
+    let median_abs = |a: &[f32], b: &[f32]| {
+        let mut d: Vec<f32> = a.iter().zip(b).map(|(x, y)| (x - y).abs()).collect();
+        d.sort_by(f32::total_cmp);
+        d[d.len() / 2]
+    };
+
+    let (flat, report) = convert("flat.tiff", &[]);
+    let look = &report["chain"]["look"];
+    assert_eq!(look["saturation"], 1.0, "{report}");
+    assert_eq!(look["saturation_slope"], look["slope"], "{report}");
+    let (steep, report) = convert("steep.tiff", &["--contrast", "1.5"]);
+    assert_ne!(flat, steep, "not vacuous");
+    // The colour stays where saturation put it.
+    let look = &report["chain"]["look"];
+    assert_eq!(
+        look["saturation_slope"], look["saturation_base_slope"],
+        "{report}"
+    );
+    let (a, b) = (ratios(&flat), ratios(&steep));
+    assert_eq!(a.len(), b.len());
+    assert!(median_abs(&a, &b) < 1e-4, "{}", median_abs(&a, &b));
+
+    // Saturation stretches every ratio by its multiplier.
+    let (rich, report) = convert("rich.tiff", &["--saturation", "1.3"]);
+    assert_eq!(
+        report["chain"]["stages"][1]["applied"], "contrast+saturation",
+        "{report}"
+    );
+    let stretched: Vec<f32> = a.iter().map(|r| r * 1.3).collect();
+    let got = ratios(&rich);
+    assert!(
+        median_abs(&stretched, &got) < 1e-3,
+        "{}",
+        median_abs(&stretched, &got)
+    );
+
+    // The recipe key is the same knob, and a flag wins over it.
+    let recipe = write_file(
+        &tmp.path("look.json"),
+        r#"{ "recipe_version": 3, "look": { "saturation": 1.3 } }"#,
+    );
+    let params = recipe.to_str().unwrap();
+    let (from_recipe, _) = convert("recipe.tiff", &["--params", params]);
+    assert_eq!(
+        rich, from_recipe,
+        "the recipe key and the flag are one knob"
+    );
+    let (reset, _) = convert("reset.tiff", &["--params", params, "--saturation", "1"]);
+    assert_eq!(reset, flat, "the flag's 1 must win over the recipe's 1.3");
+
+    // A non-positive value is refused naming the flag and the key.
+    for value in ["0", "-1"] {
+        let out = tmp.path("x.tiff");
+        let (code, _, err) = run(&[
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--saturation",
+            value,
+        ]);
+        assert_eq!(code, 2, "{value}: {err}");
+        assert!(
+            err.contains("--saturation (recipe `look.saturation`)"),
+            "{err}"
+        );
+    }
 }
 
 #[test]

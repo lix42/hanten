@@ -956,11 +956,20 @@ pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
     /// a thin frame's slope (`--roll-thin-slope`), else the roll's (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
-    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
-    /// mid-grey; slope 1 reproduces the scene's own contrast. Runs after scene
-    /// correction, so an `--exposure` is expanded with the rest of the picture.
+    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Luminance only: each pixel's
+    /// ACEScg luminance becomes `0.18 · (Y / 0.18)^slope`, pivoted at mid-grey, and its
+    /// colour is kept (`--saturation` sets that); slope 1 reproduces the scene's own
+    /// contrast. Runs after scene correction, so an `--exposure` is expanded with the
+    /// rest of the picture.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
+    /// Saturation, as a multiplier on the base slope's colour (recipe key
+    /// `look.saturation`; 1 keeps it): each pixel's colour ratios are raised to the power
+    /// `base × SATURATION` with its luminance kept. The base is `--contrast`'s, except a
+    /// thin frame's slope (`--roll-thin-slope`), which never reaches colour; so 1 renders
+    /// the colour a per-channel contrast at the base gave, whatever `--contrast` is.
+    #[arg(long, value_name = "SATURATION", allow_hyphen_values = true)]
+    pub saturation: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
     /// fixed at 1, with each pixel's ACEScg luminance restored afterwards — a cast that
     /// grows away from mid in both directions without moving neutral contrast (recipe
@@ -4428,7 +4437,7 @@ fn convert_attempt(
         recipe::validate_roll_frames(
             &stated_roll,
             recipe.reconstruction.linearization,
-            recipe.look.contrast,
+            [recipe.look.contrast, recipe.look.saturation],
             KnobNames::FlagAndKey,
         )?;
     }
