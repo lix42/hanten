@@ -288,7 +288,7 @@ pub fn probe(path: &Path) -> Result<ImageShape> {
         // A page whose color type is *unmappable* is simply not the IR plane
         // (`decode` will reject the file if it matters). A page whose color type
         // cannot be **read** is different: swallowing that error would silently
-        // drop the IR plane from the estimate — 38 → 30 B/px at encode, a 21%
+        // drop the IR plane from the estimate — 22 → 18 B/px at encode, an 18%
         // under-estimate derived from an error nobody saw. Surface it like every
         // other read failure in this walk.
         let page_channels = color_shape(

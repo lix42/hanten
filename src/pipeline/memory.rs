@@ -48,8 +48,7 @@
 //! - **One image at render.** The decode and every colour transform run in place.
 //!   `--export-film-rgb` writes the decode's buffer verbatim before the 3×3, and
 //!   `--export-pre-encode` the buffers the render already holds, so neither adds a
-//!   term. Until `nf-core/release-decoded-image` the decode wrote a new buffer and the
-//!   scan was held to the frame's end: two images at render, 16 B/px more.
+//!   term.
 //! - **Retention: a freed buffer is still counted at every later peak.** The film-base
 //!   sample is **added into** the render and encode phases rather than competing with
 //!   them. This was macOS malloc's behaviour: it kept freed large blocks resident, and
@@ -161,9 +160,8 @@
 //! | gain-map JPEG 18.66 MP (explicit base) | 1.443 GB | 1.153 GB | +25.1% |
 //! | gain-map JPEG `--exposure 3` 18.66 MP (explicit base) | 1.443 GB | 1.158 GB | +24.7% |
 //!
-//! The two `measure-roll` rows (2026-09-23) calibrate [`RunProfile::MeasureRoll`]: its
-//! enumerated buffers are 0.87x of measured at both sizes, so the allowance covers
-//! real overhead.
+//! The two `measure-roll` rows (2026-09-23) were [`RunProfile::MeasureRoll`]'s first
+//! calibration; its current one is in the set below.
 //!
 //! **The model is per frame, and so is the gate.** A multi-frame run peaks near its
 //! largest frame only because [`crate::allocator`] returns each frame's big buffers
@@ -245,25 +243,26 @@
 //! | PQ TIFF | 0.112 GB | 0.343 GB | 1.350 GB | 2.023 GB | +49.8% |
 //! | `--film-master` | 0.111 GB | 0.342 GB | 1.350 GB | 1.679 GB | +24.4% |
 //! | gain-map JPEG | 0.221 GB | 0.693 GB | 2.750 GB | 3.997 GB | +45.4% |
+//! | `measure-roll`, one frame | 0.112 GB | 0.343 GB | 1.351 GB | 1.679 GB | +24.3% |
 //!
 //! Each fell by the scan's 16 B/px against the previous build on the same frame (the
 //! float TIFFs by 14, their peak now the decode phase). `accounted` is 0.94–1.00x of
-//! measured for the SDR and float TIFFs; the PQ TIFF peaked with the float ones (its
-//! quantize buffer never set the peak on Linux) and the gain map at 0.82x of accounted,
-//! both over-counted. **The macOS calibration is owed:** before this change macOS
-//! peaked ~4 B/px above Linux on every destination, which would put the float TIFF's
-//! 74.65 MP estimate within about 1% of its peak. Re-measure on the largest real scan.
+//! measured for the SDR and float TIFFs and `measure-roll`; the PQ TIFF peaked with the
+//! float ones (its quantize buffer never set the peak on Linux) and the gain map at
+//! 0.82x of accounted, both over-counted.
 //!
 //! Peak RSS varies by a few tens of KB between identical runs; the frozen literals
 //! in the tests are single observations, which is why the assertions are
 //! `estimate >= measured` rather than equality.
 //!
-//! Measured peaks grow at most **13.3%** faster per pixel than the *accounted* buffers
-//! ([`RunProfile::F32Tiff`]: 36.0–36.25 vs 32 B/px across its two pairs), which is why
-//! [`ALLOWANCE_PERCENT`] sits above that rather than at it. A whole peak runs further
-//! over its accounted buffers on a small frame (18.5% on the 5.83 MP film master — the
-//! table's margin column compares the *estimate* instead); [`ALLOWANCE_FIXED_BYTES`]
-//! carries that.
+//! **[`ALLOWANCE_PERCENT`] is unconfirmed on macOS.** It was set above the worst
+//! per-pixel overhead measured on macOS against the 32 B/px base the float TIFF had
+//! then, **13.3%** (36.0–36.25 vs 32 B/px). On Linux today's base runs about 2% over
+//! from 18.66 MP up. But macOS peaked ~4 B/px above Linux on every destination, and 4
+//! B/px is ~22% of the float TIFF's 18 B/px base: if that holds, the estimate falls
+//! under a macOS float-TIFF peak somewhere around 100 MP. Re-measure on the largest real scan
+//! before trusting the margin. A small frame runs further over its accounted buffers
+//! (6% on the 5.83 MP film master on Linux); [`ALLOWANCE_FIXED_BYTES`] carries that.
 //!
 //! For the pre-fix three-image render peak (3.808 GB on the same 74.65 MP frame)
 //! and the rest of the before/after set, see `docs/progress/io.md`
@@ -305,26 +304,22 @@ const WORKING_CHANNELS: u64 = 3;
 /// pass/fail decision is machine-independent (see the determinism note above) —
 /// the same scan either fits the budget everywhere or nowhere.
 ///
-/// Derived from the worst *real* workload, not a round number: a `convert` on the
-/// largest scan on hand (74.65 MP HDRi) with a full-frame `--base-region` — the
-/// measure-once-reuse-`Dmin` workflow design-spec §8 recommends — accounts 50 B/px
-/// = 3.73 GB and estimates **4.43 GB** with the allowance. A 4 GiB budget
-/// (4.29 GB) would reject that run even though it measures 3.74 GB and completes
-/// fine; 6 GiB admits it with headroom while still catching the multi-GiB runaway
-/// the old 4 GiB *input* limit permitted unchecked. (Before the film-base phase
-/// was modelled this constant was 4 GiB, justified against a 3.40 GB estimate that
-/// omitted the region sample.) A machine that wants a tighter or looser ceiling
-/// sets `--max-memory`; the rejection message says so, and the RAM-aware warn tier
-/// is what protects a small machine from a budget this size. Since
-/// `nf-core/release-decoded-image` that run accounts 34 B/px and estimates 3.05 GB,
-/// so the budget has more headroom than it was sized for.
+/// Sized against the worst *real* workload: a `convert` on the largest scan on hand
+/// (74.65 MP HDRi) with a full-frame `--base-region` — the measure-once-reuse-`Dmin`
+/// workflow design-spec §8 recommends — which accounts 34 B/px = 2.54 GB and
+/// estimates **3.05 GB** with the allowance. 6 GiB admits it, and scans well beyond
+/// it, while still catching the multi-GiB runaway the old 4 GiB *input* limit
+/// permitted unchecked. A machine that wants a tighter or looser ceiling sets
+/// `--max-memory`; the rejection message says so, and the RAM-aware warn tier is what
+/// protects a small machine from a budget this size.
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// Proportional part of the allowance added to the accounted buffers, in percent.
-/// Set above the worst measured per-pixel overhead, **13.3%** (see the module doc's
-/// calibration section), so the estimate keeps a real margin rather than tracking one
-/// machine's allocator exactly: the gate must err toward rejecting, never toward an
-/// OOM. A small frame's larger relative overhead falls to [`ALLOWANCE_FIXED_BYTES`].
+/// Set above the worst per-pixel overhead measured on macOS, **13.3%**, against a
+/// larger base than today's, and unconfirmed there since (the module doc's
+/// calibration section). Above the overhead, not at it, so the estimate keeps a real
+/// margin rather than tracking one machine's allocator exactly: the gate must err
+/// toward rejecting, never toward an OOM. A small frame's larger relative overhead falls to [`ALLOWANCE_FIXED_BYTES`].
 const ALLOWANCE_PERCENT: u64 = 15;
 
 /// Fixed part of the allowance: the binary, static data, lcms2 profiles and
@@ -361,7 +356,8 @@ pub enum RunProfile {
     ///
     /// It holds the decoded image, which the fixed decode rewrites in place and the
     /// chain moves through every boundary and transforms in place, then a 3x2 B
-    /// quantize buffer with `tiff` streaming strips. Its peak is the **encode** phase.
+    /// quantize buffer with `tiff` streaming strips. Its peak is the **encode** phase
+    /// (22 B/px on HDRi); on an RGB-only scan encode ties with the decode at 18 B/px.
     /// Measured for the SDR TIFF and the PQ TIFF (the module doc's calibration table).
     ///
     /// **One branch only.** A gain-map pair (`chain::render_pair`) copies the graded
@@ -728,8 +724,9 @@ pub fn estimate_peak(
             // place. The base JPEG's doubling growth and
             // that final copy make it up to ~3x its length under the retention rule.
             // The 5 B/px is a content assumption fitted to measured JPEGs (at most
-            // 0.55 B/px: a thin grainy frame pushed +5 EV), not an enumeration; the
-            // allowance (~7 B/px at 74.65 MP) covers a base JPEG up to about 2 B/px.
+            // 0.55 B/px: a thin grainy frame pushed +5 EV), not an enumeration; past it,
+            // the margin is the allowance (~8.5 B/px at 74.65 MP: 15% of 45 B/px plus
+            // the fixed part).
             let byte_staging = mul(pixels, 5)?;
             (
                 sum(render, sampled)?,
@@ -1015,28 +1012,37 @@ mod tests {
         // claim about it was wrong twice on the removed chain's profiles. No category,
         // then. Just the truth, so the next author reads it off a test instead of a
         // sentence.
-        let peak_phase = |profile| {
-            let e = estimate_peak(&shape(10, 10, true), profile, SamplePlan::none()).unwrap();
-            if e.accounted_bytes == e.decode_bytes {
-                "decode"
-            } else if e.accounted_bytes == e.render_bytes {
-                "render"
-            } else if e.accounted_bytes == e.encode_bytes {
-                "encode"
-            } else {
-                "neither"
-            }
+        // Every phase that reaches the peak is named, so a tie is pinned as one.
+        let peak_phases = |profile, ir| {
+            let e = estimate_peak(&shape(10, 10, ir), profile, SamplePlan::none()).unwrap();
+            [
+                ("decode", e.decode_bytes),
+                ("render", e.render_bytes),
+                ("encode", e.encode_bytes),
+            ]
+            .into_iter()
+            .filter(|&(_, bytes)| bytes == e.accounted_bytes)
+            .map(|(phase, _)| phase)
+            .collect::<Vec<_>>()
+            .join("+")
         };
-        for (profile, expected) in [
-            (RunProfile::U16Tiff, "encode"),
+        // (profile, HDRi, RGB-only)
+        for (profile, with_ir, without_ir) in [
+            // Without IR the decode's 6 B/px read buffer equals the quantize buffer.
+            (RunProfile::U16Tiff, "encode", "decode+encode"),
             // The chain holds one image, so the decode's read buffers outweigh it, and
             // f32 is written verbatim.
-            (RunProfile::F32Tiff, "decode"),
+            (RunProfile::F32Tiff, "decode", "decode"),
             // Encode retains every render buffer and adds the byte staging.
-            (RunProfile::GainMapJpeg, "encode"),
-            (RunProfile::MeasureRoll, "decode"),
+            (RunProfile::GainMapJpeg, "encode", "encode"),
+            (RunProfile::MeasureRoll, "decode", "decode"),
         ] {
-            assert_eq!(peak_phase(profile), expected, "{profile:?}");
+            assert_eq!(peak_phases(profile, true), with_ir, "{profile:?} HDRi");
+            assert_eq!(
+                peak_phases(profile, false),
+                without_ir,
+                "{profile:?} RGB-only"
+            );
         }
     }
 
@@ -1235,7 +1241,8 @@ mod tests {
         // corresponding no-sampling plan alongside each frozen case.
         //
         // The conversions: Linux, synthetic HDRi, after `nf-core/release-decoded-image`
-        // (the SDR TIFF for `U16Tiff`, the linear float TIFF for `F32Tiff`).
+        // (the SDR TIFF for `U16Tiff`, the linear float TIFF for `F32Tiff`), and one
+        // frame of `measure-roll`.
         let small = shape(2700, 2160, true); // 5.83 MP HDRi
         let large = shape(5184, 3600, true); // 18.66 MP HDRi
         let (u16_out, f32_out, gain_map) =
@@ -1250,6 +1257,9 @@ mod tests {
             (small, gain_map, 220_876_800),
             (large, gain_map, 692_514_816),
             (big(), gain_map, 2_750_021_632),
+            (small, RunProfile::MeasureRoll, 112_050_176),
+            (large, RunProfile::MeasureRoll, 342_818_816),
+            (big(), RunProfile::MeasureRoll, 1_350_672_384),
         ];
         // Decode-only: macOS/aarch64, on real scans.
         let decode_only = [

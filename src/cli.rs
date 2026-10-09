@@ -4030,9 +4030,9 @@ fn render_frame(
     let decode_params = recipe.reconstruction;
 
     // Reconstruction: the fixed decode, which consumes the scan, then the pinned NC
-    // film RGB v1 3×3 — with the film RGB export, if asked for, staged between them.
-    // It writes the decode's buffer before the in-place 3×3, so it adds no image
-    // buffer; it is timed as `encode`.
+    // film RGB v1 3×3. The film RGB export, if asked for, is staged between them: it
+    // writes the decode's buffer before the in-place 3×3, so it adds no image buffer,
+    // and it is timed as `encode`.
     let (film, decoded) = clock.time(StageKind::Reconstruction, || {
         fixed::decode(image, &base, &decode_params)
     })?;

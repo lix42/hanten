@@ -1075,12 +1075,12 @@ allocator slack and fixed costs — the number the gate compares:
 ```json
 {
   "memory": {
-    "estimated_peak_bytes": 3396405248,
-    "accounted_bytes": 2836684800,
+    "estimated_peak_bytes": 2537934848,
+    "accounted_bytes": 2090188800,
     "decode_bytes": 1343692800,
-    "film_base_bytes": 1811496960,
-    "render_bytes": 2388787200,
-    "encode_bytes": 2836684800,
+    "film_base_bytes": 1642291200,
+    "render_bytes": 1642291200,
+    "encode_bytes": 2090188800,
     "budget_bytes": 6442450944,
     "budget_source": "default",
     "decision": "ok",
@@ -1090,8 +1090,9 @@ allocator slack and fixed costs — the number the gate compares:
 ```
 
 (A 10368x7200 HDRi `convert` at `u16`, default budget, with a `--base-region` of
-about half the frame. The `film_base_bytes` figure is the decoded image plus the
-three `f32` channel vectors that rectangle is gathered into; an explicit
+half the frame. The `film_base_bytes` figure is the decoded image plus the
+three `f32` channel vectors that rectangle is gathered into, which the later phases
+keep counting; an explicit
 `--film-base` gathers nothing, and neither does `measure-base`'s effective-area median
 (a fixed-size histogram), so there the phase is the decoded image alone.)
 

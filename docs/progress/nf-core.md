@@ -1249,6 +1249,23 @@ SDR/HDR split splits *from*.
   the float TIFF's estimate sits within about 1% of its macOS peak, and
   `ALLOWANCE_PERCENT` or the decode row may need to move.
 
+### 2026-10-09 — review round
+
+- Two `/code-review` passes. Fixed: the design-spec §8 memory example (regenerated from
+  a real half-frame `--base-region` run), `io/decode.rs`'s IR-drop figure (22 → 18
+  B/px), the `ALLOWANCE_PERCENT` justification (now says it is unconfirmed on macOS
+  against the smaller base), the default-budget doc (rewritten to 34 B/px, 3.05 GB),
+  the gain-map allowance arithmetic (~8.5 B/px with the fixed part), a misleading
+  `cli.rs` comment, and the peak-phase test, which now pins RGB-only scans too: there
+  `U16Tiff`'s decode and encode tie at 18 B/px.
+- `measure-roll` measured (Linux, one synthetic frame): 0.112 / 0.343 / 1.351 GB at
+  5.83 / 18.66 / 74.65 MP, `accounted` 0.995x at the largest; rows added to the module
+  doc and the conservative-estimate test.
+- Not changed: `ALLOWANCE_PERCENT` itself (waits on the macOS numbers: whether the
+  ~4 B/px is per pixel or proportional decides the fix); the PQ/HLG TIFFs' unused
+  quantize term on Linux (on macOS it was real before this change); and `ir_verified`,
+  which the decode's output never carried (`working_image.rs`, `buffer-strategy`).
+
 ## one-luma-dot
 
 **Status:** done
