@@ -1009,4 +1009,5 @@ preset row; do not reuse the name.
       `roll_white::thin_lift`).
   - **`branch_probe` (ignored) now finds 123 both-bound pixels** on 09-11 Portra. They are
     permitted by the branch contract, with no violation, but the probe asserts 0 on real
-    frames. At saturation 1 the count is 0. Left for a decision; not changed here.
+    frames. At saturation 1 the count is 0. Decided (user): the probe now asserts only
+    no violations and prints the both-bound count; `chain.rs`'s comment says so.
