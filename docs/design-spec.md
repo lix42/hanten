@@ -1092,7 +1092,7 @@ allocator slack and fixed costs — the number the gate compares:
 ```json
 {
   "memory": {
-    "estimated_peak_bytes": 2836533248,
+    "estimated_peak_bytes": 2537934848,
     "accounted_bytes": 2090188800,
     "decode_bytes": 1343692800,
     "film_base_bytes": 1642291200,
