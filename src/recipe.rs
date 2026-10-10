@@ -221,9 +221,12 @@ pub struct RollSection {
     /// measured after the gains. Unset (`null`) is on, like the lifts' switches.
     pub neutral_balance: Option<Switch>,
     /// The roll's white, in scene stops above mid-grey — the measurement, not the
-    /// slope derived from it ([`roll_white::slope_for`]), so a measured value is never
+    /// slope derived from it ([`RollSection::span_slope`]), so a measured value is never
     /// mistaken for a chosen one.
     pub white_stops: Option<f32>,
+    /// The roll's dark end, in scene stops (`roll_white::roll_dark`): with `white_stops`,
+    /// the span the roll's slope spreads. Stated with the white or not at all.
+    pub dark_stops: Option<f32>,
     /// The roll's exposure in EV, a neutral gain added to `scene_correction.exposure`
     /// (`roll_white::roll_exposure`).
     pub exposure: Option<f32>,
@@ -234,8 +237,8 @@ pub struct RollSection {
     /// Whether `frame_exposure` applies: a taste switch (design-spec §6). Unset (`null`) is
     /// on, so a measured file layered last never undoes an earlier `"off"`.
     pub small_lift: Option<Switch>,
-    /// A thin frame's own slope (`roll_white::thin_lift`), in place of the one `white_stops`
-    /// places, while [`Self::thin_lift`] is on. A slope, not a white: it is chosen, not
+    /// A thin frame's own slope (`roll_white::thin_lift`), in place of the roll's span
+    /// slope, while [`Self::thin_lift`] is on. A slope, not a white: it is chosen, not
     /// measured.
     pub thin_slope: Option<f32>,
     /// The exposure solved with `thin_slope`, a delta on `exposure` in place of
@@ -283,10 +286,17 @@ pub enum Switch {
 
 impl RollSection {
     /// The slope this frame renders at, if the section sets one: its thin slope while that
-    /// applies, else the one its white places.
+    /// applies, else [`Self::span_slope`].
     pub fn slope(&self) -> Option<f32> {
-        self.applied_thin_slope()
-            .or(self.white_stops.map(roll_white::slope_for))
+        self.applied_thin_slope().or(self.span_slope())
+    }
+
+    /// The slope the roll's span places, from its white to its dark end
+    /// ([`roll_white::span_slope`]); `None` unless both are stated.
+    pub fn span_slope(&self) -> Option<f32> {
+        self.white_stops
+            .zip(self.dark_stops)
+            .map(|(w, d)| roll_white::span_slope(w, d))
     }
 
     /// The thin slope as it applies: `None` under `--thin-lift off`.
@@ -467,7 +477,7 @@ pub struct DesaturationKeys {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SlopeBase {
-    /// The applied roll's white, through [`roll_white::slope_for`].
+    /// The applied roll's span, through [`RollSection::span_slope`].
     Roll,
     /// No roll white under `default`: [`Base::slope`], the fallback.
     Fallback,
@@ -488,11 +498,11 @@ pub struct ResolvedSlope {
     /// `look.saturation`, the multiplier.
     pub saturation: f32,
     /// What `saturation` multiplies: the base slope — except that a thin frame's never
-    /// reaches colour, so there the slope the white places — times the rendering's
+    /// reaches colour, so there the roll's span slope — times the rendering's
     /// [`Base::saturation`].
     pub saturation_base_slope: f32,
     /// Where `saturation_base_slope`'s slope came from: `base_from`, except a thin
-    /// frame's, whose colour is the white's (`roll`) or the fallback's.
+    /// frame's, whose colour is the roll's (`roll`) or the fallback's.
     pub saturation_base_from: SlopeBase,
     /// What the look stage receives. Not serialized: the report's section states them.
     #[serde(skip)]
@@ -535,8 +545,10 @@ pub struct RollReport {
     pub white_balance: Option<[f32; 3]>,
     /// The section's white, as stated.
     pub white_stops: Option<f32>,
+    /// The section's dark end, as stated.
+    pub dark_stops: Option<f32>,
     /// The slope the section sets ([`RollSection::slope`]): the thin slope while it
-    /// applies, else `white_stops`'s ([`roll_white::slope_for`]).
+    /// applies, else the span's ([`RollSection::span_slope`]).
     pub slope: Option<f32>,
     /// The section's exposure, as stated.
     pub exposure: Option<f32>,
@@ -765,15 +777,20 @@ pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
 /// body gives `look.contrast` under its own rendering and roll, how to name it, and the
 /// keys to drop first. With `roll.frames` the roll's slope differs per frame while a
 /// stated slope overrode them all, so the exact conversion drops the roll's whites and
-/// multiplies the fallback.
+/// multiplies the fallback. No slope when the body states the roll's white without its
+/// dark end: the base then comes from another layer, or is refused.
 struct BodyBase {
-    slope: f32,
+    slope: Option<f32>,
     named: String,
     drop: String,
 }
 
 fn body_base(body: &serde_json::Value) -> BodyBase {
-    let base = |slope: f32, named: String, drop: String| BodyBase { slope, named, drop };
+    let base = |slope: f32, named: String, drop: String| BodyBase {
+        slope: Some(slope),
+        named,
+        drop,
+    };
     if body.get("rendering").and_then(|r| r.as_str()) == Some("direct") {
         let s = Rendering::Direct.base().slope;
         return base(
@@ -784,16 +801,19 @@ fn body_base(body: &serde_json::Value) -> BodyBase {
     }
     let fallback = Rendering::Default.base().slope;
     let white = body.pointer("/roll/white_stops").and_then(|w| w.as_f64());
+    let dark = body.pointer("/roll/dark_stops").and_then(|d| d.as_f64());
     let frames = body
         .pointer("/roll/frames")
         .and_then(|f| f.as_object())
         .is_some_and(|f| !f.is_empty());
     match white {
         _ if frames => {
-            let keys = if white.is_some() {
-                "`roll.white_stops` and `roll.frames`"
-            } else {
-                "`roll.frames`"
+            // The dark end goes with the white: `validate` refuses one without the other.
+            let keys = match (white.is_some(), dark.is_some()) {
+                (true, true) => "`roll.white_stops`, `roll.dark_stops` and `roll.frames`",
+                (true, false) => "`roll.white_stops` and `roll.frames`",
+                (false, true) => "`roll.dark_stops` and `roll.frames`",
+                (false, false) => "`roll.frames`",
             };
             base(
                 fallback,
@@ -801,14 +821,23 @@ fn body_base(body: &serde_json::Value) -> BodyBase {
                 format!("drop {keys} (the stated slope overrode every frame's white), "),
             )
         }
-        Some(w) if w.is_finite() && w > 0.0 => {
-            let s = roll_white::slope_for(w as f32);
-            base(
-                s,
-                format!("the roll's slope {s} from `roll.white_stops` {w}"),
-                String::new(),
-            )
-        }
+        Some(w) if w.is_finite() && w > 0.0 => match dark.filter(|d| d.is_finite()) {
+            Some(d) => {
+                let s = roll_white::span_slope(w as f32, d as f32);
+                base(
+                    s,
+                    format!(
+                        "the roll's slope {s} from `roll.white_stops` {w} and `roll.dark_stops` {d}"
+                    ),
+                    String::new(),
+                )
+            }
+            None => BodyBase {
+                slope: None,
+                named: String::new(),
+                drop: String::new(),
+            },
+        },
         _ => base(
             fallback,
             format!("the fallback slope {fallback}"),
@@ -849,7 +878,7 @@ fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> St
     );
     let version = format!("`\"{VERSION_KEY}\": {RECIPE_VERSION}`");
     let b = body_base(body);
-    let convert = match multiplier_for(stated, b.slope) {
+    let convert = match b.slope.and_then(|s| multiplier_for(stated, s)) {
         Some((k, exact)) if whole => format!(
             "{}, {}state `look.contrast` {k} ({stated} over {}; stacked with other \
              `--params` files, over the base they compose to, the report's \
@@ -865,6 +894,18 @@ fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> St
         Some(_) => format!(
             "To keep the tone scale, state {stated} over the frame's base slope (its report's \
              `chain.look.base_slope`) and {version}"
+        ),
+        // A per-frame override's base is the shared recipe's, as above.
+        None if !whole && stated.is_normal() && stated > 0.0 => format!(
+            "To keep the tone scale, state {stated} over the frame's base slope (its report's \
+             `chain.look.base_slope`) and {version}"
+        ),
+        // The roll's white without its dark end: refused until one is stated, so the base
+        // is known only once it is.
+        None if b.slope.is_none() && stated.is_normal() && stated > 0.0 => format!(
+            "The roll's white needs its dark end now (`roll.dark_stops`: re-run `hanten \
+             measure-roll`), which sets the base slope; to keep the tone scale, state \
+             {stated} over that base (the report's `chain.look.base_slope`) and {version}"
         ),
         None => format!("State a positive multiplier and {version}"),
     };
@@ -1070,9 +1111,12 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
         let multiplier = v
             .as_f64()
             .filter(|_| whole)
-            .and_then(|gamma| multiplier_for(gamma as f32 / LINEARIZATION, b.slope))
-            .map(|(k, _)| k)
-            .filter(|k| (LINEARIZATION * b.slope * k).is_normal());
+            .zip(b.slope)
+            .and_then(|(gamma, s)| {
+                multiplier_for(gamma as f32 / LINEARIZATION, s)
+                    .map(|(k, _)| k)
+                    .filter(|k| (LINEARIZATION * s * k).is_normal())
+            });
         let remedy = match (v.as_f64(), multiplier) {
             (Some(gamma), Some(k)) => format!(
                 "to keep a stated {} as the whole slope, {}write `look.contrast` {k} (over \
@@ -1157,6 +1201,10 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     }
     if let Some(stops) = args.roll.roll_white {
         r.roll.white_stops = Some(stops);
+        r.roll.drop_thin_lift();
+    }
+    if let Some(stops) = args.roll.roll_dark {
+        r.roll.dark_stops = Some(stops);
         r.roll.drop_thin_lift();
     }
     if let Some(ev) = args.roll.roll_exposure {
@@ -1270,11 +1318,12 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
         Ok(_) => {
             // The roll's own values first: each is also a factor in what the stages
             // below receive, so a bad one must be named as itself.
-            validate_roll(&r.roll, names)?;
+            validate_roll(&r.roll, r.applies_roll_to_scene_correction(), names)?;
             validate_roll_frames(
                 &r.roll,
                 d.linearization,
                 [r.look.contrast, r.base().saturation, r.look.saturation],
+                r.applies_roll_to_scene_correction(),
                 names,
             )?;
             validate_scene_correction(r, names)?;
@@ -1335,12 +1384,18 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     let contrast_name = knob_name(names, "look", "--contrast", "contrast");
     let k = r.look.contrast;
     let s = r.resolved_slope();
-    let white_name = knob_name(names, "roll", "--roll-white", "white_stops");
+    let span_name = format!(
+        "{} and {}",
+        knob_name(names, "roll", "--roll-white", "white_stops"),
+        knob_name(names, "roll", "--roll-dark", "dark_stops")
+    );
     let slope_name = knob_name(names, "roll", "--roll-thin-slope", "thin_slope");
+    // The span slope is held within limits, so moving the white or dark end need not move
+    // it: `--contrast` is the remedy that always works.
     let (base, knob) = match s.base_from {
         SlopeBase::Roll => (
-            format!("the roll's slope {} from {white_name}", s.base_slope),
-            Some(SlopeKnob::White(&white_name)),
+            format!("the roll's slope {} from {span_name}", s.base_slope),
+            None,
         ),
         SlopeBase::Thin => (
             format!("the frame's thin slope {slope_name} {}", s.base_slope),
@@ -1362,10 +1417,7 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     )?;
     let saturation_name = knob_name(names, "look", "--saturation", "saturation");
     let (origin, knob) = match s.saturation_base_from {
-        SlopeBase::Roll => (
-            format!("the roll's slope from {white_name}"),
-            Some(SlopeKnob::White(&white_name)),
-        ),
+        SlopeBase::Roll => (format!("the roll's slope from {span_name}"), None),
         SlopeBase::Fallback => ("the fallback slope".to_string(), None),
         SlopeBase::Direct => ("the `direct` rendering's slope".to_string(), None),
         // A thin frame's slope never reaches colour (`Recipe::resolved_slope`).
@@ -1466,11 +1518,9 @@ fn validate_look_multipliers([contrast, saturation]: [f32; 2], names: KnobNames)
     Ok(())
 }
 
-/// The roll knob a slope comes from, named: a white (the slope falls as it rises) or a
-/// frame slope (the slope itself).
+/// The roll knob a slope comes from, named: a thin frame's slope (the slope itself).
 #[derive(Clone, Copy)]
 enum SlopeKnob<'a> {
-    White(&'a str),
     Slope(&'a str),
 }
 
@@ -1513,20 +1563,15 @@ fn validate_whole_slope(
     let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
     let overflows = whole.is_infinite();
     let what = if overflows { "overflows" } else { "underflows" };
-    let (toward, away) = if overflows {
-        ("smaller", "larger")
-    } else {
-        ("larger", "smaller")
-    };
+    let toward = if overflows { "smaller" } else { "larger" };
     let mut remedy = format!("Use a {toward} {gamma}");
     if let Some(contrast) = contrast_name {
         remedy += &format!(" or {contrast}");
     }
-    // The roll's slope is inversely proportional to its white; a frame slope is itself.
-    match roll_knob {
-        Some(SlopeKnob::White(white)) => remedy += &format!(", or a {away} {white}"),
-        Some(SlopeKnob::Slope(slope)) => remedy += &format!(", or a {toward} {slope}"),
-        None => {}
+    // A thin slope is itself; the roll's span slope is held within limits, so its ends
+    // are no remedy.
+    if let Some(SlopeKnob::Slope(slope)) = roll_knob {
+        remedy += &format!(", or a {toward} {slope}");
     }
     Err(NcError::Usage(format!(
         "the whole slope, {gamma} {linearization:e} times {what_slope} {slope:e} \
@@ -1535,8 +1580,9 @@ fn validate_whole_slope(
 }
 
 /// The roll section's value rules: gains finite and positive, as scene correction's
-/// are; a white finite and positive, since the slope is `log2(1/0.18)` over it.
-fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
+/// are; a white finite and positive and a dark end finite; and, where the roll `applies`,
+/// the two stated together, since the slope is their span's.
+fn validate_roll(p: &RollSection, applies: bool, names: KnobNames) -> Result<()> {
     if let Some(gains) = p.white_balance
         && let Some((channel, value)) = gains
             .iter()
@@ -1557,6 +1603,42 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
              measure-roll` reports them — got {stops}",
             knob_name(names, "roll", "--roll-white", "white_stops")
         )));
+    }
+    let white_name = || knob_name(names, "roll", "--roll-white", "white_stops");
+    let dark_name = || knob_name(names, "roll", "--roll-dark", "dark_stops");
+    // A dark end at or above the white is a roll with no span (one flat bright frame, its
+    // white held at the cap), which `span_slope` places at the steepest slope.
+    if let Some(stops) = p.dark_stops
+        && !stops.is_finite()
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite — scene stops from mid-grey, as `hanten measure-roll` \
+             reports them in `white.dark_stops` — got {stops}",
+            dark_name()
+        )));
+    }
+    if applies {
+        let one = match (p.white_stops, p.dark_stops) {
+            (Some(w), None) => Some(format!(
+                "{} {w} without {}: the roll's slope spreads the span from its dark end to \
+                 its white, so it needs both (a recipe written before `pipeline_version` 11 \
+                 has the white alone). Re-run `hanten measure-roll` and use its recipe or \
+                 `reuse.flag`, or state the dark end it reports in `white.dark_stops`",
+                white_name(),
+                dark_name()
+            )),
+            (None, Some(d)) => Some(format!(
+                "{} {d} without {}: the roll's slope spreads the span from its dark end to \
+                 its white, so it needs both. Re-run `hanten measure-roll` and use its recipe \
+                 or `reuse.flag`, or state the white it reports in `white.stops`",
+                dark_name(),
+                white_name()
+            )),
+            _ => None,
+        };
+        if let Some(one) = one {
+            return Err(NcError::Usage(one));
+        }
     }
     if let Some(ev) = p.exposure {
         exposure_fault(ev, &knob_name(names, "roll", "--roll-exposure", "exposure"))?;
@@ -1635,6 +1717,7 @@ pub fn validate_roll_frames(
     p: &RollSection,
     linearization: f32,
     [contrast, rendering_saturation, saturation]: [f32; 3],
+    applies: bool,
     names: KnobNames,
 ) -> Result<()> {
     validate_look_multipliers([contrast, saturation], names)?;
@@ -1688,14 +1771,37 @@ pub fn validate_roll_frames(
                  stops above mid-grey, as `hanten measure-roll` reports them — got {stops}"
             )));
         }
-        let white = format!("recipe `roll.frames.\"{name}\".white_stops`");
-        let base = roll_white::slope_for(stops);
+        // Without the roll's dark end the frame has no slope, where the roll `applies`.
+        // Named as the entry: `roll` validates the shared recipe alone, and `convert` would
+        // name the `roll.white_stops` the entry moves into.
+        let Some(dark) = p.dark_stops else {
+            if !applies {
+                continue;
+            }
+            // The other frames take the roll's own pair, so without a roll white the dark
+            // end alone is refused too: name both.
+            let state = if p.white_stops.is_some() {
+                "the dark end it reports in `white.dark_stops`"
+            } else {
+                "the roll's white and dark end it reports (`roll.white_stops` and \
+                 `roll.dark_stops`, from `white.stops` and `white.dark_stops`)"
+            };
+            return Err(NcError::Usage(format!(
+                "recipe `roll.frames.\"{name}\".white_stops` {stops} places that frame's slope \
+                 with the roll's dark end, which the recipe does not state (`roll.dark_stops`; a \
+                 recipe written before `pipeline_version` 11 has the whites alone). Re-run \
+                 `hanten measure-roll` and use its recipe, or state {state}"
+            )));
+        };
+        let white =
+            format!("recipe `roll.frames.\"{name}\".white_stops` and the roll's `roll.dark_stops`");
+        let base = roll_white::span_slope(stops, dark);
         validate_whole_slope(
             linearization,
             WholeSlope::Tone(base * contrast),
             &format!("the frame's slope {base} from {white} times {contrast_name} {contrast}"),
             Some(&contrast_name),
-            Some(SlopeKnob::White(&white)),
+            None,
             names,
         )?;
         validate_whole_slope(
@@ -1709,7 +1815,7 @@ pub fn validate_roll_frames(
                 saturation,
             ),
             Some(&saturation_name),
-            Some(SlopeKnob::White(&white)),
+            None,
             names,
         )?;
     }
@@ -1737,14 +1843,16 @@ pub fn validate_render(
         return Ok(());
     }
     let own_entry = own.and_then(|(name, stated)| Some((name, stated.frames.get(name)?)));
-    render_fault_message(r, own_entry, None, names)?;
+    // The recipe without this frame's entry: what dropping an entry's value renders.
     let mut others = r.clone();
     if let (Some((_, entry)), Some((_, stated))) = (own_entry, own) {
         others.roll.undo_entry(entry, stated);
     }
+    let roll_white = others.roll.white_stops;
+    render_fault_message(r, own_entry, None, roll_white, names)?;
     for (name, entry) in &r.roll.frames {
         let frame = others.clone().for_frame(Path::new(name));
-        render_fault_message(&frame, Some((name, entry)), Some(name), names)?;
+        render_fault_message(&frame, Some((name, entry)), Some(name), roll_white, names)?;
     }
     Ok(())
 }
@@ -1854,7 +1962,11 @@ const PROBE_KNOBS: [ProbeKnob; 14] = [
         flag: "--roll-white",
         key: "white_stops",
         stated: |r| r.roll.white_stops.is_some(),
-        reset: |r| r.roll.white_stops = None,
+        // The dark end goes with it: `validate` refuses one without the other.
+        reset: |r| {
+            r.roll.white_stops = None;
+            r.roll.dark_stops = None;
+        },
     },
     ProbeKnob {
         section: "scene_correction",
@@ -1913,16 +2025,20 @@ const PROBE_KNOBS: [ProbeKnob; 14] = [
 ];
 
 /// [`render_fault`] as a usage error: the fault, and the stated knobs whose default
-/// alone clears it — else every stated knob the probe reads.
+/// alone clears it — else every stated knob the probe reads. `roll_white` is the roll's own
+/// white, which a frame takes when its entry's is dropped.
 fn render_fault_message(
     r: &Recipe,
     own: Option<(&str, &FrameRoll)>,
     entry: Option<&str>,
+    roll_white: Option<f32>,
     names: KnobNames,
 ) -> Result<()> {
     let Some(fault) = render_fault(r)? else {
         return Ok(());
     };
+    let white_from_entry =
+        own.is_some_and(|(_, e)| e.white_stops.is_some() && e.white_stops == r.roll.white_stops);
     // The frame's entry, when `r`'s white or lift came from it (a flag beats it).
     let one = |k: &ProbeKnob| match (own, k.section, k.key) {
         (Some((frame, e)), "roll", "white_stops")
@@ -1948,8 +2064,8 @@ fn render_fault_message(
         _ => knob_name(names, k.section, k.flag, k.key),
     };
     // A reset that drops a knob applying only beside it names the pair, and whether it is
-    // one: the thin slope's exposure, and the roll gains' midtone line (stated, since
-    // `validate` refuses a line without gains even switched off).
+    // one: the thin slope's exposure, the roll gains' midtone line (stated, since
+    // `validate` refuses a line without gains even switched off), and the white's dark end.
     let name = |k: &ProbeKnob| match (k.section, k.key) {
         (_, "thin_slope") => match PROBE_KNOBS.iter().find(|e| e.key == "thin_exposure") {
             Some(exposure) if (exposure.stated)(r) => {
@@ -1957,6 +2073,15 @@ fn render_fault_message(
             }
             _ => (one(k), false),
         },
+        // An entry's white is dropped alone: the frame then takes the roll's pair.
+        ("roll", "white_stops") if r.roll.dark_stops.is_some() && !white_from_entry => (
+            format!(
+                "{} with its {}",
+                one(k),
+                knob_name(names, "roll", "--roll-dark", "dark_stops")
+            ),
+            true,
+        ),
         ("roll", "white_balance") if r.roll.midtone_line.is_some() => (
             format!(
                 "{} with its {}",
@@ -1971,7 +2096,12 @@ fn render_fault_message(
     let mut clears = Vec::new();
     for k in &stated {
         let mut reset = r.clone();
-        (k.reset)(&mut reset);
+        if k.key == "white_stops" && white_from_entry {
+            // Dropping the entry's white renders the frame at the roll's.
+            reset.roll.white_stops = roll_white;
+        } else {
+            (k.reset)(&mut reset);
+        }
         if render_fault(&reset)?.is_none() {
             clears.push(name(k));
         }
@@ -1982,7 +2112,7 @@ fn render_fault_message(
             " It renders with {} at their defaults",
             stated
                 .iter()
-                .map(|k| one(k))
+                .map(|k| name(k).0)
                 .collect::<Vec<_>>()
                 .join(" and ")
         ),
@@ -2547,13 +2677,13 @@ impl Recipe {
             .map(|(line, roll_gains)| MidtoneCorrection { line, roll_gains })
     }
 
-    /// The look's slopes and their parts: the base — the applied roll's white, else the
+    /// The look's slopes and their parts: the base — the applied roll's span, else the
     /// rendering's [`Base::slope`] — times the `look.contrast` multiplier, and the same
     /// base without a thin frame's slope, times the rendering's [`Base::saturation`] and
     /// the `look.saturation` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
         let roll = self.applied_roll();
-        let white_slope = roll.white_stops.map(roll_white::slope_for);
+        let white_slope = roll.span_slope();
         let (base_slope, base_from) = match (roll.slope(), self.rendering) {
             (Some(s), _) if roll.applied_thin_slope().is_some() => (s, SlopeBase::Thin),
             (Some(s), _) => (s, SlopeBase::Roll),
@@ -2607,6 +2737,7 @@ impl Recipe {
         // Other frames' `frames` entries are not this frame's measurement.
         (r.white_balance.is_some()
             || r.white_stops.is_some()
+            || r.dark_stops.is_some()
             || r.exposure.is_some()
             || r.frame_exposure.is_some()
             || r.thin_slope.is_some()
@@ -2615,6 +2746,7 @@ impl Recipe {
         .then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
+            dark_stops: r.dark_stops,
             slope: r.slope(),
             exposure: r.exposure,
             frame_exposure: r.frame_exposure,
@@ -2691,9 +2823,9 @@ impl Recipe {
             format!(
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
                  roll and use the recipe it writes (its `roll` section); or state the white \
-                 balance you want (`scene_correction.white_balance`) and the roll's white \
-                 (`roll.white_stops`, which sets the base slope) and exposure \
-                 (`roll.exposure`), or choose your own slope (`look.contrast` and \
+                 balance you want (`scene_correction.white_balance`), the roll's white and \
+                 dark end (`roll.white_stops` and `roll.dark_stops`, which set the base slope) \
+                 and exposure (`roll.exposure`), or choose your own slope (`look.contrast` and \
                  `look.saturation` off 1); or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
@@ -2868,26 +3000,29 @@ mod tests {
                 DEFAULT_SLOPE,
             ),
             (
-                r#"{"recipe_version": 2, "roll": {"white_stops": 1.6}, "look": {"contrast": 1.8}}"#,
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.6, "dark_stops": -3.75},
+                    "look": {"contrast": 1.8}}"#,
                 1.8,
-                roll_white::slope_for(1.6),
+                roll_white::span_slope(1.6, -3.75),
             ),
             (
-                r#"{"recipe_version": 2, "rendering": "direct", "roll": {"white_stops": 1.6},
+                r#"{"recipe_version": 2, "rendering": "direct", "roll": {"white_stops": 1.6, "dark_stops": -3.75},
                     "look": {"contrast": 1.3}}"#,
                 1.3,
                 direct,
             ),
             // Awkward quotients: the multiplier is picked so the product is exact.
             (
-                r#"{"recipe_version": 2, "roll": {"white_stops": 1.7}, "look": {"contrast": 1.1111112}}"#,
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.7, "dark_stops": -3.6},
+                    "look": {"contrast": 1.1111112}}"#,
                 1.111_111_2,
-                roll_white::slope_for(1.7),
+                roll_white::span_slope(1.7, -3.6),
             ),
             (
-                r#"{"recipe_version": 2, "roll": {"white_stops": 1.93}, "look": {"contrast": 1.37}}"#,
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.93, "dark_stops": -3.82},
+                    "look": {"contrast": 1.37}}"#,
                 1.37,
-                roll_white::slope_for(1.93),
+                roll_white::span_slope(1.93, -3.82),
             ),
         ] {
             let err = check(json, true).unwrap_err();
@@ -2927,15 +3062,16 @@ mod tests {
         // With `roll.frames` the old slope overrode every frame's white, so the exact
         // conversion drops the roll's whites: every frame, clamped or not, renders it.
         let frames = r#"{"recipe_version": 2,
-            "roll": {"white_stops": 1.6, "frames": {"f07.tif": {"white_stops": 2.0}}},
+            "roll": {"white_stops": 1.6, "dark_stops": -3.75,
+                "frames": {"f07.tif": {"white_stops": 2.0}}},
             "look": {"contrast": 1.8}}"#;
         let err = check(frames, true).unwrap_err();
         assert!(
-            err.contains("drop `roll.white_stops` and `roll.frames`")
+            err.contains("drop `roll.white_stops`, `roll.dark_stops` and `roll.frames`")
                 && err.contains("over the fallback slope"),
             "{err}"
         );
-        let r = converted(frames, &err, &["white_stops", "frames"]);
+        let r = converted(frames, &err, &["white_stops", "dark_stops", "frames"]);
         let step = f32::from_bits(1.8f32.to_bits() + 1) - 1.8;
         for input in ["f01.tif", "f07.tif"] {
             let frame = r.clone().for_frame(Path::new(input));
@@ -2944,6 +3080,41 @@ mod tests {
                 "{input}: {err}"
             );
         }
+        // A white without its dark end gives no base to convert against: the base the
+        // recipe composes to, read off the report.
+        let err = check(
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1.6}, "look": {"contrast": 1.8}}"#,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("The roll's white needs its dark end now (`roll.dark_stops`")
+                && err.contains("state 1.8 over that base (the report's `chain.look.base_slope`)"),
+            "{err}"
+        );
+        // A per-frame override states a frame's white alone; its base is the shared
+        // recipe's, which holds the dark end, so it is pointed at the frame's report.
+        let err = check(
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1.8}, "look": {"contrast": 1.8}}"#,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("state 1.8 over the frame's base slope") && !err.contains("dark end"),
+            "{err}"
+        );
+        // A dark end at or above the white is a roll with no span, at the steepest slope:
+        // converted against it exactly.
+        let flat = r#"{"recipe_version": 2, "roll": {"white_stops": 2, "dark_stops": 2.4},
+            "look": {"contrast": 1.8}}"#;
+        let err = check(flat, true).unwrap_err();
+        let r = converted(flat, &err, &[]);
+        assert_eq!(
+            r.resolved_slope().base_slope,
+            roll_white::MAX_SLOPE,
+            "{err}"
+        );
+        assert_eq!(r.resolved_slope().slope, 1.8, "{err}");
         // A number no multiplier can keep gets the general remedy, never one validation
         // would refuse.
         for bad in ["0", "-1.2"] {
@@ -3096,7 +3267,7 @@ mod tests {
         assert_eq!(
             json["roll"],
             serde_json::json!({"white_balance": null, "neutral_balance": null,
-                "white_stops": null, "exposure": null,
+                "white_stops": null, "dark_stops": null, "exposure": null,
                 "frame_exposure": null, "small_lift": null, "thin_slope": null,
                 "thin_exposure": null, "thin_lift": null, "midtone_line": null,
                 "midtone_neutral": null, "frames": {}})
@@ -3236,22 +3407,22 @@ mod tests {
 
     #[test]
     fn a_roll_frames_white_is_judged_at_the_slope_it_renders_with_the_contrast() {
-        // Each frame renders at its own white's slope times the multiplier, so an entry
-        // that fits alone can overflow once multiplied — refused by name, not left for
-        // the look stage to fail on.
-        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.6,
-            "frames": {"a.tif": {"white_stops": 1e-37}}}, "look": {"contrast": 100}}"#;
+        // Each frame renders at its own white's span slope times the multiplier, so an
+        // entry steeper than the roll can overflow once multiplied where the roll does not —
+        // refused by name, not left for the look stage to fail on.
+        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.6, "dark_stops": -3.75,
+            "frames": {"a.tif": {"white_stops": 0.1}}}, "look": {"contrast": 1e38}}"#;
         let r = parse(json).unwrap();
         validate(
-            &parse(&json.replace("100", "1")).unwrap(),
+            &parse(&json.replace("1e38", "1")).unwrap(),
             KnobNames::FlagAndKey,
         )
         .unwrap();
         let err = validate(&r, KnobNames::FlagAndKey).unwrap_err();
         let msg = err.message();
         assert!(
-            msg.contains("`roll.frames.\"a.tif\".white_stops`")
-                && msg.contains("--contrast (recipe `look.contrast`) 100")
+            msg.contains("`roll.frames.\"a.tif\".white_stops` and the roll's `roll.dark_stops`")
+                && msg.contains("--contrast (recipe `look.contrast`) 1000000")
                 && msg.contains("overflows"),
             "{msg}"
         );
@@ -3266,16 +3437,28 @@ mod tests {
                 .to_string()
         };
         let v3 = r#"{"recipe_version": 3}"#;
-        let white = roll_white::slope_for(2.0);
+        let white = roll_white::span_slope(2.0, -3.75);
         let sat = "--saturation (recipe `look.saturation`)";
         let colour = white * DEFAULT_SATURATION;
+        let span = "--roll-white (recipe `roll.white_stops`) and --roll-dark (recipe \
+                    `roll.dark_stops`)";
         // Under `default` the rendering's saturation is a factor, named with its value.
-        let msg = err(v3, &["--roll-white", "2", "--saturation", "1.5e38"]);
+        let msg = err(
+            v3,
+            &[
+                "--roll-white",
+                "2",
+                "--roll-dark",
+                "-3.75",
+                "--saturation",
+                "1.5e38",
+            ],
+        );
         assert!(
             msg.contains(&format!(
-                "(the colour's base slope {colour} (the roll's slope from --roll-white (recipe \
-                 `roll.white_stops`) times the rendering's saturation {DEFAULT_SATURATION}) \
-                 times {sat} 150000000000000000000000000000000000000)"
+                "(the colour's base slope {colour} (the roll's slope from {span} times the \
+                 rendering's saturation {DEFAULT_SATURATION}) times {sat} \
+                 150000000000000000000000000000000000000)"
             )) && msg.contains("highlight desaturation divides by it"),
             "{msg}"
         );
@@ -3300,8 +3483,8 @@ mod tests {
         );
         // A thin slope never reaches colour: the colour's base is the white's slope, or the
         // fallback's, never the thin one — and the report says which.
-        let thin_white = r#"{"recipe_version": 3, "roll": {"white_stops": 2, "thin_slope": 0.5},
-                "look": {"saturation": 1.5e38}}"#;
+        let thin_white = r#"{"recipe_version": 3, "roll": {"white_stops": 2, "dark_stops": -3.75,
+                "thin_slope": 0.5}, "look": {"saturation": 1.5e38}}"#;
         let s = merged(thin_white, &[]).resolved_slope();
         assert_eq!(
             (s.base_from, s.saturation_base_from),
@@ -3310,8 +3493,8 @@ mod tests {
         let msg = err(thin_white, &[]);
         assert!(
             msg.contains(&format!(
-                "(the colour's base slope {colour} (the roll's slope from --roll-white (recipe \
-                 `roll.white_stops`) times the rendering's saturation"
+                "(the colour's base slope {colour} (the roll's slope from {span} times the \
+                 rendering's saturation"
             )) && !msg.contains("thin"),
             "{msg}"
         );
@@ -3331,16 +3514,19 @@ mod tests {
             "{msg}"
         );
         // A `roll.frames` white is judged at the rendering's saturation too: this one fits
-        // without the 1.15 and overflows with it.
-        let frames = r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 2}}},
-                "look": {"saturation": 1.4e38}}"#;
-        assert!((1.8 * white * 1.4e38_f32).is_finite());
+        // without the 1.15 and overflows with it, where the roll's flatter slope fits.
+        let frames = r#"{"recipe_version": 3, "roll": {"white_stops": 2, "dark_stops": -3.75,
+                "frames": {"a.tif": {"white_stops": 1}}}, "look": {"saturation": 0.95e38}}"#;
+        let steep = roll_white::span_slope(1.0, -3.75);
+        assert!((1.8 * steep * 0.95e38_f32).is_finite());
+        assert!((1.8 * colour * 0.95e38_f32).is_finite());
         let msg = err(frames, &[]);
         assert!(
             msg.contains(&format!(
-                "(the colour's base slope {colour} (the frame's slope {white} from recipe \
-                 `roll.frames.\"a.tif\".white_stops` times the rendering's saturation \
-                 {DEFAULT_SATURATION}) times {sat}"
+                "(the colour's base slope {} (the frame's slope {steep} from recipe \
+                 `roll.frames.\"a.tif\".white_stops` and the roll's `roll.dark_stops` times \
+                 the rendering's saturation {DEFAULT_SATURATION}) times {sat}",
+                steep * DEFAULT_SATURATION
             )),
             "{msg}"
         );
@@ -3695,9 +3881,9 @@ mod tests {
                 3.6 / (LINEARIZATION * DEFAULT_SLOPE),
             ),
             (
-                r#"{"recipe_version": 3, "roll": {"white_stops": 1.6},
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.6, "dark_stops": -3.75},
                     "reconstruction": {"contrast": 3.6}}"#,
-                3.6 / (LINEARIZATION * roll_white::slope_for(1.6)),
+                3.6 / (LINEARIZATION * roll_white::span_slope(1.6, -3.75)),
             ),
         ] {
             let err = check(json, true).unwrap_err();
@@ -3891,13 +4077,13 @@ mod tests {
 
     #[test]
     fn a_thin_lift_replaces_the_small_one_and_each_switch_turns_off_its_own() {
-        let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+        let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
             "frames": {"a.tif": {"exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7}}}}"#;
         let frame = |extra: &[&str]| {
             let r = parse(roll).unwrap().for_frame(Path::new("/scans/a.tif"));
             merge(r, &cli_flags(extra))
         };
-        let roll_slope = (roll_white::slope_for(1.5), SlopeBase::Roll);
+        let roll_slope = (roll_white::span_slope(1.5, -3.75), SlopeBase::Roll);
         let shape = |r: &Recipe| {
             let s = r.resolved_slope();
             let report = r.roll_report(true).unwrap();
@@ -3947,7 +4133,7 @@ mod tests {
         assert_eq!(
             shape(&white),
             (
-                (roll_white::slope_for(1.9), SlopeBase::Roll),
+                (roll_white::span_slope(1.9, -3.75), SlopeBase::Roll),
                 1.25,
                 vec!["small_lift"]
             )
@@ -4016,8 +4202,8 @@ mod tests {
         };
         // The default an earlier build wrote replays as if absent.
         let old = r#"{"recipe_version": 3, "roll": {"frame_slope": null, "white_stops": 1.5,
-            "frames": {"a.tif": {"exposure": 0.2, "slope": null}}}}"#;
-        let new = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5,
+            "dark_stops": -3.75, "frames": {"a.tif": {"exposure": 0.2, "slope": null}}}}"#;
+        let new = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75,
             "frames": {"a.tif": {"exposure": 0.2}}}}"#;
         assert_eq!(loaded(old).unwrap(), parse(new).unwrap());
         // Any other value names the rename, which replays the old render: beside a slope
@@ -4031,15 +4217,15 @@ mod tests {
         };
         for (body, renamed) in [
             (
-                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                     "frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
-                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                     "frames": {"a.tif": {"thin_exposure": 0.6, "thin_slope": 2}}}}"#,
             ),
             (
-                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                     "frame_exposure": 0.6, "frame_slope": 2}}"#,
-                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                     "thin_exposure": 0.6, "thin_slope": 2}}"#,
             ),
         ] {
@@ -4069,7 +4255,7 @@ mod tests {
         // Beside the retired `frame_lift` "off", which turned both lifts off, the message
         // migrates both, and followed it renders no lift, as before.
         let msg = loaded(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                 "frame_lift": "off", "frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
         )
         .unwrap_err();
@@ -4085,12 +4271,12 @@ mod tests {
             "{msg}"
         );
         let renamed = loaded(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                 "small_lift": "off", "thin_lift": "off",
                 "frames": {"a.tif": {"thin_exposure": 0.6, "thin_slope": 2}}}}"#,
         )
         .unwrap();
-        assert_eq!(thin(renamed), (roll_white::slope_for(1.5), 1.0));
+        assert_eq!(thin(renamed), (roll_white::span_slope(1.5, -3.75), 1.0));
     }
 
     #[test]
@@ -4125,7 +4311,7 @@ mod tests {
         );
         // Followed, the old "off" renders neither lift on a thin frame, as before.
         let r = loaded(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "exposure": 1.0,
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                 "small_lift": "off", "thin_lift": "off", "frames": {"a.tif":
                 {"exposure": 0.25, "thin_slope": 2, "thin_exposure": 0.7}}}}"#,
         )
@@ -4188,7 +4374,7 @@ mod tests {
     #[test]
     fn the_roll_section_reaches_the_stages_and_the_contrast_multiplies_its_slope() {
         let roll = r#"{"recipe_version": 3,
-                       "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#;
+                       "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6, "dark_stops": -3.75}}"#;
         // The gains multiply the stated white balance; the white sets the contrast.
         let r = merged(roll, &["--white-balance", "1.25,1,1"]);
         let shared = r.shared_params();
@@ -4196,7 +4382,7 @@ mod tests {
             shared.scene_correction.white_balance,
             WhiteBalance::Explicit([0.8 * 1.25, 1.0, 1.25])
         );
-        let from_white = roll_white::slope_for(1.6);
+        let from_white = roll_white::span_slope(1.6, -3.75);
         assert_eq!(shared.look.section.slope, from_white);
         assert_eq!(
             r.resolved_slope(),
@@ -4250,7 +4436,7 @@ mod tests {
     #[test]
     fn direct_starts_every_knob_from_its_pinned_base_and_leaves_the_roll_out() {
         use crate::rendering::DIRECT;
-        let roll = r#""roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}"#;
+        let roll = r#""roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6, "dark_stops": -3.75}"#;
         let direct = merged(
             &format!(r#"{{"recipe_version": 3, {roll}}}"#),
             &["--rendering", "direct"],
@@ -4275,7 +4461,7 @@ mod tests {
             q.scene_correction.white_balance,
             WhiteBalance::Explicit([0.8, 1.0, 1.25])
         );
-        assert_eq!(q.look.section.slope, roll_white::slope_for(1.6));
+        assert_eq!(q.look.section.slope, roll_white::span_slope(1.6, -3.75));
         assert_eq!(
             q.look.section.highlight_desaturation,
             HighlightDesaturation::DEFAULT
@@ -4549,7 +4735,7 @@ mod tests {
         // wrote, and `direct` would apply it although it leaves the roll out. A contrast
         // is not: no earlier build wrote the multiplier, so it is the user's.
         let roll = r#"{"recipe_version": 3, "rendering": "direct",
-            "roll": {"white_balance": [1.2, 1, 0.9], "white_stops": 1.7},
+            "roll": {"white_balance": [1.2, 1, 0.9], "white_stops": 1.7, "dark_stops": -3.75},
             "look": {"contrast": 1.3},
             "scene_correction": {"white_balance": {"explicit": [1.2, 1, 0.9]}}}"#;
         let w = parse(roll).unwrap().recipe_warnings(TypedStyle::default());
@@ -4600,7 +4786,8 @@ mod tests {
         assert!(
             w[0].contains("`hanten measure-roll`")
                 && w[0].contains(
-                    "`scene_correction.white_balance`) and the roll's white (`roll.white_stops`"
+                    "`scene_correction.white_balance`), the roll's white and dark end \
+                     (`roll.white_stops` and `roll.dark_stops`"
                 )
                 && w[0].contains("and exposure (`roll.exposure`)")
                 && w[0].contains(
@@ -4668,6 +4855,7 @@ mod tests {
         );
         let mut r = Recipe::default();
         r.roll.white_stops = Some(1.7);
+        r.roll.dark_stops = Some(-3.75);
         r.roll.exposure = Some(0.0);
         assert!(r.recipe_warnings(typed).is_empty());
         // A roll white without an exposure says so, however it was given; only a stated
@@ -4694,7 +4882,7 @@ mod tests {
     #[test]
     fn the_roll_flags_land_in_the_roll_section() {
         let r = merged(
-            r#"{"recipe_version": 3, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5,
+            r#"{"recipe_version": 3, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5, "dark_stops": -3.75,
                 "exposure": 0.7}}"#,
             &["--roll-white", "1.8"],
         );
@@ -4704,10 +4892,19 @@ mod tests {
             RollSection {
                 white_balance: Some([0.9, 1.0, 1.1]),
                 white_stops: Some(1.8),
+                dark_stops: Some(-3.75),
                 exposure: Some(0.7),
                 frames: BTreeMap::new(),
                 ..RollSection::default()
             }
+        );
+        let r = merged(
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75}}"#,
+            &["--roll-dark", "-4"],
+        );
+        assert_eq!(
+            (r.roll.white_stops, r.roll.dark_stops),
+            (Some(1.5), Some(-4.0))
         );
         let r = merged(
             r#"{"recipe_version": 3}"#,
@@ -4725,7 +4922,9 @@ mod tests {
         };
         for stops in ["0", "-1.5"] {
             let msg = refusal(
-                &format!(r#"{{"recipe_version": 3, "roll": {{"white_stops": {stops}}}}}"#),
+                &format!(
+                    r#"{{"recipe_version": 3, "roll": {{"white_stops": {stops}, "dark_stops": -3.75}}}}"#
+                ),
                 KnobNames::FlagAndKey,
             );
             assert!(
@@ -4741,52 +4940,51 @@ mod tests {
             msg.contains("`roll.white_balance`") && !msg.contains("--"),
             "{msg}"
         );
-        // A contrast the roll's white gives, too small to survive the whole contrast:
-        // named as the white, not as `--contrast`, which the user never typed.
-        let msg = refusal(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1e38},
-                "reconstruction": {"linearization": 1e-8}}"#,
-            KnobNames::FlagAndKey,
-        );
-        assert!(msg.contains("from --roll-white"), "{msg}");
-        // The remedy moves the white the other way: the slope is inverse to it.
-        assert!(
-            msg.contains(
-                "Use a larger --density-gamma (recipe `reconstruction.linearization`) or \
-                 --contrast (recipe `look.contrast`), or a smaller --roll-white (recipe \
-                 `roll.white_stops`)"
+        // A dark end at or above the white is a roll with no span, which `measure-roll`
+        // writes for one flat bright frame: it renders at the steepest slope.
+        let flat = parse(r#"{"recipe_version": 3, "roll": {"white_stops": 2, "dark_stops": 2.4}}"#)
+            .unwrap();
+        validate(&flat, KnobNames::FlagAndKey).unwrap();
+        assert_eq!(flat.resolved_slope().base_slope, roll_white::MAX_SLOPE);
+        // The span slope is held within limits, so no white, however far from the dark
+        // end, makes the whole slope leave f32 at a usable linearization.
+        for white in ["1e38", "1e-45"] {
+            let json = format!(
+                r#"{{"recipe_version": 3, "roll": {{"white_stops": {white}, "dark_stops": -3.75}}}}"#
+            );
+            validate(&parse(&json).unwrap(), KnobNames::FlagAndKey).unwrap();
+        }
+        // A white alone, or a dark end alone, is refused where the roll applies, naming the
+        // measurement that supplies the other; `direct` and the film master spare it.
+        for (roll, alone, missing, state) in [
+            (
+                r#"{"white_stops": 1.7}"#,
+                "--roll-white (recipe `roll.white_stops`) 1.7",
+                "--roll-dark",
+                "state the dark end it reports in `white.dark_stops`",
             ),
-            "{msg}"
-        );
-        assert!(!msg.contains("value for either"), "{msg}");
-        // Overflow, in `roll`'s key-only spelling: the reverse remedy.
-        let msg = refusal(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1e-30},
-                "reconstruction": {"linearization": 1e10}}"#,
-            KnobNames::KeyOnly,
-        );
-        assert!(msg.contains("overflows"), "{msg}");
-        assert!(
-            msg.contains(
-                "Use a smaller `reconstruction.linearization` or `look.contrast`, or a larger \
-                 `roll.white_stops`"
+            (
+                r#"{"dark_stops": -3.75}"#,
+                "--roll-dark (recipe `roll.dark_stops`) -3.75",
+                "--roll-white",
+                "state the white it reports in `white.stops`",
             ),
-            "{msg}"
-        );
-        assert!(
-            !msg.contains("value for either") && !msg.contains("--"),
-            "{msg}"
-        );
-        // A white so small its slope is not finite overflows the same rule.
-        let msg = refusal(
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1e-45}}"#,
-            KnobNames::FlagAndKey,
-        );
-        assert!(
-            msg.contains("overflows")
-                && msg.contains("or a larger --roll-white (recipe `roll.white_stops`)"),
-            "{msg}"
-        );
+        ] {
+            let json = format!(r#"{{"recipe_version": 3, "roll": {roll}}}"#);
+            let msg = refusal(&json, KnobNames::FlagAndKey);
+            assert!(
+                msg.starts_with(&format!("{alone} without {missing}"))
+                    && msg.contains("Re-run `hanten measure-roll`")
+                    && msg.ends_with(state),
+                "{msg}"
+            );
+            for spared in [
+                format!(r#"{{"recipe_version": 3, "rendering": "direct", "roll": {roll}}}"#),
+                format!(r#"{{"recipe_version": 3, "output": "film-master", "roll": {roll}}}"#),
+            ] {
+                validate(&parse(&spared).unwrap(), KnobNames::FlagAndKey).unwrap();
+            }
+        }
         // A product only the roll's gains make is named with both factors.
         let msg = refusal(
             r#"{"recipe_version": 3, "roll": {"white_balance": [1e30, 1, 1]},
@@ -4806,7 +5004,7 @@ mod tests {
         // The stated gains multiply the roll's. The contrast beside the roll's white is
         // not an overlap: it multiplies the roll's slope, which is what it is for.
         let overlapping = r#"{"recipe_version": 3,
-                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
+                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7, "dark_stops": -3.75},
                 "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}},
                 "look": {"contrast": 1.2}}"#;
         let only = warnings(overlapping);
@@ -4841,11 +5039,11 @@ mod tests {
                 "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}}}"#,
             // The roll's gains over the identity, and a version 2 `null` contrast.
             r#"{"recipe_version": 2,
-                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
+                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7, "dark_stops": -3.75},
                 "scene_correction": {"white_balance": {"explicit": [1, 1, 1]}},
                 "look": {"contrast": null}}"#,
             // A stated white balance beside the *other* roll measurement.
-            r#"{"recipe_version": 3, "roll": {"white_stops": 1.7},
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.7, "dark_stops": -3.75},
                 "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}}}"#,
         ] {
             assert_eq!(warnings(quiet), Vec::<String>::new(), "{quiet}");
@@ -4856,7 +5054,7 @@ mod tests {
     fn the_film_master_leaves_the_roll_section_unapplied_and_says_so() {
         let r: Recipe = parse(
             r#"{"recipe_version": 3, "output": "film-master",
-                "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
+                "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6, "dark_stops": -3.75}}"#,
         )
         .unwrap();
         // A measurement is not a stage the user asked for, so it is not refused.
@@ -4866,7 +5064,7 @@ mod tests {
         );
         let report = r.roll_report(false).unwrap();
         assert!(!report.white_balance_applied && !report.slope_applied);
-        assert_eq!(report.slope, Some(roll_white::slope_for(1.6)));
+        assert_eq!(report.slope, Some(roll_white::span_slope(1.6, -3.75)));
         let rendered = r.roll_report(true).unwrap();
         assert!(rendered.white_balance_applied && rendered.slope_applied);
         // A stated contrast multiplies the roll's slope, so the roll's still applies.
@@ -5176,6 +5374,9 @@ mod tests {
             ("--roll-white", &["--roll-white", "1.7"], |r| {
                 r.roll.white_stops == Some(1.7)
             }),
+            ("--roll-dark", &["--roll-dark", "-3.75"], |r| {
+                r.roll.dark_stops == Some(-3.75)
+            }),
             ("--roll-exposure", &["--roll-exposure", "-0.4"], |r| {
                 r.roll.exposure == Some(-0.4)
             }),
@@ -5334,7 +5535,6 @@ mod tests {
             ("--density-gamma", "100", "reconstruction.linearization"),
             ("--anchor-mid-offset", "30", "reconstruction.anchor"),
             ("--contrast", "100", "look.contrast"),
-            ("--roll-white", "0.001", "roll.white_stops"),
         ] {
             let err = render_err(V3, &[&format!("{flag}={value}")]).expect(flag);
             assert!(
@@ -5437,21 +5637,48 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_entry_white_is_probed_at_the_rolls_own() {
+        // Both the entry's slope and the roll's fault at this contrast; only the fallback,
+        // which dropping the entry does not reach, renders. So the entry is no remedy.
+        let json = r#"{"recipe_version": 3, "look": {"contrast": 2},
+            "roll": {"white_stops": 2.5, "dark_stops": -1, "exposure": 0,
+                "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
+        let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
+        let mut roll_only = stated.clone();
+        roll_only.roll.frames.clear();
+        assert!(render_fault(&roll_only).unwrap().is_some(), "not vacuous");
+        let frame = stated.clone().for_frame(Path::new("b.tif"));
+        let err = validate_render(&frame, Some(("b.tif", &stated.roll)), KnobNames::FlagAndKey)
+            .unwrap_err();
+        let msg = err.message();
+        assert!(
+            msg.ends_with("It renders with --contrast (recipe `look.contrast`) at its default"),
+            "{msg}"
+        );
+        assert!(!msg.contains("roll.frames"), "{msg}");
+    }
+
+    #[test]
     fn a_roll_entry_is_named_as_itself() {
-        let json = r#"{"recipe_version": 3,
-            "roll": {"white_stops": 2.5, "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
+        // The entry's span slope is held at the maximum, which a contrast the roll's own
+        // slope takes renders past; the roll's does not.
+        let json = r#"{"recipe_version": 3, "look": {"contrast": 1.5},
+            "roll": {"white_stops": 2.5, "dark_stops": -1, "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
         let err = render_err(json, &[]).unwrap();
         assert!(
-            err.starts_with(r#"recipe `roll.frames."b.tif"`: the film base"#),
+            err.starts_with(r#"recipe `roll.frames."b.tif"`: "#),
+            "{err}"
+        );
+        // Dropping the entry's white alone is the remedy: the frame then takes the roll's
+        // pair, so the dark end is not named with it.
+        assert!(
+            err.ends_with(r#"recipe `roll.frames."b.tif".white_stops` at its default"#),
             "{err}"
         );
         assert!(
-            err.ends_with(
-                r#"It renders with recipe `roll.frames."b.tif".white_stops` at its default"#
-            ),
+            !err.contains("--roll-white") && !err.contains("dark_stops"),
             "{err}"
         );
-        assert!(!err.contains("--roll-white"), "{err}");
         // `convert` of that frame: the entry moved into `roll.white_stops`, and is still
         // named as the entry; a flag that beats it is named as the flag.
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
@@ -5460,20 +5687,31 @@ mod tests {
         let err = validate_render(&frame, own, KnobNames::FlagAndKey).unwrap_err();
         assert!(
             err.message()
-                .ends_with(r#"recipe `roll.frames."b.tif".white_stops` at its default"#),
+                .contains(r#"recipe `roll.frames."b.tif".white_stops`"#),
             "{}",
             err.message()
         );
+        // A typed white is the roll's, dropped with its dark end.
         let mut beaten = frame;
         beaten.roll.frames.clear();
         beaten.roll.white_stops = Some(0.002);
         let err = validate_render(&beaten, own, KnobNames::FlagAndKey).unwrap_err();
         assert!(
-            err.message()
-                .ends_with("--roll-white (recipe `roll.white_stops`) at its default"),
+            err.message().contains(
+                "--roll-white (recipe `roll.white_stops`) with its --roll-dark (recipe \
+                 `roll.dark_stops`)"
+            ),
             "{}",
             err.message()
         );
+        // Each remedy renders: the frame at the roll's pair, or at the fallback.
+        let mut entry_dropped = beaten.clone();
+        entry_dropped.roll.white_stops = Some(2.5);
+        assert_eq!(render_fault(&entry_dropped).unwrap(), None);
+        let mut pair_dropped = beaten;
+        pair_dropped.roll.white_stops = None;
+        pair_dropped.roll.dark_stops = None;
+        assert_eq!(render_fault(&pair_dropped).unwrap(), None);
     }
 
     #[test]
@@ -5483,6 +5721,8 @@ mod tests {
             "1,1,1",
             "--roll-white",
             "1.5",
+            "--roll-dark",
+            "-3.75",
             "--roll-exposure",
             "0.4",
         ];
@@ -5537,14 +5777,15 @@ mod tests {
 
     #[test]
     fn another_entry_is_probed_without_this_frames_values() {
-        // `a.tif`'s steep white and `b.tif`'s exposure each render; only together would
+        // `a.tif`'s steep thin slope and `b.tif`'s exposure each render; only together would
         // the densest sample overflow, and no frame renders both.
-        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "frames": {
-            "a.tif": {"white_stops": 0.8}, "b.tif": {"exposure": 16}}}}"#;
+        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "frames": {
+            "a.tif": {"thin_slope": 3.09}, "b.tif": {"exposure": 16}}}}"#;
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
         let frame = stated.clone().for_frame(Path::new("a.tif"));
         let mut both = frame.clone();
-        both.roll.frame_exposure = Some(16.0);
+        // A thin slope takes its own exposure in place of the small lift.
+        both.roll.thin_exposure = Some(16.0);
         assert!(render_fault(&both).unwrap().is_some(), "not vacuous");
         validate_render(&frame, Some(("a.tif", &stated.roll)), KnobNames::FlagAndKey).unwrap();
     }

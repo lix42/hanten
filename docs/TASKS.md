@@ -2196,10 +2196,13 @@ the design now in `docs/design-spec.md` (§6–§7):
   0](tasks/nf-calibration/level-target-zero.md) — `measure-roll` puts the median frame at
   mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred
   it on 09-18 Gold and 09-29 Ektar
-- [ ] [The roll's slope from its span, and where its white
-  lands](tasks/nf-calibration/span-roll-slope.md) — per-roll placement maps the roll's
-  white and dark end to display targets (slope 1.57–1.75 where today's spans 1.05–1.57);
-  settles the SDR white target (reviews preferred L* 90–92) and the anchor
+- [x] [The roll's slope from its span, and where its white
+  lands](tasks/nf-calibration/span-roll-slope.md) — **done 2026-10-09
+  (`pipeline_version` 11).** The roll's slope spreads its span, white to dark end
+  (`roll.dark_stops` / `--roll-dark`), over 9.049 stops, mid-grey pinned, within
+  1.237–3.5 (1.56–1.74 on the archive); chosen by review over holding the white at L* 91
+  or 94, so there is no white target: the white renders where slope and exposure put it.
+  A white without its dark end is refused
 - [ ] [Envelope hybrid placement](tasks/nf-calibration/envelope-hybrid-placement.md) —
   each frame its own contrast and exposure, inside the limits the roll's placement sets
   (R 7, α 0.6); per-roll stays a choice

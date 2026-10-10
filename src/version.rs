@@ -133,7 +133,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// commands' own algorithms, which change what a new measurement writes but not how a
 /// written one replays. It cannot tell a document that pins every value it relies on
 /// from one that does not, so a bump warns on both.
-pub const PIPELINE_VERSION: u32 = 10;
+pub const PIPELINE_VERSION: u32 = 11;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -418,6 +418,24 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
         recipe: "0b84aff6f83ea9a2",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v11 bump took the constant over.
+        behavior: "SDR Display P3 16-bit TIFF default output; the fixed decode (linearization \
+                   1.8, mid-grey 0.62 density above the film base, neutral-patch-calibrated \
+                   per-channel density gain); look slope on luminance placing a white 1.75 \
+                   stops above mid-grey when no roll white is given, saturation 1.15 times the \
+                   slope's colour, with highlight desaturation; extended-Reinhard fit range at \
+                   6 stops with display black 6 stops below mid-grey; radial gamut map into \
+                   Display P3; no auto white balance",
+    },
+    // v11 — the roll's slope from its span, white to dark end (2026-10-09,
+    // `nf-calibration/span-roll-slope`). No default pixel moved: `render` and `base` are
+    // unchanged and `recipe` gains `roll.dark_stops`, `null` by default. The bump is for a
+    // stated roll: its slope changed meaning, and a white without a dark end is refused.
+    PipelineFingerprint {
+        pipeline_version: 11,
+        render: "f51d3397c7364160",
+        base: "01c5acccc36a3388",
+        recipe: "07e194eeba5d6d8b",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -562,9 +580,10 @@ pub struct PipelineFingerprint {
 /// The v1 row records the outcome; read it before amending anything here.
 pub const PIPELINE_BEHAVIOR: &str = "SDR Display P3 16-bit TIFF default output; the fixed \
      decode (linearization 1.8, mid-grey 0.62 density above the film base, \
-     neutral-patch-calibrated per-channel density gain); look slope on luminance placing a \
-     white 1.75 stops above mid-grey when no roll white is given, saturation 1.15 times \
-     the slope's colour, with highlight desaturation; extended-Reinhard fit range at 6 \
+     neutral-patch-calibrated per-channel density gain); look slope on luminance spreading a \
+     measured roll's span, white to dark end, over 9.049 stops, or placing a white 1.75 \
+     stops above mid-grey when none is given, saturation 1.15 times the slope's colour, \
+     with highlight desaturation; extended-Reinhard fit range at 6 \
      stops with display black 6 stops below mid-grey; radial gamut map into Display P3; no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it

@@ -110,8 +110,8 @@ gains the wrong way). Under that white balance the operator's extra cleaning was
 visible by eye; the band's value is keeping the pull off colour.
 
 **`contrast-definition` is done (2026-09-29): `look.contrast` is a multiplier.**
-`--contrast` multiplies the base slope — the applied roll white's
-(`roll_white::slope_for`), else `look::DEFAULT_SLOPE`, or `direct`'s pinned slope (both
+`--contrast` multiplies the base slope — the applied roll's span slope
+(`roll_white::span_slope`, since `nf-calibration/span-roll-slope`), else `look::DEFAULT_SLOPE`, or `direct`'s pinned slope (both
 ≈1.414 since `pipeline_version` 9) — default 1, so it builds on the roll's as `--white-balance` does. Only the knob
 is "contrast"; absolute values are **slopes** (`LookSection::slope`, reported as
 `chain.look.{contrast, base_slope, base_from, slope}`, `chain.roll.slope`/

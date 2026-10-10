@@ -111,9 +111,10 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// Where diffuse white sits in the **graded** image — the look's output, which every
 /// stage from the look on reads.
 ///
-/// A convention, not a measurement: the look's slope places a roll's white here
-/// (`pipeline::roll_white::slope_for`), and without a roll measurement a white
-/// [`FALLBACK_WHITE_STOPS`](crate::pipeline::roll_white::FALLBACK_WHITE_STOPS) up. Against
+/// A convention, not a measurement: without a roll measurement the look places a white
+/// [`FALLBACK_WHITE_STOPS`](crate::pipeline::roll_white::FALLBACK_WHITE_STOPS) up here
+/// (`pipeline::roll_white::slope_for`); a measured roll's white lands where its span slope
+/// puts it (`pipeline::roll_white::span_slope`). Against
 /// the datasheets' diffuse white: at the bundled contrast 2.0 it lands ≈0.08 stop from
 /// `1.0` (`tests::the_anchor_is_the_documented_number`); at the linearization alone it
 /// decodes a third of a stop under; a stronger look contrast lifts it above, which is

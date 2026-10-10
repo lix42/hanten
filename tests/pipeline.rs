@@ -3719,14 +3719,15 @@ fn a_roll_frame_resolves_as_the_equivalent_convert_and_warns_only_on_roll_wide_v
     let tmp = TempDir::new("roll-equivalence");
     let shared = r#""recipe_version": 3,
         "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}"#;
-    let roll = r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 1.7}"#;
+    let roll =
+        r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 1.7, "dark_stops": -3.75}"#;
     let recipe = write_file(&tmp.path("roll.json"), &format!("{{{shared}, {roll}}}"));
     let input = fixture("hdr-48bit.tif");
     let cases = [
         (
             "clamp",
-            r#"{"roll": {"white_stops": 2.0}}"#,
-            r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0}"#.to_string(),
+            r#"{"roll": {"white_stops": 2.0, "dark_stops": -3.75}}"#,
+            r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0, "dark_stops": -3.75}"#.to_string(),
         ),
         (
             "direct",
@@ -9120,13 +9121,14 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .collect();
     assert_eq!(flag[0], "--roll-white-balance", "{report}");
     assert_eq!(flag[2], "--roll-white", "{report}");
-    assert_eq!(flag[4], "--roll-exposure", "{report}");
-    assert_eq!(flag[6], "--roll-frame-exposure", "{report}");
+    assert_eq!(flag[4], "--roll-dark", "{report}");
+    assert_eq!(flag[6], "--roll-exposure", "{report}");
+    assert_eq!(flag[8], "--roll-frame-exposure", "{report}");
     assert!(
         report["reuse"]["flag"]
             .as_str()
             .unwrap()
-            .ends_with(&flag[..6].join(" ")),
+            .ends_with(&flag[..8].join(" ")),
         "the roll's flag is the frame's without its lift: {report}"
     );
     let (code, stdout, err) = run(&[
@@ -9153,6 +9155,10 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     );
     let roll = &converted["chain"]["roll"];
     assert_eq!(roll["white_stops"], report["white"]["stops"], "{converted}");
+    assert_eq!(
+        roll["dark_stops"], report["white"]["dark_stops"],
+        "{converted}"
+    );
     assert_eq!(roll["slope"], report["white"]["slope"], "{converted}");
     assert_eq!(roll["white_balance_applied"], true, "{converted}");
     assert_eq!(roll["slope_applied"], true, "{converted}");
@@ -9182,6 +9188,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .collect::<Vec<_>>()
         .join(",");
     let stops_text = report["white"]["stops"].to_string();
+    let dark_text = report["white"]["dark_stops"].to_string();
     let exposure_text = report["exposure"]["ev"].to_string();
     let (code, _, err) = run(&[
         "convert",
@@ -9196,6 +9203,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         &lift_text,
         "--roll-white",
         &stops_text,
+        "--roll-dark",
+        &dark_text,
         "-o",
         as_style.to_str().unwrap(),
     ]);
@@ -9218,6 +9227,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         report["white_balance"]["gains"]
     );
     assert_eq!(written["roll"]["white_stops"], report["white"]["stops"]);
+    assert_eq!(written["roll"]["dark_stops"], report["white"]["dark_stops"]);
     assert_eq!(written["roll"]["exposure"], report["exposure"]["ev"]);
     assert_eq!(
         written["roll"]["frames"]["hdr-48bit.tif"]["exposure"], report["frames"][0]["lift_ev"],
@@ -9372,6 +9382,8 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             "1.05,1,1",
             "--roll-white",
             "1.7",
+            "--roll-dark",
+            "-3.75",
             "--roll-exposure",
             "0",
             "--contrast",
@@ -9435,7 +9447,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             &format!(
                 r#"{{"recipe_version": {version},
                      "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
-                     "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7,
+                     "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7, "dark_stops": -3.75,
                                "exposure": 0.0}},
                      "scene_correction": {{"white_balance": {{"explicit": {scene}}}}},
                      "look": {{"contrast": {look}}}}}"#
@@ -9565,7 +9577,7 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
     // is spared: no earlier build wrote the multiplier.
     let roll = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 3, "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+        r#"{"recipe_version": 3, "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7, "dark_stops": -3.75}}"#,
     );
     {
         let flag = &["--white-balance", "1.05,1,1"][..];
@@ -9638,11 +9650,18 @@ fn a_roll_white_without_an_exposure_warns_until_one_is_stated() {
     let tmp = TempDir::new("roll-no-exposure");
     let white_only = write_file(
         &tmp.path("white.json"),
-        r#"{"recipe_version": 3, "roll": {"white_stops": 1.7},
+        r#"{"recipe_version": 3, "roll": {"white_stops": 1.7, "dark_stops": -3.75},
             "scene_correction": {"white_balance": {"explicit": [1.1, 1, 0.9]}}}"#,
     );
     let recipe = ["--params", white_only.to_str().unwrap()];
-    let typed = ["--roll-white", "1.7", "--white-balance", "1.1,1,0.9"];
+    let typed = [
+        "--roll-white",
+        "1.7",
+        "--roll-dark",
+        "-3.75",
+        "--white-balance",
+        "1.1,1,0.9",
+    ];
     for source in [&recipe[..], &typed[..]] {
         let (code, _, err) = convert_48bit(&tmp.path("w.tiff"), &[source, &["--strict"]].concat());
         assert_eq!(code, 1, "{source:?}: {err}");
@@ -9662,6 +9681,139 @@ fn a_roll_white_without_an_exposure_warns_until_one_is_stated() {
     }
 }
 
+/// The roll's slope is its span's (`nf-calibration/span-roll-slope`): a white without its
+/// dark end — every `roll.json` written before `pipeline_version` 11, or `--roll-white`
+/// typed alone — is refused with a remedy that renders, ahead of any value rule; `direct`
+/// leaves the roll out and spares it.
+#[test]
+fn a_roll_white_without_its_dark_end_is_refused_naming_the_measurement() {
+    let tmp = TempDir::new("roll-white-alone");
+    let old = write_file(
+        &tmp.path("old.json"),
+        r#"{"recipe_version": 3, "roll": {"white_balance": [1.0, 1.0, 1.0],
+            "white_stops": 1.7, "exposure": 0.5}}"#,
+    );
+    for extra in [
+        &["--params", old.to_str().unwrap()][..],
+        &["--roll-white", "1.7", "--contrast", "1e38"][..],
+    ] {
+        let (code, _, err) = convert_48bit(&tmp.path("o.tiff"), extra);
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        assert!(
+            err.contains("--roll-white (recipe `roll.white_stops`) 1.7 without --roll-dark")
+                && err.contains("Re-run `hanten measure-roll`")
+                && err.contains("`white.dark_stops`"),
+            "{extra:?}: {err}"
+        );
+        assert!(
+            !err.contains("overflows"),
+            "the pair is diagnosed first: {err}"
+        );
+    }
+    // Followed, the remedy renders.
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("fixed.tiff"),
+        &["--params", old.to_str().unwrap(), "--roll-dark", "-3.75"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let roll = &json(&stdout)["chain"]["roll"];
+    assert_eq!(roll["dark_stops"], -3.75, "{stdout}");
+    assert!(
+        (roll["slope"].as_f64().unwrap() - 9.049 / (1.7 + 3.75)).abs() < 1e-5,
+        "{stdout}"
+    );
+    // `direct` leaves the roll out: the recipe's lone white is spared.
+    let (code, _, err) = convert_48bit(
+        &tmp.path("direct.tiff"),
+        &["--params", old.to_str().unwrap(), "--rendering", "direct"],
+    );
+    assert_eq!(code, 0, "{err}");
+
+    // An entry's white over a roll with no dark end: refused as the entry by `convert` and
+    // by `roll`, which validates the shared recipe alone, never rendered at the fallback.
+    let entry = write_file(
+        &tmp.path("entry.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"exposure": 0, "frames": {"hdr-48bit.tif": {"white_stops": 1.8}}}}"#,
+    );
+    let frame = fixture("hdr-48bit.tif");
+    for command in ["convert", "roll"] {
+        let (code, _, err) = run(&[
+            command,
+            frame.to_str().unwrap(),
+            "--params",
+            entry.to_str().unwrap(),
+            "-o",
+            tmp.path(&format!("{command}-entry.tiff")).to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "{command}: {err}");
+        assert!(
+            err.contains("recipe `roll.frames.\"hdr-48bit.tif\".white_stops` 1.8")
+                && err.contains("`roll.white_stops` and `roll.dark_stops`")
+                && !err.contains("--roll-white (recipe `roll.white_stops`)"),
+            "{command}: {err}"
+        );
+        // The remedy: the roll's white and dark end, which every other frame takes too.
+        let (code, _, err) = run(&[
+            command,
+            frame.to_str().unwrap(),
+            "--params",
+            entry.to_str().unwrap(),
+            "--roll-white",
+            "1.6",
+            "--roll-dark=-3.75",
+            "-o",
+            tmp.path(&format!("{command}-entry-fixed.tiff"))
+                .to_str()
+                .unwrap(),
+        ]);
+        assert_eq!(code, 0, "{command}: {err}");
+    }
+    // The remedy, typed over an old recipe with a clamped frame: the entry spreads the
+    // flag's dark end, on both commands.
+    let clamped = write_file(
+        &tmp.path("clamped.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 1.6, "exposure": 0,
+                "frames": {"hdr-48bit.tif": {"white_stops": 2.0}}}}"#,
+    );
+    for command in ["convert", "roll"] {
+        let (code, stdout, err) = run(&[
+            command,
+            frame.to_str().unwrap(),
+            "--params",
+            clamped.to_str().unwrap(),
+            "--roll-dark=-3.75",
+            "-o",
+            tmp.path(&format!("{command}-clamped.tiff"))
+                .to_str()
+                .unwrap(),
+        ]);
+        assert_eq!(code, 0, "{command}: {err}");
+        let report = json(&stdout);
+        let roll = if command == "roll" {
+            &report["frames"][0]["chain"]["roll"]
+        } else {
+            &report["chain"]["roll"]
+        };
+        assert!(
+            (roll["slope"].as_f64().unwrap() - 9.049 / (2.0 + 3.75)).abs() < 1e-5,
+            "{command}: {report}"
+        );
+    }
+}
+
+/// The typed roll flags among `args` as a refusal names them, and the verb that agrees.
+fn roll_flags_named(args: &[&str]) -> (String, &'static str) {
+    let flags: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| a.starts_with("--roll-"))
+        .collect();
+    let verb = if flags.len() > 1 { "apply" } else { "applies" };
+    (flags.join(" and "), verb)
+}
+
 #[test]
 fn the_roll_flags_are_refused_under_the_direct_rendering() {
     // `direct` leaves the roll out, so a typed roll flag would be silently ignored —
@@ -9671,13 +9823,13 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
     let direct = write_file(
         &tmp.path("direct.json"),
         r#"{"recipe_version": 3, "rendering": "direct",
-            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7, "dark_stops": -3.75}}"#,
     );
     let params = ["--params", direct.to_str().unwrap()];
     for (source, extra) in [
         (
             &["--rendering", "direct"][..],
-            &["--roll-white", "1.7", "--strict"][..],
+            &["--roll-white", "1.7", "--roll-dark", "-3.75", "--strict"][..],
         ),
         (&params[..], &["--roll-white-balance", "1.3,1,0.8"][..]),
         // A bad value still gets the presence refusal, not the value rule's remedy.
@@ -9685,10 +9837,11 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
     ] {
         let (code, _, err) = convert_48bit(&tmp.path("d.tiff"), &[source, extra].concat());
         assert_eq!(code, 2, "{extra:?}: {err}");
+        let (named, verb) = roll_flags_named(extra);
         assert!(
-            err.contains(&format!("{} applies the roll's measurements", extra[0]))
+            err.contains(&format!("{named} {verb} the roll's measurements"))
                 && err.contains("the rendering is `direct`")
-                && err.contains(&format!("drop {}", extra[0]))
+                && err.contains(&format!("drop {named}"))
                 && err.contains("pass --rendering default"),
             "{extra:?}: {err}"
         );
@@ -9702,7 +9855,14 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
         &tmp.path("default.tiff"),
         &[
             &params[..],
-            &["--roll-white", "1.7", "--rendering", "default"],
+            &[
+                "--roll-white",
+                "1.7",
+                "--roll-dark",
+                "-3.75",
+                "--rendering",
+                "default",
+            ],
         ]
         .concat(),
     );
@@ -9719,12 +9879,21 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
     );
     let (code, _, err) = convert_48bit(
         &tmp.path("both.tiff"),
-        &["--params", both.to_str().unwrap(), "--roll-white", "1.7"],
+        &[
+            "--params",
+            both.to_str().unwrap(),
+            "--roll-white",
+            "1.7",
+            "--roll-dark",
+            "-3.75",
+        ],
     );
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains("the recipe's `output` is \"film-master\"")
-            && err.contains("Either drop --roll-white and pass --rendering default, or")
+            && err.contains(
+                "Either drop --roll-white and --roll-dark and pass --rendering default, or"
+            )
             && err.contains("with --rendering default"),
         "{err}"
     );
@@ -9743,6 +9912,8 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
             both.to_str().unwrap(),
             "--roll-white",
             "1.7",
+            "--roll-dark",
+            "-3.75",
             "--range",
             "sdr",
             "--rendering",
@@ -9763,11 +9934,11 @@ fn the_roll_flags_are_refused_under_the_film_master() {
     let master = write_file(
         &tmp.path("master.json"),
         r#"{"recipe_version": 3, "output": "film-master",
-            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7, "dark_stops": -3.75}}"#,
     );
     for flag in [
         &["--roll-white-balance", "1.3,1,0.8"][..],
-        &["--roll-white", "1.7"][..],
+        &["--roll-white", "1.7", "--roll-dark", "-3.75"][..],
         &[
             "--roll-midtone-line",
             "-0.05,0.04,-0.02,0.37,-2.75,1.75,1.9",
@@ -9791,10 +9962,11 @@ fn the_roll_flags_are_refused_under_the_film_master() {
             &[&["--params", master.to_str().unwrap()][..], flag].concat(),
         );
         assert_eq!(code, 2, "{flag:?}: {err}");
+        let (named, verb) = roll_flags_named(flag);
         assert!(
-            err.contains(&format!("{} applies the roll's measurements", flag[0]))
+            err.contains(&format!("{named} {verb} the roll's measurements"))
                 && err.contains("the recipe's `output` is \"film-master\"")
-                && err.contains(&format!("drop {}", flag[0]))
+                && err.contains(&format!("drop {named}"))
                 && err.contains("choose a rendered destination"),
             "{flag:?}: {err}"
         );
@@ -9825,7 +9997,14 @@ fn the_roll_flags_are_refused_under_the_film_master() {
             &["must be finite and positive"][..],
         ),
         (
-            &["--roll-white", "1.7", "--contrast", "1.3"][..],
+            &[
+                "--roll-white",
+                "1.7",
+                "--roll-dark",
+                "-3.75",
+                "--contrast",
+                "1.3",
+            ][..],
             &["cannot apply", "--contrast"][..],
         ),
     ] {
@@ -9941,6 +10120,22 @@ fn write_split_density(path: &Path, base: [f32; 3], d: f32, dark: f32, rows: u32
     let pixels: Vec<u16> = (0..h)
         .flat_map(|y| {
             let px = raw(if y >= h - rows { dark } else { d });
+            (0..w).flat_map(move |_| px)
+        })
+        .collect();
+    write_hdri(path, w, h, &pixels, &vec![40_000; (w * h) as usize]);
+}
+
+/// A frame at density `d` with two middle rows near the film base: a dark end five stops
+/// under a typical white (`roll_white::FrameTones::dark_stops`), so the roll's slope has a
+/// span to spread, yet few enough rows that the frame still reads as flat (no lift) and
+/// its white is `d`'s.
+fn write_white_density(path: &Path, base: [f32; 3], d: f32) {
+    let raw = |d: f32| base.map(|b| (b * 10f32.powf(-d) * 65535.0).round() as u16);
+    let (w, h) = (64, 64);
+    let pixels: Vec<u16> = (0..h)
+        .flat_map(|y| {
+            let px = raw(if (31..33).contains(&y) { 0.05 } else { d });
             (0..w).flat_map(move |_| px)
         })
         .collect();
@@ -10479,7 +10674,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
     let (dim, bright) = (tmp.path("dim.tif"), tmp.path("bright.tif"));
-    write_uniform_density(&dim, base, 1.01);
+    write_white_density(&dim, base, 1.01);
+    // Uniform: the near leader's guard must be able to take every pixel.
     write_uniform_density(&bright, base, 1.17);
     let (near, far) = (tmp.path("near.tif"), tmp.path("far.tif"));
     // The near leader is 0.1 stop over the bright frame — inside the guard, which would
@@ -10532,8 +10728,10 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         )),
         "a clamped frame's own flag carries the cap as its white: {report}"
     );
+    // Both spread their span to the roll's dark end; the cap's is the longer, so flatter.
+    let dark = white["dark_stops"].as_f64().unwrap();
     assert!(
-        (cap_slope * 1.8 - 2.23).abs() < 0.01 && roll_slope > cap_slope,
+        (cap_slope - 9.049 / (2.0 - dark)).abs() < 1e-4 && roll_slope > cap_slope,
         "{report}"
     );
     assert!(
@@ -10585,8 +10783,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
             .as_str()
             .unwrap()
             .ends_with(&format!(
-                "--roll-white {} --roll-exposure {}",
+                "--roll-white {} --roll-dark {} --roll-exposure {}",
                 white["stops"].as_f64().unwrap() as f32,
+                dark as f32,
                 report["exposure"]["ev"].as_f64().unwrap() as f32
             )),
         "{report}"
@@ -10652,6 +10851,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     shared["roll"] = serde_json::json!({
         "white_balance": written["roll"]["white_balance"],
         "white_stops": written["roll"]["white_stops"],
+        "dark_stops": written["roll"]["dark_stops"],
         "exposure": written["roll"]["exposure"],
     });
     let shared = write_file(&tmp.path("shared.json"), &shared.to_string());
@@ -10747,9 +10947,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert!(err.contains("belongs in the shared recipe"), "{err}");
 
     // A roll whose every frame is above the cap lands on the cap: its frames are still
-    // disclosed as clamped, but they render at the roll's own contrast, so the table
-    // names no frame (without lifts: the roll's exposure binds at -2 EV, so this one
-    // frame would be lifted).
+    // disclosed as clamped, but they render at the roll's own slope — the cap's span to
+    // this roll's dark end — so the table names no frame (without lifts: the roll's
+    // exposure binds at -2 EV, so this one frame would be lifted).
     let capped_recipe = tmp.path("capped.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
@@ -10765,7 +10965,20 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(code, 0, "{err}");
     let capped = json(&stdout);
     assert_eq!(capped["white"]["bound"], "cap", "{capped}");
-    assert_eq!(capped["white"]["slope"], clamped["slope"], "{capped}");
+    // One flat frame: its dark end sits over the capped white, a roll with no span, which
+    // takes the steepest slope — and the recipe it writes renders.
+    let capped_dark = capped["white"]["dark_stops"].as_f64().unwrap();
+    assert!(capped_dark > 2.0, "{capped}");
+    assert_eq!(capped["white"]["slope"], 3.5, "{capped}");
+    let (code, _, err) = run(&[
+        "convert",
+        bright.to_str().unwrap(),
+        "--params",
+        capped_recipe.to_str().unwrap(),
+        "-o",
+        tmp.path("capped.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
     assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
     let written = written_recipe(&capped_recipe);
     assert_eq!(
@@ -11986,6 +12199,7 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
             "roll": {
                 "white_balance": by_hand["white_balance"]["gains"],
                 "white_stops": by_hand["white"]["stops"],
+                "dark_stops": by_hand["white"]["dark_stops"],
                 "exposure": by_hand["exposure"]["ev"],
             },
         })
@@ -12179,6 +12393,8 @@ fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
         "--film-master",
         "--roll-white",
         "2",
+        "--roll-dark",
+        "-3.75",
         "--params",
         recipe.to_str().unwrap(),
         "-o",
@@ -12221,7 +12437,7 @@ fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
     let recipe = write_file(
         &tmp.path("r.json"),
         r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
-            "roll": {"white_stops": 1.6,
+            "roll": {"white_stops": 1.6, "dark_stops": -3.75,
                      "frames": {"hdr-48bit.tif": {"white_stops": 2.0}, "other.tif": {"white_stops": 2.0}}}}"#,
     );
     let (dump, first, replay) = (tmp.path("d.json"), tmp.path("a.tiff"), tmp.path("b.tiff"));
@@ -12232,6 +12448,8 @@ fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
         recipe.to_str().unwrap(),
         "--roll-white",
         "1.7",
+        "--roll-dark",
+        "-3.75",
         "--dump-params",
         dump.to_str().unwrap(),
         "-o",
@@ -12282,23 +12500,28 @@ fn the_removed_estimate_command_names_measure_base() {
 fn a_roll_frames_table_is_validated_by_key_and_value() {
     let tmp = TempDir::new("roll-frames-table");
     let frame = fixture("hdr-48bit.tif").display().to_string();
-    for (table, expect) in [
+    for (table, contrast, expect) in [
         (
             r#"{"sub/f.tif": {"white_stops": 2.0}}"#,
+            "1",
             "file names, not paths",
         ),
         (
             r#"{"hdr-48bit.tif": {"white_stops": -1.0}}"#,
+            "1",
             "must be finite and positive",
         ),
         (
             r#"{"hdr-48bit.tif": {"white_stops": 2.0, "contrast": 1}}"#,
+            "1",
             "unknown field",
         ),
-        // Finite and positive, but its whole contrast overflows: named as the entry,
-        // not as the `roll.white_stops` it resolves into.
+        // Finite and positive, but its span slope is steeper than the roll's, and the
+        // contrast takes its whole slope past f32 where the roll's fits: named as the
+        // entry, not as the `roll.white_stops` it resolves into.
         (
-            r#"{"hdr-48bit.tif": {"white_stops": 1e-38}}"#,
+            r#"{"hdr-48bit.tif": {"white_stops": 0.001}}"#,
+            "0.9e38",
             "`roll.frames.\"hdr-48bit.tif\".white_stops`",
         ),
     ] {
@@ -12306,7 +12529,8 @@ fn a_roll_frames_table_is_validated_by_key_and_value() {
             &tmp.path("r.json"),
             &format!(
                 r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
-                    "roll": {{"white_stops": 1.6, "frames": {table}}}}}"#
+                    "look": {{"contrast": {contrast}}},
+                    "roll": {{"white_stops": 2.5, "dark_stops": -3.75, "frames": {table}}}}}"#
             ),
         );
         for command in ["convert", "roll"] {
@@ -12323,7 +12547,7 @@ fn a_roll_frames_table_is_validated_by_key_and_value() {
             assert!(err.contains(expect), "{command} {table}: {err}");
             assert!(
                 !err.contains("recipe `roll.white_stops`"),
-                "{command} {table}: the stated 1.6 is not at fault: {err}"
+                "{command} {table}: the stated 2.5 is not at fault: {err}"
             );
         }
     }
@@ -12648,18 +12872,35 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     assert_ne!(narrow, on, "the band must change which pixels are pulled");
 }
 
-/// The roll white whose slope is exactly 1 (`log2(1/0.18)`, the binary's own value
-/// printed so it parses back to the same `f32`): the look's contrast is then the
-/// identity, and with [`scene_saturation`] its colour too.
-fn scene_contrast_white() -> String {
-    (1.0f32 / 0.18).log2().to_string()
-}
-
-/// The `--saturation` that, beside [`scene_contrast_white`], makes the saturation slope
-/// exactly 1: the reciprocal of the `default` rendering's `look::DEFAULT_SATURATION`
-/// (1.15), which `1.15 × it` rounds back to 1 in `f32`.
-fn scene_saturation() -> String {
-    (1.0f32 / 1.15f32).to_string()
+/// Flags that make the look the identity under `default`: a roll white and dark end whose
+/// span slope (`9.049 / (white − dark)`, never under 1.237) the `--contrast` multiplier
+/// takes to exactly 1, and the `--saturation` that takes its colour (times the rendering's
+/// 1.15) there too — the first dark end, in hundredths, whose `f32` products round to 1,
+/// each value printed so it parses back to the same `f32`.
+fn scene_identity() -> Vec<String> {
+    let white = 2.0f32;
+    (375..500)
+        .map(|h| -(h as f32) / 100.0)
+        .find_map(|dark| {
+            let slope = 9.049f32 / (white - dark);
+            let colour = slope * 1.15f32;
+            let (contrast, saturation) = (1.0 / slope, 1.0 / colour);
+            (slope * contrast == 1.0 && colour * saturation == 1.0).then(|| {
+                [
+                    "--roll-white",
+                    &white.to_string(),
+                    "--roll-dark",
+                    &dark.to_string(),
+                    "--contrast",
+                    &contrast.to_string(),
+                    "--saturation",
+                    &saturation.to_string(),
+                ]
+                .map(String::from)
+                .to_vec()
+            })
+        })
+        .expect("a dark end whose products round to 1")
 }
 
 /// The look's contrast (`nf-look/contrast-definition`): a multiplier on the base slope,
@@ -12727,18 +12968,25 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     );
 
     // On a roll white it builds on the roll's slope, not the fallback.
-    let (_, report) = convert("roll.tiff", &["--roll-white", "2", "--contrast", "1.2"]);
+    let (_, report) = convert(
+        "roll.tiff",
+        &[
+            "--roll-white",
+            "2",
+            "--roll-dark",
+            "-3.75",
+            "--contrast",
+            "1.2",
+        ],
+    );
     let (_, base, from, slope) = look(&report);
     assert_eq!(from, "roll", "{report}");
     assert_eq!(base, report["chain"]["roll"]["slope"].as_f64().unwrap());
     assert!((slope - base * 1.2).abs() < 1e-6, "{report}");
     // A slope of exactly 1 is the identity, reported as such.
-    let white = scene_contrast_white();
-    let saturation = scene_saturation();
-    let (unity, report) = convert(
-        "unity.tiff",
-        &["--roll-white", &white, "--saturation", &saturation],
-    );
+    let identity = scene_identity();
+    let identity: Vec<&str> = identity.iter().map(String::as_str).collect();
+    let (unity, report) = convert("unity.tiff", &identity);
     assert_eq!(applied(&report), "identity", "{report}");
     assert_ne!(unity, default);
 
@@ -12918,8 +13166,7 @@ fn the_look_contrast_refuses_a_value_it_cannot_apply() {
 fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
     let tmp = TempDir::new("look-channel-grade");
     let input = fixture("hdr-48bit.tif").display().to_string();
-    let white = scene_contrast_white();
-    let saturation = scene_saturation();
+    let identity = scene_identity();
     let convert = |name: &str, extra: &[&str]| {
         let out = tmp.path(name);
         let mut argv = vec![
@@ -12929,14 +13176,12 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.55,0.42",
-            // Contrast, saturation and desaturation off, so `applied` reads the grade alone.
-            "--roll-white",
-            &white,
-            "--saturation",
-            &saturation,
+            // Desaturation off, and contrast and saturation at the identity, so `applied`
+            // reads the grade alone.
             "--highlight-desaturation",
             "0",
         ];
+        argv.extend(identity.iter().map(String::as_str));
         argv.extend_from_slice(extra);
         let (code, stdout, err) = run(&argv);
         assert_eq!(code, 0, "{extra:?}: {err}");
@@ -13204,7 +13449,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
         &tmp.path("roll.json"),
         r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
-            "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
+            "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6, "dark_stops": -3.75}}"#,
     );
     let convert = |name: &str, extra: &[&str]| {
         let out = tmp.path(name);
@@ -13789,7 +14034,8 @@ fn a_roll_names_each_frame_from_its_destination() {
         r#"{
   "recipe_version": 3,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-  "roll": { "white_balance": [1.0, 1.0, 1.0], "white_stops": 2.0, "exposure": 0.0 },
+  "roll": { "white_balance": [1.0, 1.0, 1.0], "white_stops": 2.0, "dark_stops": -3.75,
+    "exposure": 0.0 },
   "output": { "display": { "transfer": "pq" } }
 }"#,
     );
@@ -13917,7 +14163,7 @@ fn a_roll_names_each_frame_from_its_destination() {
 /// A measured roll file: the film base and the roll section.
 const MEASURED_LAYER: &str = r#"{"recipe_version": 2,
     "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
-    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5}}"#;
+    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5, "dark_stops": -3.75}}"#;
 /// A look: no measurement.
 const LOOK_LAYER: &str = r#"{"recipe_version": 2,
     "scene_correction": {"exposure": 0.3},
@@ -13925,7 +14171,7 @@ const LOOK_LAYER: &str = r#"{"recipe_version": 2,
 /// The two, merged by hand.
 const MERGED_LAYERS: &str = r#"{"recipe_version": 2,
     "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
-    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5},
+    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5, "dark_stops": -3.75},
     "scene_correction": {"exposure": 0.3},
     "look": {"channel_grade": [1.1, 0.95]}}"#;
 
@@ -14056,7 +14302,7 @@ fn a_complete_look_file_layered_after_the_measurement_keeps_it() {
         r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
             "reconstruction": {"linearization": 1.6},
-            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5}}"#,
+            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5, "dark_stops": -3.75}}"#,
     );
     let (code, complete, err) = run(&["params"]);
     assert_eq!(code, 0, "{err}");
@@ -14091,14 +14337,14 @@ fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
         &tmp.path("roll1.json"),
         r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
-            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0,
+            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0, "dark_stops": -3.75,
                      "frames": {"hdr-48bit.tif": {"white_stops": 1.7}}}}"#,
     );
     let roll2 = write_file(
         &tmp.path("roll2.json"),
         r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.8, 0.5, 0.4]}},
-            "roll": {"white_balance": [1.0, 1.0, 1.0], "white_stops": 1.8}}"#,
+            "roll": {"white_balance": [1.0, 1.0, 1.0], "white_stops": 1.8, "dark_stops": -3.75}}"#,
     );
     // Dumped from another frame of roll 1, so the table stays a table.
     let other = tmp.path("other.tif");
@@ -14278,6 +14524,8 @@ fn roll_runs_from_flags_alone_and_from_layers() {
         "0.3",
         "--roll-white",
         "2.5",
+        "--roll-dark",
+        "-3.75",
     ];
     let (_, convert_bytes) = convert_ok(&tmp, "convert", &flags);
     let out_dir = tmp.path("flags");
@@ -14350,8 +14598,15 @@ fn a_frames_override_beats_a_roll_flag() {
         json(&stdout)
     };
     // A clamp survives a roll-wide `--roll-white`, and is frame-local: no warning.
-    let clamp = one_frame_manifest(&tmp.path("clamp.json"), r#"{"roll": {"white_stops": 1.5}}"#);
-    let report = roll(&clamp, &["--roll-white", "3.0"], "clamp");
+    let clamp = one_frame_manifest(
+        &tmp.path("clamp.json"),
+        r#"{"roll": {"white_stops": 1.5, "dark_stops": -3.75}}"#,
+    );
+    let report = roll(
+        &clamp,
+        &["--roll-white", "3.0", "--roll-dark", "-3.75"],
+        "clamp",
+    );
     assert_eq!(
         report["frames"][0]["chain"]["roll"]["white_stops"], 1.5,
         "{report}"
@@ -14393,7 +14648,7 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     let roll = |frames: &str| {
         format!(
             r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
-                "roll": {{"white_stops": 1.5, "exposure": 1.0, "frames": {frames}}}}}"#
+                "roll": {{"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0, "frames": {frames}}}}}"#
         )
     };
     let lifted = write_file(
@@ -14421,11 +14676,25 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     };
     let (beaten, report) = convert(
         "beaten.tiff",
-        &["--params", &s(&lifted), "--roll-white", "1.9"],
+        &[
+            "--params",
+            &s(&lifted),
+            "--roll-white",
+            "1.9",
+            "--roll-dark",
+            "-3.75",
+        ],
     );
     let (control, control_report) = convert(
         "control.tiff",
-        &["--params", &s(&plain), "--roll-white", "1.9"],
+        &[
+            "--params",
+            &s(&plain),
+            "--roll-white",
+            "1.9",
+            "--roll-dark",
+            "-3.75",
+        ],
     );
     let chain = &report["chain"];
     assert_eq!(chain["look"]["base_from"], "roll", "{report}");
@@ -14450,6 +14719,8 @@ fn a_stated_white_drops_a_frames_thin_lift() {
             &s(&lifted),
             "--roll-white",
             "1.9",
+            "--roll-dark",
+            "-3.75",
             "--roll-thin-slope",
             "2.2",
             "--roll-thin-exposure",
@@ -14459,7 +14730,14 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     assert_eq!(typed["chain"]["look"]["base_from"], "thin", "{typed}");
     let (_, kept) = convert(
         "kept.tiff",
-        &["--params", &s(&small), "--roll-white", "1.9"],
+        &[
+            "--params",
+            &s(&small),
+            "--roll-white",
+            "1.9",
+            "--roll-dark",
+            "-3.75",
+        ],
     );
     assert_eq!(
         kept["chain"]["roll"]["frame_exposure_applied"], true,
@@ -14489,7 +14767,10 @@ fn a_stated_white_drops_a_frames_thin_lift() {
         assert_eq!(code, 0, "{err}");
         json(&stdout)["frames"][0]["chain"].clone()
     };
-    let chain = roll_with("manifest", r#"{"roll": {"white_stops": 1.9}}"#);
+    let chain = roll_with(
+        "manifest",
+        r#"{"roll": {"white_stops": 1.9, "dark_stops": -3.75}}"#,
+    );
     assert_eq!(chain["look"]["base_from"], "roll", "{chain}");
     assert_eq!(
         chain["roll"]["slope"],
@@ -14499,7 +14780,7 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     assert_eq!(chain["roll"]["frame_exposure_applied"], true, "{chain}");
     let chain = roll_with(
         "manifest-slope",
-        r#"{"roll": {"white_stops": 1.9, "thin_slope": 2.2, "thin_exposure": 0.2}}"#,
+        r#"{"roll": {"white_stops": 1.9, "dark_stops": -3.75, "thin_slope": 2.2, "thin_exposure": 0.2}}"#,
     );
     assert_eq!(chain["look"]["base_from"], "thin", "{chain}");
     assert_eq!(chain["roll"]["thin_slope"], 2.2, "{chain}");
@@ -14751,6 +15032,13 @@ fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
         assert_eq!(written["meta"]["pipeline_version"], current, "{name}");
         // `convert_p3` states a base, which `hanten params` leaves unset, and `MEASURED`
         // the roll values only `measure-roll` writes, so `--strict` fails on the stamp alone.
+        // The fixture's one bright frame measures a dark end three stops under its white,
+        // a span the roll's slope stretches until it clips: a deeper one keeps it quiet.
+        let deeper: &[&str] = if doc == &measured_roll {
+            &["--roll-dark=-4"]
+        } else {
+            &[]
+        };
         let replay = |recipe: &Path, extra: &[&str]| {
             convert_p3(
                 &scan,
@@ -14758,6 +15046,7 @@ fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
                 &[
                     &["--params", recipe.to_str().unwrap()][..],
                     &MEASURED,
+                    deeper,
                     extra,
                 ]
                 .concat(),
@@ -15023,7 +15312,7 @@ fn a_roll_flag_beats_a_frames_table_entry_as_on_convert() {
         &tmp.path("roll.json"),
         r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
-            "roll": {"white_stops": 2.5, "frames": {"hdr-48bit.tif": {"white_stops": 1.5}}}}"#,
+            "roll": {"white_stops": 2.5, "dark_stops": -3.75, "frames": {"hdr-48bit.tif": {"white_stops": 1.5}}}}"#,
     );
     let scan = fixture("hdr-48bit.tif");
     let roll = |extra: &[&str], dir: &str| {
@@ -15051,9 +15340,13 @@ fn a_roll_flag_beats_a_frames_table_entry_as_on_convert() {
     assert_eq!(white, 1.5, "the entry applies");
     let (_, convert_bytes) = convert_ok(&tmp, "entry", &["--params", m]);
     assert!(bytes == convert_bytes);
-    let (white, bytes) = roll(&["--roll-white", "3.0"], "flag");
+    let (white, bytes) = roll(&["--roll-white", "3.0", "--roll-dark", "-3.75"], "flag");
     assert_eq!(white, 3.0, "the flag beats the entry");
-    let (_, convert_bytes) = convert_ok(&tmp, "flag", &["--params", m, "--roll-white", "3.0"]);
+    let (_, convert_bytes) = convert_ok(
+        &tmp,
+        "flag",
+        &["--params", m, "--roll-white", "3.0", "--roll-dark", "-3.75"],
+    );
     assert!(bytes == convert_bytes);
 }
 
@@ -15291,13 +15584,16 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
         assert!(!out.with_extension("tiff").exists(), "{value}");
     }
 
-    // `roll` refuses a `roll.frames` entry by its own key, before any frame is written.
+    // `roll` refuses a `roll.frames` entry by its own key, before any frame is written: its
+    // span slope is held at the maximum, which the contrast takes past what renders.
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
         r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
-            "roll": {"white_stops": 2.5, "frames": {"hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
+            "look": {"contrast": 1.5},
+            "roll": {"white_stops": 2.5, "dark_stops": -1, "exposure": 0,
+                "frames": {"hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
     )
     .unwrap();
     let out_dir = tmp.path("roll");
@@ -15311,9 +15607,7 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains(
-            r#"It renders with recipe `roll.frames."hdr-48bit.tif".white_stops` at its default"#
-        ),
+        err.contains(r#"recipe `roll.frames."hdr-48bit.tif".white_stops` at its default"#),
         "{err}"
     );
     assert!(!out_dir.exists() || std::fs::read_dir(&out_dir).unwrap().next().is_none());
@@ -15345,11 +15639,13 @@ fn a_channel_rendered_black_everywhere_warns() {
             .map(|a| a.iter().map(|w| w.as_str().unwrap().to_string()).collect())
             .unwrap_or_default()
     };
-    // A measured roll white: under `MEASURED`'s contrast the exposure below would also
-    // drive the film base to 0, which is a usage error rather than a black render.
+    // A measured roll at the flattest span slope: any steeper and the exposure below would
+    // also drive the film base to 0, which is a usage error rather than a black render.
     let mut measured = vec![
         "--roll-white",
         "2.5",
+        "--roll-dark",
+        "-20",
         "--roll-white-balance",
         "1,1,1",
         "--roll-exposure",
@@ -15380,7 +15676,15 @@ fn a_channel_rendered_black_everywhere_warns() {
     // Saturation held low: a red-less picture saturated further leaves Display P3, and the
     // gamut map's pull toward neutral puts red back.
     let mut one = roll;
-    one.extend(["--white-balance=1e-30,1,1", "--saturation", "0.5"]);
+    // Contrast takes the slope under the span's flattest, back to the one the case was
+    // built at; steeper, red reappears.
+    one.extend([
+        "--white-balance=1e-30,1,1",
+        "--saturation",
+        "0.5",
+        "--contrast",
+        "0.8",
+    ]);
     let (code, stdout, err) = convert("red", &one);
     assert_eq!(code, 0, "{err}");
     assert!(

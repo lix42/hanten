@@ -15,13 +15,18 @@
 //! make neutral stays neutral under any slope; the gain *values* belong to this
 //! decode, which is why they are measured here and not at a rendered output.
 //!
+//! **The roll's slope** (`nf-calibration/span-roll-slope`) spreads the roll's span, from
+//! its dark end ([`roll_dark`]) to its white, over [`SPAN_LOOK_STOPS`], mid-grey pinned
+//! and the roll's exposure unchanged, so the white renders where the slope and exposure
+//! put it ([`span_slope`]). The recipe stores the two ends (`roll.white_stops`,
+//! `roll.dark_stops`), not the slope, which is derived at render time and which
+//! `look.contrast` multiplies.
+//!
 //! **The roll's white** (`nf-calibration/roll-white-rule`) is measured from the same
-//! per-frame samples and placed through the look's slope, with mid-grey pinned, so the
-//! roll's white renders at diffuse white. The recipe stores the white
-//! (`roll.white_stops`), not the slope: [`slope_for`] is applied at render time, and
-//! `look.contrast` multiplies it. The rule was chosen by review on nine rolls
-//! (`nf-calibration/anchor-comparison`), with a black point in the chain; its values are
-//! provisional, since that sample held no deliberately bad frames:
+//! per-frame samples. The rule was chosen by review on nine rolls
+//! (`nf-calibration/anchor-comparison`) when it placed the white at diffuse white, with a
+//! black point in the chain; its values are provisional, since that sample held no
+//! deliberately bad frames:
 //!
 //! - A frame's white is the [`WHITE_PERCENTILE`] of its pixels' **brightest channel**
 //!   over its effective area, which keeps the specular headroom above white, in **scene
@@ -31,7 +36,7 @@
 //!   measured before it.
 //! - The roll's white is the brightest frame white at or under [`WHITE_CAP_STOPS`],
 //!   raised to at least [`WHITE_FLOOR_STOPS`]; if every frame is above the cap, it is the
-//!   cap. A frame above the cap is **clamped**: it renders at the cap's slope, not the
+//!   cap. A frame above the cap is **clamped**: it renders at the cap's span, not the
 //!   roll's, and the report discloses it — an ordinary bright scene is clamped too, so it
 //!   is not a warning.
 //! - A frame whose white **as decoded** is within [`SATURATION_MARGIN_STOPS`] of the
@@ -182,6 +187,23 @@ pub const THIN_LIFT_STOPS: f32 = 1.0;
 /// The steepest slope a thin-frame lift may reach — grain rises with it. Review passed 2.4
 /// on two thin frames.
 pub const THIN_SLOPE_BOUND: f32 = 2.4;
+
+/// The percentile of a frame's luma taken as its dark end ([`FrameTones::dark_stops`]).
+/// From the poor-development spike (`docs/spike/poor-development.md`), whose 5 % is
+/// untried.
+pub const DARK_PERCENTILE: f32 = 0.01;
+
+/// The percentile of its frames' dark ends taken as the roll's ([`roll_dark`]): low, so
+/// the roll's darkest content sets it, but not its single darkest frame.
+pub const ROLL_DARK_PERCENTILE: f32 = 0.1;
+
+/// How many look stops the roll's span renders over ([`span_slope`]): the spike's white
+/// target (+4.049, about L\* 91 on SDR) less its dark target (−5).
+pub const SPAN_LOOK_STOPS: f32 = 9.049;
+
+/// The steepest slope any placement sets. A placeholder from one review, owned by
+/// `nf-calibration/hybrid-slope-bounds`.
+pub const MAX_SLOPE: f32 = 3.5;
 
 /// The leader measurement the guard reads, **written fresh** — the retiring
 /// leader-`Dmax` anchor is not reused (`nf-retire/dmax-machinery`).
@@ -437,6 +459,27 @@ pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
     })
 }
 
+/// The roll's dark end, in scene stops: the [`ROLL_DARK_PERCENTILE`] of its frames' dark
+/// ends ([`FrameTones::dark_stops`]; `None` for a frame with no usable pixel), so one
+/// night frame does not set it. `None` when no frame has one.
+pub fn roll_dark(darks: &[Option<f32>]) -> Option<f32> {
+    let known: Vec<f32> = darks.iter().flatten().copied().collect();
+    (!known.is_empty()).then(|| nearest_rank_of(known, ROLL_DARK_PERCENTILE))
+}
+
+/// The slope that renders a span from `dark_stops` to `white_stops` (scene stops) over
+/// [`SPAN_LOOK_STOPS`], held within [`slope_for`] of [`WHITE_CAP_STOPS`] (1.237)
+/// and [`MAX_SLOPE`]. A span that is not positive takes the steepest.
+pub fn span_slope(white_stops: f32, dark_stops: f32) -> f32 {
+    let span = white_stops - dark_stops;
+    let k = if span > 0.0 {
+        SPAN_LOOK_STOPS / span
+    } else {
+        MAX_SLOPE
+    };
+    k.clamp(slope_for(WHITE_CAP_STOPS), MAX_SLOPE)
+}
+
 /// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`sample_white`], scene
 /// stops) and the roll's exposure as applied, so the key is where the white renders.
 pub fn small_lift(white_stops: f32, roll_ev: f32) -> f32 {
@@ -446,11 +489,15 @@ pub fn small_lift(white_stops: f32, roll_ev: f32) -> f32 {
 }
 
 /// A frame's tonal shape over `region`, from its luma in scene stops: what decides whether
-/// a lift may touch it ([`FLAT_SPREAD_STOPS`], [`THIN_BASE_SHARE`]).
+/// a lift may touch it ([`FLAT_SPREAD_STOPS`], [`THIN_BASE_SHARE`]), and its dark end.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct FrameTones {
     /// Stops from the luma's p5 to its p95.
     pub spread_stops: f32,
+    /// The luma's [`DARK_PERCENTILE`]: the frame's dark end, which [`roll_dark`] pools.
+    /// Before the roll's gains, as the exposure's level is (the white is after them): the
+    /// gains move a dark pixel's luma by hundredths of a stop.
+    pub dark_stops: f32,
     /// The share of pixels whose luma is within [`NEAR_BASE_STOPS`] of the base.
     pub base_share: f32,
 }
@@ -487,21 +534,29 @@ pub fn frame_tones(
         .filter(|s| **s < base_stops + NEAR_BASE_STOPS)
         .count();
     let base_share = near as f32 / stops.len() as f32;
-    // Both percentiles from one selection: p5 lies below p95's place.
+    // Every percentile from nested selections: each lies at or below the next one's place.
     let mut stops = stops;
-    let (lo, hi) = (
+    let (dark, lo, hi) = (
+        nearest_rank_index(stops.len(), DARK_PERCENTILE),
         nearest_rank_index(stops.len(), 0.05),
         nearest_rank_index(stops.len(), 0.95),
     );
     let (below, p95, _) = stops.select_nth_unstable_by(hi, f32::total_cmp);
     let p95 = *p95;
-    let p5 = if lo < hi {
-        *below.select_nth_unstable_by(lo, f32::total_cmp).1
+    let (below, p5) = if lo < hi {
+        let (below, p5, _) = below.select_nth_unstable_by(lo, f32::total_cmp);
+        (below, *p5)
     } else {
-        p95
+        (below, p95)
+    };
+    let p1 = if dark < lo.min(hi) {
+        *below.select_nth_unstable_by(dark, f32::total_cmp).1
+    } else {
+        p5
     };
     Ok(Some(FrameTones {
         spread_stops: p95 - p5,
+        dark_stops: p1,
         base_share,
     }))
 }
@@ -597,7 +652,8 @@ pub fn scene_stops(level: f32) -> f32 {
 
 /// The slope that renders a white `white_stops` above mid-grey at diffuse white,
 /// mid-grey pinned: the look maps `MID_GREY · 2^w` to `MID_GREY · 2^(k·w)`. Scene stops
-/// already include the decode's linearization, so it does not enter here.
+/// already include the decode's linearization, so it does not enter here. The fallback
+/// without a roll measurement, and the cap's, the flattest [`span_slope`].
 pub const fn slope_for(white_stops: f32) -> f32 {
     WHITE_OVER_MID_STOPS / white_stops
 }
@@ -626,7 +682,7 @@ pub enum FrameRole {
     SetsRoll,
     /// At or under the cap, and not the roll's white (or the floor raised it).
     Under,
-    /// Above the cap: rendered at the cap's slope, not the roll's.
+    /// Above the cap: rendered at the cap's span to the roll's dark end, not the roll's.
     Clamped,
     /// No usable pixel, so no white.
     Unmeasured,
@@ -849,6 +905,7 @@ mod tests {
         let t = frame_tones(&rgb, 20, [0, 0, 20, 1], base).unwrap().unwrap();
         assert!((t.spread_stops - 3.4).abs() < 1e-4, "{t:?}");
         assert!((t.base_share - 0.25).abs() < 1e-6, "{t:?}");
+        assert!((t.dark_stops - (base + 0.1)).abs() < 1e-4, "{t:?}");
         assert!(!t.flat());
         // One surface: under a stop from p5 to p95.
         let flat: Vec<f32> = (0..20)
@@ -870,6 +927,7 @@ mod tests {
     fn a_thin_frame_is_dark_with_its_shadows_on_the_base_and_not_flat() {
         let tones = |spread_stops, base_share| FrameTones {
             spread_stops,
+            dark_stops: -3.0,
             base_share,
         };
         assert!(thin(-1.2, 1.4, &tones(1.9, 0.64)));
@@ -879,6 +937,37 @@ mod tests {
         assert!(!thin(0.5, 1.4, &tones(2.0, 0.6)));
         // Flat wins over everything.
         assert!(!thin(-1.2, 1.4, &tones(FLAT_SPREAD_STOPS - 0.01, 0.9)));
+    }
+
+    #[test]
+    fn a_frames_dark_end_is_its_lumas_low_percentile() {
+        // 200 levels a hundredth of a stop apart: nearest-rank p1 is the third.
+        let rgb: Vec<f32> = (0..200)
+            .flat_map(|i| [MID_GREY * (-4.0 + 0.01 * i as f32).exp2(); 3])
+            .collect();
+        let t = frame_tones(&rgb, 200, [0, 0, 200, 1], -5.0)
+            .unwrap()
+            .unwrap();
+        assert!((t.dark_stops - -3.98).abs() < 1e-4, "{t:?}");
+    }
+
+    #[test]
+    fn the_rolls_dark_end_is_low_but_not_its_darkest_frame() {
+        let darks: Vec<Option<f32>> = (0..11).map(|i| Some(-6.0 + i as f32 * 0.1)).collect();
+        // Nearest-rank p10 of eleven is the second darkest.
+        assert_eq!(roll_dark(&darks), darks[1]);
+        assert_eq!(roll_dark(&[None, Some(-4.0)]), Some(-4.0));
+        assert_eq!(roll_dark(&[None]), None);
+    }
+
+    #[test]
+    fn the_span_slope_spreads_the_span_over_its_look_stops_within_the_limits() {
+        assert!((span_slope(1.75, -3.75) - SPAN_LOOK_STOPS / 5.5).abs() < 1e-6);
+        // A very long span flattens no further than 1.237, a short one steepens
+        // no further than the maximum; an empty span takes the steepest.
+        assert_eq!(span_slope(2.0, -20.0), slope_for(WHITE_CAP_STOPS));
+        assert_eq!(span_slope(1.0, -0.5), MAX_SLOPE);
+        assert_eq!(span_slope(1.0, 1.0), MAX_SLOPE);
     }
 
     #[test]
