@@ -36,7 +36,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `measure-roll` report on their real rolls). At `core/auto-calibration` §4's
 > `measure-roll` section and §7's measure-roll bullets were re-run, the `auto` report on
 > its real roll, and at `core/profile-authoring` (`hanten profile`, `--save-recipe`,
-> comments in recipes) §3, §4's look file, §5 and §10's recipe examples. The staleness
+> comments in recipes) §3, §4's look file, §5 and §10's recipe examples. At
+> `core/roll-measure-mode` §3's `roll` row and §4's measure-mode section were re-run on
+> the real 2026-07-15 Ektar 100 and 2026-09-18 Gold 200 rolls. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -148,7 +150,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten measure-base` | **"What is this film's base?"** — measure the film base (`Dmin`) alone, from an unexposed frame or a region. Prints a reuse-ready `--film-base` flag; `--out` writes it as a recipe. (Was `estimate`, which now exits 2 naming it.) | No |
 | `hanten profile` | Write a **look** from the conversion flags, with no scan: every setting but what belongs to one roll, as an annotated recipe (§5). (Was `params`, which now exits 2 naming it.) | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
-| `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`. | Yes |
+| `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`; with `--measure-roll` (or `--unexposed`) it measures the roll first, as `measure-roll` does (§4). | Yes |
 | `hanten measure-roll` | **"What does this roll share?"** — its white balance, midtone line, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` ([§11](#telemetry-upload)). | No |
 
@@ -436,6 +438,74 @@ value it states (§5, "Precedence").
 > every frame of the roll** — exactly what `roll` exists to prevent (`roll` warns
 > "roll film base is NOT frozen"). Use the file `--out` writes.
 
+### Steps 2 and 3 in one command: measure mode
+
+`roll --unexposed <unexposed.tif|auto>` measures the roll's film base, then the roll,
+as `measure-roll` does over the same frames, then converts them. With the base already
+stated (a `measure-base` file in `--params`, or `--film-base`), `--measure-roll` alone
+enters the mode. `--leader` is the optional saturation guard, as on `measure-roll`:
+
+```sh
+hanten roll frames/*.tif --unexposed unexposed.tif --leader leader.tif --out-dir positives/ \
+    --params look.jsonc --exposure 0.3 [--save-recipe roll-recipe.json]
+hanten measure-base frame.tif --base-region 0,0,24,24 --out base.json   # no unexposed frame
+hanten roll frames/*.tif --params base.json --measure-roll --leader leader.tif --out-dir positives/
+```
+
+The images are byte-identical to `measure-roll … --out roll.json` then `roll …
+--params roll.json` over the same frames and layers, with the same style flags
+(checked on the real 2026-09-18 Gold 200 roll, both forms). The decode and input flags
+(`--density-gamma`, `--input-transfer`, …) and `--measure-inset` apply to the
+measurement too, so by hand `measure-roll` must measure under them: pass it
+`--measure-inset` directly, and state the rest in a `--params` layer it reads
+(`reconstruction.linearization` for `--density-gamma`). The measurement is layered after every
+`--params` recipe, as `roll.json` would be, and the flags apply over it. The report is
+`roll`'s, with a `measurement` object holding what `measure-roll`'s report would (the
+`unexposed` and `references` evidence, each frame's white, the warnings).
+
+- **The base must be explicit**: a recipe's, `--film-base`, or `--unexposed` (a path or
+  `auto`, as on `measure-roll`). `--unexposed` beside a stated base exits 2, and so does
+  a `--base-region` base, which would measure each frame under a different decode.
+- **What is measured cannot be stated.** A `--params` recipe holding a measured `roll`
+  value, and a `--roll-*` flag, exit 2 (a frame's lift, `--roll-frame-exposure` or
+  `roll.thin_slope`, with the refusal it gets on any `roll`):
+
+  ```
+  usage: recipe roll.json states `roll.white_balance`, a roll value, and --measure-roll
+         measures the roll's values. Layer a recipe without a measured `roll` section (a
+         look from `hanten profile`, a base from `hanten measure-base --out`), or render
+         with this one without measuring
+  ```
+
+- **The switches keep their meaning.** `--small-lift`, `--thin-lift`,
+  `--midtone-neutral` and `--neutral-balance` decide what applies at render, as on any
+  `roll`. The measurement runs at `measure-roll`'s defaults; to measure differently
+  (`measure-roll --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
+- **`--leader`** works as on `measure-roll`, `auto` included: without one the run warns
+  and `--strict` refuses before anything is decoded. A frame `auto` finds is left
+  unconverted, and a `note:` line names it. Outside measure mode `--leader` exits 2, since nothing is measured. The
+  unexposed frame and the leader named among the frames exit 2.
+- **`--frames` exits 2** in measure mode: a manifest's `params` can change the decode a
+  frame is measured under. Measure with `measure-roll --out` and pass the file.
+- **A measurement that fails writes no image** and exits with its own code (a scan that
+  does not decode is exit 3), with no report. Under `--strict` a measurement warning
+  exits 1 once the report is written, before any frame converts.
+- Each frame is decoded twice (measured, then converted); peak memory is about that of
+  the larger command (341 MiB against `measure-roll`'s 326 on the 8-frame Gold 200 roll).
+
+**`--save-recipe PATH`** (measure mode or not) writes the whole resolved run — the
+measurement, every layer and every flag — once the roll succeeds, and `roll --params
+PATH` over the same frames replays it byte for byte (with the same `--frames` manifest,
+if any). It is how to re-render the roll with a changed look, or a subset of its frames
+with the whole roll's numbers: measuring a subset gives other numbers. A failed or
+`--strict`-refused roll writes none; the out-dir is created first, so the file may go
+in it. As on `convert`, it may overwrite a `--params` file only when that is the sole
+layer, and never in measure mode. A typed `--roll-white` beats every frame's
+`roll.frames` white, and a typed `--roll-white` or `--roll-dark` every frame's thin
+lift, so the saved file leaves those out. After `auto`, replay over the picture frames
+alone: a plain `roll` converts every input it is given, the found unexposed frame and
+leader too.
+
 ---
 
 ## 5. Recipes
@@ -670,7 +740,8 @@ hanten convert scan.tif -o out --params look.json --params roll.json --exposure 
   `roll.frames` table — for replaying *that* run, not a look: layered under another
   roll's file, its table's entries survive (tables merge, and absence states nothing).
   Write a look with `hanten profile`. For the same reason `--save-recipe` may
-  overwrite a `--params` file only when it is the sole layer.
+  overwrite a `--params` file only when it is the sole layer (never in `roll`'s
+  measure mode).
 - **Flags win over every layer, by *source*, not value** — an explicit
   `--white-balance 1,1,1` over a recipe's gains means neutral. That includes a frame's
   `roll.frames` entry: `--roll-white` renders every frame at that white.
@@ -2021,8 +2092,10 @@ write as its `params` — save it and it reloads through `--params` to the same 
 and `identity.params_hash`, a stable hash of that recipe as Hanten pretty-prints it
 (the telemetry record's `conversion.params_hash`). Each `roll` frame's `identity.params_hash` hashes
 the recipe that frame ran, the shared one plus its overrides; the roll report does not
-echo the recipe. No other `identity` carries a hash — not `inspect`, `measure-base`,
-`measure-roll`, nor the roll-level one.
+echo the recipe (`roll --save-recipe` writes it). In measure mode the roll report also
+carries `measurement`, `measure-roll`'s report for the same run (§4). No other
+`identity` carries a hash — not `inspect`, `measure-base`, `measure-roll`, nor the
+roll-level one.
 
 ```sh
 hanten convert scan.tif -o out --film-base … | jq .recipe > out-recipe.json
