@@ -2671,6 +2671,7 @@ fn run_profile_command(args: &ProfileArgs) -> Result<()> {
         return Err(NcError::Usage(message));
     }
     check_out(args.out.as_deref(), args.force)?;
+    reject_roll_unsupported_input(&recipe)?;
     recipe::validate(&recipe, KnobNames::FlagAndKey)?;
     validate_shared_stated(&recipe)?;
     OutputTarget::resolve(
@@ -2678,6 +2679,13 @@ fn run_profile_command(args: &ProfileArgs) -> Result<()> {
         KnobNames::FlagAndKey,
         knobs.destination.film_master,
     )?;
+    // The render probe at the thinnest base: a look it refuses renders under no film base.
+    let mut probed = recipe.clone();
+    probed.calibration.film_base = Some(FilmBaseSource::Explicit(profile::PROBE_BASE));
+    recipe::validate_render(&probed, None, KnobNames::FlagAndKey).map_err(|e| match e {
+        NcError::Usage(m) => NcError::Usage(format!("{m}. {}", profile::PROBE_NOTE)),
+        e => e,
+    })?;
 
     let json = serde_json::to_string(&RecipeEnvelope::new(&recipe))
         .map_err(|e| NcError::Other(format!("serializing the profile: {e}")))?;

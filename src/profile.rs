@@ -238,6 +238,16 @@ pub fn refusal(knobs: &ConversionFlags, merged: &Recipe) -> Option<String> {
     ))
 }
 
+/// The film base `profile` probes a look's render at: thinner on every channel than any
+/// base measured. The base's own rendered luminance does not depend on it, and the
+/// densest sample decodes densest under the densest base, so a look that fails here
+/// fails under every real one.
+pub const PROBE_BASE: [f32; 3] = [0.02; 3];
+
+/// What `profile` adds to a render probe's refusal.
+pub const PROBE_NOTE: &str = "Probed at a film base thinner than any measured, so no \
+     film base renders this look";
+
 /// The `roll` switches among [`REFUSED_FLAGS`], with their keys: chosen rather than
 /// measured, so `measure-roll` never writes them.
 const ROLL_SWITCHES: &[(&str, &str)] = &[
@@ -291,9 +301,9 @@ const HEADER: &[&str] = &[
     "A Hanten look profile, written by `hanten profile`. It writes every setting but what",
     "belongs to one roll (`calibration`, `roll`, `scene_correction`); a null takes the",
     "rendering's value, which a later build may move. `meta` names the build that wrote it.",
-    "Checked without a scan: what needs one (whether the film base renders, clipping) is",
-    "checked when it converts. It states the decode, so layer it before a roll's measured",
-    "recipe: --params look.jsonc --params roll.json",
+    "Checked without a scan: what depends on your base or pixels (clipping, a render your",
+    "base cannot hold) is checked when it converts. It states the decode, so layer it",
+    "before a roll's measured recipe: --params look.jsonc --params roll.json",
     "`hanten profile` never overwrites it, and its comments are not read back: edit freely.",
 ];
 

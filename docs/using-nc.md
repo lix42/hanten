@@ -539,8 +539,10 @@ hanten profile --contrast 1.2 --out look.jsonc
   `--out` the profile goes to stdout.
 - **Checked without a scan.** A value out of range or a contradiction is refused here
   (exit 2), as `convert` would refuse it: `--range sdr --transfer pq` gets `no destination
-  combines --range sdr and --transfer pq`. What needs pixels — whether the film base
-  renders, clipping — is checked when it converts.
+  combines --range sdr and --transfer pq`. So is a look no film base could render, probed
+  at a base thinner than any measured, and `--input-meaning colorimetric` (exit 4). What
+  depends on your base or pixels — clipping, a render your base cannot hold — is checked
+  when it converts.
 - **What belongs to one roll is refused**, naming where it goes; `profile --help` does
   not list those flags. A white balance or exposure in a look would land as a recipe
   value, which beside a roll's measurement warns as a stale adjustment:

@@ -1313,6 +1313,14 @@ integration, 1 + 32 other, 575 `nctool`.
 look holds no roll switches; if users want one in a look, that is a new decision, since
 the switches live in `roll`.
 
+### 2026-10-09 — PR review (#259, Codex bot)
+
+Three findings, fixed: `nctool roll --recipe` now reads JSONC, as `hanten profile --out`
+writes it; `profile` runs the render probe at `profile::PROBE_BASE`, a base thinner than any
+measured (the base's own luminance does not depend on the base, and overflow grows with a
+denser one), so a look no base renders is refused while one a real base might hold is not;
+and `--input-meaning colorimetric` is refused (exit 4) by `roll`'s pre-flight rule.
+
 ## unfrozen-auto-mode-warning
 
 **Status:** closed — moot

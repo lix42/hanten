@@ -283,6 +283,19 @@ class TestConvert(unittest.TestCase):
                                                         "container": "jpeg"}})
         self.assertEqual(recipe["scene_correction"]["exposure"], .5)
 
+    def test_a_profiles_jsonc_is_read_as_the_recipe(self):
+        # `hanten profile --out` writes JSONC, and is a recipe like any other.
+        recipe_path = self.root / "look.jsonc"
+        recipe_path.write_text('// a look\n{"meta": {"pipeline_version": 10}, "params": '
+                               '{"recipe_version": 3, "look": {"contrast": 1.2}}  // c\n}\n')
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(config="jsonc", recipe=str(recipe_path)))
+        self.assertEqual(code, 0, err.getvalue())
+        recipe = json.loads((self.root / "converted/nc/jsonc/R/recipe.json").read_text())
+        self.assertEqual(recipe["params"]["look"]["contrast"], 1.2)
+
     def test_an_enveloped_default_recipe_is_read_as_its_params(self):
         # A build that stamps its recipe documents wraps `hanten params` too.
         self.defaults = {"meta": {"pipeline_version": 9}, "params": self.DEFAULTS}

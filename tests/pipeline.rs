@@ -8518,6 +8518,13 @@ fn a_profile_refuses_what_it_cannot_hold() {
     assert!(err.contains("no destination combines"), "{err}");
     let err = refused(&["--film-master", "--contrast", "1.2"]);
     assert!(err.contains("cannot apply the look"), "{err}");
+    // A look no film base renders, found by the probe at the thinnest base.
+    let err = refused(&["--display-black", "off", "--density-offset", "1e6,1e6,1e6"]);
+    assert!(err.contains("no film base renders this look"), "{err}");
+    // A meaning no frame can convert is refused before any scan exists.
+    let (code, _, err) = run(&["profile", "--input-meaning", "colorimetric"]);
+    assert_eq!(code, 4, "{err}");
+    assert!(err.contains("colorimetric is unsupported"), "{err}");
 
     // `--out` never clobbers a file, unless forced.
     let tmp = TempDir::new("profile-out");

@@ -28,10 +28,11 @@ ANALYSIS_SCHEMA = 1
 CONFIG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _load_object(path: Path) -> tuple[dict | None, str | None]:
+def _load_object(path: Path, jsonc: bool = False) -> tuple[dict | None, str | None]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        text = path.read_text(encoding="utf-8")
+        value = json.loads(_strip_jsonc(text) if jsonc else text)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         return None, f"cannot read {path}: {error}"
     if not isinstance(value, dict):
         return None, f"{path}: expected a JSON object"
@@ -192,7 +193,8 @@ def _recipe_input(path: str | None) -> tuple[dict | None, dict | None, str | Non
     """The `--recipe` file's recipe, and its envelope's `meta` (None when bare)."""
     if path is None:
         return {}, None, None
-    value, error = _load_object(Path(path))
+    # A recipe may be JSONC, as `hanten profile --out` writes one.
+    value, error = _load_object(Path(path), jsonc=True)
     if error:
         return None, None, error
     assert value is not None
