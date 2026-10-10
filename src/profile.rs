@@ -179,6 +179,7 @@ pub const REFUSED_FLAGS: &[(&str, &str)] = &[
     ("calibration", "--base-region"),
     ("roll", "--roll-white-balance"),
     ("roll", "--roll-white"),
+    ("roll", "--roll-dark"),
     ("roll", "--roll-exposure"),
     ("roll", "--roll-frame-exposure"),
     ("roll", "--small-lift"),
@@ -265,6 +266,7 @@ fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
         "--base-region" => base.base_region.is_some(),
         "--roll-white-balance" => roll.roll_white_balance.is_some(),
         "--roll-white" => roll.roll_white.is_some(),
+        "--roll-dark" => roll.roll_dark.is_some(),
         "--roll-exposure" => roll.roll_exposure.is_some(),
         "--roll-frame-exposure" => roll.roll_frame_exposure.is_some(),
         "--small-lift" => roll.small_lift.is_some(),
@@ -664,6 +666,44 @@ mod tests {
                 n.path
             );
         }
+    }
+
+    /// Every visible flag in the groups that set an omitted section is listed, so a new
+    /// one is named in its refusal and hidden from `profile --help`. Clap names each
+    /// flattened group after its struct.
+    #[test]
+    fn every_flag_that_sets_an_omitted_section_is_listed() {
+        use clap::CommandFactory;
+        let cli = crate::cli::Cli::command();
+        let convert = cli.find_subcommand("convert").unwrap();
+        let mut seen = 0;
+        for group in [
+            "FilmBaseOverrides",
+            "RollOverrides",
+            "SceneCorrectionOverrides",
+        ] {
+            let group = convert
+                .get_groups()
+                .find(|g| g.get_id() == group)
+                .unwrap_or_else(|| panic!("no group {group}"));
+            for id in group.get_args() {
+                let arg = convert.get_arguments().find(|a| a.get_id() == id).unwrap();
+                if arg.is_hide_set() {
+                    continue; // a removed flag, refused as removed
+                }
+                let flag = format!("--{}", arg.get_long().unwrap());
+                assert!(
+                    REFUSED_FLAGS.iter().any(|(_, f)| *f == flag),
+                    "{flag} is missing from REFUSED_FLAGS"
+                );
+                seen += 1;
+            }
+        }
+        assert_eq!(
+            seen,
+            REFUSED_FLAGS.len(),
+            "REFUSED_FLAGS lists a flag no group has"
+        );
     }
 
     #[test]

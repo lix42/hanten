@@ -164,6 +164,7 @@ pub enum TelemetryCommand {
 #[command(mut_arg("base_region", |a| a.hide(true)))]
 #[command(mut_arg("roll_white_balance", |a| a.hide(true)))]
 #[command(mut_arg("roll_white", |a| a.hide(true)))]
+#[command(mut_arg("roll_dark", |a| a.hide(true)))]
 #[command(mut_arg("roll_exposure", |a| a.hide(true)))]
 #[command(mut_arg("roll_frame_exposure", |a| a.hide(true)))]
 #[command(mut_arg("small_lift", |a| a.hide(true)))]
