@@ -133,13 +133,6 @@ impl FitGamutParams {
 /// leaving the chain costs no more than entering it did. The gamut rides out beside
 /// the pixels, so the encoder learns which primaries it holds from the image itself.
 ///
-/// **The carried IR plane rides out with it.** The design says carry the plane
-/// through rather than consume it (CLAUDE.md), and this chain must not be the thing
-/// that loses it — the removed chain's SDR render dropped it
-/// (`LinearImage::new(w, h, rgb, None)`), and this chain deliberately does not. Nothing
-/// downstream depends on the plane arriving here yet. How the plane *travels* is
-/// `nf-core/buffer-strategy`'s to settle; that it is not lost is decided here.
-///
 /// [`into_parts`]: Self::into_parts
 pub struct DisplayReferredImage(WorkingBuffer, DestinationGamut);
 

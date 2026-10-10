@@ -949,17 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn ir_plane_is_carried_through_untouched() {
-        // The IR plane must survive the color transform byte-for-byte (it is
-        // preserved, not consumed, in Step 1).
-        let img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], Some(vec![0.42])).unwrap();
-        let out = transform_to(img, &Profile::new_srgb()).unwrap();
-        assert_eq!(out.width, 1);
-        assert_eq!(out.height, 1);
-        assert_eq!(out.ir, Some(vec![0.42]));
-    }
-
-    #[test]
     fn malformed_rgb_length_fails_loudly() {
         // The loud `rgb.len() % 3` guard must still fire (`rgb` is `pub`, so a
         // malformed buffer is reachable): `as_chunks_mut` would otherwise silently
@@ -1551,12 +1540,11 @@ mod tests {
         // The destination half of "the declared profile matches the pixels":
         // `fit_gamut` already moved the pixels into Display P3, so the encode must apply
         // the sRGB curve and nothing else — no second gamut transform — and embed the
-        // Display P3 profile. The IR plane rides through untouched.
+        // Display P3 profile.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::DisplayP3).unwrap();
         assert_eq!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
-        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
         for (got, inp) in encoded.rgb.iter().zip(linear) {
             let want = srgb_encode(inp);
             assert!(
@@ -1629,10 +1617,9 @@ mod tests {
         // tell `563/256` from the `2.2` it is often rounded to, and the near-black
         // sample tells a pure power law from a curve with a linear toe.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::AdobeRgb).unwrap();
         assert_eq!(icc, adobe_rgb_icc());
-        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
         // Little CMS evaluates the parametric curve in float, measured within 4e-9.
         const TOLERANCE: f32 = 1e-6;
         for (got, inp) in encoded.rgb.iter().zip(linear) {
@@ -1714,12 +1701,11 @@ mod tests {
     #[test]
     fn srgb_encode_applies_only_the_srgb_curve_and_is_named() {
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::Srgb).unwrap();
         assert_eq!(icc, srgb_icc(), "must serialize to identical bytes");
         assert!(icc[24..36].iter().all(|&b| b == 0), "dateTime not zeroed");
         assert_ne!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
-        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
         for (got, inp) in encoded.rgb.iter().zip(linear) {
             let want = srgb_encode(inp);
             assert!(

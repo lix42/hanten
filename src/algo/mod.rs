@@ -15,8 +15,8 @@ pub mod fixed;
 use crate::types::LinearImage;
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
-/// the unclamped linear positive in NC's film-rendering interpretation, plus
-/// the carried-through IR plane. Fields are **private** and the constructor is
+/// the unclamped linear positive in NC's film-rendering interpretation. It has no
+/// IR plane: the decode drops it ([`fixed::decode`]). Fields are **private** and the constructor is
 /// `pub(in crate::algo)`, so only the `algo` module tree's reconstruction
 /// paths can mint one — a raw scan or density buffer cannot impersonate film
 /// RGB downstream (the working-space mapper accepts `FilmRgbImage`, nothing
@@ -34,8 +34,6 @@ pub struct FilmRgbImage {
     height: u32,
     /// Interleaved `r,g,b` positive, `len == width * height * 3`.
     rgb: Vec<f32>,
-    /// Carried-through IR plane (HDRi input), `len == width * height`.
-    ir: Option<Vec<f32>>,
 }
 
 impl FilmRgbImage {
@@ -45,13 +43,12 @@ impl FilmRgbImage {
     /// the fixed decode ([`fixed::decode`]) is the only producer outside tests (see
     /// `FilmRgbImage::fixture` (test-only)). Takes an
     /// already-validated [`LinearImage`] so the buffer length invariants hold
-    /// by construction.
+    /// by construction. An IR plane on `image` is dropped.
     pub(in crate::algo) fn from_linear(image: LinearImage) -> Self {
         Self {
             width: image.width,
             height: image.height,
             rgb: image.rgb,
-            ir: image.ir,
         }
     }
 
@@ -68,8 +65,7 @@ impl FilmRgbImage {
 
     // The read accessors below are the boundary's inspection API. Rendering takes the
     // whole image across the boundary (`into_linear`, the working-space mapper);
-    // `measure-roll` reads the dimensions and pixels; `ir` is exercised only by tests —
-    // a narrow documented allow per the house rule.
+    // `measure-roll` reads the dimensions and pixels.
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -85,12 +81,6 @@ impl FilmRgbImage {
         &self.rgb
     }
 
-    /// Read-only view of the carried IR plane, when the input had one.
-    #[allow(dead_code)]
-    pub fn ir(&self) -> Option<&[f32]> {
-        self.ir.as_deref()
-    }
-
     /// Unwrap into the plain working-space image type — the **read** direction
     /// of the boundary, used by the working-space mapper. Constructing a
     /// `FilmRgbImage` stays restricted; reading one out is not the invariant the
@@ -99,7 +89,7 @@ impl FilmRgbImage {
         // The fields came from a validated LinearImage and are never resized,
         // so the invariants hold; route through the validated constructor
         // anyway (its checks are O(1)) so a future regression fails loudly.
-        LinearImage::new(self.width, self.height, self.rgb, self.ir)
+        LinearImage::new(self.width, self.height, self.rgb, None)
             .expect("FilmRgbImage preserves the validated buffer-length invariants")
     }
 }
@@ -109,7 +99,6 @@ impl std::fmt::Debug for FilmRgbImage {
         f.debug_struct("FilmRgbImage")
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("ir", &self.ir.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -134,17 +123,14 @@ mod tests {
     }
 
     #[test]
-    fn reconstruction_returns_a_film_rgb_image_and_preserves_ir() {
+    fn reconstruction_returns_a_film_rgb_image() {
         // The type-level boundary: the decode produces a `FilmRgbImage` (enforced by
-        // its signature) with the dimensions and IR plane intact.
+        // its signature) with the dimensions intact. It has no IR field.
         let (film, _) = fixed::decode(image(), &base(), &fixed::DecodeParams::default()).unwrap();
         assert_eq!((film.width(), film.height()), (2, 1));
         assert_eq!(film.rgb().len(), 6);
-        assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]));
-        // The read direction round-trips losslessly.
         let linear = film.into_linear();
         assert_eq!((linear.width, linear.height), (2, 1));
-        assert_eq!(linear.ir.as_deref(), Some(&[0.25_f32, 0.75][..]));
     }
 
     // `FilmRgbImage`'s construction privacy is enforced by the compiler:

@@ -468,7 +468,7 @@ pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, Dec
     // non-preview page as the IR plane (strictly, as before), and note extras.
     let mut ir = None;
     // Whether the accepted IR plane carried the `NewSubfileType=4` marker. A
-    // shape-only plane (marker absent) is still carried, but consumers must not
+    // shape-only plane (marker absent) is still decoded, but consumers must not
     // trust it — threaded onto the image as `ir_verified` (see the holder mask).
     let mut ir_verified = false;
     let mut warned_extra = false;
@@ -539,15 +539,15 @@ pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, Dec
         }
         // The real IR plane is marked `NewSubfileType=4`. We still accept a
         // matching-dimension 16-bit grayscale IFD without it (the layout is
-        // reverse-engineered, and the IR plane is only carried, not consumed in
-        // Step 1), but record a warning so an incidental page isn't reported as IR
+        // reverse-engineered, and only the holder measurement reads the plane,
+        // which then refuses to trust it), but record a warning so an incidental page isn't reported as IR
         // provenance with no trace.
         ir_verified = subfile == Some(4);
         if !ir_verified {
             warnings.push(format!(
                 "IR plane has NewSubfileType={subfile:?} (expected 4); \
                  identified as IR by its full-res 16-bit grayscale shape alone \
-                 (carried and exportable, but not trusted for holder detection)"
+                 (not trusted for holder detection)"
             ));
         }
         ir = Some(read_plane_u16(&mut dec, path, "IR plane")?);

@@ -6,8 +6,8 @@
 //! out-of-order composition is the whole point of the skeleton
 //! (`nf-core/stage-skeleton`). What they share is one piece of knowledge, not a
 //! coincidence of shape: what a full-frame working image **is** — interleaved
-//! linear RGB, the carried IR plane, the length invariants that tie them to the
-//! dimensions, and the rule that a `Debug` never prints pixels. That lives here,
+//! linear RGB, the length invariant that ties it to the dimensions, and the rule that
+//! a `Debug` never prints pixels. That lives here,
 //! once; the wrappers stay separate so they can diverge as their stages gain
 //! parameters.
 //!
@@ -35,12 +35,10 @@ pub(in crate::pipeline) struct WorkingBuffer {
     height: u32,
     /// Interleaved `r,g,b`, `len == width * height * 3`.
     rgb: Vec<f32>,
-    /// Carried-through IR plane (HDRi input), `len == width * height`.
-    ir: Option<Vec<f32>>,
 }
 
 impl WorkingBuffer {
-    /// A full-frame copy, the IR plane included when the scan has one. Its one caller
+    /// A full-frame copy. Its one caller
     /// is the SDR/HDR branch point (`look::GradedImage::split`), where a gain map needs
     /// both renditions; a new caller is a new full-frame buffer for
     /// `pipeline::memory`'s model.
@@ -49,32 +47,21 @@ impl WorkingBuffer {
             width: self.width,
             height: self.height,
             rgb: self.rgb.clone(),
-            ir: self.ir.clone(),
         }
     }
 
     /// Take the buffers out of the chain's input [`AcesCgImage`].
     ///
-    /// A **move**, not a copy: the `Vec`s are handed over, so entering the chain
-    /// allocates nothing. That is what makes a distinct type per boundary free at
-    /// runtime, and it is the property `nf-core/buffer-strategy` inherits when it
-    /// decides what each stage does with the buffer it is given.
+    /// A **move**, not a copy: the buffer is handed over, so entering the chain
+    /// allocates nothing (see `pipeline::chain`'s buffer rule).
     pub(in crate::pipeline) fn from_aces(image: AcesCgImage) -> Self {
         // `into_linear` is `AcesCgImage`'s own consuming unwrap, so the length
-        // invariants it validated on the way in still hold here by construction.
-        //
-        // It does **not** carry `LinearImage::ir_verified`, which that round trip
-        // already resets: an `AcesCgImage` has never held the plane's provenance,
-        // only the plane. Inherited rather than introduced here — whether the new
-        // chain should carry it is `nf-core/buffer-strategy`'s to settle, and it
-        // matters because a shape-only IR plane must not be trusted by a
-        // conversion consumer even though it is still exportable.
+        // invariant it validated on the way in still holds here by construction.
         let linear = image.into_linear();
         Self {
             width: linear.width,
             height: linear.height,
             rgb: linear.rgb,
-            ir: linear.ir,
         }
     }
 
@@ -88,7 +75,7 @@ impl WorkingBuffer {
     pub(in crate::pipeline) fn into_linear(self) -> LinearImage {
         // Same reasoning as `AcesCgImage::into_linear`: the invariants hold, but
         // route through the validated constructor anyway so a regression is loud.
-        LinearImage::new(self.width, self.height, self.rgb, self.ir)
+        LinearImage::new(self.width, self.height, self.rgb, None)
             .expect("a WorkingBuffer preserves the validated buffer-length invariants")
     }
 
@@ -97,8 +84,8 @@ impl WorkingBuffer {
         &mut self.rgb
     }
 
-    /// The boundary types' shared `Debug` body — dimensions and whether an IR
-    /// plane rides along, **never** the pixel buffers (matching
+    /// The boundary types' shared `Debug` body — the dimensions, **never** the pixel
+    /// buffers (matching
     /// [`AcesCgImage`]'s own rule). `name` is the wrapping type's own name, so
     /// each boundary still prints as itself.
     pub(in crate::pipeline) fn fmt_named(
@@ -109,7 +96,6 @@ impl WorkingBuffer {
         f.debug_struct(name)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("ir", &self.ir.is_some())
             .finish_non_exhaustive()
     }
 }

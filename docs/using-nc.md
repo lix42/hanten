@@ -1694,9 +1694,9 @@ two-thirds of full scale, as a B&W negative's can be on every channel.
 
 ### IR (HDRi 64-bit input)
 
-The IR plane is decoded and **preserved, but no rendered pixel depends on it**.
-Carrying it is the normal case, so it raises no warning, and `--strict` passes on an
-HDRi scan. It is not exported: `--export-ir` and `input.export_ir` were removed and
+The IR plane is decoded, read only by the film-holder measurement below, and dropped
+before the render: **no rendered pixel depends on it**. It raises no warning, and
+`--strict` passes on an HDRi scan. It is not exported: `--export-ir` and `input.export_ir` were removed and
 exit 2 (a `null` key, as older dumps wrote it, is dropped).
 
 - **IR film-holder measurement** runs by itself when the plane can do the job: it

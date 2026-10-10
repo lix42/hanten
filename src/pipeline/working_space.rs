@@ -68,7 +68,7 @@ pub const WORKING_MAPPING_ID: &str = "nc-film-rgb-v1";
 // a neutral ACEScg value.
 
 /// The intentional film rendering after NC film RGB v1 interpretation: unclamped
-/// linear **ACEScg (AP1) at D60**, with the IR plane carried through untouched.
+/// linear **ACEScg (AP1) at D60**.
 ///
 /// Fields are **private** and [`new`](AcesCgImage::new) is module-private, so
 /// [`map_nc_film_rgb_v1`] is the only producer — no other stage can mint an
@@ -84,8 +84,6 @@ pub struct AcesCgImage {
     height: u32,
     /// Interleaved `r,g,b` in linear ACEScg, `len == width * height * 3`.
     rgb: Vec<f32>,
-    /// Carried-through IR plane (HDRi input), `len == width * height`.
-    ir: Option<Vec<f32>>,
 }
 
 impl AcesCgImage {
@@ -98,7 +96,6 @@ impl AcesCgImage {
             width: image.width,
             height: image.height,
             rgb: image.rgb,
-            ir: image.ir,
         }
     }
 
@@ -116,22 +113,6 @@ impl AcesCgImage {
         &self.rgb
     }
 
-    /// Read-only view of the carried IR plane, when the input had one. Tests only: the
-    /// chain takes the plane with the buffer (`into_linear`).
-    #[cfg(test)]
-    pub fn ir(&self) -> Option<&[f32]> {
-        self.ir.as_deref()
-    }
-
-    /// The same image without its IR plane, for a render that never reads it and would
-    /// otherwise copy it — the gain map, whose `chain::render_pair` splits the graded
-    /// image in two. Dropping data cannot mint an unmapped image, so this keeps the
-    /// constructor's invariant.
-    pub(crate) fn without_ir(mut self) -> Self {
-        self.ir = None;
-        self
-    }
-
     /// Unwrap into the plain working-space image — the **read** direction of the
     /// boundary: the film master's encode takes an `AcesCgImage` this way, and so does
     /// the chain's entry point (`pipeline::working_image::WorkingBuffer::from_aces`),
@@ -141,7 +122,7 @@ impl AcesCgImage {
         // The fields came from a validated LinearImage and are never resized, so
         // the invariants hold; route through the validated constructor anyway
         // (O(1) checks) so a future regression fails loudly.
-        LinearImage::new(self.width, self.height, self.rgb, self.ir)
+        LinearImage::new(self.width, self.height, self.rgb, None)
             .expect("AcesCgImage preserves the validated buffer-length invariants")
     }
 }
@@ -151,7 +132,6 @@ impl std::fmt::Debug for AcesCgImage {
         f.debug_struct("AcesCgImage")
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("ir", &self.ir.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -163,7 +143,7 @@ impl std::fmt::Debug for AcesCgImage {
 /// makes no difference to how the mapping is applied.
 ///
 /// Pure and total: the matrix multiply runs in binary64 (stored `f32`), applies
-/// no clamp or gamut limit, and carries the IR plane through untouched. Any
+/// no clamp or gamut limit. Any
 /// non-finite input channel propagates as non-finite (counted downstream at
 /// encode, never swallowed here).
 pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage {
@@ -287,8 +267,8 @@ mod tests {
     // -- fixtures --------------------------------------------------------------
 
     /// A `FilmRgbImage` whose film-RGB values are *exactly* `rgb`.
-    fn film_from(width: u32, height: u32, rgb: Vec<f32>, ir: Option<Vec<f32>>) -> FilmRgbImage {
-        FilmRgbImage::fixture(LinearImage::new(width, height, rgb, ir).unwrap())
+    fn film_from(width: u32, height: u32, rgb: Vec<f32>) -> FilmRgbImage {
+        FilmRgbImage::fixture(LinearImage::new(width, height, rgb, None).unwrap())
     }
 
     /// A film-RGB producer under test, at its defaults.
@@ -386,7 +366,7 @@ mod tests {
             [1.5, -0.2, 0.0], // above-one + negative (out-of-range finite)
         ];
         for input in inputs {
-            let film = film_from(1, 1, input.to_vec(), None);
+            let film = film_from(1, 1, input.to_vec());
             let aces = map_nc_film_rgb_v1(film);
             let got = aces.rgb();
             let want = matvec(&m, [input[0] as f64, input[1] as f64, input[2] as f64]);
@@ -416,7 +396,7 @@ mod tests {
             [1.2, 0.4, 0.6], // mismatch rather than cancelling out
         ];
         let flat: Vec<f32> = px.iter().flatten().copied().collect();
-        let film = film_from(3, 1, flat, None);
+        let film = film_from(3, 1, flat);
         let aces = map_nc_film_rgb_v1(film);
         let got = aces.rgb();
         for (p, input) in px.iter().enumerate() {
@@ -436,24 +416,20 @@ mod tests {
     // -- typed boundary / mapper behavior --------------------------------------
 
     #[test]
-    fn every_reconstruction_path_uses_the_same_mapper_and_preserves_shape_ir() {
+    fn every_reconstruction_path_uses_the_same_mapper_and_preserves_shape() {
         // both producers reach the mapper and
         // yield an `AcesCgImage` (compiler-enforced by the return type) with the
-        // dimensions and IR plane intact.
+        // dimensions intact.
         let scan = vec![0.5, 0.3, 0.2, 0.05, 0.03, 0.02];
-        let ir = Some(vec![0.25, 0.75]);
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for (name, produce) in producers() {
-            let img = LinearImage::new(2, 1, scan.clone(), ir.clone()).unwrap();
+            let img = LinearImage::new(2, 1, scan.clone(), None).unwrap();
             let film = produce(&img, &base);
             let aces = map_nc_film_rgb_v1(film);
             assert_eq!((aces.width(), aces.height()), (2, 1), "{name}");
             assert_eq!(aces.rgb().len(), 6, "{name}");
-            assert_eq!(aces.ir(), Some(&[0.25_f32, 0.75][..]), "{name}");
-            // Read direction round-trips dims + IR.
             let linear = aces.into_linear();
             assert_eq!((linear.width, linear.height), (2, 1));
-            assert_eq!(linear.ir.as_deref(), Some(&[0.25_f32, 0.75][..]));
         }
     }
 
@@ -484,7 +460,7 @@ mod tests {
         // The stage neither clamps nor gamut-limits: an above-one input stays
         // above one where the matrix keeps it there, and a non-finite channel
         // propagates as non-finite (encode counts it — it is never swallowed).
-        let film = film_from(2, 1, vec![5.0, 5.0, 5.0, f32::NAN, 0.1, 0.2], None);
+        let film = film_from(2, 1, vec![5.0, 5.0, 5.0, f32::NAN, 0.1, 0.2]);
         let aces = map_nc_film_rgb_v1(film);
         let out = aces.rgb();
         // Neutral 5.0 maps to ~5.0 (rows sum to 1) — well above the [0,1] gamut,
@@ -499,13 +475,6 @@ mod tests {
             "NaN must propagate, got {:?}",
             &out[3..6]
         );
-    }
-
-    #[test]
-    fn ir_absent_stays_absent() {
-        let film = film_from(1, 1, vec![0.4, 0.5, 0.6], None);
-        let aces = map_nc_film_rgb_v1(film);
-        assert_eq!(aces.ir(), None);
     }
 
     // Construction privacy is compiler-enforced and cannot be exercised at

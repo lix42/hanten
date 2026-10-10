@@ -290,10 +290,6 @@ fn golden_decode_is_correct_within_its_libm_window() {
         );
         assert_eq!(report.anchor_rule, "mid-at-base-offset");
         assert!(!report.reads_reference);
-        assert_eq!(
-            film.ir(),
-            Some(&[0.1f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8][..])
-        );
     }
 }
 
@@ -413,16 +409,10 @@ const FILM_RGB: [f32; 24] = [
     0.2,
 ];
 
-/// The first `pixels` of [`FILM_RGB`], with an IR plane, which every stage must carry.
+/// The first `pixels` of [`FILM_RGB`].
 fn film_of(pixels: usize) -> FilmRgbImage {
     FilmRgbImage::fixture(
-        LinearImage::new(
-            pixels as u32,
-            1,
-            FILM_RGB[..pixels * 3].to_vec(),
-            Some(FILM_IR[..pixels].to_vec()),
-        )
-        .unwrap(),
+        LinearImage::new(pixels as u32, 1, FILM_RGB[..pixels * 3].to_vec(), None).unwrap(),
     )
 }
 
@@ -433,8 +423,6 @@ fn film() -> FilmRgbImage {
 /// How many of [`FILM_RGB`]'s pixels are finite — all but the last. Fit range refuses
 /// a non-finite sample, so it and every stage below it are pinned on these.
 const FINITE_PIXELS: usize = 7;
-
-const FILM_IR: [f32; 8] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
 
 fn aces() -> AcesCgImage {
     map_nc_film_rgb_v1(film())
@@ -457,7 +445,6 @@ fn golden_working_space_mapping_is_bit_identical() {
     // `colorimetry`, but only this pins what the mapper does with it.
     let out = aces();
     assert_stage_bits("working-space", out.rgb(), &MAPPED);
-    assert_eq!(out.ir(), Some(&FILM_IR[..]));
 }
 
 fn scene_correct(params: &SceneCorrectionParams) -> Vec<f32> {
@@ -703,7 +690,6 @@ fn golden_look_and_zero_headroom_fit_range_are_bit_exact_identities() {
         input,
         "stage `look` or `fit-range` moved a pixel"
     );
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 /// Fit range at the default six stops against an SDR peak. `+ − × /` and `sqrt` in
@@ -720,7 +706,6 @@ fn golden_fit_range_sdr_is_bit_identical() {
         .into_buffer()
         .into_linear();
     assert_stage_bits("fit-range (sdr)", &out.rgb, &FIT_RANGE_SDR);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 /// An HDR display's peak: 1000 nits over 203-nit reference white. Stated here rather
@@ -1339,7 +1324,6 @@ fn golden_fit_gamut_is_bit_identical() {
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut", &out.rgb, &FIT_GAMUT_P3);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 /// [`FIT_GAMUT_P3`]'s input into Adobe RGB, which runs the same map through a
@@ -1361,7 +1345,6 @@ fn golden_fit_gamut_adobe_rgb_is_bit_identical() {
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-adobe-rgb", &out.rgb, &FIT_GAMUT_ADOBE_RGB);
     assert_eq!(gamut, DestinationGamut::AdobeRgb);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 /// [`FIT_GAMUT_P3`]'s input into BT.2020, the HDR destinations' gamut: the same map
@@ -1386,7 +1369,6 @@ fn golden_fit_gamut_bt2020_is_bit_identical() {
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-bt2020", &out.rgb, &FIT_GAMUT_BT2020);
     assert_eq!(gamut, DestinationGamut::Bt2020);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 // --- threaded ----------------------------------------------------------------
@@ -1479,7 +1461,6 @@ fn golden_the_chain_threaded_is_bit_identical() {
     let (out, gamut) = rendered.image.into_parts();
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 /// Two bright pixels for the look inside the chain: (0) near-neutral only *after* the
@@ -1575,5 +1556,4 @@ fn golden_fit_gamut_srgb_is_bit_identical() {
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-srgb", &out.rgb, &FIT_GAMUT_SRGB);
     assert_eq!(gamut, DestinationGamut::Srgb);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }

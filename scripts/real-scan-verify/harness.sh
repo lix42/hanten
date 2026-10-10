@@ -11,7 +11,7 @@
 #               uniformity (unexposed / full-exp / real)
 #   freeze    - measure per-roll Dmin (unexposed), freeze recipes
 #   convert   - roll-convert every real frame, 16-bit + float HDR
-#   ir        - convert an IR frame, check the carried plane raises no warning
+#   ir        - convert an IR frame, check its IR plane raises no warning
 #   determinism - byte-identical re-run + --params reload
 #   resource  - /usr/bin/time -l peak RSS + wall-clock on the largest scan
 set -euo pipefail
@@ -266,11 +266,11 @@ stage_ir() {
     return 1
   fi
   if grep -Fq 'input carries an IR plane' "$ART/ir.err"; then
-    echo "error: the carried IR plane raised a warning" >&2
+    echo "error: the IR plane raised a warning" >&2
     cat "$ART/ir.err" >&2
     return 1
   fi
-  echo "IR plane carried without a warning ($roll/$fr)"
+  echo "IR frame converted without a warning ($roll/$fr)"
 }
 
 stage_determinism() {
