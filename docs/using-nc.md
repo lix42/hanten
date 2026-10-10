@@ -35,9 +35,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > report, thin-lift examples and `measure-roll` report were re-run (`roll.json` and the
 > `measure-roll` report on their real rolls). At `core/auto-calibration` §4's
 > `measure-roll` section and §7's measure-roll bullets were re-run, the `auto` report on
-> its real roll. The staleness signal is
-> `pipeline_version`: if `hanten --version` reports a different one, treat this
-> document as suspect and re-verify.
+> its real roll, and at `core/profile-authoring` (`hanten profile`, `--save-recipe`,
+> comments in recipes) §3, §4's look file, §5 and §10's recipe examples. The staleness
+> signal is `pipeline_version`: if `hanten --version` reports a different one, treat
+> this document as suspect and re-verify.
 >
 > **Before `pipeline_version` 8** there was a second rendering chain, chosen by
 > **output presets** (`--output-preset`: `gain-map-hdr`, `display-p3`, `hdr-pq`, …)
@@ -145,7 +146,7 @@ guaranteed byte-identical within one build and architecture.
 |---|---|---|
 | `hanten inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, the effective area. | No |
 | `hanten measure-base` | **"What is this film's base?"** — measure the film base (`Dmin`) alone, from an unexposed frame or a region. Prints a reuse-ready `--film-base` flag; `--out` writes it as a recipe. (Was `estimate`, which now exits 2 naming it.) | No |
-| `hanten params` | Print the full default recipe as JSON, in the stamped `{meta, params}` envelope every written recipe has (§5) — the scaffolding starting point. | No |
+| `hanten profile` | Write a **look** from the conversion flags, with no scan: every setting but what belongs to one roll, as an annotated recipe (§5). (Was `params`, which now exits 2 naming it.) | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`. | Yes |
 | `hanten measure-roll` | **"What does this roll share?"** — its white balance, midtone line, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
@@ -153,8 +154,8 @@ guaranteed byte-identical within one build and architecture.
 
 Every image command (`inspect`, `measure-base`, `measure-roll`, `convert`, `roll`)
 emits a **JSON report on stdout** on success (`--report none` to suppress,
-`--report-file PATH` to redirect); `params` takes no flags at all and just prints the
-default recipe, and `telemetry` has its own output (§11). Logs and warnings go to
+`--report-file PATH` to redirect); `profile` writes its look to stdout or `--out`,
+and `telemetry` has its own output (§11). Logs and warnings go to
 **stderr**, so stdout stays clean for piping into `jq`.
 
 > **A hard failure emits no report at all** — stdout is empty. A decode error, a
@@ -168,7 +169,7 @@ default recipe, and `telemetry` has its own output (§11). Logs and warnings go 
 > and the exit code is the run's own — `--strict` and a failed `roll` frame still
 > exit 1. Under `-v`, stderr notes the dropped report (`hanten: stdout's reader
 > closed; the report was not read`). Any other failure to write the report or
-> `params` to stdout, such as a full disk behind `>`, exits 5.
+> the profile to stdout, such as a full disk behind `>`, exits 5.
 
 ---
 
@@ -413,30 +414,25 @@ the same file: `hanten convert frame.tif -o out --params roll.json` renders
 byte-identically to that frame of the roll, its `roll.frames` entry included.
 
 **Your look is its own file.** `--params` is repeatable, and `roll` takes every flag
-`convert` does, so the measurement and your choices stay apart — `look.json`:
-
-```json
-{ "recipe_version": 3, "scene_correction": { "exposure": 0.3 } }
-```
+`convert` does, so the measurement and your choices stay apart. `hanten profile` writes
+the look from the same flags, with no scan (§5, "A look: `hanten profile`"):
 
 ```sh
-hanten roll frames/*.tif --out-dir positives/ --params look.json --params roll.json
+hanten profile --contrast 1.2 --out look.jsonc
+hanten roll frames/*.tif --out-dir positives/ --params look.jsonc --params roll.json
 hanten roll frames/*.tif --out-dir positives/ --params roll.json --exposure 0.3   # one-off
 ```
 
 The two have different lifetimes: `calibration` and `roll` are what you measured off
 *this* roll, and the look is what you reuse across rolls, so a look file states no
-`calibration` or `roll` section. Put the measured file last: a later layer wins every
+`calibration` or `roll` section — nor `scene_correction`, the white balance and exposure
+you adjust that roll's measurement by, so those go on the command line. Put the measured file last: a later layer wins every
 value it states (§5, "Precedence").
 
-Omitted sections take their defaults, so a recipe only needs `"recipe_version": 3`
-and what you decided. `hanten params` prints the full default document if you want a
-scaffold to edit.
-
-> **`--dump-params` writes what you stated**, and it replays byte-identically. A knob
+> **`--save-recipe` writes what you stated**, and it replays byte-identically. A knob
 > you left unstated stays `null`, so the rendering still decides it on replay. A
-> measured value is frozen only if you stated it: a run with `--base-region` dumps
-> the region, not the base it read, so a recipe dumped from it **re-reads the base on
+> measured value is frozen only if you stated it: a run with `--base-region` saves
+> the region, not the base it read, so a recipe saved from it **re-reads the base on
 > every frame of the roll** — exactly what `roll` exists to prevent (`roll` warns
 > "roll film base is NOT frozen"). Use the file `--out` writes.
 
@@ -447,11 +443,8 @@ scaffold to edit.
 ### Shape
 
 A recipe is one JSON document, versioned as a document, with one section per stage.
-Get the current default with:
-
-```sh
-hanten params
-```
+The whole layout, at the defaults (`--save-recipe` writes it with your base; `profile`
+and the measuring commands write parts of it):
 
 ```json
 {
@@ -493,11 +486,10 @@ hanten params
 }
 ```
 
-(Reflowed; the real output is one value per line.) The recipe is `params`; `meta` is
-the build that wrote it, which a replay checks and never applies ("No sidecar is written", below). A recipe you
-write by hand can be the bare `params` object. `calibration.film_base` prints as
-`null` because it has **no default** — this document is a template to edit, not a
-runnable recipe. `convert` and `roll` reject an unstated base.
+(Reflowed.) The recipe is `params`; `meta` is the build that wrote it, which a replay
+checks and never applies ("No sidecar is written", below). A recipe you write by hand
+can be the bare `params` object. `calibration.film_base` is `null` here because it has
+**no default**: `convert` and `roll` reject an unstated base.
 
 `input`, `calibration` and `measure` describe the scan (§4, §9), and `roll` holds
 what `hanten measure-roll` measured — nothing by default (§7). `reconstruction` is the
@@ -508,6 +500,62 @@ and display black are 0.8, 6 and 6 under `default`. The look's `contrast` is a
 multiplier, so its default `1.0` keeps the base slope: a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
+
+### A look: `hanten profile`
+
+`hanten profile` takes the conversion flags and writes the recipe they describe, with
+no scan — every section above but the three that belong to one roll: `calibration` and
+`roll`, its measurements, and `scene_correction`, the adjustment made on top of them:
+
+```sh
+hanten profile --contrast 1.2 --out look.jsonc
+```
+
+```jsonc
+// A Hanten look profile, written by `hanten profile`. It writes every setting but what
+// belongs to one roll (`calibration`, `roll`, `scene_correction`); a null takes the
+// rendering's value, which a later build may move. `meta` names the build that wrote it.
+// …
+{
+  "meta": { … },
+  "params": {
+    "recipe_version": 3,  // the recipe layout this file is written in
+    "input": {  // how the scan's samples are read
+      "transfer": "auto",  // how samples are encoded; --input-transfer (auto | linear)
+      …
+    "look": {  // contrast and colour
+      "contrast": 1.2,  // multiplier on the base slope, > 0; 1 keeps it; --contrast
+```
+
+- **Every key is written.** One the rendering decides is `null` (highlight
+  desaturation, the display tone, an unstated destination axis), and takes the
+  rendering's value, which a later build may move; `contrast` and `saturation`
+  multiply the roll's slope. Like every written recipe it is stamped, so a later
+  `pipeline_version` warns on replay. It restates the decode (`reconstruction`), so
+  layer it **before** a roll's measured file.
+- **The comments are for you**: one per key, its units, values and flag. `--params`
+  reads them (JSONC, `//` and `/* */`, in any recipe) and keeps none, so `profile` never
+  overwrites the file: `--out` over an existing file exits 2 unless `--force`. Without
+  `--out` the profile goes to stdout.
+- **Checked without a scan.** A value out of range or a contradiction is refused here
+  (exit 2), as `convert` would refuse it: `--range sdr --transfer pq` gets `no destination
+  combines --range sdr and --transfer pq`. So is a look no film base could render, probed
+  at a base thinner than any measured, and `--input-meaning colorimetric` (exit 4). What
+  depends on your base or pixels — clipping, a render your base cannot hold — is checked
+  when it converts.
+- **What belongs to one roll is refused**, naming where it goes; `profile --help` does
+  not list those flags. A white balance or exposure in a look would land as a recipe
+  value, which beside a roll's measurement warns as a stale adjustment:
+
+```
+usage: hanten profile writes a look, and --roll-white sets a roll value (`roll`), which
+       belongs to one roll: pass it to `convert` or `roll`, or write the roll's file
+       with `hanten measure-roll <frames> --out roll.json` and layer it after the look
+       (--params look.jsonc --params roll.json)
+usage: hanten profile writes a look, and --exposure sets an adjustment to one roll's
+       measured white balance and exposure (`scene_correction`): pass it to `convert` or
+       `roll`, where it adjusts that roll's measurement
+```
 
 ### Partial recipes are fine
 
@@ -545,10 +593,11 @@ different picture while claiming to be the same recipe:
 usage: recipe old.json: a recipe must state `"recipe_version": 3`. A document without
        it — every sidecar and `--dump-params` file written before `pipeline_version` 8
        — describes the rendering chain that version removed, and there is no
-       converter. `hanten params` writes the current layout in its `params`:
-       `input`, `measure` and a `region` or `explicit` `calibration.film_base` carry
-       over unchanged (an `"auto"` one retired: measure the base with `hanten
-       measure-base <unexposed-frame>`), and the rest is a stage section each
+       converter. In the current layout (`hanten profile` writes a look's sections,
+       `hanten measure-base --out` the base's), `input`, `measure` and a `region` or
+       `explicit` `calibration.film_base` carry over unchanged (an `"auto"` one
+       retired: measure the base with `hanten measure-base <unexposed-frame>`), and
+       the rest is a stage section each
        (`reconstruction`, `scene_correction`, `look`, `fit_range`) plus `output`, the
        destination
 ```
@@ -612,19 +661,16 @@ hanten convert scan.tif -o out --params look.json --params roll.json --exposure 
 - **Layers merge key by key.** A later layer replaces only the keys it states; one
   that switches a tagged value (`{"region": …}` → `{"explicit": …}`) replaces it whole.
   `roll.frames` merges entry by entry.
-- **A `null` states nothing**, so `hanten params`' unset base and roll keys erase
-  nothing, and a layer cannot unset what an earlier one stated. **Any stated value
-  wins**, a restated default included (`hanten params` states `reconstruction`,
-  `input` and `measure`): put the measured file last (`--params look.json --params
-  roll.json`). `roll.json` states its decode, so a look's `reconstruction` under it
+- **A `null` states nothing**, so a recipe's unset knobs erase nothing, and a layer
+  cannot unset what an earlier one stated. **Any stated value wins**, a restated
+  default included (a profile states `reconstruction`, `input` and `measure`): put the
+  measured file last (`--params look.jsonc --params roll.json`). `roll.json` states its decode, so a look's `reconstruction` under it
   does not apply; to change the decode, measure the roll again under it.
-- **A `--dump-params` file is the whole run** — its base, its `roll` values and its
-  `roll.frames` table — for replaying *that* run, not a look. Layered under another
-  roll's file, its table's entries survive (tables merge, and absence states
-  nothing), so strip `calibration` and `roll` from its `params` to reuse it as a look
-  — and `reconstruction` and `input`, unless you mean to keep that run's decode. Authoring look
-  files is `core/profile-authoring`. For the same reason `--dump-params` may overwrite
-  a `--params` file only when it is the sole layer.
+- **A `--save-recipe` file is the whole run** — its base, its `roll` values and its
+  `roll.frames` table — for replaying *that* run, not a look: layered under another
+  roll's file, its table's entries survive (tables merge, and absence states nothing).
+  Write a look with `hanten profile`. For the same reason `--save-recipe` may
+  overwrite a `--params` file only when it is the sole layer.
 - **Flags win over every layer, by *source*, not value** — an explicit
   `--white-balance 1,1,1` over a recipe's gains means neutral. That includes a frame's
   `roll.frames` entry: `--roll-white` renders every frame at that white.
@@ -637,12 +683,13 @@ hanten convert scan.tif -o out --params look.json --params roll.json --exposure 
 Earlier builds wrote a `<output>.json` sidecar beside every image; this one does not.
 A `convert` report carries the resolved recipe (§10); a `roll` report does not, and
 records each frame's `overrides` and `identity.params_hash` instead. To keep a recipe
-file, write it with `--dump-params`, which replays byte-identically. It is written only
-when the run succeeds: a `--strict` refusal still writes the image and the report but
-not the dump, so a file already at that path describes an earlier run.
+file, write it with `--save-recipe` (was `--dump-params`, which now exits 2 naming
+it), which replays byte-identically. It is written only when the run succeeds: a
+`--strict` refusal still writes the image and the report but not the recipe, so a file
+already at that path describes an earlier run.
 
 ```sh
-hanten convert scan.tif -o out --film-base … --contrast 1.3 --dump-params out.json
+hanten convert scan.tif -o out --film-base … --contrast 1.3 --save-recipe out.json
 hanten convert scan.tif -o repro --params out.json
 # → repro.tiff is byte-identical to out.tiff
 ```
@@ -653,11 +700,11 @@ its image — it describes the picture just overwritten — and the report names
 alone, and so is one this run read as its `--params` recipe (with a warning, since it
 still pairs by name with an image it no longer describes).
 
-Every recipe file Hanten writes — `--dump-params`, `hanten params`, `measure-base
+Every recipe file Hanten writes — `--save-recipe`, `hanten profile`, `measure-base
 --out`, `measure-roll --out` — has the shape those sidecars had, `{"meta": …, "params":
 …}`: `params` is the recipe, and `meta` is the `identity` of the build that wrote it
 (§10). Only a file from a build before `pipeline_version` 8 counts as a sidecar, so a
-`--dump-params` file named `<output>.json` is not removed.
+`--save-recipe` file named `<output>.json` is not removed.
 
 `meta` changes no pixel, but its `pipeline_version` is checked. A value a recipe leaves
 unset takes this build's default, so a file written under another `pipeline_version`
@@ -926,8 +973,8 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   and which would turn the pull back on, and a stated white balance beside a `roll`
   section, which an earlier `measure-roll` wrote. Every other old default equals
   `direct`'s base. A deliberate value — any other, or a typed flag — never warns, so a
-  `--dump-params` recipe replays under `--strict`, with one carve-out: in a recipe that
-  has a `roll` section, a white balance you typed is dumped as a recipe value and warns
+  `--save-recipe` recipe replays under `--strict`, with one carve-out: in a recipe that
+  has a `roll` section, a white balance you typed is saved as a recipe value and warns
   on replay, since a file cannot say who chose it — type the flag again on replay to
   keep it without the warning:
 
@@ -1318,7 +1365,7 @@ hanten: warning: the recipe's `scene_correction.exposure` 1.4 adds to the roll's
 ```
 
 A typed `--white-balance` or `--exposure` is a choice made now, and never warns. A
-`--dump-params` recipe that states one beside the roll's gains does warn on replay,
+`--save-recipe` recipe that states one beside the roll's gains does warn on replay,
 since a file cannot say who chose a value; type the flag on replay to keep it without
 the warning. A contrast beside the roll's white never warns: it multiplies the roll's
 slope, which is what it is for. `roll` warns once, for the shared recipe, not per
@@ -1335,7 +1382,7 @@ hanten: warning: the recipe's `scene_correction.white_balance` [1.2, 1.0, 1.0] m
 
 **Adopting the `roll` section in a recipe an earlier build wrote:** drop
 `scene_correction.white_balance` if it holds `measure-roll`'s old output. No value is
-read as unset for you: a `--dump-params` recipe replays exactly what it rendered. (A
+read as unset for you: a `--save-recipe` recipe replays exactly what it rendered. (A
 version 2 recipe's `look.contrast` is refused with its conversion — §5.)
 
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,
@@ -1805,7 +1852,7 @@ exit 2 (a `null` key, as older dumps wrote it, is dropped).
   and `inspect` (recipe key `input.film_type`), as a **provenance declaration**:
   it records what stock a run was made from, and nothing reads it. Set it if you
   want the film chemistry captured beside the output: the report echoes it as
-  `film_type` (on `roll`, per frame; never `unknown`), and `--dump-params` writes it as
+  `film_type` (on `roll`, per frame; never `unknown`), and `--save-recipe` writes it as
   `input.film_type`. Leave it out otherwise. Planned IR dust removal will need the same
   declaration, which is why it stays.
 
@@ -1969,7 +2016,7 @@ samples' mean, the cross-build comparison basis), and warnings:
 hanten convert scan.tif -o out --film-base … | jq '.loss, .warnings'
 ```
 
-A `convert` report also carries `recipe`, the resolved recipe `--dump-params` would
+A `convert` report also carries `recipe`, the resolved recipe `--save-recipe` would
 write as its `params` — save it and it reloads through `--params` to the same image —
 and `identity.params_hash`, a stable hash of that recipe as Hanten pretty-prints it
 (the telemetry record's `conversion.params_hash`). Each `roll` frame's `identity.params_hash` hashes
@@ -2027,7 +2074,7 @@ else.
 | 2 | Invalid CLI usage or parameters (bad flag value, a destination not written, wrong suffix, bad recipe, a removed flag) |
 | 3 | Input read/decode error |
 | 4 | Unsupported variant (e.g. a channel layout not handled yet) |
-| 5 | Output write error — including the report or `params` on stdout, unless its reader closed early |
+| 5 | Output write error — including the report or the profile on stdout, unless its reader closed early |
 | 6 | Resource limit — estimated peak memory exceeds the budget |
 
 ---
@@ -2035,7 +2082,7 @@ else.
 ## 11. Operational flags
 
 The flags in the tables below are **not** conversion knobs: they never appear in a
-recipe and can never perturb a pixel. `params` takes none of them, and `inspect` has no
+recipe and can never perturb a pixel. `profile` takes none of them, and `inspect` has no
 `--strict`.
 
 | Flag | Purpose |
@@ -2184,8 +2231,9 @@ Every `convert` under the `default` rendering warns until the roll is measured, 
 
 **"a recipe must state `"recipe_version": 3`"**
 The recipe was written before `pipeline_version` 8, for the removed chain (§5). Start
-from `hanten params`, carry `calibration.film_base` across, and render the old recipe
-itself with the reference build.
+from `hanten profile` for the look, carry `calibration.film_base` into its own file
+(`--film-base`, or `hanten measure-base --out`), and render the old recipe itself with
+the reference build.
 
 **Output differs between two machines**
 Determinism is scoped to one build and architecture. Transcendental FP and the

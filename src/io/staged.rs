@@ -585,7 +585,7 @@ fn flush_surfacing_errors<W: Write>(writer: &mut W, target: &Path) -> Result<()>
         .map_err(|e| NcError::Write(format!("flushing {}: {e}", target.display())))
 }
 
-/// Stage a complete byte buffer — the JSON artifacts (`--dump-params`,
+/// Stage a complete byte buffer — the JSON artifacts (`--save-recipe`,
 /// `--report-file`), which are built in memory and have no incremental writer.
 pub fn stage_bytes(target: &Path, bytes: &[u8]) -> Result<Staged> {
     let (staged, ()) = stage(target, |w| {
@@ -1133,7 +1133,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_direct_commit_reports_hard_links_too() {
-        // `write_json` (--dump-params, --report-file, inspect/estimate reports) calls
+        // `write_json` (--save-recipe, --report-file, inspect/estimate reports) calls
         // `commit` directly, so the warning has to come from `commit` rather than only from
         // `commit_all` — otherwise "hard links are reported" was true for some artifacts and
         // silently false for others.

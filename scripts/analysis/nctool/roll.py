@@ -28,10 +28,11 @@ ANALYSIS_SCHEMA = 1
 CONFIG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _load_object(path: Path) -> tuple[dict | None, str | None]:
+def _load_object(path: Path, jsonc: bool = False) -> tuple[dict | None, str | None]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        text = path.read_text(encoding="utf-8")
+        value = json.loads(_strip_jsonc(text) if jsonc else text)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         return None, f"cannot read {path}: {error}"
     if not isinstance(value, dict):
         return None, f"{path}: expected a JSON object"
@@ -109,7 +110,44 @@ def _region(raw: str | None, frame: dict, label: str,
     return ",".join(map(str, values)), None
 
 
-def _run_json(argv: list[str], label: str) -> tuple[dict | None, str | None]:
+def _strip_jsonc(text: str) -> str:
+    """`text` with its `//` and `/* */` comments outside strings blanked: JSONC, which
+    `hanten profile` writes, read as JSON. An unclosed `/*` raises `ValueError`, as
+    `--params` refuses it."""
+    out, i, in_string = [], 0, False
+    while i < len(text):
+        c = text[i]
+        if in_string:
+            out.append(c)
+            if c == "\\" and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+            out.append(c)
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            if end == -1:
+                line = text.count("\n", 0, i) + 1
+                raise ValueError(f"the comment opened on line {line} is never closed")
+            # Line breaks stay, so a parse error's line still points into the text.
+            out.append(" " + "\n" * text.count("\n", i, end))
+            i = end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _run_json(argv: list[str], label: str, jsonc: bool = False
+              ) -> tuple[dict | None, str | None]:
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     except OSError as error:
@@ -118,12 +156,25 @@ def _run_json(argv: list[str], label: str) -> tuple[dict | None, str | None]:
         detail = proc.stderr.strip() or proc.stdout.strip() or "no diagnostic"
         return None, f"{label} failed (exit {proc.returncode}): {detail}"
     try:
-        value = json.loads(proc.stdout)
-    except json.JSONDecodeError as error:
+        value = json.loads(_strip_jsonc(proc.stdout) if jsonc else proc.stdout)
+    except ValueError as error:  # json.JSONDecodeError, or an unclosed comment
         return None, f"{label} emitted invalid JSON: {error}"
     if not isinstance(value, dict):
         return None, f"{label} emitted a non-object JSON report"
     return value, None
+
+
+def _defaults_command(nc: str) -> str:
+    """The subcommand that prints the build's complete default recipe: ``profile``
+    (JSONC, without the measured ``calibration`` and ``roll``), or ``params`` on a build
+    from before the rename (the reference build). Asked of the binary, like
+    `_base_command`: ``params`` exits 2 on a renamed build."""
+    try:
+        proc = subprocess.run([nc, "profile", "--help"], capture_output=True,
+                              text=True, check=False)
+    except OSError:
+        return "profile"  # the default recipe query reports the start failure itself
+    return "profile" if proc.returncode == 0 else "params"
 
 
 def _base_command(nc: str) -> str:
@@ -142,7 +193,8 @@ def _recipe_input(path: str | None) -> tuple[dict | None, dict | None, str | Non
     """The `--recipe` file's recipe, and its envelope's `meta` (None when bare)."""
     if path is None:
         return {}, None, None
-    value, error = _load_object(Path(path))
+    # A recipe may be JSONC, as `hanten profile --out` writes one.
+    value, error = _load_object(Path(path), jsonc=True)
     if error:
         return None, None, error
     assert value is not None
@@ -193,7 +245,7 @@ def _drop_retired_curve_tag(defaults: dict, partial: dict) -> None:
     """Drop a partial recipe's `reconstruction.curve.type = "exponential"` when the
     build's own defaults carry no curve tag.
 
-    `hanten params` stopped writing the tag when the curve became the one exponential
+    the default recipe stopped writing the tag when the curve became the one exponential
     (`nf-retire/characteristic`), so the old spelling would read as a variant switch in
     `_deep_merge` and replace the whole default curve. The reference build still writes
     it, and there a stated tag is a real selector, so it is kept."""
@@ -211,7 +263,7 @@ def _adopt_the_builds_version(defaults: dict, partial: dict) -> None:
     `recipe_version`.
 
     Version 3 changed only that key — a slope in 2, a multiplier on the base slope in
-    3 — and `hanten params` writes it as `1.0`. Merged under the partial's stated 2,
+    3 — and the default recipe writes it as `1.0`. Merged under the partial's stated 2,
     that default would read as an old slope and `hanten` would refuse it, though the
     partial never stated one. A partial that states a number keeps its version, so
     `hanten` refuses it with the conversion."""
@@ -260,7 +312,7 @@ def _freeze_recipe(base: dict, dmin: list[float],
     if not isinstance(calibration, dict):
         return None, "recipe `calibration` must be an object"
     calibration["film_base"] = {"explicit": dmin}
-    # `hanten params` from a build before `nf-retire/dmax-machinery` (the reference
+    # The default recipe from a build before `nf-retire/dmax-machinery` (the reference
     # build) still writes the retired reference at its old default; drop it so the
     # frozen recipe names only what this build reads. A stated one is left for
     # `hanten` to refuse.
@@ -270,7 +322,7 @@ def _freeze_recipe(base: dict, dmin: list[float],
     reconstruction = recipe.setdefault("reconstruction", {})
     if not isinstance(reconstruction, dict):
         return None, "recipe `reconstruction` must be an object"
-    # The curve is left as the merge resolved it: `hanten params` writes the build's own
+    # The curve is left as the merge resolved it: the default recipe writes the build's own
     # (with its tag on the reference build, without on this one).
     curve = reconstruction.get("curve")
     if curve is not None and not isinstance(curve, dict):
@@ -365,7 +417,9 @@ def cmd_convert(args) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     assert roles is not None
-    defaults, error = _run_json([args.nc, "params"], "default recipe query")
+    command = _defaults_command(args.nc)
+    defaults, error = _run_json([args.nc, command], "default recipe query",
+                                jsonc=command == "profile")
     if not error:
         assert defaults is not None
         defaults, error = _unwrap_envelope(defaults, "default recipe query")
@@ -377,7 +431,7 @@ def cmd_convert(args) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     assert defaults is not None and partial is not None
-    # `hanten params` no longer writes `reconstruction.type`, so a recipe still
+    # The default recipe no longer writes `reconstruction.type`, so a recipe still
     # spelling the old `"density"` tag would read as a variant switch in the merge and
     # replace the whole default reconstruction. nc accepts the tag; drop it here.
     reconstruction = partial.get("reconstruction")

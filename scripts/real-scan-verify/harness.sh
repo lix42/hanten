@@ -301,13 +301,13 @@ stage_determinism() {
     echo "error: determinism re-run differs" >&2
     return 1
   fi
-  # dump-params reload
-  $NC convert --params "$REC/$roll.json" --dump-params "$ART/resolved.json" -o "$ART/det-c.tiff" "$A/rolls/$roll/$fr" --report none 2>/dev/null
+  # save-recipe reload
+  $NC convert --params "$REC/$roll.json" --save-recipe "$ART/resolved.json" -o "$ART/det-c.tiff" "$A/rolls/$roll/$fr" --report none 2>/dev/null
   $NC convert --params "$ART/resolved.json" -o "$ART/det-d.tiff" "$A/rolls/$roll/$fr" --report none 2>/dev/null
   if cmp -s "$ART/det-a.tiff" "$ART/det-d.tiff"; then
-    echo "determinism: dump-params reload BYTE-IDENTICAL"
+    echo "determinism: save-recipe reload BYTE-IDENTICAL"
   else
-    echo "error: dump-params reload differs" >&2
+    echo "error: save-recipe reload differs" >&2
     return 1
   fi
 }

@@ -42,7 +42,7 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 | `freeze` | measure per-roll `Dmin` (the unexposed frame's effective area, at its median), write `recipes/` |
 | `convert` | roll-convert every real frame, 16-bit + float HDR, into the output dir |
 | `ir` | convert one IR frame; check its IR plane raises no warning |
-| `determinism` | re-run byte-identical + `--dump-params` reload byte-identical |
+| `determinism` | re-run byte-identical + `--save-recipe` reload byte-identical |
 | `resource` | `/usr/bin/time -l` peak RSS + wall-clock on the largest scan |
 
 ## Configuration (env overrides)

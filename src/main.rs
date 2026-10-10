@@ -16,7 +16,9 @@ mod destination;
 #[cfg(test)]
 mod film_stock;
 mod io;
+mod jsonc;
 mod pipeline;
+mod profile;
 mod recipe;
 mod rendering;
 mod stage;

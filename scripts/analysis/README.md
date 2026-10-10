@@ -99,10 +99,10 @@ It performs these operations:
    five-cell grid, for a build that predates the effective-area measurement (the
    reference build). No `Dmax` is measured: the roll reference density
    retired with the placements that read it (`nf-retire/dmax-machinery`).
-4. Reads the tested binary's complete `hanten params` document, overlays the optional
-   partial recipe, then freezes the measurements. This pins defaults such as the
-   curve's anchor placement instead of letting a later build reinterpret an
-   underspecified recipe.
+4. Reads the tested binary's complete default recipe (`hanten profile`; `hanten
+   params` on the reference build), overlays the optional partial recipe, then
+   freezes the measurements. This pins defaults such as the curve's anchor placement
+   instead of letting a later build reinterpret an underspecified recipe.
 5. Runs `hanten roll` over the real frames with that shared recipe.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
    beside the converted images.

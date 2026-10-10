@@ -1,9 +1,10 @@
 # The roll workflow: measuring, composing and converting from the CLI
 
 **Status:** target design, decided 2026-09-28. The measuring commands (`measure-base`,
-`measure-roll --unexposed`, `--out`) shipped with `core/measure-base`, and layering and
-`roll`'s override flags with `core/recipe-composition`; `roll`'s measure mode has not. Where this document and a task file
-disagree, this document wins — change it first, then the task. `docs/using-nc.md` §4
+`measure-roll --unexposed`, `--out`) shipped with `core/measure-base`, layering and
+`roll`'s override flags with `core/recipe-composition`, and `profile` with
+`core/profile-authoring`; `roll`'s measure mode has not. Where this document and a task
+file disagree, this document wins — change it first, then the task. `docs/using-nc.md` §4
 describes what ships today.
 
 **Implemented by:** [`core/measure-base`](../tasks/core/measure-base.md),
@@ -66,7 +67,7 @@ roll, and the look file is the only one meant for other rolls.
 | `inspect` | what is this file (unchanged) | report |
 | `measure-roll` | **everything a roll shares**: the film base (`--unexposed`), white balance, midtone line, white and exposure | report; `--out` → `{"recipe_version": 3, "calibration": {…}, "roll": {…}}`, plus the per-frame clamps |
 | **`measure-base`** (was `estimate`) | the film base alone, from one frame or a region — for a single-frame `convert`, or a roll with no unexposed frame | report; `--out` → `{"recipe_version": 3, "calibration": {…}}` |
-| **`profile`** (was `params`) | author a look from flags, no image | `--out` → annotated look file |
+| **`profile`** (was `params`) | author a look from flags, no image | annotated look file (JSONC), to stdout or `--out` |
 | `roll` | convert frames from layered recipes and flags — or, with `--measure-roll` (implied by `--unexposed`), measure the roll first | images; report; opt-in recipe (`--save-recipe`) |
 
 The workflow becomes:
@@ -137,10 +138,9 @@ neutral gains, not "fall back to the recipe". `roll` gains every override flag
 `null` states nothing** (no layer unsets an earlier value), but any stated value wins,
 a restated default included — so the measured file goes last; a tagged value that
 switches variant (`region` → `explicit`) is replaced whole, and `roll.frames` merges
-entry by entry. A look layer states no `calibration` or `roll`; a `--dump-params` file
-is the whole run, table included, so it is a look only once those are stripped
-(and `reconstruction` and `input`, unless its decode is meant to carry; authoring
-looks: `core/profile-authoring`).
+entry by entry. A look layer states no `calibration` or `roll`, which is what
+`hanten profile` writes; a `convert --save-recipe` file is the whole run, table
+included.
 
 A frame's own override (the `--frames` manifest's `params`) lands on that frame's
 recipe with its flags applied, and resolves the same config a single `convert` of
@@ -239,12 +239,15 @@ Each is owned by the task named; its answer is recorded here.
 4. ~~`--out` over an existing file~~ **Resolved 2026-09-28: refused (exit 2, before
    anything is decoded) unless `--force`.** `core/profile-authoring` follows the same
    rule.
-5. **Does `--dump-params` go?** It was to be deleted as a duplicate of the output
-   sidecar, but no sidecar has been written since `nf-core/default-flip`, so it is the
-   only recipe *file* a `convert` leaves (the report echoes the recipe). —
-   `core/profile-authoring`
-6. **Is a profile complete or partial?** Complete survives a default change; partial
-   composes and reads better. — `core/profile-authoring`
+5. ~~Does `--dump-params` go?~~ **Resolved 2026-10-09: renamed `convert
+   --save-recipe`**, the name `roll` takes in measure mode. It is the only recipe file a
+   `convert` leaves, and a profile cannot stand in for it: a profile states no
+   `calibration` or `roll`, which a replay needs.
+6. ~~Is a profile complete or partial?~~ **Resolved 2026-10-09: complete** — every key
+   but `calibration`, `roll` and `scene_correction` (a roll's adjustment: as a recipe
+   value it warns beside every measured roll), a key the rendering decides written
+   `null`, and stamped like every written recipe, so a `pipeline_version` change warns.
+   It restates the decode, so it is layered before the measured file.
 7. **`--strict` across measure mode's phases**: does a measurement warning refuse
    before any frame is written? — `core/roll-measure-mode`
 8. **Does `--unexposed` take a region** of a part-exposed frame, for a roll whose only
