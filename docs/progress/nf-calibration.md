@@ -92,6 +92,14 @@ keys (`roll.frame_slope`, an entry's `slope`, `--roll-frame-slope`) are refused 
 migrations that replay the old render; a `null` one is dropped. A typed or manifest-stated
 lift that another source's lift would silently replace is refused, naming the value.
 
+**`span-roll-slope` is done (2026-10-09, `pipeline_version` 11): the roll's slope spreads
+its span.** `roll.white_stops` and `roll.dark_stops` (the p10 over picture frames of each
+frame's luma p1) are stated together, or refused where the roll applies; the slope is
+`9.049 / (white − dark)` within 1.237–3.5 (`roll_white::span_slope`), mid-grey pinned, the
+roll's exposure unchanged, so the white has no target (round 1 chose this over holding it
+at L\* 91 or 94). The white rule (cap, floor, clamp) is unchanged; a clamped frame spreads
+the cap's span. It is the base of every placement the epic adds next.
+
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
 slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
@@ -1451,13 +1459,115 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## span-roll-slope
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-09
 
 - 2026-10-09: filed (user), split from `envelope-hybrid-placement` and absorbing
   `display-white` (see their sections): the per-roll slope from the roll's span, the SDR
   white target and the anchor, chosen together. The first of the three placements;
   `envelope-hybrid-placement` and `per-frame-placement` build on it.
+
+- 2026-10-09: **started; step 1, the dark end measured** (no render change). `measure-roll`
+  reports each frame's `dark_stops` (luma p1 in scene stops, linear ACEScg before the roll's
+  gains: the pixels the exposure reads) and the roll's (`white.dark_stops`, the p10 over
+  picture frames) and `white.span_slope` (`9.049 / (white − dark)`, held within the cap's
+  1.237 and 3.5). Archive re-measure (`../temp/span-roll-slope/`, `table.txt`): span slopes
+  1.56–1.74, within 0.05 of the spike's on ten rolls; 09-28 1.56 against 1.70, since its
+  white moved +1.50 → +1.97 when whites were measured after colour correction.
+  - **The change is narrower than the spike said.** The four floor rolls (white +1.50: 07-24,
+    09-11, 09-13, 09-18) move ≤ 0.08; rolls whose white sat near the cap steepen 1.25–1.38 →
+    1.56–1.64 (09-09, 09-14, 09-20, 09-28). The spike's "1.05–1.57 today" was its own
+    exposure-inclusive slope, not `slope_for`.
+  - **Today's roll white already renders at L\* 86–98**, not 79: the roll's exposure lifts
+    it. Span slope, mid-grey anchored: 91–98.
+  - **The dark end renders at L\* 1.8–3.0 under every arm**: display black sets it, so the
+    spike's −5 dark target never shows; only the span's length matters.
+  - Holding the roll's white at L\* 91 costs 0.0–0.55 EV on good rolls and 1.0–1.4 on thin
+    ones (09-11, 09-13, 09-28): most of what `level-target-zero` gave them.
+- 2026-10-09: **round 1 — the span slope, mid-grey anchored** (user). Set
+  `../temp/span-roll-slope/round1/` (`scripts/build.py`, binary `hanten-step1`): 09-20,
+  09-28, 09-29, six frames each (the white-setting, a clamped and a thin frame among them);
+  today / span mid-grey anchored / span with the white held at L\* 91 / at L\* 94, display
+  black on, rendered with per-frame `--contrast` and `--saturation` multipliers (thin lifts
+  re-solved from the span slope). Verdict: "hard to tell, none of them is bad; 2 is the more
+  common choice". So **no anchor and no white target in code**: the roll's white renders
+  where the span slope and the roll's exposure put it, and `SPAN_LOOK_STOPS` is the one new
+  value. `display-white`'s question closes as that. Arm 2 clipped most on a few frames
+  (pixels with a channel at the sRGB maximum, saturated colour included: 09-28 2013 20 %,
+  09-20 1882 14 %, 2011 11 %, against 0.2–3 % today); accepted with the verdict.
+- 2026-10-09: **implemented** (`pipeline_version` 11). Decisions (user): a white without its
+  dark end is refused, not rendered at the old slope (one formula in the code).
+  - `roll.dark_stops` / `--roll-dark`, a measurement beside the white; `RollSection::span_slope`
+    derives the slope at render time (`roll_white::span_slope`: `SPAN_LOOK_STOPS` 9.049 over
+    the span, held within `slope_for(WHITE_CAP_STOPS)` 1.237 and `MAX_SLOPE` 3.5). The white
+    rule (cap, floor, clamp) is unchanged; a clamped frame spreads the cap's span to the
+    roll's dark end. The colour's base slope and the thin lift's `k0` are the span slope.
+  - **The pair rule** (`recipe::validate_roll`): one end without the other is refused where
+    the roll applies (`default`, not the film master), before every other look rule, naming
+    `measure-roll` and `white.dark_stops`; `direct` and the film master spare it. **A dark end
+    at or above the white is allowed** and takes `MAX_SLOPE`: one flat bright frame (a
+    uniform test frame) measures its dark end over its capped white, and `measure-roll` must
+    not write a recipe `convert` refuses.
+  - The roll's white no longer has a render-fault remedy of its own (the span slope is
+    bounded, and 3.5 renders at contrast 1); the probe resets white and dark as a pair and
+    names them so, except an entry's white, which drops alone (the frame then takes the
+    roll's pair). The whole-slope remedy no longer offers "a larger/smaller white".
+  - The migration messages for a version 2 `look.contrast` and `reconstruction.contrast`
+    compute the multiplier only from a body stating both ends; a white alone points at the
+    report's `chain.look.base_slope`.
+  - v11 drift-gate row: `render` and `base` unchanged, `recipe` gains `roll.dark_stops`.
+  - **Archive re-measure** (`../temp/span-roll-slope/reports-step3/`, `compare-step3.txt`):
+    every roll's rendered slope equals step 1's span slope (1.56–1.74). Lifts against
+    `level-target-zero`'s reports: small 61 → 61 over eleven rolls (per roll ±3: 09-09 1 → 4,
+    09-18 19 → 17), thin 6 → 7 (09-11's night frame 1641, slope 2.09); thin slopes now
+    1.97–2.10, none bounded. The two effects (whites after colour correction, the span) are
+    not separated.
+  - Tests: synthetic uniform frames have no dark end of their own (it sits at their level),
+    so their span slope pins at 3.5. The white-rule binary test gives its dim frame a thin
+    band near the base (`write_white_density`); the recipe-stamp replay states a deeper dark
+    end; the identity-look tests reach slope 1 with `--contrast` over a span slope, since 1
+    is under the span's 1.237 floor.
+  - Docs: design-spec §6 table, §8 `measure-roll` and recipe example, §9 roll keys and the
+    look's base; `using-nc.md` re-verified (header). Asset probes and every CI gate pass.
+  - **For dependents:** `envelope-hybrid-placement` builds on `roll_white::span_slope` and
+    `roll_dark`; `MAX_SLOPE` is the global maximum `hybrid-slope-bounds` tunes. A
+    low-contrast roll (dark end close to its white) is stretched up to 3.5, which clips —
+    on the archive no roll comes near, but the bound is the only guard.
+- 2026-10-09: `/code-review high`, 9 findings. Fixed:
+  - **`roll` rendered an entry's white at the fallback slope** when the roll had no dark
+    end: it validates the shared recipe alone, where `validate_roll_frames` skipped the
+    entry. The entry is now refused by its own key wherever the roll applies, on `convert`
+    and `roll` alike (binary test).
+  - The render probe reset an entry's white to nothing (the fallback) while naming the entry
+    alone; it now probes the roll's own white, what dropping the entry renders. The
+    "no single knob clears it" remedy names the white with its dark end.
+  - The version 2 contrast message for a white alone names the dark end to measure first;
+    a dark end at or above the white converts exactly (against 3.5).
+  - `roll.dark_stops` is **roll-wide** (`cli::ROLL_WIDE`): a manifest override that changes
+    it for one frame warns. Comments describing the cap's slope and the white above
+    diffuse white.
+  - Declined: measuring the dark end after the roll's gains. Its domain is the exposure's
+    (ACEScg luma before the gains, which reproduced the spike's slopes); the gains move a
+    dark pixel's luma by 0.02–0.03 stop on the archive. Documented on
+    `FrameTones::dark_stops`.
+- 2026-10-09: ship review (`ship:diff-reviewer` and Codex). Fixed: `convert` checked the
+  frame table against the recipe's dark end before the flags, so a typed `--roll-dark` (the
+  migration remedy) was refused over a recipe with a clamped frame; the dark-alone refusal
+  named the dark end as its remedy (it now names the white); the entry refusal names the
+  roll's white and dark end where the roll has no white; a version 2 per-frame override
+  gets the frame-base remedy, not "re-measure". Binary tests follow each remedy on
+  `convert` and `roll`.
+- 2026-10-09: **done.** Landed: `roll_white::roll_dark` / `span_slope` (`SPAN_LOOK_STOPS`
+  9.049, `MAX_SLOPE` 3.5, floor the cap's 1.237), `roll.dark_stops` / `--roll-dark` (a
+  roll-wide measurement), the span slope as the roll's base and colour slope and the thin
+  lift's `k0`, the pair rule, `pipeline_version` 11. No anchor and no white target (round
+  1). Verified: unit and binary tests (every refusal's remedy followed on `convert` and
+  `roll`), the archive re-measure (slopes 1.56–1.74, lifts 61 small / 7 thin), the guide's
+  examples re-run on fixtures and real rolls, asset probes, all CI gates; reviewed by
+  `/code-review`, `ship:diff-reviewer` and Codex. **For dependents:** the hybrid
+  (`envelope-hybrid-placement`) starts from `span_slope` and `roll_dark`; `MAX_SLOPE` is the
+  global maximum `hybrid-slope-bounds` tunes, and the only guard on a low-contrast roll;
+  `white-rule-hdr` reviews a white with no target — it lands at L\* 91–98 on SDR.
 
 ## per-frame-placement
 

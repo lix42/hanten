@@ -601,7 +601,7 @@ pub struct DestinationOverrides {
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
-    /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`,
+    /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-dark`, `--roll-exposure`,
     /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
     /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`,
     /// `--neutral-balance on`), which only a rendering applies — refused under a recipe's film master too. A
@@ -611,7 +611,7 @@ pub struct DestinationOverrides {
         long = "film-master",
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
-            "roll_exposure", "roll_frame_exposure", "roll_thin_slope", "roll_thin_exposure",
+            "roll_dark", "roll_exposure", "roll_frame_exposure", "roll_thin_slope", "roll_thin_exposure",
             "roll_midtone_line",
         ]
     )]
@@ -835,12 +835,18 @@ pub struct RollOverrides {
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb)]
     pub roll_white_balance: Option<[f32; 3]>,
     /// The roll's white, in scene stops above mid-grey, as `hanten measure-roll`
-    /// measured it (recipe key `roll.white_stops`). The look renders it at diffuse white
-    /// with mid-grey pinned — a slope of `log2(1/0.18) / STOPS` — which `--contrast`
-    /// multiplies, unless a thin lift applies (`--roll-thin-slope`). It drops a frame's
-    /// thin lift (slope and exposure).
+    /// measured it (recipe key `roll.white_stops`). Stated with `--roll-dark`: the look's
+    /// slope spreads the span from the dark end to the white over a fixed range, mid-grey
+    /// pinned, and `--contrast` multiplies it, unless a thin lift applies
+    /// (`--roll-thin-slope`). It drops a frame's thin lift (slope and exposure).
     #[arg(long, value_name = "STOPS")]
     pub roll_white: Option<f32>,
+    /// The roll's dark end, in scene stops from mid-grey, as `hanten measure-roll`
+    /// measured it (recipe key `roll.dark_stops`; its report's `white.dark_stops`). Stated
+    /// with `--roll-white`: the roll's slope spreads the span between them. It drops a
+    /// frame's thin lift (slope and exposure).
+    #[arg(long, value_name = "STOPS", allow_hyphen_values = true)]
+    pub roll_dark: Option<f32>,
     /// The roll's exposure in EV, as `hanten measure-roll` measured it (recipe key
     /// `roll.exposure`): a neutral gain that brings the roll's median frame to a normal
     /// level. Added to `--exposure`, which then adjusts it rather than replacing it.
@@ -855,7 +861,7 @@ pub struct RollOverrides {
     /// recipe (recipe key `roll.small_lift`). A taste adjustment.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub small_lift: Option<recipe::Switch>,
-    /// A thin frame's own slope, in place of the one `--roll-white` places (recipe key
+    /// A thin frame's own slope, in place of the roll's (recipe key
     /// `roll.thin_slope`; a `roll.frames` entry's `thin_slope`): the steeper slope `hanten
     /// measure-roll` gives a thin frame. `--contrast` multiplies it.
     #[arg(long, value_name = "SLOPE")]
@@ -901,6 +907,7 @@ impl RollOverrides {
         [
             ("--roll-white-balance", self.roll_white_balance.is_some()),
             ("--roll-white", self.roll_white.is_some()),
+            ("--roll-dark", self.roll_dark.is_some()),
             ("--roll-exposure", self.roll_exposure.is_some()),
             ("--roll-frame-exposure", self.roll_frame_exposure.is_some()),
             ("--roll-thin-slope", self.roll_thin_slope.is_some()),
@@ -955,8 +962,9 @@ pub struct SceneCorrectionOverrides {
 pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
-    /// a thin frame's slope (`--roll-thin-slope`), else the roll's (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
-    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Luminance only: each pixel's
+    /// a thin frame's slope (`--roll-thin-slope`), else the roll's (`--roll-white` and
+    /// `--roll-dark`), else the fallback ≈ 1.41, as if the roll's white were 1.75 stops up
+    /// (`direct`: its pinned ≈ 1.41). Luminance only: each pixel's
     /// ACEScg luminance becomes `0.18 · (Y / 0.18)^slope`, pivoted at mid-grey, and its
     /// colour is kept (`--saturation` sets that); slope 1 reproduces the scene's own
     /// contrast. Runs after scene correction, so an `--exposure` is expanded with the
@@ -4433,14 +4441,21 @@ fn convert_attempt(
     // where `validate` would name the wrong key. Only over a sound decode, as in
     // `validate`: a bad linearization is its own fault, not an entry's.
     if recipe.reconstruction.check().is_ok() {
+        // The entries as stated, against the dark end the flags resolve: every entry's
+        // white spreads the roll's span, and `--roll-dark` beats the recipe's.
+        let table = recipe::RollSection {
+            dark_stops: recipe.roll.dark_stops,
+            ..stated_roll.clone()
+        };
         recipe::validate_roll_frames(
-            &stated_roll,
+            &table,
             recipe.reconstruction.linearization,
             [
                 recipe.look.contrast,
                 recipe.base().saturation,
                 recipe.look.saturation,
             ],
+            recipe.applies_roll_to_scene_correction(),
             KnobNames::FlagAndKey,
         )?;
     }
@@ -5091,6 +5106,17 @@ const ROLL_WIDE: &[RollWide] = &[
         },
     },
     RollWide {
+        key: "roll.dark_stops",
+        breaks: "this frame's slope spreads a span apart from the roll's measured dark end \
+                 (a frame's own contrast is `look.contrast`, which multiplies the slope)",
+        compare: |f, r| {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+                return Ok(None);
+            }
+            changed(&f.roll.dark_stops, &r.roll.dark_stops)
+        },
+    },
+    RollWide {
         key: "roll.exposure",
         breaks: "this frame is exposed apart from the roll's measured exposure (a frame's \
                  own adjustment is `scene_correction.exposure`, which adds to it)",
@@ -5244,10 +5270,11 @@ fn resolve_frames(
                                  `roll.thin_slope` and `roll.thin_exposure`, here"
                             )));
                         }
-                        // Its white beats the thin lift beneath it, as a typed one does.
-                        if ov
-                            .pointer("/roll/white_stops")
-                            .is_some_and(|v| !v.is_null())
+                        // Its white or dark end beats the thin lift beneath it, as a typed
+                        // one does.
+                        if ["/roll/white_stops", "/roll/dark_stops"]
+                            .iter()
+                            .any(|k| ov.pointer(k).is_some_and(|v| !v.is_null()))
                         {
                             own.roll.drop_thin_lift();
                         }
@@ -6648,12 +6675,16 @@ struct MeasuredRollWhite {
     /// The frame it was taken from, when no limit bound.
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<PathBuf>,
-    /// The slope `roll.white_stops` renders at: the white at diffuse white, mid-grey
-    /// pinned, at `look.contrast` 1 and no exposure. The white is measured before the
-    /// roll's exposure, which the look expands too, so the roll's white renders
-    /// `exposure.ev · slope` stops off diffuse white. The recipe stores `stops`.
+    /// The roll's dark end (`roll_white::roll_dark`), in scene stops.
+    dark_stops: f32,
+    /// The slope the roll renders at, at `look.contrast` 1: the span from `dark_stops` to
+    /// `stops` over `roll_white::SPAN_LOOK_STOPS`, mid-grey pinned
+    /// (`roll_white::span_slope`). Both ends are measured at exposure 0, so the roll's
+    /// white renders `slope · (stops + exposure.ev)` stops above mid-grey. The recipe stores
+    /// `stops` and `dark_stops`.
     slope: f32,
-    /// Frames above the cap, rendered at the cap's slope rather than the roll's.
+    /// Frames above the cap, rendered at the cap's span to the roll's dark end rather than
+    /// the roll's.
     /// Disclosed, not warned about: an ordinary bright scene lands here too.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     clamped: Vec<ClampedFrame>,
@@ -6664,7 +6695,7 @@ struct MeasuredRollWhite {
 struct ClampedFrame {
     input: PathBuf,
     white_stops: f32,
-    /// Its slope, the cap's — against the roll's `slope`.
+    /// Its slope, the cap's span to the roll's dark end — against the roll's `slope`.
     slope: f32,
     /// This frame's own `convert` flags: `reuse.flag` carries the roll's white, which
     /// would undo the clamp on this frame.
@@ -6704,13 +6735,20 @@ struct RollColour {
     line: Option<MidtoneLine>,
 }
 
-/// The `convert` flags that freeze the roll's `colour`, the white `white_stops`, the
-/// exposure `ev` and a frame's `written` lifts — `reuse.flag`, and a clamped or lifted
-/// frame's own.
-fn reuse_flag(colour: RollColour, white_stops: f32, ev: f32, written: Written) -> String {
+/// The `convert` flags that freeze the roll's `colour`, the white `white_stops` and dark
+/// end `dark_stops`, the exposure `ev` and a frame's `written` lifts — `reuse.flag`, and a
+/// clamped or lifted frame's own.
+fn reuse_flag(
+    colour: RollColour,
+    white_stops: f32,
+    dark_stops: f32,
+    ev: f32,
+    written: Written,
+) -> String {
     let gains = colour.gains;
     let mut flag = format!(
-        "--roll-white-balance {},{},{} --roll-white {white_stops} --roll-exposure {ev}",
+        "--roll-white-balance {},{},{} --roll-white {white_stops} --roll-dark {dark_stops} \
+         --roll-exposure {ev}",
         gains[0], gains[1], gains[2]
     );
     if let Some(l) = colour.line {
@@ -6905,15 +6943,24 @@ fn measured_roll_white(
     for (f, role) in frames.iter_mut().zip(&placed.roles) {
         f.white_role = *role;
     }
-    let cap_slope = roll_white::slope_for(roll_white::WHITE_CAP_STOPS);
+    // Picture frames only, as for the exposure, which has already refused a roll with none.
+    let darks: Vec<Option<f32>> = frames
+        .iter()
+        .map(|f| f.tones.filter(|_| f.counts.kept > 0).map(|t| t.dark_stops))
+        .collect();
+    let dark_stops = roll_white::roll_dark(&darks).ok_or_else(|| {
+        NcError::Other("roll dark end: no picture frame has a usable pixel".into())
+    })?;
+    let cap_slope = roll_white::span_slope(roll_white::WHITE_CAP_STOPS, dark_stops);
     Ok(MeasuredRollWhite {
+        dark_stops,
         stops: placed.stops,
         bound: placed.bound,
         from: frames
             .iter()
             .find(|f| f.white_role == roll_white::FrameRole::SetsRoll)
             .map(|f| f.input.clone()),
-        slope: roll_white::slope_for(placed.stops),
+        slope: roll_white::span_slope(placed.stops, dark_stops),
         clamped: frames
             .iter()
             .filter(|f| f.white_role == roll_white::FrameRole::Clamped)
@@ -6921,7 +6968,13 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 slope: cap_slope,
-                flag: reuse_flag(colour, roll_white::WHITE_CAP_STOPS, ev, Written::default()),
+                flag: reuse_flag(
+                    colour,
+                    roll_white::WHITE_CAP_STOPS,
+                    dark_stops,
+                    ev,
+                    Written::default(),
+                ),
             })
             .collect(),
         rule: WhiteRule {
@@ -6946,15 +6999,28 @@ fn frame_flags(
     for f in frames.iter_mut() {
         let clamp = own_white(f, white);
         let written = f.written(lifts);
-        f.flag = (clamp.is_some() || written != Written::default())
-            .then(|| reuse_flag(colour, clamp.unwrap_or(white.stops), ev, written));
+        f.flag = (clamp.is_some() || written != Written::default()).then(|| {
+            reuse_flag(
+                colour,
+                clamp.unwrap_or(white.stops),
+                white.dark_stops,
+                ev,
+                written,
+            )
+        });
     }
     for c in &mut white.clamped {
         let written = frames
             .iter()
             .find(|f| f.input == c.input)
             .map_or(Written::default(), |f| f.written(lifts));
-        c.flag = reuse_flag(colour, roll_white::WHITE_CAP_STOPS, ev, written);
+        c.flag = reuse_flag(
+            colour,
+            roll_white::WHITE_CAP_STOPS,
+            white.dark_stops,
+            ev,
+            written,
+        );
     }
 }
 
@@ -7463,7 +7529,10 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         if !roll_white::thin(w, exposure.ev, &tones) {
             continue;
         }
-        let k0 = roll_white::slope_for(own_white(f, &white).unwrap_or(white.stops));
+        let k0 = roll_white::span_slope(
+            own_white(f, &white).unwrap_or(white.stops),
+            white.dark_stops,
+        );
         f.thin_lift = roll_white::thin_lift(w, base_stops, exposure.ev, k0, exposure.ev + lift);
         // Disclosed, not warned about: the lift is a taste adjustment, on by default.
         let name = f.input.display();
@@ -7531,6 +7600,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             white_balance: Some(gains),
             midtone_line: midtone.line,
             white_stops: Some(white.stops),
+            dark_stops: Some(white.dark_stops),
             exposure: Some(exposure.ev),
             frames: frame_table(&frames, &white, lifts),
             ..recipe::RollSection::default()
@@ -7563,7 +7633,13 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         },
         confidence,
         reuse: RollReuse {
-            flag: reuse_flag(colour, white.stops, exposure.ev, Written::default()),
+            flag: reuse_flag(
+                colour,
+                white.stops,
+                white.dark_stops,
+                exposure.ev,
+                Written::default(),
+            ),
         },
         white,
         exposure: MeasuredRollExposure {
@@ -9600,7 +9676,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
         type Change = (&'static str, fn(&mut Recipe));
-        let changes: [Change; 10] = [
+        let changes: [Change; 11] = [
             ("calibration.film_base", |r| {
                 r.calibration.film_base = Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4]))
             }),
@@ -9615,6 +9691,7 @@ mod tests {
                     fade_end_stops: 1.87,
                 })
             }),
+            ("roll.dark_stops", |r| r.roll.dark_stops = Some(-3.0)),
             ("roll.exposure", |r| r.roll.exposure = Some(0.5)),
             ("reconstruction.scale", |r| {
                 r.reconstruction.scale = [1.0, 0.9, 0.8]
