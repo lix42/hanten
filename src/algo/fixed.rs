@@ -299,9 +299,10 @@ pub struct DecodeReport {
 /// and non-finite samples ride through for `io::encode` to count — the clamping
 /// boundary is the u16 encode and nowhere else.
 ///
-/// Consumes the scan and writes the positive into its buffer, the IR plane moving
-/// with it, so a frame never holds the scan and its positive at once
-/// (`pipeline::memory`).
+/// Consumes the scan and writes the positive into its buffer, so a frame never holds
+/// the scan and its positive at once (`pipeline::memory`). The IR plane is **dropped**
+/// here: its one reader, `film_base`'s holder detection, has already run, and nothing
+/// after the decode reads it (IR dust removal would bring it back).
 pub fn decode(
     image: LinearImage,
     base: &FilmBase,
@@ -323,8 +324,17 @@ pub fn decode(
         ..
     } = *params;
 
-    // The fields are public, so re-check the buffer lengths the positive inherits.
-    let mut image = LinearImage::new(image.width, image.height, image.rgb, image.ir)?;
+    // Free the IR plane before the pass, and re-check the RGB length the positive
+    // inherits (the fields are public).
+    let LinearImage {
+        width,
+        height,
+        rgb,
+        ir,
+        ..
+    } = image;
+    drop(ir);
+    let mut image = LinearImage::new(width, height, rgb, None)?;
     // Fused measurement + calibration + curve, one pass. Each output sample reads
     // only its own input sample, so rewriting in place is the same arithmetic.
     pixels::map_in_place(&mut image.rgb, |px| {
@@ -628,27 +638,13 @@ mod tests {
     }
 
     #[test]
-    fn the_ir_plane_is_carried_and_never_minted() {
-        // Preserve, don't consume — and the falsifiable half: an IR-free scan must
-        // stay IR-free.
-        let (film, _) = decode(scan(), &base(), &DecodeParams::default()).unwrap();
-        assert_eq!(film.ir(), Some(&[0.1_f32, 0.2, 0.3, 0.4][..]));
-        assert_eq!((film.width(), film.height()), (4, 1));
-
-        let bare = LinearImage::new(1, 1, vec![0.5, 0.3, 0.2], None).unwrap();
-        let (film, _) = decode(bare, &base(), &DecodeParams::default()).unwrap();
-        assert_eq!(film.ir(), None);
-    }
-
-    #[test]
     fn the_decode_writes_into_the_scan_s_own_buffers() {
         // The memory model counts one image from the decode on (`pipeline::memory`);
-        // a copy of either plane would put the scan back beside its positive.
+        // a copy would put the scan back beside its positive.
         let image = scan();
-        let (rgb, ir) = (image.rgb.as_ptr(), image.ir.as_ref().unwrap().as_ptr());
+        let rgb = image.rgb.as_ptr();
         let (film, _) = decode(image, &base(), &DecodeParams::default()).unwrap();
         assert_eq!(film.rgb().as_ptr(), rgb);
-        assert_eq!(film.ir().unwrap().as_ptr(), ir);
     }
 
     #[test]

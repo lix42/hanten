@@ -3948,10 +3948,8 @@ fn render_gain_map(
     clock: &mut impl StageClock,
 ) -> Result<(DestinationRender, Option<staged::Staged>)> {
     let peak = d.range.peak()?;
-    // Neither JPEG stores the IR plane, so it is dropped before the pair splits the
-    // graded image and copies it.
     let chain::RenderedPair { sdr, hdr } = chain::render_pair(
-        aces.without_ir(),
+        aces,
         film_base,
         &recipe.shared_params(),
         d.gamut.destination(),

@@ -364,7 +364,6 @@ pub fn from_new_chain(
     tone_curve: &'static str,
     gamut_mapping: &'static str,
 ) -> Result<(LinearHdr, PeakClamp)> {
-    image.ir = None;
     let clamp = clamp_to_peak(&mut image.rgb)?;
     let content_light = measure_content_light(&image.rgb);
     Ok((
@@ -985,8 +984,7 @@ mod tests {
             0.0,
             0.0, // exactly at the peak: not counted
         ];
-        let ir = Some(vec![0.1; 3]);
-        let image = LinearImage::new(3, 1, rgb.clone(), ir).unwrap();
+        let image = LinearImage::new(3, 1, rgb.clone(), None).unwrap();
         let (hdr, clamp) =
             from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap();
         assert_eq!(
@@ -1014,10 +1012,6 @@ mod tests {
                 .map(|v| v.to_bits())
                 .collect::<Vec<_>>(),
             clamped.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
-        );
-        assert!(
-            hdr.image().ir.is_none(),
-            "the IR plane is not an HDR channel"
         );
         // Measured on what is stored: the clamped pixels, not the chain's output.
         assert_eq!(hdr.content_light(), measure_content_light(&clamped));

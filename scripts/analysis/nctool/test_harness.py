@@ -268,7 +268,7 @@ printf '{"command":"roll","frames":[{"input":"real.tif","output":"%s/real_positi
         self.assertNotIn("converted FixtureRoll", result.stdout)
         self.assertFalse((self.out / "FixtureRoll" / "real_positive.tiff").exists())
 
-    def test_ir_stage_rejects_a_warning_about_the_carried_plane(self):
+    def test_ir_stage_rejects_a_warning_about_the_ir_plane(self):
         self.seed_recipes()
         fake_nc = self.tmp / "fake-ir-nc"
         fake_nc.write_text(
@@ -299,13 +299,13 @@ printf '{"command":"convert"}\n'
 
         result = self.run_harness("ir", fake_nc, {**env, "FAKE_IR": "warns"})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("the carried IR plane raised a warning", result.stderr)
+        self.assertIn("the IR plane raised a warning", result.stderr)
 
         # A decoder layout note naming the plane is not the retired warning.
         for fake_ir in ("silent", "layout"):
             result = self.run_harness("ir", fake_nc, {**env, "FAKE_IR": fake_ir})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("IR plane carried without a warning", result.stdout)
+            self.assertIn("IR frame converted without a warning", result.stdout)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ pub struct LinearImage {
     /// Whether the IR plane's provenance is **marker-verified** — the decoder
     /// found the SilverFast IR IFD's `NewSubfileType=4` marker, not merely a
     /// same-dimension 16-bit grayscale page identified by shape alone. A
-    /// shape-only IR plane is still carried and exportable, but it must **not** be
+    /// shape-only IR plane is still decoded, but it must **not** be
     /// trusted by a conversion consumer (a stray grayscale page could otherwise be
     /// thresholded as IR and corrupt the film base), so the holder mask is skipped
     /// for it. Meaningful only when `ir.is_some()`; [`new`](Self::new) defaults it
@@ -77,7 +77,7 @@ impl LinearImage {
             ir,
             // Provenance is not known at this boundary; `io::decode` sets it from
             // the IR IFD's `NewSubfileType=4` marker. A shape-only IR plane stays
-            // `false` (carried/exportable but not trusted by consumers).
+            // `false` (not trusted by consumers).
             ir_verified: false,
         })
     }

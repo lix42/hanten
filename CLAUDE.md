@@ -136,9 +136,10 @@ Rules every stage keeps:
   into `EncodeReport` for a report warning. Never clamp silently.
 - **Density conversion and print rendering are separate stages** — the core
   colour-fidelity rule. Don't merge them.
-- **The IR plane is carried through, not consumed.** The one exception is holder
-  detection in `film_base`, gated on the *measured* `ir_separability`, never on
-  `--film-type`.
+- **The IR plane stops at the decode.** Its one reader is holder detection in
+  `film_base`, gated on the *measured* `ir_separability`, never on `--film-type`;
+  `algo::fixed::decode` then drops it, and nothing after reads it. IR dust removal
+  would bring it back (design-spec §6.1).
 - **Every standards-based matrix, luma vector and transfer constant lives in
   `pipeline/colorimetry/`** — never a literal in a stage. Editing `REC709`,
   `DISPLAY_P3`, `ACESCG`, `ADOBE_RGB` or `BT2020` changes ICC bytes and pixels even with

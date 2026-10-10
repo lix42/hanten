@@ -44,6 +44,10 @@ memory decision as much as a structural one.
 - Moving where a buffer lives must not move a pixel: the rayon pass set that bar
   with byte-identical output, and the same bar applies here.
 
+**Decided 2026-10-09** (progress log): one buffer, in place, the gain map's split the
+one copy; the IR plane is **dropped at the fixed decode** rather than carried, which
+overturns the skeleton's provisional call and closes `ir_verified`.
+
 ## Open questions
 
 - **What consume-and-return costs the typed boundary** — a consumed input cannot be

@@ -58,7 +58,7 @@ not the master branch.
 One bullet per epic below — the name is the epic id the task list is grouped
 under, and the parenthesized paths are the modules it owns.
 
-- **io** (`io/decode.rs`, `io/encode.rs`, `pipeline/input_semantics.rs`) — SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → linear `f32` scanner measurements (IR carried through, consumed only by `film-base/ir-holder-detection`); input semantics remain explicit rather than silently assigning Rec.709. On the way out, `LinearImage` → 16-bit or 32-bit float TIFF with ICC, retaining linear ACEScg film masters; the planned display-output encoders are the `output` epic's. Buffer strategy (preflight, streaming) lives here too.
+- **io** (`io/decode.rs`, `io/encode.rs`, `pipeline/input_semantics.rs`) — SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → linear `f32` scanner measurements (IR read only by `film-base/ir-holder-detection`, dropped at the fixed decode); input semantics remain explicit rather than silently assigning Rec.709. On the way out, `LinearImage` → 16-bit or 32-bit float TIFF with ICC, retaining linear ACEScg film masters; the planned display-output encoders are the `output` epic's. Buffer strategy (preflight, streaming) lives here too.
 - **film-base** (`pipeline/film_base.rs`) — estimate `Dmin` from unexposed border,
   with CLI override, and measure the roll-fixed `Dmax` anchor from a reference
   frame. The two are *different quantities* (see design-spec §4) that share this
@@ -87,7 +87,7 @@ under, and the parenthesized paths are the modules it owns.
 - **Normally 32-bit float linear image buffers:** scanner measurement coordinates before reconstruction, typed NC film RGB after the density curve, and linear ACEScg after the versioned working-space mapping; bit-depth reduction only at encode.
 - **Pluggable algorithms** behind the tagged `reconstruction` recipe object, resolved by `algo::reconstruct`, so more can be added later.
 - Density conversion and print rendering are **separate sub-stages** (core fidelity rule).
-- IR channel is **preserved and not acted on by the conversion path**, with one exception: on a marker-verified IR plane that *measures* able to separate holder from film on that frame (`film-base/ir-usability-detection`), `film_base::estimate` consumes IR to mask the opaque holder before the auto rebate search (`film-base/ir-holder-detection`). `--film-type` is provenance only and gates nothing. IR dust removal remains a roadmap follow-up.
+- IR channel is **not acted on by the conversion path** and is dropped at the fixed decode (`nf-core/buffer-strategy`), with one exception: on a marker-verified IR plane that *measures* able to separate holder from film on that frame (`film-base/ir-usability-detection`), `film_base::estimate` consumes IR to mask the opaque holder before the auto rebate search (`film-base/ir-holder-detection`). `--film-type` is provenance only and gates nothing. IR dust removal remains a roadmap follow-up.
 
 ## Dependencies
 
@@ -334,6 +334,7 @@ graph TD
   end
   subgraph nf-core
     nf-core/buffer-strategy
+    nf-core/scan-type
     nf-core/release-decoded-image
     nf-core/subcommands
     nf-core/recipe-schema
@@ -779,6 +780,7 @@ graph TD
   nf-core/minimal-end-to-end --> nf-core/subcommands
   nf-core/subcommands --> core/recipe-composition
   nf-core/stage-skeleton --> nf-core/buffer-strategy
+  nf-core/buffer-strategy --> nf-core/scan-type
   nf-verification/roll-side-exports --> nf-core/release-decoded-image
   nf-look/path-to-white --> nf-core/one-luma-dot
   nf-calibration/scale-ladder --> nf-look/path-to-white
@@ -1270,6 +1272,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
   — the GPU spike decided the seams are the existing typed boundaries, not one
   per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
+- `nf-core/scan-type` (new flow): `nf-core/buffer-strategy`
+  — filed 2026-10-09 from its review: the IR plane stops at the decode only because
+  every post-decode `into_linear` passes `None`
 - `nf-core/release-decoded-image` (new flow): `nf-verification/roll-side-exports`
   — nothing reads the decoded image after the decode once `--export-ir` is retired
 - `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
@@ -1891,10 +1896,15 @@ the design now in `docs/design-spec.md` (§6–§7):
   would, and an override that changes a roll-wide value warns (`roll.white_stops` per
   frame is legitimate). *Re-scoped 2026-09-28: `inspect` is done, `estimate` moved to
   `core/measure-base`, `nctool roll`'s calibrate step to `core/roll-measure-mode`*
-- [ ] [Stage seams, buffers and the IR
+- [x] [Stage seams, buffers and the IR
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is
-  ≈0.9 GB each at 74.6 MP
+  ≈0.9 GB each at 74.6 MP. **Done 2026-10-09**: one buffer, in place, the gain map's
+  split the one copy; the IR plane is dropped at `fixed::decode`. SDR TIFF peak
+  1.654 → 1.355 GB at 74.65 MP, outputs byte-identical
+- [ ] [A scan type that ends at the decode](tasks/nf-core/scan-type.md) — split the
+  scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce
+  that the IR plane stops at `fixed::decode`
 - [x] [Release the decoded image after the
   decode](tasks/nf-core/release-decoded-image.md) — free it once `fixed::decode` has
   read it, lowering each frame's peak by 12–16 B/px; the memory model moves with it.

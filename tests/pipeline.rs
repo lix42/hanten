@@ -5780,17 +5780,15 @@ fn roll_reports_the_preflight_decision_per_frame() {
         assert_eq!(mem["decision"], "ok");
         assert!(mem["estimated_peak_bytes"].as_u64().unwrap() > 0);
     }
-    // The HDRi frame carries an IR plane, so it must estimate above the HDR one.
+    // Same dimensions, and the HDRi frame's IR plane does not raise a conversion's
+    // peak: its read buffers tie the RGB one, and the decode drops it.
     let hdr = frames[0]["memory"]["estimated_peak_bytes"]
         .as_u64()
         .unwrap();
     let hdri = frames[1]["memory"]["estimated_peak_bytes"]
         .as_u64()
         .unwrap();
-    assert!(
-        hdri > hdr,
-        "the IR-carrying frame must estimate higher ({hdri} vs {hdr})"
-    );
+    assert_eq!(hdri, hdr);
 }
 
 #[test]
@@ -5801,41 +5799,61 @@ fn roll_gates_each_frame_against_the_shared_budget() {
     // non-zero.
     let tmp = TempDir::new("mem-roll-mixed");
     let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
-    let hdr_in = fixture("hdr-48bit.tif");
-    let hdri_in = fixture("hdri-64bit.tif");
+    // Two frame sizes, so two estimates.
+    let small_in = tmp.path("small.tif");
+    write_hdri_with_uniform_ir(&small_in, 64, 64, [20000, 15000, 12000], 40000);
+    let large_in = fixture("hdri-64bit.tif");
 
     // Read both estimates from a roll that fits, rather than hardcoding fixture
     // arithmetic that would rot with the model.
     let probe_dir = tmp.path("probe");
     let (code, stdout, err) = run(&[
         "roll",
-        hdr_in.to_str().unwrap(),
-        hdri_in.to_str().unwrap(),
+        small_in.to_str().unwrap(),
+        large_in.to_str().unwrap(),
         "--out-dir",
         probe_dir.to_str().unwrap(),
         "--params",
         recipe.to_str().unwrap(),
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
     ]);
     assert_eq!(code, 0, "{err}");
-    let frames = json(&stdout)["frames"].as_array().unwrap().clone();
-    let small = frames[0]["memory"]["estimated_peak_bytes"]
-        .as_u64()
-        .unwrap();
-    let large = frames[1]["memory"]["estimated_peak_bytes"]
-        .as_u64()
-        .unwrap();
+    // `roll` sorts its inputs by path, so find each frame by its input.
+    let frame_of = |report: &serde_json::Value, input: &Path| {
+        report["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["input"] == input.to_str().unwrap())
+            .unwrap_or_else(|| panic!("no frame for {}", input.display()))
+            .clone()
+    };
+    let probe = json(&stdout);
+    let estimate = |input| {
+        frame_of(&probe, input)["memory"]["estimated_peak_bytes"]
+            .as_u64()
+            .unwrap()
+    };
+    let (small, large) = (estimate(&small_in), estimate(&large_in));
     assert!(small < large);
     let between = ((small + large) / 2).to_string();
 
     let out_dir = tmp.path("out");
     let (code, stdout, err) = run(&[
         "roll",
-        hdr_in.to_str().unwrap(),
-        hdri_in.to_str().unwrap(),
+        small_in.to_str().unwrap(),
+        large_in.to_str().unwrap(),
         "--out-dir",
         out_dir.to_str().unwrap(),
         "--params",
         recipe.to_str().unwrap(),
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
         "--max-memory",
         &between,
     ]);
@@ -5843,17 +5861,17 @@ fn roll_gates_each_frame_against_the_shared_budget() {
     let report = json(&stdout);
     assert_eq!(report["summary"]["succeeded"], 1);
     assert_eq!(report["summary"]["failed"], 1);
-    let frames = report["frames"].as_array().unwrap();
-    assert_eq!(frames[0]["status"], "ok");
-    assert_eq!(frames[1]["status"], "failed");
-    let error = frames[1]["error"].as_str().unwrap();
+    let (small_frame, large_frame) = (frame_of(&report, &small_in), frame_of(&report, &large_in));
+    assert_eq!(small_frame["status"], "ok");
+    assert_eq!(large_frame["status"], "failed");
+    let error = large_frame["error"].as_str().unwrap();
     assert!(
         error.contains("resource:") && error.contains("estimated peak"),
         "the failed frame must carry its own resource error: {error}"
     );
     // The frame that fitted was written; its sibling was not.
     assert!(
-        out_dir.join("hdr-48bit_positive.tiff").exists(),
+        out_dir.join("small_positive.tiff").exists(),
         "the in-budget frame must still be converted"
     );
     assert!(
@@ -5898,7 +5916,8 @@ fn over_budget_rejection_covers_inspect_estimate_and_roll() {
 #[test]
 fn decode_only_commands_pass_a_budget_that_rejects_the_full_pipeline() {
     // The per-profile gate is not cosmetic: a budget between the decode-only and
-    // full-pipeline estimates must admit `inspect` while rejecting `convert`.
+    // full-pipeline estimates must admit `inspect` while rejecting `convert`. The gain
+    // map, since a TIFF's peak ties the decode's when nothing is sampled.
     let tmp = TempDir::new("mem-profile");
     let input = fixture("hdri-64bit.tif");
     let in_str = input.to_str().unwrap();
@@ -5909,12 +5928,14 @@ fn decode_only_commands_pass_a_budget_that_rejects_the_full_pipeline() {
     let decode_only = json(&stdout)["memory"]["estimated_peak_bytes"]
         .as_u64()
         .unwrap();
-    let out = tmp.path("out.tiff");
+    let out = tmp.path("out.jpg");
     let (_c, stdout, _e) = run(&[
         "convert",
         in_str,
         "-o",
         out.to_str().unwrap(),
+        "--range",
+        "hdr",
         "--film-base",
         "0.9,0.55,0.42",
     ]);
@@ -5931,12 +5952,14 @@ fn decode_only_commands_pass_a_budget_that_rejects_the_full_pipeline() {
     let budget = between.to_string();
     let (code, _out, err) = run(&["inspect", in_str, "--max-memory", &budget]);
     assert_eq!(code, 0, "inspect fits the in-between budget:\n{err}");
-    let out2 = tmp.path("out2.tiff");
+    let out2 = tmp.path("out2.jpg");
     let (code, _out, err) = run(&[
         "convert",
         in_str,
         "-o",
         out2.to_str().unwrap(),
+        "--range",
+        "hdr",
         "--film-base",
         "0.9,0.55,0.42",
         "--max-memory",
@@ -7806,8 +7829,8 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
 
 #[test]
 fn the_default_destination_renders_a_display_p3_tiff() {
-    // The fixed decode → the chain → the default destination. Both fixtures, so the
-    // IR-carrying path is covered too. The pass bar
+    // The fixed decode → the chain → the default destination. Both fixtures, so a scan
+    // with an IR plane is covered too. The pass bar
     // is "a file that decodes and is not obviously broken" — whether it *looks* right
     // is `nf-calibration`'s question.
     let tmp = TempDir::new("render");

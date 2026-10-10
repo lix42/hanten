@@ -37,8 +37,8 @@ The deterministic core owns the image science. Any future ML assistance (see
 ### In scope
 
 - Read SilverFast **HDR (48-bit RGB)** and **HDRi (64-bit RGB + infrared)** scans.
-- Parse and **preserve** the IR channel. It is carried through the pipeline and can
-  be exported; its one reader is the holder cut of the measurement area (§6.1).
+- Parse the IR channel. Its one reader is the holder cut of the measurement area
+  (§6.1); the decode drops it after that.
 - Convert negative → positive in **32-bit float linear buffers** whose domain is
   always explicit: scanner measurement RGB through `Dmin`/density, the typed
   `FilmRgbImage` after the decode, and typed linear ACEScg after the NC film RGB v1
@@ -118,8 +118,8 @@ linear (raw-ish) scanner data:
 | HDR   | R, G, B            | 48-bit (16/ch) | Single IFD: 3-sample chunky RGB, no IR. |
 | HDRi  | R, G, B + IR       | 64-bit (16/ch) | IFD0 = 3-sample RGB (as HDR); a 1-sample grayscale IR plane in a later IFD. High-res scans also embed a reduced-resolution RGB preview IFD between them. |
 
-The tool reads both. On HDRi input the IR plane is parsed and kept; on HDR input
-there simply is no IR channel.
+The tool reads both. On HDRi input the IR plane is parsed and kept until the decode;
+on HDR input there simply is no IR channel.
 
 **On-disk layout (verified against real sample files, 2026-06):** these are
 uncompressed little-endian ClassicTIFFs, `PlanarConfiguration=1` (chunky), 16-bit
@@ -529,9 +529,10 @@ reconstruction is measured, and it refuses any stage the recipe asks for (§9).
 
 ### 6.1 IR channel handling
 
-The IR plane (when present) is decoded and carried alongside RGB. **No conversion
-stage consumes it**, and carrying it is the normal case, so it raises no warning; it
-is not exported (`--export-ir` retired). Its one reader is the **effective area** (§9 `measure`): where a marker-verified
+The IR plane (when present) is decoded beside RGB, and **the fixed decode drops it**:
+no rendering stage reads it, and the chain does not carry 4 B/px for no reader. It
+raises no warning and is not exported (`--export-ir` retired). Its one reader is the
+**effective area** (§9 `measure`), which runs before the decode: where a marker-verified
 plane **measures able to separate holder from film on that frame**, the opaque
 scanner holder (dark in IR) is cut from the frame's edges, since IR-transparent film
 (base, rebate, picture) reads bright. That area is what `measure-base`, `inspect` and
@@ -555,8 +556,8 @@ infrared while physical defects (dust, scratches, hair) are opaque to it, so the
 IR channel is a near-clean defect map. Acting on it requires a separate
 mask + inpainting stage with its own parameters, and it does **not** work for
 traditional silver B&W film (silver blocks IR like dust) or reliably for
-Kodachrome. So nc preserves the data cheaply now and adds the consuming stage
-later.
+Kodachrome. So nc reads the plane now and adds the consuming stage later, carrying
+the plane as far as that stage needs it.
 
 
 ## 7. Reconstruction: the fixed decode
@@ -1092,16 +1093,16 @@ allocator slack and fixed costs — the number the gate compares:
 ```json
 {
   "memory": {
-    "estimated_peak_bytes": 2537934848,
-    "accounted_bytes": 2090188800,
+    "estimated_peak_bytes": 2194546688,
+    "accounted_bytes": 1791590400,
     "decode_bytes": 1343692800,
     "film_base_bytes": 1642291200,
-    "render_bytes": 1642291200,
-    "encode_bytes": 2090188800,
+    "render_bytes": 1343692800,
+    "encode_bytes": 1791590400,
     "budget_bytes": 6442450944,
     "budget_source": "default",
     "decision": "ok",
-    "detected_total_ram_bytes": 51539607552
+    "detected_total_ram_bytes": 19327352832
   }
 }
 ```
@@ -2214,8 +2215,8 @@ Deferred work, recorded so it isn't lost. Items graduate into tracked tasks in
 [TASKS.md](TASKS.md). Numbers are stable because other documents cite them, so a
 shipped or retired item keeps its number and shrinks to one line.
 
-1. **IR-based dust & scratch removal.** Consume the IR channel (already preserved)
-   to build a defect mask and inpaint defects. Parameters: IR threshold, mask
+1. **IR-based dust & scratch removal.** Consume the IR channel (decoded, but dropped
+   at the fixed decode today, so the stage carries it on) to build a defect mask and inpaint defects. Parameters: IR threshold, mask
    dilation/morphology, inpainting method/strength. Must handle the known limits —
    disable/guard for silver B&W film and Kodachrome. New stages: `defect_mask`,
    `inpaint`. New flags under an `--ir-*` namespace.

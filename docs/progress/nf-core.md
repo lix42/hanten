@@ -19,7 +19,8 @@ the old chain, its presets, its print stage, its recipe, its sidecar and
 settled the report (`chain`, the `recipe` echo and its hash, no sidecar) and telemetry
 schema 9. **`subcommands`** settled `roll`'s per-frame overrides: a frame resolves as
 `convert` would, and an override that changes a roll-wide value (`cli::ROLL_WIDE`)
-warns naming both values. Open: `buffer-strategy`, `three-step-pipeline`.
+warns naming both values. **`buffer-strategy`** settled the buffer rule and dropped
+the IR plane at the decode. Open: `scan-type`, `three-step-pipeline`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -50,9 +51,15 @@ so a type per stage costs no allocation. Each stage's `Params` is a struct — n
 `Option`, because "this stage is off" is deliberately not expressible. Fit gamut owns
 the change of primaries into the destination's gamut (`DestinationGamut`, carried by
 `FitGamutParams`, which has no `Default`), and its recipe section is the separate,
-empty `recipe::FitGamut`. The IR plane rides the whole chain and leaves it with the
-image through `DisplayReferredImage::into_parts`. `GradedImage` is the boundary the
-SDR/HDR split splits *from*.
+empty `recipe::FitGamut`. `GradedImage` is the boundary the SDR/HDR split splits
+*from*.
+
+**The buffer rule** (`buffer-strategy`): one full-frame RGB buffer from the scan to the
+encoder. Every stage takes it by value, transforms it in place and hands it on; the
+gain map's split is the one copy. A stage that cannot work in place owes the memory
+model a buffer (`pipeline::chain`'s module docs). **The IR plane stops at the decode**:
+`film_base`'s holder detection reads it, `fixed::decode` drops it, and IR dust removal
+would have to carry it on.
 
 - **The destination decides the output path** (`cli::OutputTarget`): `-o out`
   completes to the container's suffix, and a stated suffix the destination does not
@@ -69,8 +76,8 @@ SDR/HDR split splits *from*.
 - **Memory profiles are per buffer shape** (`RunProfile::{U16Tiff, F32Tiff, Avif,
   GainMapJpeg}`); a buffer added to a stage must move its arm.
 - **`fixed::decode` consumes the scan** (`release-decoded-image`): it takes the
-  `LinearImage` by value and rewrites it in place, moving the IR plane onto the
-  `FilmRgbImage`. A caller that needs the scan again clones it first. The memory
+  `LinearImage` by value and rewrites it in place, dropping the IR plane. A caller
+  that needs the scan again clones it first. The memory
   allowance is 15% + 128 MiB, measured on Linux and macOS.
 
 ## new-flow-flag
@@ -1200,10 +1207,91 @@ SDR/HDR split splits *from*.
 
 ## buffer-strategy
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-10-09
 
 - 2026-09-19: filed after the plan review. Goal: stage seams, buffers and the IR plane.
+
+### 2026-10-09 — one buffer, and the IR plane stops at the decode
+
+- **Most of the buffer question had been settled by other tasks.** Since the skeleton
+  every boundary moves, and since `release-decoded-image` the decode works in place;
+  every filled stage (`scene_correction`, `look`, `fit_range`, `fit_gamut`) and the
+  ACEScg mapping map in place too. The task wrote the rule down (`pipeline::chain`'s
+  module docs: one buffer, in place, the gain map's split the one copy, a stage that
+  needs neighbours owes a scratch buffer) and pinned it:
+  `the_scan_s_buffer_is_the_one_that_leaves_the_chain` runs a scan through the real
+  decode and every stage acting and asserts the RGB pointer that leaves the chain is
+  the scan's. Falsified by hand: a `.copy()` in `look::apply` reds it.
+  `a_pair_copies_the_frame_once` pins the split.
+- **Consume-and-return costs the stage goldens nothing**: `chain_golden` builds a
+  fresh input per call (`aces()`, `finite_aces()`), so the open question closes.
+- **The IR plane is dropped at `fixed::decode`, by the user's call** (asked 2026-10-09,
+  over the recommendation to keep carrying it). It cost 4 B/px from the decode to the
+  encoder, and every encoder discarded it. Its one reader, `film_base`'s holder
+  detection, runs before the decode, so the plane lives to there. IR dust removal is
+  the stage that would carry it on. This replaces CLAUDE.md's "carried through, not
+  consumed" rule. The `ir` fields left `FilmRgbImage`, `AcesCgImage` and
+  `WorkingBuffer`; `AcesCgImage::without_ir` and `hdr::from_new_chain`'s drop went with
+  them. `LinearImage` keeps `ir` and `ir_verified` for the decode and film base.
+- **`ir_verified` closes with it**: no plane reaches a consumer that could trust a
+  shape-only one. The "drop an unverified plane at decode" option the user also picked
+  is covered by dropping every plane.
+- **Model** (`pipeline/memory.rs`): render 16 → 12 + 12·s B/px, u16 encode 22 → 18 +
+  12·s, gain map 40 / 45 → 36 / 41. A u16 TIFF's decode and encode now tie at 18 B/px
+  with nothing sampled, so **an IR plane no longer raises any conversion's estimate**;
+  only the film-base phase (and `DecodeOnly` with a sample) still counts it. Three
+  `tests/pipeline.rs` tests had used "HDRi estimates above HDR" or "inspect below a u16
+  convert" as their lever: the roll gating test now uses two frame sizes, the
+  decode-only test a gain map.
+- **Measured** (macOS/aarch64, release, `/usr/bin/time -l`, highest of five, explicit
+  base, the 2×2 tile of `2026-07-24-Gold200/1137`, 74.65 MP, rebuilt with `tifffile`;
+  `origin/main` `9c2b719` → this branch): SDR TIFF 1.654 → 1.355 GB, float TIFF 1.354 →
+  1.354, PQ TIFF 1.355 → 1.355, film master 1.354 → 1.354, gain map 2.754 → 2.747. The
+  reference build (`reserve` @ `0da32d0`, `sigmoid-knees` + `display-p3`) peaked at
+  3.150 GB on the same frame. Branch SDR TIFF / gain map at 5.83 and 18.66 MP: 0.116 /
+  0.221 and 0.347 / 0.697 GB. Model at 74.65 MP: 1.679 GB for every TIFF (+23.9% over
+  the SDR peak), 3.654 GB for the gain map (+33%).
+- **Per-stage time** (telemetry `timing_ms`, median of five): unchanged within noise,
+  which on this machine is large (the SDR TIFF's total ran 2.4–7.0 s across identical
+  runs). Branch SDR medians: decode 159 ms, film base 57, reconstruction 319, look 504,
+  fit range 252, fit gamut 125, destination 1808, encode 248. No stage's arithmetic
+  changed.
+- **Budget**: on the tile, `--max-memory` one byte under the estimate exits 6 and
+  writes nothing for the SDR TIFF and the gain map; at the estimate both run.
+- **Byte-identical**: all five destinations on the tile, `cmp` against `origin/main`.
+- Docs: CLAUDE.md's rule, design-spec §2, §6.1, §12 item 1 and the §8 memory example
+  (regenerated from a half-frame `--base-region` run), `using-nc.md` §9, `TASKS.md`'s
+  io and IR notes, the default-budget doc (full-frame `--base-region` now 2.71 GB),
+  and the `real-scan-verify` `ir` stage's wording (its nctool test follows it).
+
+### 2026-10-09 — review round
+
+- `/code-review`, eight findings. Fixed: the roll gating test picked frames by index
+  though `roll` sorts inputs by path (it failed with `TMPDIR` under `target/`); it finds
+  each frame by `input` now. The buffer test compared pointers on a 48-byte buffer, which
+  a second copy can land back on, so it also checks capacity (the scan is built with
+  spare capacity, which no copy keeps). `memory.rs` said a conversion's film-base phase
+  never peaks: with the IR plane gone from render, an HDRi float TIFF or `measure-roll`
+  peaks there once the sample passes a sixth of the frame (pinned both sides). The gain-map table cell, three stale "carried"
+  sentences, and four assertions that `ir` is `None` on types that no longer have the
+  field (they could not fail) went.
+- Not changed: "no integration test shows IR is counted" (the unit pins hold film-base 16
+  vs 12 B/px); `docs/tasks/io/memory-preflight.md`'s "keep the IR plane carried" (a closed
+  task's record). **Follow-up, filed as `nf-core/scan-type`:** split the scan type
+  (RGB + IR + `ir_verified`) from the post-decode `LinearImage`, so the type, not every
+  `into_linear` passing `None`, enforces that the plane stops at the decode; it would
+  also retire the now-unreachable guard in `hdr::EncodedHdrImage::from_linear_storage`.
+
+- **Done 2026-10-09.** Landed as above: the one-buffer rule written down and pinned
+  (pointer and capacity, from the scan to the chain's exit), the IR plane dropped at
+  `fixed::decode`, the memory model and its calibration moved with it. Verified: all
+  five destinations byte-identical to `origin/main` on a 74.65 MP frame, a budget one
+  byte under the estimate exits 6 there, all gates green; two review rounds plus Codex
+  (no findings). **For dependents:** a new stage works in place on the buffer it is
+  given, or adds its scratch buffer to `pipeline/memory.rs`; anything that needs the
+  IR plane after the decode (IR dust removal) must carry it from the scan itself.
+  Follow-up: `nf-core/scan-type`.
 
 ## release-decoded-image
 
@@ -1346,3 +1434,11 @@ SDR/HDR split splits *from*.
   decide whether the chain should be rebuilt as decode → roll → style, now that the
   roll's measurements live in rendering (`docs/design-update.md`, Part 2, "Two
   renderings").
+
+## scan-type
+
+**Status:** not started
+**Updated:** 2026-10-09
+
+- 2026-10-09: filed from `buffer-strategy`'s review round. Goal: a scan type that ends at
+  the decode, so the types enforce that the IR plane stops there.

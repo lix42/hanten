@@ -15,14 +15,17 @@
 //! decided once, deliberately, rather than falling out of whichever stage ships
 //! first.
 //!
-//! Entering the chain, crossing each boundary, and **leaving** it
-//! (`DisplayReferredImage::into_parts`) all move the pixel buffers, so a type per
-//! stage costs no allocation. The exit is the one worth stating separately: the
-//! encoder takes `&LinearImage`, so a boundary with only `&`-accessors would force
-//! a full-frame copy at the hand-off — ~0.9 GB on a 74.6 MP scan — and the "no
-//! allocation" claim would be false at exactly the point it matters most. What each
-//! stage then *does* with the buffer it owns is `nf-core/buffer-strategy`'s to
-//! settle.
+//! **The buffer rule: one full-frame buffer, from the scan to the encoder.** The fixed
+//! decode rewrites the scan's RGB in place and drops its IR plane; entering the chain,
+//! each stage, and **leaving** it (`DisplayReferredImage::into_parts`) take the buffer
+//! by value and hand it on, and every stage transforms it in place
+//! (`pipeline::pixels::map_in_place`). A full-frame f32 RGB buffer is 12 B/px, ~0.9 GB
+//! at 74.6 MP, so a stage that returned a fresh one would add that to the peak
+//! `pipeline::memory` models. The one copy is the gain map's split ([`render_pair`]).
+//! A stage whose output pixel needs its neighbours cannot work in place: it owes a
+//! scratch buffer to the memory model. Consuming an input costs the tests nothing:
+//! they build a fresh one per call (`chain_golden`).
+//! `the_scan_s_buffer_is_the_one_that_leaves_the_chain` pins the rule.
 //!
 //! # The SDR/HDR branch contract
 //!
@@ -449,14 +452,14 @@ mod tests {
 
     /// The decoded film base as the chain takes it: one neutral pixel at [`FILM_BASE`].
     fn film_base() -> AcesCgImage {
-        aces_from(1, 1, &[FILM_BASE; 3], None)
+        aces_from(1, 1, &[FILM_BASE; 3])
     }
 
     /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
     /// non-finite value — through the real working-space mapper.
-    fn aces_from(width: u32, height: u32, rgb: &[f32], ir: Option<Vec<f32>>) -> AcesCgImage {
+    fn aces_from(width: u32, height: u32, rgb: &[f32]) -> AcesCgImage {
         let film =
-            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), ir).unwrap());
+            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), None).unwrap());
         map_nc_film_rgb_v1(film)
     }
 
@@ -519,7 +522,7 @@ mod tests {
 
     #[test]
     fn the_first_three_stages_are_a_bit_exact_identity() {
-        let aces = aces_from(3, 1, &FINITE, None);
+        let aces = aces_from(3, 1, &FINITE);
         let before = bits(aces.rgb());
 
         let out = through_fit_range(aces).into_buffer().into_linear();
@@ -536,12 +539,7 @@ mod tests {
         // an identity, i.e. exactly when this control stops exercising ULP detection.
         // Making a stage non-identity needs a deliberately broken build, done by hand
         // when the chain landed (`docs/progress/nf-core.md`).
-        let aces = aces_from(
-            3,
-            1,
-            &[0.0, 0.18, 1.0, 5.0, -0.25, 0.5, 0.25, 0.75, 0.9],
-            None,
-        );
+        let aces = aces_from(3, 1, &[0.0, 0.18, 1.0, 5.0, -0.25, 0.5, 0.25, 0.75, 0.9]);
         let rendered = bits(&through_fit_range(aces).into_buffer().into_linear().rgb);
         let mut moved = rendered.clone();
 
@@ -576,7 +574,7 @@ mod tests {
             ),
             (DestinationGamut::Srgb, ACESCG_TO_SRGB, SRGB_LUMA),
         ] {
-            let aces = aces_from(3, 1, &rgb, None);
+            let aces = aces_from(3, 1, &rgb);
             let expected = to_destination(aces.rgb(), matrix);
             let mut p = params();
             p.target.gamut = gamut;
@@ -618,7 +616,7 @@ mod tests {
         // At the identity headroom too: whether a frame renders must not depend on
         // the setting.
         for p in [params(), shipped_params()] {
-            let aces = aces_from(3, 1, &AWKWARD, None);
+            let aces = aces_from(3, 1, &AWKWARD);
             let err = render(aces, film_base(), &p, &mut Untimed)
                 .err()
                 .expect("a non-finite sample");
@@ -632,12 +630,7 @@ mod tests {
 
     #[test]
     fn the_shipped_fit_range_compresses_highlights_and_keeps_mid_grey_and_hue() {
-        let aces = aces_from(
-            3,
-            1,
-            &[0.18, 0.18, 0.18, 4.0, 4.0, 4.0, 3.0, 1.5, 0.5],
-            None,
-        );
+        let aces = aces_from(3, 1, &[0.18, 0.18, 0.18, 4.0, 4.0, 4.0, 3.0, 1.5, 0.5]);
         let input = aces.rgb().to_vec();
         let p = shipped_params();
         let corrected =
@@ -663,7 +656,7 @@ mod tests {
             );
         }
         let rendered = render(
-            aces_from(1, 1, &[0.5, 0.5, 0.5], None),
+            aces_from(1, 1, &[0.5, 0.5, 0.5]),
             film_base(),
             &p,
             &mut Untimed,
@@ -683,7 +676,7 @@ mod tests {
         // encoder's alone — while a colour the matrix puts below zero in P3 is mapped
         // onto the cube rather than left for the encoder's per-channel clip.
         let rgb = [4.0, 4.0, 4.0, 0.9, 0.05, -0.3];
-        let aces = aces_from(2, 1, &rgb, None);
+        let aces = aces_from(2, 1, &rgb);
         let p3 = to_p3(aces.rgb());
         assert!(p3[3..].iter().any(|v| *v < 0.0), "{:?}", &p3[3..]);
         let (out, _) = render(aces, film_base(), &params(), &mut Untimed)
@@ -716,7 +709,7 @@ mod tests {
         // The adapted matrix maps the ACES white to D65 white, so an ACEScg neutral
         // lands on the P3 neutral axis. Tolerance, not bits: the rows sum to 1 only to
         // f32 rounding.
-        let aces = aces_from(1, 1, &[0.18, 0.18, 0.18], None);
+        let aces = aces_from(1, 1, &[0.18, 0.18, 0.18]);
         let neutral = aces.rgb().to_vec();
         assert!(
             (neutral[0] - neutral[1]).abs() < 1e-6 && (neutral[1] - neutral[2]).abs() < 1e-6,
@@ -740,12 +733,8 @@ mod tests {
     #[test]
     fn leaving_the_chain_preserves_everything_the_encoder_reads() {
         // The exit boundary is a consuming unwrap so the hand-off moves rather than
-        // copies a full-frame buffer. What it must not do is lose anything on the way
-        // out, the carried IR plane included: the design says carry the plane rather
-        // than consume it, and today's SDR render is the counter-example the new
-        // chain declines to copy.
-        let ir = vec![0.1, 0.2, 0.3, 0.4];
-        let aces = aces_from(2, 2, &[0.25; 12], Some(ir.clone()));
+        // copies a full-frame buffer, and loses nothing on the way out.
+        let aces = aces_from(2, 2, &[0.25; 12]);
         let expected = bits(&to_p3(aces.rgb()));
 
         let (linear, _) = render(aces, film_base(), &params(), &mut Untimed)
@@ -756,22 +745,78 @@ mod tests {
         assert_eq!(linear.width, 2);
         assert_eq!(linear.height, 2);
         assert_eq!(bits(&linear.rgb), expected);
-        assert_eq!(linear.ir, Some(ir));
+    }
+
+    /// A scan with an IR plane, as `io::decode` hands it to the decode. Its RGB has
+    /// spare capacity, which a copy (`clone`, `collect`) never keeps: a freed block can
+    /// come back at the same address, its capacity cannot.
+    fn scan_with_ir() -> LinearImage {
+        let mut rgb = Vec::with_capacity(SCAN_CAPACITY);
+        rgb.extend([
+            0.6, 0.4, 0.3, 0.2, 0.15, 0.1, 0.05, 0.04, 0.03, 0.9, 0.7, 0.5,
+        ]);
+        LinearImage::new(2, 2, rgb, Some(vec![0.8; 4])).unwrap()
+    }
+
+    const SCAN_CAPACITY: usize = 64;
+
+    /// `scan` through the real decode and working-space mapping: the chain's input as a
+    /// run builds it.
+    fn decoded(scan: LinearImage) -> AcesCgImage {
+        let base = FilmBase::from([0.9, 0.55, 0.42]);
+        map_nc_film_rgb_v1(
+            crate::algo::fixed::decode(scan, &base, &Default::default())
+                .unwrap()
+                .0,
+        )
     }
 
     #[test]
-    fn an_ir_free_input_stays_ir_free() {
-        // Falsifiability for the test above: the plane must be carried, not minted.
-        let (out, _) = render(
-            aces_from(2, 2, &[0.5; 12], None),
+    fn the_scan_s_buffer_is_the_one_that_leaves_the_chain() {
+        // The buffer rule (module docs), measured rather than read off the code: from
+        // the scan to the chain's exit, with every stage acting, no stage reallocates.
+        let scan = scan_with_ir();
+        let rgb = scan.rgb.as_ptr();
+        let p = ChainParams {
+            shared: shared_acting(),
+            target: DisplayTarget {
+                peak: DisplayPeak::SDR,
+                gamut: DestinationGamut::AdobeRgb,
+            },
+        };
+
+        let (out, _) = render(decoded(scan), film_base(), &p, &mut Untimed)
+            .unwrap()
+            .image
+            .into_parts();
+
+        assert_eq!(out.rgb.as_ptr(), rgb, "a stage reallocated the frame");
+        assert_eq!(
+            out.rgb.capacity(),
+            SCAN_CAPACITY,
+            "a stage copied the frame"
+        );
+    }
+
+    #[test]
+    fn a_pair_copies_the_frame_once() {
+        // The gain map's one extra full-frame buffer is the split: the SDR rendition
+        // keeps the scan's buffer and the HDR one is the copy.
+        let scan = scan_with_ir();
+        let rgb = scan.rgb.as_ptr();
+        let pair = render_pair(
+            decoded(scan),
             film_base(),
-            &params(),
+            &shared_acting(),
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
             &mut Untimed,
         )
-        .unwrap()
-        .image
-        .into_parts();
-        assert_eq!(out.ir, None);
+        .unwrap();
+        let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
+        assert_eq!(sdr.rgb.as_ptr(), rgb);
+        assert_eq!(sdr.rgb.capacity(), SCAN_CAPACITY);
+        assert_ne!(hdr.rgb.as_ptr(), rgb);
     }
 
     #[test]
@@ -813,7 +858,7 @@ mod tests {
         // compile error here. The runtime half — that scene correction's gains land
         // *before* the change of primaries — is
         // `scene_correction_runs_before_the_change_of_primaries`.
-        let aces = aces_from(1, 1, &[0.2, 0.4, 0.6], None);
+        let aces = aces_from(1, 1, &[0.2, 0.4, 0.6]);
         let p = params();
 
         let corrected =
@@ -839,7 +884,7 @@ mod tests {
         // different pixels — and only one of them is scene correction's contract:
         // white balance acts on ACEScg channels, before the destination's primaries.
         let rgb = [0.2, 0.4, 0.6];
-        let aces = aces_from(1, 1, &rgb, None);
+        let aces = aces_from(1, 1, &rgb);
         let gains = [2.0f32, 1.0, 0.5];
         let balanced: Vec<f32> = aces
             .rgb()
@@ -950,7 +995,7 @@ mod tests {
                 },
             };
             let rendered = render(
-                aces_from(1, 1, &[FILM_BASE; 3], None),
+                aces_from(1, 1, &[FILM_BASE; 3]),
                 film_base(),
                 &p,
                 &mut Untimed,
@@ -995,22 +1040,17 @@ mod tests {
     fn a_film_base_that_grades_to_nothing_is_refused() {
         let mut p = shipped_params();
         p.shared.display_black = DisplayBlack::default();
-        let err = render(grid(), aces_from(1, 1, &[0.0; 3], None), &p, &mut Untimed)
+        let err = render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed)
             .err()
             .expect("refused");
         assert!(err.message().contains("film base"), "{}", err.message());
         // With display black off the base is never read, so it cannot fail the render.
         p.shared.display_black = DisplayBlack::Off;
-        render(grid(), aces_from(1, 1, &[0.0; 3], None), &p, &mut Untimed).unwrap();
+        render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed).unwrap();
         p.shared.display_black = DisplayBlack::default();
-        let err = render(
-            grid(),
-            aces_from(2, 1, &[FILM_BASE; 6], None),
-            &p,
-            &mut Untimed,
-        )
-        .err()
-        .expect("refused");
+        let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6]), &p, &mut Untimed)
+            .err()
+            .expect("refused");
         assert!(err.message().contains("one pixel"), "{}", err.message());
     }
 
@@ -1051,7 +1091,7 @@ mod tests {
                     .flat_map(move |&g| LEVELS.iter().flat_map(move |&b| [r, g, b]))
             })
             .collect();
-        aces_from((rgb.len() / 3) as u32, 1, &rgb, None)
+        aces_from((rgb.len() / 3) as u32, 1, &rgb)
     }
 
     fn pixels_of(rendered: Rendered) -> LinearImage {
@@ -1298,7 +1338,7 @@ mod tests {
             0.02, 0.02, 0.02, 0.18, 0.18, 0.18, 0.3, 0.25, 0.2, 0.6, 0.6, 0.6,
         ];
         let pair = render_pair(
-            aces_from(4, 1, &rgb, None),
+            aces_from(4, 1, &rgb),
             film_base(),
             &shared_acting(),
             DestinationGamut::DisplayP3,
@@ -1335,7 +1375,7 @@ mod tests {
             let mut p = params();
             p.shared.look.section.slope = contrast;
             p.shared.headroom_stops = headroom_stops;
-            let out = render(aces_from(3, 1, &rgb, None), film_base(), &p, &mut Untimed).unwrap();
+            let out = render(aces_from(3, 1, &rgb), film_base(), &p, &mut Untimed).unwrap();
             let y: Vec<f32> = out
                 .image
                 .into_parts()
