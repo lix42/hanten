@@ -2,9 +2,10 @@
 
 ## Goal
 
-Review the roll's white rule ([`roll-white-rule`](roll-white-rule.md)) on an HDR
-rendition, so its values can stop being provisional. Every round that chose and
-checked the rule was judged on SDR renders.
+Review the roll's white placement on an HDR rendition, so its values can stop being
+provisional. Every round that chose and checked it was judged on SDR renders. Since
+2026-10-09 that placement is [`span-roll-slope`](span-roll-slope.md)'s span slope and
+display white target, which may replace `roll-white-rule`'s cap, floor and target below.
 
 ## Design
 
@@ -39,6 +40,8 @@ Open:
   it here, with the same probe approach.
 - Whether the clamped frames (rendered at the cap's contrast) need anything different
   in HDR.
+- What `span-roll-slope`'s display white target means on HDR, and how much headroom is
+  left once the white moves toward L\* 91.
 
 ## How to Verify
 
@@ -54,3 +57,5 @@ Open:
   — settles the operator the HDR rendition is judged under
 - [A measured roll exposure](roll-exposure.md) — sets the level the rule is reviewed at
   (the white stays measured at exposure 0, and the exposure moves where it renders)
+- [The roll's slope from its span](span-roll-slope.md) — the SDR white target this
+  reviews on HDR

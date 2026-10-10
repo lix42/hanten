@@ -3,8 +3,8 @@
 ## Goal
 
 Make the envelope hybrid the default way a roll's frames are placed: each frame gets its
-own contrast and exposure, but only inside the limits the roll's own placement sets. Keep
-the per-roll and two per-frame placements as a user's choices.
+own contrast and exposure, but only inside the limits the roll's own placement sets.
+Per-roll stays a choice; the per-frame placements are `per-frame-placement`'s.
 
 ## Design
 
@@ -14,8 +14,8 @@ Known (`docs/spike/poor-development.md`, 2026-10-04/05):
   exposure keeps α of its offset from the roll's median level. Both stay inside the
   per-roll envelope: the roll's brightest and darkest points land where per-roll puts
   them. Default R 7, α 0.6, exposure within −1.5…+0.5 EV of the roll's.
-- **The floor is the span-based per-roll slope** (roll white to the 10th percentile of
-  the frames' darkest 1 %; 1.57–1.75 on ten rolls), and **one global maximum slope**
+- **The floor is the span-based per-roll slope** (`span-roll-slope`, which also sets
+  where the roll's white lands), and **one global maximum slope**
   applies wherever a slope is set (3.5, provisional — `hybrid-slope-bounds`).
 - **Review** (whole rolls 09-29 and 09-18, colour and black-and-white): the hybrid is the
   default, "not too dramatic, not too flat"; per-roll, per-frame white-pinned and
@@ -29,7 +29,8 @@ Known (`docs/spike/poor-development.md`, 2026-10-04/05):
 
 Open:
 
-- How the placement choice and R and α reach the recipe and `measure-roll`; their classes
+- How the placement choice (per-roll or hybrid, then `per-frame-placement`'s) and R and α
+  reach the recipe and `measure-roll`; their classes
   (correction / guard / preference).
 - What becomes of the small and thin lifts and their switches.
 - `roll_white::thin_lift` reads the base's luminance before the roll gains, so a thin
@@ -47,6 +48,8 @@ Open:
 
 ## Dependencies
 
+- [The roll's slope from its span](span-roll-slope.md) — the floor and the envelope's
+  ends
 - [Raise the roll's brightness target to 0](level-target-zero.md) — the exposure the
   hybrid starts from
 - [Separate taste from quality](taste-vs-quality.md) — the lifts this generalises, and

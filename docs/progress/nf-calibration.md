@@ -1399,27 +1399,34 @@ frames; the look's default contrast is `no-roll-defaults`'.
 ## envelope-hybrid-placement
 
 **Status:** not started
-**Updated:** 2026-10-07
+**Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
   `../temp/roll-neutral-spike/TODO.md` A4, G3, G5). Whole-roll review on 09-29 and 09-18
   (`../temp/a4-review/`) chose the envelope hybrid, R 7, α 0.6, as the default; per-roll and
   the two per-frame placements stay as choices. Ships with the span-based roll slope and a
   maximum slope of 3.5, both provisional (`hybrid-slope-bounds`).
+- 2026-10-09: split (user). The span-based roll slope is `span-roll-slope`, which this
+  task now depends on; the two per-frame placements are `per-frame-placement`, which
+  depends on this one for the placement choice. This task keeps the hybrid and the
+  choice between it and per-roll.
 
 ## hybrid-slope-bounds
 
 **Status:** not started
-**Updated:** 2026-10-07
+**Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` G2, G3(c), G4,
   A6): the span-based roll slope's anchor (its whitest point lands at L* 97.7) and whether
   the maximum slope is fixed or depends on the frame.
+- 2026-10-09: the span slope's anchor and the 1 % / 5 % dark end moved to
+  `span-roll-slope`, which also introduces the maximum at 3.5; this task tunes it across
+  the hybrid and the per-frame placements, so it now waits on `per-frame-placement`.
 
 ## display-white
 
-**Status:** not started
-**Updated:** 2026-10-08
+**Status:** closed — folded into `span-roll-slope`
+**Updated:** 2026-10-09
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` A8, G1): diffuse
   white renders at L* 79 and the band above it is mostly empty; reviews preferred the
@@ -1429,6 +1436,11 @@ frames; the look's default contrast is `no-roll-defaults`'.
   +1.93, 07-15 +1.95 → +1.76), and the reviewed rolls rendered a little darker. The user
   accepted it on the expectation that this task
   brightens white. Review this task against those whites.
+- 2026-10-09: **folded into `span-roll-slope`** (user). The span slope maps the roll's
+  white to a display target (the spike's ≈ L* 91), so the target cannot be chosen apart
+  from it, and the hybrid inherits the roll's white from per-roll. The commitment above,
+  that this work brightens white, moves with it. HDR stays `white-rule-hdr`'s, which now
+  waits on `span-roll-slope`.
 
 ## thin-lift-confirmation (cross-reference)
 
@@ -1436,3 +1448,23 @@ frames; the look's default contrast is `no-roll-defaults`'.
   noted on the task — 09-29 is poorly developed and its thin frames sit at the threshold
   (2044 lost its lift under a two-point scale), so `midtone-neutral` and
   `envelope-hybrid-placement` can change which frames qualify.
+
+## span-roll-slope
+
+**Status:** not started
+**Updated:** 2026-10-09
+
+- 2026-10-09: filed (user), split from `envelope-hybrid-placement` and absorbing
+  `display-white` (see their sections): the per-roll slope from the roll's span, the SDR
+  white target and the anchor, chosen together. The first of the three placements;
+  `envelope-hybrid-placement` and `per-frame-placement` build on it.
+
+## per-frame-placement
+
+**Status:** not started
+**Updated:** 2026-10-09
+
+- 2026-10-09: filed (user), split from `envelope-hybrid-placement`: the white-pinned and
+  midtone-pinned per-frame placements the spike's review kept as choices. White target:
+  start from `span-roll-slope`'s; the review adds one lower-target arm on low-key frames,
+  since white-pinned brings every frame's white to the target.
