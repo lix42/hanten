@@ -41,7 +41,7 @@ use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
     color, correction_confidence, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral,
-    roll_white, scene_correction, working_space,
+    reference_frames, roll_white, scene_correction, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
@@ -320,7 +320,8 @@ pub enum MidtoneMode {
 #[derive(Args, Debug)]
 pub struct MeasureRollArgs {
     /// The roll's picture frames (SilverFast HDR/HDRi TIFF). Leave out the unexposed
-    /// base, the leader and any calibration frame: every input is pooled as picture.
+    /// base, the leader and any calibration frame: every input is pooled as picture,
+    /// except a frame `--unexposed auto` or `--leader auto` finds among them.
     #[arg(required = true)]
     pub inputs: Vec<PathBuf>,
     /// The roll's leader — a fully exposed frame, decoded with the same base. Pixels
@@ -328,9 +329,11 @@ pub struct MeasureRollArgs {
     /// frame mixed into the roll cannot set the gains (measured: it would move them
     /// 0.4–1.3 stops) — a frame it empties is left out of the exposure too — and a frame
     /// whose white comes within 0.5 stop of it warns as near film saturation. Without it the run warns and nothing is checked for saturation,
-    /// and `--strict` refuses before decoding anything.
-    #[arg(long, value_name = "PATH")]
-    pub leader: Option<PathBuf>,
+    /// and `--strict` refuses before decoding anything. `auto` finds it among the
+    /// inputs instead: a flat frame at least 0.7 density above the roll's base on every
+    /// channel, then left out of the picture frames.
+    #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
+    pub leader: Option<Reference>,
     /// The roll's recipe (`"recipe_version": 3`): the film base and
     /// the decode the gains, the white and the exposure are measured under. Its
     /// `scene_correction` and `look` values are not read — this command measures the white
@@ -345,8 +348,12 @@ pub struct MeasureRollArgs {
     /// over its effective area, as `hanten measure-base` does with no source flag — and
     /// decode every frame with it.
     /// Refused beside `--film-base` or a recipe stating `calibration.film_base`.
-    #[arg(long, value_name = "PATH")]
-    pub unexposed: Option<PathBuf>,
+    /// `auto` finds it among the inputs instead: the clearest frame with an area spread
+    /// below 0.30, refused if any input is clearer; flat frames within 0.01 density of it
+    /// corroborate it. They are left out of the picture frames. One frame alone is used
+    /// with a warning (uncorroborated), which `--strict` refuses.
+    #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
+    pub unexposed: Option<Reference>,
     /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
     /// the other — this, the recipe, or `--unexposed` — and explicit: a base estimated
     /// per frame would measure each frame under a different decode.
@@ -1392,6 +1399,10 @@ pub struct Report {
     /// no pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_base_percentile: Option<f32>,
+    /// `measure-base` over the effective area: its worst per-channel
+    /// `(p90 - p10) / p50`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area_spread: Option<f32>,
     /// The declared film chemistry, echoed back. It gates nothing
     /// (`ir-usability-detection`); it is recorded so a declaration a user made is
     /// visible in the artifact the run produced — without it the flag would be parsed
@@ -1453,6 +1464,39 @@ pub struct Report {
 // ---------------------------------------------------------------------------
 // Value parsers (comma lists)
 // ---------------------------------------------------------------------------
+
+/// A reference frame named on the command line, or `auto` to find it among the inputs
+/// (`core/auto-calibration`). A file named `auto` is `./auto`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reference {
+    Auto,
+    Path(PathBuf),
+}
+
+impl Reference {
+    fn path(&self) -> Option<&Path> {
+        match self {
+            Reference::Auto => None,
+            Reference::Path(p) => Some(p),
+        }
+    }
+}
+
+impl std::fmt::Display for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reference::Auto => f.write_str("auto"),
+            Reference::Path(p) => write!(f, "{}", p.display()),
+        }
+    }
+}
+
+fn parse_reference(s: &str) -> std::result::Result<Reference, String> {
+    Ok(match s {
+        "auto" => Reference::Auto,
+        _ => Reference::Path(s.into()),
+    })
+}
 
 /// Parse `R,G,B` into three `f32`s.
 fn parse_rgb(s: &str) -> std::result::Result<[f32; 3], String> {
@@ -6091,6 +6135,10 @@ struct BaseMeasurement {
     film_base_source: FilmBaseProvenance,
     #[serde(skip_serializing_if = "Option::is_none")]
     film_base_percentile: Option<f32>,
+    /// The effective area's worst per-channel `(p90 - p10) / p50`; absent for a
+    /// stated source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    area_spread: Option<f32>,
     #[serde(flatten)]
     reuse: Option<ReuseReady>,
 }
@@ -6241,6 +6289,7 @@ fn measure_base_into(
         film_base,
         film_base_source,
         film_base_percentile: est.percentile,
+        area_spread: est.spread,
         reuse,
     })
 }
@@ -6367,6 +6416,7 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
         film_base: Some(m.film_base),
         film_base_source: Some(m.film_base_source),
         film_base_percentile: m.film_base_percentile,
+        area_spread: m.area_spread,
         reuse: m.reuse,
         warnings,
         elapsed_ms: Some(elapsed_ms(started)),
@@ -6460,6 +6510,9 @@ struct MeasureRollReport {
     /// The `--unexposed` frame's base measurement, the evidence `measure-base` reports.
     #[serde(skip_serializing_if = "Option::is_none")]
     unexposed: Option<BaseMeasurement>,
+    /// What `--unexposed auto` and `--leader auto` found among the inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    references: Option<FoundReferences>,
     /// The film base every input was decoded with.
     film_base: FilmBase,
     /// The decode the gains belong to: they are measured at its output.
@@ -7079,6 +7132,240 @@ fn refuse_shared_file_names(inputs: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+/// What `--unexposed auto` and `--leader auto` found among the inputs
+/// (`core/auto-calibration`): every input with the evidence it was classified on.
+#[derive(Debug, Serialize)]
+struct FoundReferences {
+    inputs: Vec<FoundInput>,
+    /// Present with `--unexposed auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unexposed: Option<FoundUnexposed>,
+    /// Present with `--leader auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader: Option<FoundLeader>,
+}
+
+#[derive(Debug, Serialize)]
+struct FoundInput {
+    input: PathBuf,
+    class: FoundClass,
+    /// The effective area's per-channel median transmission. The three area fields are
+    /// absent for an input whose area gave no base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    area_median: Option<FilmBase>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    area_spread: Option<f32>,
+    /// Per-channel density above the roll's base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    density_above_base: Option<[f32; 3]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FoundClass {
+    Unexposed,
+    Leader,
+    Picture,
+}
+
+#[derive(Debug, Serialize)]
+struct FoundUnexposed {
+    /// The agreeing frames the base is the per-channel median of.
+    frames: Vec<PathBuf>,
+    confidence: reference_frames::Confidence,
+    /// The widest per-channel density range across `frames`.
+    spread_density: f32,
+    /// Flat frames denser than the clearest: near-blank pictures, measured as picture.
+    rejected: Vec<PathBuf>,
+    max_spread: f32,
+    agreement_density: f32,
+    /// Each of `frames`, as `measure-base` reports it.
+    measurements: Vec<BaseMeasurement>,
+}
+
+#[derive(Debug, Serialize)]
+struct FoundLeader {
+    /// Every leader-like input, all left out of the picture frames; the report's
+    /// `leader` is the least dense of them.
+    frames: Vec<PathBuf>,
+    min_density: f32,
+}
+
+/// One input's area measurement and its unreported warnings; `None` when it gave none,
+/// or once [`find_unexposed`] takes it for the report.
+type AreaMeasurement = Option<(BaseMeasurement, Vec<String>)>;
+
+/// Every input's effective-area measurement for the `auto` references, its warnings
+/// kept per input: only a frame taken as the base reports them. `None` for an input
+/// whose area gives no base.
+fn measure_areas(
+    inputs: &[PathBuf],
+    inset: f32,
+    budget: memory::Budget,
+    log: &Log,
+) -> Result<Vec<AreaMeasurement>> {
+    inputs
+        .iter()
+        .map(|input| {
+            let req = BaseRequest {
+                input,
+                source: None,
+                inset,
+                film_type: None,
+            };
+            let mut own = Vec::new();
+            match measure_base_into(&req, budget, log, &mut own) {
+                Ok(m) => Ok(Some((m, own))),
+                // A frame whose area yields no base is no reference frame; measured as a
+                // picture, it is refused in that measurement's own words. A file that
+                // will not decode, or will not fit, refuses here.
+                Err(e @ (NcError::Usage(_) | NcError::Other(_))) => {
+                    log.info(format_args!(
+                        "{}: no reference frame — its area gives no base ({})",
+                        input.display(),
+                        e.message()
+                    ));
+                    Ok(None)
+                }
+                Err(e) => Err(e.prefixed(input.display())),
+            }
+        })
+        .collect()
+}
+
+/// `--unexposed auto`: the base from the inputs' area measurements, refused when no
+/// input is flat enough or the base is unusable. Takes the frames' measurements out
+/// of `areas`.
+fn find_unexposed(
+    inputs: &[PathBuf],
+    stats: &[Option<reference_frames::AreaStats>],
+    areas: &mut [AreaMeasurement],
+    strict: bool,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) -> Result<(reference_frames::Unexposed, Vec<BaseMeasurement>)> {
+    let found = reference_frames::find_unexposed(stats).map_err(|why| {
+        let why = match why {
+            reference_frames::NotFound::NoneFlat { flattest } => format!(
+                "none is flat enough (effective-area spread below {:.2}; {})",
+                reference_frames::UNEXPOSED_MAX_SPREAD,
+                match flattest {
+                    Some(f) => format!("the flattest reads {f:.3}"),
+                    None => "no input's area could be measured".into(),
+                }
+            ),
+            reference_frames::NotFound::Beaten {
+                candidate,
+                by,
+                density,
+            } => format!(
+                "the clearest flat frame, {}, is no film base: {} is {density:.2} density \
+                 clearer on every channel, and unexposed film is the clearest thing on a roll \
+                 (a leader or a flat picture, with no unexposed frame among the inputs)",
+                inputs[candidate].display(),
+                inputs[by].display()
+            ),
+        };
+        NcError::Usage(format!(
+            "--unexposed auto found no unexposed frame among the inputs: {why}. Name the \
+             roll's unexposed frame with --unexposed <file>, leaving it out of the frames; \
+             or, with none on the roll, measure a region of clear film (`hanten \
+             measure-base <frame> --base-region X,Y,W,H --out base.json`) and pass \
+             --params base.json in place of --unexposed"
+        ))
+    })?;
+    if reuse_ready(found.base).is_none() {
+        return Err(NcError::Other(format!(
+            "--unexposed auto: the base {:?} measured from {} is not usable as an explicit \
+             film base (channels must be in (0, 1]); `hanten measure-base` on it reports \
+             the evidence",
+            found.base,
+            inputs[found.frames[0]].display()
+        )));
+    }
+    let mut measurements = Vec::with_capacity(found.frames.len());
+    for &i in &found.frames {
+        let (m, own) = areas[i].take().expect("each frame is taken once");
+        for w in own {
+            push_warning_buf(warnings, log, format!("{}: {w}", inputs[i].display()));
+        }
+        measurements.push(m);
+    }
+    if found.confidence == reference_frames::Confidence::Uncorroborated {
+        let only = inputs[found.frames[0]].display();
+        let msg = format!(
+            "{only}: taken as the roll's unexposed frame (--unexposed auto), \
+             uncorroborated: no other input agrees with it. If it is the roll's unexposed \
+             film, name it with --unexposed {only}, leaving it out of the frames"
+        );
+        // Before the pictures are measured, as `--strict` with no leader found is.
+        if strict {
+            return Err(NcError::Usage(format!(
+                "--strict refuses an uncorroborated base: {msg}"
+            )));
+        }
+        push_warning_buf(warnings, log, msg);
+    }
+    Ok((found, measurements))
+}
+
+/// Classify every input for the report, from what `auto` found.
+fn found_references(
+    inputs: &[PathBuf],
+    stats: &[Option<reference_frames::AreaStats>],
+    base: FilmBase,
+    unexposed: Option<(reference_frames::Unexposed, Vec<BaseMeasurement>)>,
+    leaders: Option<Vec<usize>>,
+) -> FoundReferences {
+    let classes: Vec<FoundClass> = (0..stats.len())
+        .map(|i| {
+            if unexposed
+                .as_ref()
+                .is_some_and(|(u, _)| u.frames.contains(&i))
+            {
+                FoundClass::Unexposed
+            } else if leaders.as_ref().is_some_and(|l| l.contains(&i)) {
+                FoundClass::Leader
+            } else {
+                FoundClass::Picture
+            }
+        })
+        .collect();
+    let found_inputs = stats
+        .iter()
+        .enumerate()
+        .map(|(i, s)| FoundInput {
+            input: inputs[i].clone(),
+            class: classes[i],
+            area_median: s.map(|s| FilmBase::from(s.median)),
+            area_spread: s.map(|s| s.spread),
+            density_above_base: s.map(|s| reference_frames::density_above(base.into(), s.median)),
+        })
+        .collect();
+    let paths = |ix: &[usize]| ix.iter().map(|&i| inputs[i].clone()).collect();
+    FoundReferences {
+        inputs: found_inputs,
+        unexposed: unexposed.map(|(u, measurements)| FoundUnexposed {
+            frames: paths(&u.frames),
+            confidence: u.confidence,
+            spread_density: u.spread_density,
+            rejected: u
+                .rejected
+                .iter()
+                .filter(|&&i| classes[i] == FoundClass::Picture)
+                .map(|&i| inputs[i].clone())
+                .collect(),
+            max_spread: reference_frames::UNEXPOSED_MAX_SPREAD,
+            agreement_density: reference_frames::AGREEMENT_DENSITY,
+            measurements,
+        }),
+        leader: leaders.map(|l| FoundLeader {
+            frames: paths(&l),
+            min_density: reference_frames::LEADER_MIN_DENSITY,
+        }),
+    }
+}
+
 /// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` its film
 /// base ([`measure_base`]), then its white balance, midtone line, white and exposure over its picture frames;
 /// report them, and with `--out` write them as one recipe `roll --params` renders alone.
@@ -7092,6 +7379,12 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 .into(),
         ));
     }
+
+    let named_leader = args.leader.as_ref().and_then(Reference::path);
+    let named_unexposed = args.unexposed.as_ref().and_then(Reference::path);
+    let auto_unexposed = args.unexposed == Some(Reference::Auto);
+    let auto_leader = args.leader == Some(Reference::Auto);
+    let auto = auto_unexposed || auto_leader;
 
     let loaded = load_recipes(&args.recipe_in)?;
     let mut recipe = loaded.recipe;
@@ -7107,9 +7400,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         };
         if let Some(stated) = stated {
             return Err(NcError::Usage(format!(
-                "--unexposed {} measures the film base, and {stated} states one; the base \
-                 is measured or stated, never both. Drop one of them",
-                unexposed.display()
+                "--unexposed {unexposed} measures the film base, and {stated} states one; the base \
+                 is measured or stated, never both. Drop one of them"
             )));
         }
     }
@@ -7146,8 +7438,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // The unexposed frame likewise: it is film base, not picture.
     let mut seen: Vec<(PathBuf, &Path)> = Vec::new();
     let references = [
-        ("--leader", "leader", args.leader.as_deref()),
-        ("--unexposed", "unexposed frame", args.unexposed.as_deref()),
+        ("--leader", "leader", named_leader),
+        ("--unexposed", "unexposed frame", named_unexposed),
     ];
     for (flag, what, path) in references {
         let Some(path) = path else { continue };
@@ -7164,7 +7456,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             )));
         }
     }
-    if let (Some(leader), Some(unexposed)) = (&args.leader, &args.unexposed)
+    if let (Some(leader), Some(unexposed)) = (named_leader, named_unexposed)
         && keys_collide(&collision_key(leader), &collision_key(unexposed))
     {
         return Err(NcError::Usage(format!(
@@ -7189,8 +7481,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         }
         seen.push((key, input));
     }
-    // After the exact repeat above: a file named twice is that fault, not a clash.
-    if args.out.out.is_some() {
+    // After the exact repeat above: a file named twice is that fault, not a clash. With
+    // `auto`, only the picture frames key `roll.frames`, so they are checked once found.
+    if args.out.out.is_some() && !auto {
         refuse_shared_file_names(&args.inputs)?;
     }
     let stated_base = match (&args.unexposed, &recipe.calibration.film_base) {
@@ -7221,12 +7514,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         .inputs
         .iter()
         .map(|p| (p.as_path(), "an input scan"))
-        .chain(args.leader.as_deref().map(|p| (p, "the --leader scan")))
-        .chain(
-            args.unexposed
-                .as_deref()
-                .map(|p| (p, "the --unexposed scan")),
-        )
+        .chain(named_leader.map(|p| (p, "the --leader scan")))
+        .chain(named_unexposed.map(|p| (p, "the --unexposed scan")))
         .chain(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
     for (input, what) in read {
         ensure_write_targets_spare(input, what, &targets)?;
@@ -7240,11 +7529,11 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     }
     let mut decode = None;
 
-    // The unexposed frame first: every other frame is decoded with its base. Measured
-    // exactly as `measure-base` measures it with no source flag: its effective area
-    // at the median.
+    // The unexposed frame first: every other frame is decoded with its base, and a bad one
+    // refuses before the inputs are measured. Measured exactly as `measure-base` measures
+    // it with no source flag: its effective area at the median.
     let unexposed = match &args.unexposed {
-        Some(path) => {
+        Some(Reference::Path(path)) => {
             let req = BaseRequest {
                 input: path,
                 source: None,
@@ -7264,13 +7553,104 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             }
             Some(m)
         }
+        Some(Reference::Auto) | None => None,
+    };
+
+    // `auto` (`core/auto-calibration`): every input's effective area, measured as
+    // `measure-base` measures it with no source flag; the base and the leader are found
+    // from those measurements. `None` is an input whose area could not be measured.
+    let mut areas = if auto {
+        measure_areas(&args.inputs, recipe.measure.inset, budget, &log)?
+    } else {
+        Vec::new()
+    };
+    let stats: Vec<Option<reference_frames::AreaStats>> = areas
+        .iter()
+        .map(|a| {
+            a.as_ref().map(|(m, _)| reference_frames::AreaStats {
+                median: m.film_base.into(),
+                spread: m.area_spread.expect("measured over the effective area"),
+            })
+        })
+        .collect();
+    let found_unexposed = if auto_unexposed {
+        Some(find_unexposed(
+            &args.inputs,
+            &stats,
+            &mut areas,
+            args.strict,
+            &log,
+            &mut warnings,
+        )?)
+    } else {
+        None
+    };
+
+    let base = match (&unexposed, &found_unexposed, stated_base) {
+        (Some(m), _, _) => m.film_base,
+        (None, Some((u, _)), _) => FilmBase::from(u.base),
+        (None, None, Some(b)) => b,
+        _ => unreachable!("refused above"),
+    };
+    // Every input is classified once the base is known: a leader is dense against it.
+    let found_leader = auto_leader.then(|| {
+        let taken = found_unexposed
+            .as_ref()
+            .map_or(&[][..], |(u, _)| u.frames.as_slice());
+        reference_frames::find_leaders(
+            &stats,
+            (0..stats.len()).filter(|i| !taken.contains(i)),
+            base.into(),
+        )
+    });
+    let leader_path = match &args.leader {
+        Some(Reference::Path(p)) => Some(p.clone()),
+        Some(Reference::Auto) => found_leader
+            .as_ref()
+            .and_then(|l| l.as_ref())
+            .map(|(guard, _)| args.inputs[*guard].clone()),
         None => None,
     };
-    let base = match (&unexposed, stated_base) {
-        (Some(m), _) => m.film_base,
-        (None, Some(b)) => b,
-        (None, None) => unreachable!("refused above"),
+    let references = (auto_unexposed || auto_leader).then(|| {
+        found_references(
+            &args.inputs,
+            &stats,
+            base,
+            found_unexposed,
+            found_leader.map(|l| l.map_or_else(Vec::new, |(_, all)| all)),
+        )
+    });
+    let pictures: Vec<PathBuf> = match &references {
+        Some(r) => r
+            .inputs
+            .iter()
+            .filter(|i| i.class == FoundClass::Picture)
+            .map(|i| i.input.clone())
+            .collect(),
+        None => args.inputs.clone(),
     };
+    if pictures.is_empty() {
+        return Err(NcError::Usage(
+            "every input was taken as a reference frame (see `--unexposed auto` and \
+             `--leader auto`); measure-roll measures the roll's picture frames, so pass \
+             them too"
+                .into(),
+        ));
+    }
+    if auto && args.out.out.is_some() {
+        refuse_shared_file_names(&pictures)?;
+    }
+    // Before the pictures are measured (pass 2); pass 1 has decoded every input.
+    if args.strict && auto_leader && leader_path.is_none() {
+        return Err(NcError::Usage(format!(
+            "--strict refuses an unguarded measurement: --leader auto found no leader among \
+             the inputs (a flat frame at least {} density above the roll's base on every \
+             channel), so a fully exposed frame among them would set the roll's white \
+             balance, and no frame is checked for film saturation. Pass the roll's leader \
+             scan with --leader <file>",
+            reference_frames::LEADER_MIN_DENSITY
+        )));
+    }
     // Where every frame's shadows bottom out, in the luma the frames' tones are read in.
     let base_px =
         working_space::map_nc_film_rgb_v1(fixed::decode_film_base(&base, &recipe.reconstruction)?);
@@ -7280,7 +7660,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             .expect("the decoded base is one pixel"),
     );
 
-    let leader = match &args.leader {
+    let leader = match &leader_path {
         Some(path) => {
             // Each error keeps its kind, and so its exit code (a memory refusal stays 6).
             let (aces, _, film_peak, _, memory) = decode_for_roll_white(
@@ -7322,11 +7702,17 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             push_warning_buf(
                 &mut warnings,
                 &log,
-                "no --leader: the measurement is unguarded, so a fully exposed frame among \
-                 the inputs would set the roll's white balance (measured: it moves the gains \
-                 0.4–1.3 stops), and no frame is checked for film saturation. Pass the \
-                 roll's leader scan"
-                    .into(),
+                format!(
+                    "{}: the measurement is unguarded, so a fully exposed frame among the \
+                     inputs would set the roll's white balance (measured: it moves the gains \
+                     0.4–1.3 stops), and no frame is checked for film saturation. Pass the \
+                     roll's leader scan",
+                    if auto_leader {
+                        "--leader auto found no leader among the inputs"
+                    } else {
+                        "no --leader"
+                    }
+                ),
             );
             None
         }
@@ -7335,9 +7721,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let mut pool = Vec::new();
     // Each frame's film-RGB sample, unguarded: the midtone line's votes and fade end, and
     // the frame's white once the roll's colour correction is known.
-    let mut film_samples = Vec::with_capacity(args.inputs.len());
-    let mut frames = Vec::with_capacity(args.inputs.len());
-    for input in &args.inputs {
+    let mut film_samples = Vec::with_capacity(pictures.len());
+    let mut frames = Vec::with_capacity(pictures.len());
+    for input in &pictures {
         let (aces, area, film_sample, decoded, memory) = decode_for_roll_white(
             input,
             RollScan::Frame,
@@ -7518,7 +7904,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             }
         });
     }
-    let mut white = measured_roll_white(&mut frames, args.leader.is_some(), colour, exposure.ev)?;
+    let mut white = measured_roll_white(&mut frames, leader.is_some(), colour, exposure.ev)?;
     // The thin lift starts from the frame's render without it: its own slope (a clamp's,
     // else the roll's) and the roll's exposure plus its small lift.
     let (mut thin_bounded, mut thin_unlifted) = (Vec::new(), Vec::new());
@@ -7613,8 +7999,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         command: "measure-roll",
         identity: Identity::new(),
         unexposed,
+        references,
         film_base: base,
-        decode: decode.expect("clap requires at least one input"),
+        decode: decode.expect("refused above when no picture frame is left"),
         leader,
         frames,
         white_balance: RollWhiteBalance {

@@ -80,6 +80,12 @@ What other epics need to know about `core`:
   `reuse.frames` are gone). Per-frame clamps are the recipe key `roll.frames`,
   `{"<file name>": {"white_stops": …}}`. `Recipe::for_frame` applies an entry for
   `convert` and every `roll` frame before flags merge, and a manifest's `params` beat it.
+- **`measure-roll --unexposed auto` / `--leader auto` find the reference frames among the
+  inputs** (`core/auto-calibration`, 2026-10-09). The rule is in `pipeline::reference_frames`:
+  the clearest flat frame, refused when any input is clearer; the leader is at least 0.7
+  density above the base. Found frames leave the picture pool. A roll with no trustworthy
+  unexposed frame is refused (exit 2), never converted per frame. `measure-base` and the
+  `unexposed` evidence carry `area_spread`.
 - **Exit codes (design-spec §11):** Usage=2, Decode=3, Unsupported=4, Write=5,
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
@@ -385,8 +391,8 @@ of plan → recipe → apply. The **plan** half is `core/base-acquisition-planne
 
 ## auto-calibration
 
-**Status:** not started
-**Updated:** 2026-09-28
+**Status:** done (2026-10-09)
+**Updated:** 2026-10-09
 
 - Goal: Implement the automatic **acquisition cascade** that resolves a roll's `Dmin` and `Dmax` from whatever the user provides, emits a **frozen recipe with provenance + confidence**, and decides when to fall back from roll to single conversion.
 - **2026-09-28 — renamed from `base-acquisition-planner` and re-scoped.** The explicit
@@ -399,6 +405,104 @@ of plan → recipe → apply. The **plan** half is `core/base-acquisition-planne
 - **2026-09-28:** an opt-in mode of `measure-roll` rather than of `roll` — finding the
   frames is measurement. Its cascade may still use region and automatic base measurement;
   a named `--unexposed` always measures its whole frame.
+
+### 2026-10-09 — implemented
+
+- **Shipped:** `measure-roll --unexposed auto` and `--leader auto`, each usable on its own
+  (`cli::Reference`, a path or `auto`; a file named `auto` is `./auto`). Pass 1 measures
+  every input's effective area through `measure_base_into`, so each frame is decoded
+  twice. The pure classifier is `pipeline::reference_frames`. Found frames leave the
+  picture pool, and the report's `references` records every input's class and evidence.
+  `measure-base` and the `unexposed` evidence gain `area_spread`.
+- **Open questions answered (user):** a detected frame is used without confirmation,
+  and a base from one frame warns as uncorroborated, which `--strict` refuses. Detected
+  frames are excluded automatically. "Drop to single" became a **refusal** (exit 2)
+  naming `--unexposed FILE` and `measure-base --base-region`, because no per-frame base
+  exists to drop to. A named-region rung was dropped too: a region is something the user
+  states.
+- **The rule was measured, not taken from `harness.sh classify`.** The old rule (uniform at
+  spread < 0.5, then luma < 0.08 for a leader) misread four uniform pictures on the full
+  archive (243 frames): `1612` and `1719` as leaders, `1797` and `2051` as unexposed.
+  Its 9/9 held only on the trimmed set. Two near-blank pictures, `1641` (spread 0.469)
+  and `1698` (0.341, 0.029 density above its base), also pass the 0.5 gate. The measured
+  ranges:
+  - unexposed spread 0.06-0.280; the flattest picture 0.300; gate **0.30**;
+  - agreement within **0.01** density of the clearest flat frame on every channel. The
+    one blank pair (the positive-mode folder's `1256`/`1294`) agrees to 0.003, and the
+    nearest near-blank picture sits 0.024 off. This is thin evidence: every archive roll
+    has one unexposed frame;
+  - leader: spread ≤ 0.5 and at least **0.7** density above the roll's base on every
+    channel. Leaders read 1.02-1.47, uniform pictures at most 0.40. It is measured
+    against the base, never an absolute level.
+- **Verified.** `--out` is byte-identical to the named run on 10 of 11 trimmed rolls. On
+  2026-09-11 the folder holds a `calibration` frame, which `auto` pools as a picture; the
+  base is the same. `harness.sh classify` now runs the auto mode against the manifest's
+  roles: on the full archive, 11/11 unexposed, 11/11 leaders, 210/210 pictures, with no
+  refusal. Gates: fmt, machete, clippy, build, rustdoc, `nctool` (572), `cargo test`
+  (747 unit, 256 + 32 + 1 integration).
+- **For `core/roll-measure-mode`:** it inherits `auto` through `run_measure_roll`'s body.
+  The found leader is decoded again in pass 2, like a named one.
+
+### 2026-10-09 — review round (`/code-review high`): ten findings, all fixed
+
+This entry supersedes the rule above where they differ.
+- **A missing unexposed frame took a wrong base with only a warning.** I removed each
+  roll's unexposed frame and re-ran the old rule. On 6 of 11 rolls it took the leader
+  (spread 0.23-0.29), and on 2026-09-14 the flat picture `1719` (spread 0.300, which the
+  inclusive gate let through). **Fix: a candidate is refused when any input's median is
+  clearer than it by more than 0.01 density on every channel.** Unexposed film is the
+  clearest thing on a roll. Every wrong pick is beaten by 0.205-1.26. With the base
+  present, nothing comes closer than -0.021 (the 2026-09-11 calibration frame). The spread
+  gate is now strict (`< 0.30`). Refusal: `NotFound::Beaten`, exit 2.
+- `--strict` with `--leader auto` finding nothing now refuses (exit 2) before any picture
+  is decoded, instead of exit 1 at the end.
+- A frame whose area gives no base in pass 1 (a Usage or Other error) is no candidate.
+  It is measured as a picture, and pass 2 refuses it in its own words. Decode, memory and
+  write errors still refuse in pass 1.
+- A named `--unexposed` is measured before pass 1, so a bad file refuses in one decode.
+- With `auto`, the `--out` file-name clash check covers the picture frames only: a found
+  leader keys no `roll.frames` entry.
+- `roll_white::median` is shared by `roll_exposure` (same sort and middle-two mean, so its
+  result is unchanged) and the corroborated base. `named_leader` and `named_unexposed` are
+  bound once.
+- The guide's "11 of 11 byte-identical" was wrong: it is 10 of 11, the eleventh holding the
+  calibration frame. `harness.sh classify` now prints stderr when a roll fails, fails the
+  stage on a failure or a MISS, and never expands an empty frame list.
+
+### 2026-10-09 — ship review (`ship:diff-reviewer`; Codex skipped, out of credits)
+
+- `--strict` with an uncorroborated `--unexposed auto` base now refuses with exit 2 right
+  after pass 1, like `--leader auto` finding nothing, instead of exit 1 once both passes
+  are done. This corrects the review-round entry above: both refusals come **before the
+  pictures are measured** (pass 2), not before any picture is decoded, because pass 1
+  decodes every input.
+- Prose fixed to match the classifier: the `--unexposed` and inputs `--help`, the task
+  file's Goal (refuse, not drop to single), and the design doc's claim that `roll`'s
+  measure mode, which is not built yet, already inherits `auto`.
+- Declined: an open-gate frame (a channel median above 1) taken as the base refuses with
+  exit 1, not 2. That matches a named `--unexposed`.
+
+### 2026-10-09 — closed
+
+Landed as `measure-roll --unexposed auto` and `--leader auto`, with the classifier in
+`pipeline::reference_frames` and the evidence in the report's `references`. Verified:
+- every CI gate (749 unit, 256 + 32 + 1 integration, 572 `nctool`);
+- `harness.sh classify` on the full archive: 11/11 unexposed, 11/11 leaders, 210/210
+  pictures;
+- with each roll's unexposed frame removed, every roll refuses instead of taking a wrong
+  base;
+- the auto `--out` is byte-identical to the named run on 10 of 11 trimmed rolls (the
+  eleventh pools its calibration frame).
+
+For dependent work:
+- **`core/roll-measure-mode`** reaches `auto` through `run_measure_roll`'s body. Its
+  `--strict` refusals for an uncorroborated base and for no leader found are exit 2
+  before pass 2.
+- **`film-base/content-fallback`** stays out of the cascade: a roll with no unexposed
+  frame refuses.
+- **Weakest evidence:** the 0.01 agreement tolerance rests on one pair of blank frames,
+  because every archive roll has a single unexposed frame. A roll with two would test
+  "corroborated" for real.
 
 ## measure-base
 

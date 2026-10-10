@@ -64,7 +64,7 @@ const AREA_SPREAD_PERCENTILES: [f32; 2] = [0.10, 0.90];
 /// picture frames 0.87-2.26. This is their geometric midpoint. It is a coarse "is
 /// this a picture?" guard, not a uniformity verdict: a leader (0.23-0.45) and a
 /// near-blank frame pass it.
-const AREA_MAX_RELATIVE_SPREAD: f32 = 0.5;
+pub const AREA_MAX_RELATIVE_SPREAD: f32 = 0.5;
 
 /// The 16-bit code count: decoded samples are `code / 65535`
 /// (`io::decode::normalize_u16`), so a histogram over the codes holds every sample
@@ -173,6 +173,9 @@ pub struct BaseEstimate {
     /// for an explicit base, which reads no pixels. Returned so the report states
     /// the method rather than re-deriving it from the source.
     pub percentile: Option<f32>,
+    /// The worst per-channel [`AREA_SPREAD_PERCENTILES`] spread over the effective
+    /// area; `None` for a stated source. Detecting an unexposed frame reads it.
+    pub spread: Option<f32>,
 }
 
 /// An image edge, for the holder march.
@@ -197,6 +200,7 @@ pub fn estimate(image: &LinearImage, source: &FilmBaseSource) -> Result<BaseEsti
             base: FilmBase::from(rgb),
             warnings: Vec::new(),
             percentile: None,
+            spread: None,
         },
         FilmBaseSource::Region(rect) => sample_region(image, rect)?,
     };
@@ -243,6 +247,7 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
         base,
         warnings,
         percentile: Some(AREA_PERCENTILE),
+        spread: Some(spread),
     })
 }
 
@@ -357,6 +362,7 @@ fn sample_region(image: &LinearImage, rect: [u32; 4]) -> Result<BaseEstimate> {
         base: FilmBase::from(hi),
         warnings,
         percentile: Some(SAMPLE_PERCENTILE),
+        spread: None,
     })
 }
 

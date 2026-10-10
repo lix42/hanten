@@ -1403,10 +1403,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   [--leader L]` measures the roll over the recipe's base, then converts; `--unexposed U`
   measures the base too and implies it. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the
   resolved run for re-rendering the same roll
-- [ ] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed
+- [x] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed
   from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll,
-  cross-frame agreement, provenance + confidence, loud drop to single. An opt-in mode of
-  `measure-roll`
+  cross-frame agreement, provenance + confidence, a loud refusal. An opt-in mode of
+  `measure-roll`. **Done 2026-10-09**: `--unexposed auto` / `--leader auto`
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
 - [x] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain

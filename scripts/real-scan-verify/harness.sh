@@ -7,8 +7,8 @@
 # acceptance, streaming-tiled-io) reuse the frozen recipes + measured peak here.
 #
 # Stages (pass a stage name to run one; default runs B..E):
-#   classify  - classify every frame per roll by its effective-area median and
-#               uniformity (unexposed / full-exp / real)
+#   classify  - classify every frame per roll with measure-roll's auto references,
+#               beside the manifest's roles (unexposed / leader / picture)
 #   freeze    - measure per-roll Dmin (unexposed), freeze recipes
 #   convert   - roll-convert every real frame, 16-bit + float HDR
 #   ir        - convert an IR frame, check its IR plane raises no warning
@@ -138,23 +138,41 @@ require_entry_count() { # directory expected-count description
 }
 
 stage_classify() {
-  printf "%-24s %-22s %8s %7s  %s\n" FRAME ROLL luma uniform CLASS
+  # `measure-roll --unexposed auto --leader auto` over each roll's whole folder: the
+  # binary's own classification (`pipeline::reference_frames`), set beside the
+  # manifest's roles. MISS marks a disagreement; a MISS or a failed roll fails the stage.
+  local fail=0
+  printf "%-24s %-22s %7s %8s  %-10s %s\n" FRAME ROLL spread dens_min CLASS ROLE
   for row in "${ROLLS[@]}"; do IFS='|' read -r roll uf ff reals <<<"$row"
-    # Match both .tif and .tiff (list_imgs / the manifest accept either); the
-    # `-e` guard is nullglob-safe on bash 3.2 (an unmatched glob stays literal, so
-    # skip it rather than passing a bogus path to `hanten measure-base`).
+    # Match both .tif and .tiff; the `-e` guard is nullglob-safe on bash 3.2, and an
+    # empty array is never expanded (unbound under `set -u` there).
+    frames=()
     for f in "$A/rolls/$roll"/*.tif "$A/rolls/$roll"/*.tiff; do
-      [ -e "$f" ] || continue
-      # The effective-area median, and whether `measure-base` found the area uniform
-      # (it warns "not uniform" over a picture).
-      j=$($NC measure-base "$f" 2>/dev/null)
-      read cr cg cb un <<<"$(echo "$j" | jq -r '.film_base as $c|"\($c.r) \($c.g) \($c.b) \([.warnings[]? | select(test("not uniform"))] | length == 0)"')"
-      lum=$(python3 -c "print(f'{0.2126*$cr+0.7152*$cg+0.0722*$cb:.4f}')")
-      # Uniformity first: a picture's median is often as dense as a leader's.
-      cls=$(python3 -c "l=$lum;print('real' if '$un'!='true' else ('full-exp' if l<0.08 else 'unexposed'))")
-      printf "%-24s %-22s %8s %7s  %s\n" "$(basename "$f")" "$roll" "$lum" "$un" "$cls"
+      [ -e "$f" ] && frames+=("$f")
     done
+    if [ ${#frames[@]} -eq 0 ]; then
+      echo "error: $roll: no .tif/.tiff frames under $A/rolls/$roll" >&2
+      fail=1; continue
+    fi
+    if ! j=$($NC measure-roll "${frames[@]}" --unexposed auto --leader auto 2>"$ART/$roll.classify.err"); then
+      echo "error: $roll: measure-roll --unexposed auto --leader auto failed:" >&2
+      cat "$ART/$roll.classify.err" >&2
+      fail=1; continue
+    fi
+    # A frame whose area gave no base has no area fields: printed as `-`.
+    rows=$(echo "$j" | jq -r 'def f: if . == null then "-" else (. * 1000 | round / 1000 | tostring) end;
+      .references.inputs[]
+      | "\(.input | split("/")[-1]) \(.area_spread | f) \(.density_above_base | if . == null then null else min end | f) \(.class)"')
+    while read -r name spread dmin cls; do
+      role=real
+      [ "$name" = "$(basename "$uf")" ] && role=unexposed
+      [ "$name" = "$(basename "$ff")" ] && role=leader
+      want=$role; [ "$role" = real ] && want=picture
+      mark=""; [ "$cls" = "$want" ] || { mark="  MISS"; fail=1; }
+      printf "%-24s %-22s %7s %8s  %-10s %s%s\n" "$name" "$roll" "$spread" "$dmin" "$cls" "$role" "$mark"
+    done <<<"$rows"
   done
+  return $fail
 }
 
 stage_freeze() {

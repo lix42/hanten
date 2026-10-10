@@ -33,7 +33,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > (`nf-calibration/span-roll-slope`, the roll's slope from its span) §5's default recipe,
 > `roll.json` and version 2 refusal, and §7's no-roll warning, `direct` refusal, roll
 > report, thin-lift examples and `measure-roll` report were re-run (`roll.json` and the
-> `measure-roll` report on their real rolls). The staleness signal is
+> `measure-roll` report on their real rolls). At `core/auto-calibration` §4's
+> `measure-roll` section and §7's measure-roll bullets were re-run, the `auto` report on
+> its real roll. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -264,6 +266,76 @@ stated `input` or `measure` keys, the file carries them too.
 The report on stdout is the evidence (the base measurement, each frame's white, the
 warnings); it does not carry the recipe.
 
+#### Finding the reference frames: `auto`
+
+`--unexposed auto` and `--leader auto` find those frames among the inputs instead, so a
+whole folder can go in as is. Each is separate: name one and find the other.
+
+```sh
+hanten measure-roll frames/*.tif --unexposed auto --leader auto --out roll.json
+```
+
+Every input's effective area is measured first, as `measure-base` measures it with no
+source flag, so each frame is decoded twice. Then:
+
+- **The unexposed frame** is flat (an area spread below 0.30) and the clearest such
+  frame, and no input is clearer than it by more than 0.01 density on every channel.
+  Any flat frame within 0.01 density of it on every channel is the same film and
+  **corroborates** it, and the base is their per-channel median. A flat frame that is
+  denser than that is a near-blank picture and stays a picture. A base from **one** frame
+  is used, but with a warning that it is uncorroborated; `--strict` refuses it (exit 2)
+  before the pictures are measured. Naming
+  that frame with `--unexposed` (and leaving it out of the frames) clears the warning.
+  Without an unexposed frame among the inputs, the clearest flat frame is the leader or a
+  flat picture; the pictures beat it, so the run is refused.
+- **The leader** is flat (spread at most 0.5) and at least 0.7 density above the roll's
+  base on every channel. When several frames qualify, all are left out and the least
+  dense one guards. If none qualifies, the run warns, as it does without `--leader`, and
+  `--strict` refuses it (exit 2) before the pictures are measured.
+- **Found frames leave the picture pool**, so the `--out` file is the one that naming
+  them writes. It was byte-identical on 10 of the 11 trimmed archive rolls; the eleventh
+  folder holds a calibration frame, which `auto` does not recognise and measures as a
+  picture. A frame whose area gives no base is no candidate, and is measured as a
+  picture.
+- **If no frame is flat enough, or a clearer input beats the candidate, the run is
+  refused** (exit 2): there is no per-frame base to fall back to. On the Ektar 100 roll
+  with its unexposed frame left out, the leader is the clearest flat frame:
+
+  ```
+  usage: --unexposed auto found no unexposed frame among the inputs: the clearest flat
+         frame, …/leader.tif, is no film base: …/989.tif is 0.89 density clearer on every
+         channel, and unexposed film is the clearest thing on a roll (a leader or a flat
+         picture, with no unexposed frame among the inputs). Name the roll's
+         unexposed frame with --unexposed <file>, leaving it out of the frames; or, with
+         none on the roll, measure a region of clear film (`hanten measure-base <frame>
+         --base-region X,Y,W,H --out base.json`) and pass --params base.json in place of
+         --unexposed
+  ```
+
+The report's `references` object records the evidence: each input's `class`
+(`unexposed`, `leader` or `picture`), `area_median`, `area_spread` and
+`density_above_base` (the last three absent for a frame whose area gave no base). Under `unexposed` it lists the `frames` the base came from, the
+`confidence`, the `spread_density` across those frames, the `rejected` near-blank
+pictures, and each frame's `measurements` as `measure-base` reports them. Under
+`leader` it lists every leader-like frame. On the real Ektar 100 roll above (abridged):
+
+```json
+"references": {
+  "inputs": [
+    { "input": "…/971.tif",    "class": "picture",   "area_spread": 1.6501793,
+      "density_above_base": [0.39922413, 0.53584325, 0.61948985] },
+    { "input": "…/base.tif",   "class": "unexposed", "area_spread": 0.096840866,
+      "density_above_base": [0.0, 0.0, 0.0] },
+    { "input": "…/leader.tif", "class": "leader",    "area_spread": 0.23025207,
+      "density_above_base": [1.2481698, 1.2628708, 1.290577] }, …
+  ],
+  "unexposed": { "frames": ["…/base.tif"], "confidence": "uncorroborated",
+                 "spread_density": 0.0, "rejected": [], "max_spread": 0.3,
+                 "agreement_density": 0.01, "measurements": [ … ] },
+  "leader": { "frames": ["…/leader.tif"], "min_density": 0.7 }
+}
+```
+
 #### The film base alone: `measure-base`
 
 `measure-base` measures the film base and nothing else, and `--out` writes it as a
@@ -286,8 +358,9 @@ hanten measure-base unexposed.tif --out base.json
 Over unexposed film the area is one population — the base plus grain and scanner
 noise — so the median is the base, where a high percentile would land in the noise
 tail and understate every density. The report says `"film_base_source":
-"effective_area"` and `"film_base_percentile": 0.5`. A frame that is not unexposed
-film warns (`--strict` fails on it):
+"effective_area"` and `"film_base_percentile": 0.5`, and `area_spread` is that worst
+per-channel `(p90 - p10) / p50` (0.097 on the Ektar roll's unexposed frame). A frame
+that is not unexposed film warns (`--strict` fails on it):
 
 ```
 hanten: warning: the effective area is not uniform (worst per-channel spread
@@ -1436,7 +1509,8 @@ hanten: warning: the roll section has no `roll.exposure`, so the roll renders at
   raising the roll's white. Without `--leader` the run warns, no frame is checked for
   saturation, and `--strict` refuses it before decoding anything (exit 2).
 - **Only picture frames, each once.** Every input is pooled as picture; leave out the
-  unexposed base, the leader and any calibration frame. A frame named twice is
+  unexposed base, the leader and any calibration frame, or pass the leader and unexposed
+  frame with them and use `auto` (§4). A frame named twice is
   refused (exit 2) — it would weigh double — and so are the `--leader` and
   `--unexposed` files among the inputs. With `--out`, two inputs sharing a file name are
   refused too, since `roll.frames` keys by it. A frame that contributes nothing, or whose

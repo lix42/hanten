@@ -15,8 +15,7 @@
 
 When the user does not name the unexposed frame or the leader, find them in the roll,
 resolve the roll's calibration from whatever is there, record which source won and how
-confident it is, and drop **loudly** to single-frame conversion when nothing is
-trustworthy. This is an opt-in mode of `measure-roll` (and so of `roll`'s measure mode), never
+confident it is, and refuse **loudly** when nothing is trustworthy. This is an opt-in mode of `measure-roll` (and so of `roll`'s measure mode), never
 its default (2026-09-28: finding the frames is measurement).
 
 ## What is known
@@ -26,7 +25,7 @@ its default (2026-09-28: finding the frames is measurement).
   frame or region, the confidence, the cross-frame spread) goes in the report.
 - **The base cascade, most reliable first:** a dedicated unexposed frame → a named
   region on a picture frame → the automatic measurement → cross-frame agreement over
-  the roll → drop to single. Content-based estimation (`film-base/content-fallback`)
+  the roll → drop to single (a refusal, as built: below). Content-based estimation (`film-base/content-fallback`)
   is **never** a rung: it is scene-dependent, and is used only on explicit opt-in.
 - **There is no rebate search to fall back on** (`film-base/holder-masked-measurement`,
   2026-09-28). The automatic measurement is the effective-area median
@@ -47,10 +46,14 @@ its default (2026-09-28: finding the frames is measurement).
 
 ## Open questions
 
-- How confident must a detected frame be before it is used without confirmation?
-- Does a detected leader or unexposed frame get excluded from the picture frames
-  automatically, given `measure-roll` refuses the leader among its inputs?
-- What does "drop to single" produce — per-frame auto bases, or a refusal?
+All answered by the user, 2026-10-09:
+
+- **Confidence:** any detected frame is used. A base from one frame warns as
+  uncorroborated, and `--strict` refuses it.
+- **Exclusion:** detected frames leave the picture pool automatically and are reported.
+- **Drop to single:** a refusal (exit 2) naming `--unexposed FILE` and `measure-base
+  --base-region`. No per-frame base exists to drop to.
+- **CLI shape:** `--unexposed auto` and `--leader auto`, each on its own.
 
 ## How to Verify
 
@@ -59,7 +62,7 @@ its default (2026-09-28: finding the frames is measurement).
   report records the provenance.
 - Two frames whose bases agree corroborate each other, with the spread recorded; a
   single candidate is reported as uncorroborated.
-- A roll with no usable reference drops to single conversion loudly; content
+- A roll with no usable reference is refused loudly; content
   estimation runs only when explicitly opted in.
 
 ## Dependencies
