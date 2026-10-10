@@ -68,6 +68,10 @@ SDR/HDR split splits *from*.
   `clock.time` call where it runs.
 - **Memory profiles are per buffer shape** (`RunProfile::{U16Tiff, F32Tiff, Avif,
   GainMapJpeg}`); a buffer added to a stage must move its arm.
+- **`fixed::decode` consumes the scan** (`release-decoded-image`): it takes the
+  `LinearImage` by value and rewrites it in place, moving the IR plane onto the
+  `FilmRgbImage`. A caller that needs the scan again clones it first. The memory
+  allowance is 15% + 128 MiB, measured on Linux and macOS.
 
 ## new-flow-flag
 
@@ -1203,8 +1207,8 @@ SDR/HDR split splits *from*.
 
 ## release-decoded-image
 
-**Status:** in progress
-**Updated:** 2026-10-08
+**Status:** done
+**Updated:** 2026-10-09
 
 - 2026-10-08: filed from `nf-verification/roll-side-exports`, which retired `--export-ir`,
   the last reader of the decoded image after the decode. Goal: release it early.
@@ -1276,6 +1280,39 @@ SDR/HDR split splits *from*.
   Linux peaks; the "within 25%" check gives the conversions 50% while the floor stands.
 - Still owed: the macOS peak on a real 74.65 MP scan. It decides whether the floor
   stays, shrinks, or becomes a higher `ALLOWANCE_PERCENT`.
+
+### 2026-10-09 — macOS measured; the floor goes
+
+- **Frame.** No real 74.65 MP scan exists (`largest.tif` is in neither `../nc-assets`
+  nor the archive). The user chose a 2×2 tile of `2026-07-24-Gold200/1137` (5184×3600 →
+  10368×7200): real content, IR plane as `NewSubfileType=4`, XMP kept; `inspect` reads it
+  as `hdri` with no warning. Written with `tifffile`; the script is not committed.
+- **Measured (macOS/aarch64, release, `/usr/bin/time -l`, explicit `--film-base`)** at
+  5.83 MP (`2026-09-28-Portra400-dark/base.tif`, 1890×3083), 18.66 MP (`1137`) and the
+  tile, highest of 2–6 runs: SDR TIFF 0.140 / 0.422 / 1.654 GB, float TIFF 0.115 / 0.347
+  / 1.354, PQ TIFF 0.117 / 0.347 / 1.355, film master 0.115 / 0.346 / 1.354, gain map
+  0.221 / 0.697 / 2.754, `measure-roll` 0.115 / 0.346 / 1.354.
+- **macOS now runs a constant 3–5 MB above Linux at every size**: a fixed cost, not
+  the ~4 B/px it was before this task (that went with the scan's buffer). Measured is
+  1.01x of accounted at 74.65 MP for the SDR and float TIFFs.
+- **So `ALLOWANCE_PER_PIXEL_BYTES` is deleted**; `ALLOWANCE_PERCENT` (15) and the
+  128 MiB fixed part stay. 74.65 MP estimates: SDR 2.023 GB (+22.3% over the macOS
+  peak), float / film master / `measure-roll` 1.679 GB (+24.0%), PQ 2.023 (+49.2%),
+  gain map 3.997 (+45.1%). The "within 25%" check is back for the conversions; macOS
+  rows joined `estimate_stays_conservative_against_the_measured_peaks`. The default-
+  budget doc's full-frame `--base-region` example is 3.05 GB again; design-spec §8's
+  half-frame example regenerated (2.538 GB).
+- **Gotcha: macOS peak RSS is noisy at 74.65 MP.** The SDR TIFF read 1.491 GB once
+  against 1.654 GB in five other runs, and the gain map 2.31–2.75 GB. Take the highest
+  of several runs, never one.
+- Byte-identical needs no check: only the estimate changed, and no pixel path.
+- **Done 2026-10-09.** The decode works in place and frees the scan; peaks fell
+  16 B/px (14 on the float TIFFs) on both platforms, and the memory model counts
+  15% + 128 MiB over the buffers, with no per-pixel term. Gates green. Side fix:
+  two `measure-roll` tests in `tests/pipeline.rs` matched "decoded" in their own
+  fixture paths (this worktree's folder name) and now strip `CARGO_MANIFEST_DIR`.
+  Their check is weak anyway: the "decoded" log line prints only under `-v`, which
+  they don't pass, so exit 2 and the message are the real guard.
 
 ## one-luma-dot
 

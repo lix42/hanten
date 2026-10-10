@@ -12082,7 +12082,8 @@ fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
             "{args:?}: the coarser rule lost: {err}"
         );
         assert!(
-            !err.contains("decoded"),
+            !err.replace(env!("CARGO_MANIFEST_DIR"), "")
+                .contains("decoded"),
             "{args:?}: refused before decoding: {err}"
         );
     }
@@ -12405,7 +12406,8 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
         assert!(stdout.is_empty(), "{extra:?}");
         assert!(err.contains(expect), "{extra:?}: {err}");
         assert!(
-            !err.contains("decoded"),
+            !err.replace(env!("CARGO_MANIFEST_DIR"), "")
+                .contains("decoded"),
             "{extra:?} must refuse before decoding: {err}"
         );
     }

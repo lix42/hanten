@@ -1895,11 +1895,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is
   ≈0.9 GB each at 74.6 MP
-- [~] [Release the decoded image after the
+- [x] [Release the decoded image after the
   decode](tasks/nf-core/release-decoded-image.md) — free it once `fixed::decode` has
   read it, lowering each frame's peak by 12–16 B/px; the memory model moves with it.
   **Landed 2026-10-08**: the decode rewrites the scan in place, peaks fell 16 B/px on
-  Linux, outputs byte-identical; the macOS peak on a real 74.65 MP scan is owed
+  Linux, outputs byte-identical. macOS measured 2026-10-09 (a 2×2 tile, 74.65 MP) only
+  3–5 MB above Linux, so the provisional 4 B/px allowance floor is gone
 - [x] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — **done
   2026-09-24.** `colorimetry::dot` is the one f32 copy; the four private ones are
   gone and the look no longer imports fit range's. No pixel moved, no golden edited
