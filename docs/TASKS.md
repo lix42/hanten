@@ -407,7 +407,9 @@ graph TD
     nf-calibration/taste-vs-quality
     nf-calibration/thin-lift-confirmation
     nf-calibration/level-target-zero
+    nf-calibration/span-roll-slope
     nf-calibration/envelope-hybrid-placement
+    nf-calibration/per-frame-placement
     nf-calibration/hybrid-slope-bounds
     nf-calibration/display-white
     nf-calibration/scale-ladder
@@ -682,10 +684,18 @@ graph TD
   nf-scene-correction/midtone-neutral --> nf-scene-correction/correction-confidence
   nf-scene-correction/roll-white-balance --> nf-scene-correction/correction-confidence
   nf-calibration/taste-vs-quality --> nf-scene-correction/correction-confidence
+  nf-calibration/level-target-zero --> nf-calibration/span-roll-slope
+  nf-scene-correction/midtone-neutral --> nf-calibration/span-roll-slope
+  nf-look/contrast-on-luminance --> nf-calibration/span-roll-slope
+  nf-calibration/span-roll-slope --> nf-calibration/envelope-hybrid-placement
+  nf-calibration/span-roll-slope --> nf-calibration/per-frame-placement
+  nf-calibration/envelope-hybrid-placement --> nf-calibration/per-frame-placement
+  nf-calibration/span-roll-slope --> nf-calibration/white-rule-hdr
   nf-calibration/level-target-zero --> nf-calibration/envelope-hybrid-placement
   nf-calibration/taste-vs-quality --> nf-calibration/envelope-hybrid-placement
   nf-look/contrast-on-luminance --> nf-calibration/envelope-hybrid-placement
   nf-calibration/envelope-hybrid-placement --> nf-calibration/hybrid-slope-bounds
+  nf-calibration/per-frame-placement --> nf-calibration/hybrid-slope-bounds
   nf-scene-correction/midtone-neutral --> nf-calibration/hybrid-slope-bounds
   nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
   nf-calibration/level-target-zero --> nf-calibration/display-white
@@ -1303,7 +1313,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   — filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
 - `nf-calibration/roll-section` (new flow): `nf-calibration/roll-white-rule`
   — filed 2026-09-27: moves the values it measures out of the style knobs
-- `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`, `nf-calibration/roll-exposure`
+- `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`, `nf-calibration/roll-exposure`, `nf-calibration/span-roll-slope`
   — filed 2026-09-27: the rule was reviewed on SDR only; `roll-white-rule` handed HDR to
   `parametric-shoulder`, which kept reinhard and left it unreviewed; after `roll-exposure`
   (2026-09-29), which sets the level the rule is reviewed at
@@ -1339,13 +1349,19 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
-- `nf-calibration/envelope-hybrid-placement` (new flow): `nf-calibration/level-target-zero`, `nf-calibration/taste-vs-quality`, `nf-look/contrast-on-luminance`
+- `nf-calibration/span-roll-slope` (new flow): `nf-calibration/level-target-zero`, `nf-scene-correction/midtone-neutral`, `nf-look/contrast-on-luminance`
+  — filed 2026-10-09 (split from `envelope-hybrid-placement`, absorbing `display-white`):
+  the per-roll slope from the roll's span, and the display white it maps to
+- `nf-calibration/envelope-hybrid-placement` (new flow): `nf-calibration/span-roll-slope`, `nf-calibration/level-target-zero`, `nf-calibration/taste-vs-quality`, `nf-look/contrast-on-luminance`
   — filed 2026-10-07: the spike's default placement; it starts from the target-0 exposure,
   generalises the lifts, and was approved with saturation held
-- `nf-calibration/hybrid-slope-bounds` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-scene-correction/midtone-neutral`
+- `nf-calibration/per-frame-placement` (new flow): `nf-calibration/span-roll-slope`, `nf-calibration/envelope-hybrid-placement`
+  — filed 2026-10-09 (split from `envelope-hybrid-placement`): white- and midtone-pinned
+  per-frame placements as choices, added to the placement choice the hybrid introduces
+- `nf-calibration/hybrid-slope-bounds` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/per-frame-placement`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: the hybrid's provisional anchor and maximum slope, measured on
-  whites taken after colour correction
-- `nf-calibration/display-white` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
+  whites taken after colour correction; the anchor moved to `span-roll-slope` 2026-10-09
+- `nf-calibration/display-white` (new flow, **closed: folded into `nf-calibration/span-roll-slope`** 2026-10-09; the deps below are decision history): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
   — filed 2026-10-07: a white target in display terms, set together with the brightness
   target
 
@@ -2169,14 +2185,20 @@ the design now in `docs/design-spec.md` (§6–§7):
   0](tasks/nf-calibration/level-target-zero.md) — `measure-roll` puts the median frame at
   mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred
   it on 09-18 Gold and 09-29 Ektar
+- [ ] [The roll's slope from its span, and where its white
+  lands](tasks/nf-calibration/span-roll-slope.md) — per-roll placement maps the roll's
+  white and dark end to display targets (slope 1.57–1.75 where today's spans 1.05–1.57);
+  settles the SDR white target (reviews preferred L* 90–92) and the anchor
 - [ ] [Envelope hybrid placement](tasks/nf-calibration/envelope-hybrid-placement.md) —
   each frame its own contrast and exposure, inside the limits the roll's placement sets
-  (R 7, α 0.6); per-roll and per-frame placements as a user's choices
-- [ ] [The envelope's anchor and the maximum
-  slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the two limits the hybrid ships
-  with provisional values
-- [ ] [Where white lands on the display](tasks/nf-calibration/display-white.md) — a white
-  target near L* 90–92 instead of diffuse white (L* 79), set with the brightness target
+  (R 7, α 0.6); per-roll stays a choice
+- [ ] [Per-frame placements](tasks/nf-calibration/per-frame-placement.md) — white-pinned
+  and midtone-pinned, each frame's contrast from its own span, as a user's choice
+- [ ] [The maximum slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the limit every
+  slope-setting placement shares, provisional at 3.5
+- [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —
+  **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps
+  the roll's white to the target, so the two are chosen together
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the
