@@ -1,5 +1,10 @@
 # Where white lands on the display
 
+> **Folded into `nf-calibration/span-roll-slope` on 2026-10-09.** The span slope maps the
+> roll's white to a display target, so the target cannot be chosen apart from it; that
+> task carries this one's evidence, open questions and review. HDR stays
+> `white-rule-hdr`'s. This file is kept so existing references resolve.
+
 ## Goal
 
 Choose a white target in display terms, so a frame's white is placed where the reviews

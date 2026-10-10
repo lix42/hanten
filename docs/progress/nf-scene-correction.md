@@ -49,7 +49,7 @@ wants it, it is a look control.
 fits `roll.midtone_line` (10+ frames) and scene correction removes that cast before the
 roll's gains, keyed on those gains, with a tint gate sparing strongly coloured light;
 `roll.midtone_neutral` switches it per frame. Each frame's white is now measured after
-the gains and the line, so anything tuned on whites (the thin lift, `display-white`)
+the gains and the line, so anything tuned on whites (the thin lift, `nf-calibration/span-roll-slope`)
 reads corrected whites; the saturation check keeps the decoded white.
 
 **How far to trust them (`correction-confidence`, 2026-10-09).** `measure-roll` grades the
