@@ -547,8 +547,8 @@ pub struct ThinLift {
 /// fall under `e0` (a base above mid-grey), darkening the mid-tones the small lift raised.
 ///
 /// Approximate: the white (film RGB, brightest channel) and the base (ACEScg luma, before
-/// the roll's gains) are not the measure the render's per-channel slope applies to, so
-/// the base moves and the white rises by about, not exactly, these amounts.
+/// the roll's gains) are not the luminance the render's slope applies to, so the base
+/// moves and the white rises by about, not exactly, these amounts.
 pub fn thin_lift(
     white_stops: f32,
     base_stops: f32,

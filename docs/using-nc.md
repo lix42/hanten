@@ -27,7 +27,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > recipe, §8's film RGB export (now on `roll` too), §9's IR section and §11's flag tables.
 > At `nf-scene-correction/midtone-neutral` (whites now measured after the roll's colour
 > correction) §5's default recipe and `roll.json` and §7's scene-correction and roll report
-> examples were re-run. The staleness signal is
+> examples were re-run. At `pipeline_version` 10 (`nf-look/contrast-on-luminance`,
+> contrast on luminance and a saturation setting) §5's default recipe, §6's replay
+> warning and §7's look section and report were re-run. The staleness signal is
 > `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -209,7 +211,7 @@ abridged):
 
 ```json
 {
-  "meta": { "nc_version": "0.1.0", "pipeline_version": 9, … },
+  "meta": { "nc_version": "0.1.0", "pipeline_version": 10, … },
   "params": {
     "recipe_version": 3,
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
@@ -376,7 +378,7 @@ hanten params
 ```json
 {
   "meta": { "nc_version": "0.1.0", "git_commit": "…", "git_dirty": false,
-            "pipeline_version": 9, "target": "aarch64-apple-darwin" },
+            "pipeline_version": 10, "target": "aarch64-apple-darwin" },
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
@@ -402,6 +404,7 @@ hanten params
     },
     "look": {
       "contrast": 1.0,
+      "saturation": 1.0,
       "channel_grade": [1.0, 1.0],
       "highlight_desaturation": { "strength": null, "start_stops": null, "band": null }
     },
@@ -478,13 +481,15 @@ build. A version this build does not read is refused too (`this build reads 3 an
 **A version 2 recipe is read, except a number in `look.contrast`.** Version 3 changed
 only that key: in version 2 it was the slope itself, and now it multiplies the base
 slope (§7), so the old number would render differently. It is refused with the
-multiplier that keeps it — worked out against the recipe's own rendering and roll white
-— and `null` (what version 2 wrote for unset) is read as `1`:
+multiplier that keeps its tone scale — worked out against the recipe's own rendering and
+roll white; colour now follows `look.saturation` — and `null` (what version 2 wrote for
+unset) is read as `1`:
 
 ```
 usage: recipe old.json: `look.contrast` 1.4552535 in a `recipe_version` 2 recipe is the
-       slope itself; since version 3 it is a multiplier on the base slope (1 keeps it).
-       To render as before, state `look.contrast` 1 (1.4552535 over the roll's slope
+       slope itself; since version 3 it is a multiplier on the base slope (1 keeps it),
+       on luminance only: colour follows `look.saturation`. To keep the tone scale,
+       state `look.contrast` 1 (1.4552535 over the roll's slope
        1.4552535 from `roll.white_stops` 1.7; stacked with other `--params` files, over
        the base they compose to, the report's `chain.look.base_slope`) and
        `"recipe_version": 3`. If nobody
@@ -581,8 +586,8 @@ unset takes this build's default, so a file written under another `pipeline_vers
 may not render as it did there, and its replay warns (`--strict` exits 1):
 
 ```
-hanten: warning: recipe old.json was produced by pipeline_version 8, but this build is
-         pipeline_version 9 — the parameters still apply, but the default conversion
+hanten: warning: recipe old.json was produced by pipeline_version 9, but this build is
+         pipeline_version 10 — the parameters still apply, but the default conversion
          behavior changed between them, so the output will not match the original
 ```
 
@@ -770,7 +775,7 @@ identity), and the report lists what each applied in `chain.stages`:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stages[].applied]'
-["identity","contrast+highlight-desaturation","reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
+["identity","contrast+saturation+highlight-desaturation","reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
 ```
 
 Scene correction reports what ran joined by `+`, in order — `midtone-neutral`,
@@ -798,6 +803,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 |---|---|---|
 | the roll's measurements (`roll`) | applied | left out, and reported so (`chain.roll.*_applied: false`) |
 | white balance / base slope | the roll's; without them neutral / ≈1.414, and a warning | neutral / ≈1.414, pinned |
+| saturation over the base slope's colour | 1.15 | 1, pinned |
 | highlight desaturation | 0.8 | off |
 | display black / headroom | 6 / 6 | 6 / 6, pinned |
 | destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
@@ -806,8 +812,8 @@ The removed chain's print controls are refused, each saying where the knob went:
 can and applies only what the container needs — the handoff to an editor, and (as
 `--rendering direct --range sdr`, the form you can judge by eye) the rendering the
 calibration loop holds fixed. A knob you state builds on either: `--white-balance`
-multiplies the base gains and `--contrast` the base slope; every other knob replaces its
-base value. A stated axis is
+multiplies the base gains, and `--contrast` and `--saturation` their base slopes; every
+other knob replaces its base value. A stated axis is
 never overridden, and `direct` decides its container before its range, so it never
 takes a lossy container by default — only when you state one, or when your stated axes
 leave no lossless row: `--rendering direct --gamut display-p3` is the Display P3 float
@@ -828,13 +834,15 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   `measure-roll`:
 
   ```text
-  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.413675 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) and exposure (`roll.exposure`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
+  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.413675 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope) and exposure (`roll.exposure`), or choose your own slope (`look.contrast` and `look.saturation` off 1); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
   ```
 
-  A typed `--white-balance` or `--contrast` is a choice — even `--white-balance 1,1,1` or
-  `--contrast 1`, though both multiply the fallback — and silences its half, as does a
-  recipe value off the identity. `--strict` fails the run on it: without a roll
-  measurement, state `--white-balance` and `--contrast`, or pass `--rendering direct`.
+  A typed `--white-balance`, `--contrast` or `--saturation` is a choice — even the
+  identity, though each multiplies the fallback — as is a recipe value off the identity.
+  `--white-balance` silences its half; the slope's half lasts until both multipliers are
+  chosen, naming the one still unchosen (`for tone` or `for colour`). `--strict` fails
+  the run on it: without a roll measurement, state `--white-balance`, `--contrast` and `--saturation`, or pass
+  `--rendering direct`.
 - **A recipe value an earlier build could have written unchosen warns under
   `direct`**: highlight desaturation at exactly 0.8, which every earlier recipe stated
   and which would turn the pull back on, and a stated white balance beside a `roll`
@@ -923,16 +931,18 @@ it, then state the gains `hanten measure-roll` reports for the roll as
 
 ### The look
 
-The stage between scene correction and fit range. It runs three controls, in this
-order: **contrast**; the **per-channel grade**, which removes (or
-adds) a cast that grows away from mid-grey; then **highlight desaturation**, which
-pulls bright surfaces that are nearly neutral the rest of the way to neutral, so a
-white that still carries a trace of cast after the roll's white balance reads clean.
-Contrast and highlight desaturation are **on by default**; the grade is off.
+The stage between scene correction and fit range. It runs four controls, in this
+order: **contrast**, on luminance; **saturation**, on colour; the **per-channel grade**,
+which removes (or adds) a cast that grows away from mid-grey; then **highlight
+desaturation**, which pulls bright surfaces that are nearly neutral the rest of the way
+to neutral, so a white that still carries a trace of cast after the roll's white balance
+reads clean. Contrast, saturation and highlight desaturation are **on by default**; the
+grade is off.
 
 | Flag | Recipe key | |
 |---|---|---|
 | `--contrast CONTRAST` | `look.contrast` | a multiplier on the base slope: `1.2` is 20% more contrast, `0.9` flatter; default `1`, which keeps the base; must be positive |
+| `--saturation SATURATION` | `look.saturation` | a multiplier on the default colour: `1.2` is 20% more saturated, `0.9` less; default `1`, which keeps the default; must be positive |
 | `--channel-grade R,B` | `look.channel_grade` | red and blue exponents pivoted at mid-grey, green fixed at 1; default `1,1` (off); both positive, with the spread over `R,1,B` under 1 |
 | `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; unstated, `0.8` (off under `--rendering direct`); `0` is off |
 | `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (unstated, `-1`) |
@@ -940,21 +950,29 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 
 - **It only touches near-neutral highlights.** Its strength rises from `start_stops`
   up to diffuse white, and falls to nothing across the band: a pixel whose channels
-  differ by more than `S1` (measured as `log10(max/min)` over the whole slope,
-  `--density-gamma` × the look's slope, so the band means the same density spread on a
-  flat roll and a contrasty one) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
+  differ by more than `S1` (measured as `log10(max/min)` over `--density-gamma` × the
+  saturation slope, so the band means the same density spread on a flat roll and a
+  saturated one) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
 - **It assumes the roll's white balance.** "Near-neutral" means near R = G = B, which
   is near white only after `measure-roll`'s gains have removed the roll's cast.
-- **Contrast is the slope, pivoted at mid-grey**, on each ACEScg channel: mid-grey
-  stays put and each stop away from it becomes `slope` stops, where slope 1 reproduces
-  the scene's own contrast. The slope is a **base** times `--contrast`: the roll's
-  (`roll.white_stops`, below), else the fallback ≈1.414 — the slope a roll whose white
-  sat 1.75 stops above mid-grey would get — and under `direct` its pinned ≈1.414. So `--contrast 1.2` is 20% more than the roll's, on every roll —
-  the way to carry one taste across rolls. A neutral stays neutral; saturated colour
-  shifts slightly against the pre-split single slope, which acted before the NC film
-  RGB 3×3 rather than after it. It runs after scene correction, so `--exposure 1` at
-  slope 1.41 moves the picture 1.41 stops: exposure is in stops of the reconstructed
-  scene.
+- **Contrast is the slope, pivoted at mid-grey, on luminance**: mid-grey stays put and
+  each stop of a pixel's luminance away from it becomes `slope` stops, where slope 1
+  reproduces the scene's own contrast. The whole pixel is scaled, so its colour does not
+  change with contrast. The slope is a **base** times `--contrast`: the roll's
+  (`roll.white_stops`, below), a thin frame's (`roll.thin_slope`), else the fallback
+  ≈1.414 — the slope a roll whose white sat 1.75 stops above mid-grey would get — and
+  under `direct` its pinned ≈1.414. So `--contrast 1.2` is 20% more than the roll's, on
+  every roll — the way to carry one taste across rolls. It runs after scene correction,
+  so `--exposure 1` at slope 1.41 moves the picture 1.41 stops: exposure is in stops of
+  the reconstructed scene.
+- **Saturation is the colour's slope**: each pixel's ratios between channels are raised
+  to the power `saturation slope` (a channel twice green's becomes 2^s times it) and its
+  luminance is kept, so neutrals and the tone scale do not move. The saturation slope is
+  the same base slope × 1.15 × `--saturation` — except that a thin frame's slope never
+  reaches colour: there the base is the one the white places. The 1.15 is the default,
+  chosen by review: 15% more colour than the base slope gave when contrast still acted
+  on each channel. `direct` uses 1 there instead. Whatever `--contrast` is, colour stays
+  put.
 - **The grade is for crossover** — a cast that differs between shadows and
   highlights, which one set of white-balance gains cannot remove. Each of red and blue
   becomes `0.18 · (v / 0.18)^R` (or `^B`), and the pixel's luminance is then put back,
@@ -964,20 +982,22 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
   reverse. It runs after contrast, so the same values act more strongly on a
   contrastier picture. It does not replace the roll's white balance, which should be
   set first, or the decode's calibrated `--density-scale`.
-- **Luminance is kept** by the grade and by highlight desaturation; only chroma moves.
-  `--highlight-desaturation 0` turns desaturation off — with the grade at `1,1` the look
-  is then the slope alone, which keeps a neutral neutral: the way to see the roll's raw
-  cast.
+- **Luminance is kept** by saturation, the grade and highlight desaturation; only chroma
+  moves. `--highlight-desaturation 0` turns desaturation off — with the grade at `1,1`
+  the look is then the two slopes alone, which keep a neutral neutral: the way to see the
+  roll's raw cast.
 - The report says what ran:
 
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
       | jq -c '{look: .chain.look, stage: .chain.stages[1]}'
-  {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","slope":1.413675,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
+  {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","saturation":1.0,"saturation_base_slope":1.6257261,"saturation_base_from":"fallback","slope":1.413675,"saturation_slope":1.6257261,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+saturation+highlight-desaturation"}}
   ```
 
-  `base_from` is `roll`, `thin`, `fallback` or `direct`, and `slope` is `base_slope` ×
-  `contrast`.
+  `base_from` is `roll`, `thin`, `fallback` or `direct`; `slope` is `base_slope` ×
+  `contrast`; `saturation_base_slope` is the colour's base (× 1.15 under `default`),
+  `saturation_base_from` where its slope came from (a thin frame's colour is the white's,
+  `roll`, or `fallback`), and `saturation_slope` is it × `saturation`.
 
 - An out-of-range value is refused naming the flag and the key:
 
@@ -1148,7 +1168,7 @@ measured value is never mistaken for a chosen one:
 | Flag | Recipe key | |
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
-| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope. Typed, or in a `roll` manifest's `params`, it drops a frame's thin lift (slope and exposure) and keeps its small lift; a later `--params` layer's white does not |
+| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope. It sets the colour's base slope too, which `--saturation` multiplies. Typed, or in a `roll` manifest's `params`, it drops a frame's thin lift (slope and exposure) and keeps its small lift; a later `--params` layer's white does not |
 | `--roll-exposure EV` | `roll.exposure` | the roll's exposure, a neutral gain of `2^EV`; `--exposure` adds to it |
 | `--roll-frame-exposure EV` | `roll.frame_exposure` | this frame's small lift, added to the roll's exposure: the lift `measure-roll` writes for a low-key frame. A thin lift replaces it |
 | `--small-lift on\|off` | `roll.small_lift` | whether the small lift applies |
@@ -1443,8 +1463,8 @@ usage: --film-master (recipe `output`: `"film-master"`) writes the fixed decode'
 ```
 
 Each stage's default and its identity are accepted, since neither asks for anything —
-`--exposure 0 --white-balance 1,1,1`, the look's `--contrast 1 --channel-grade 1,1
---highlight-desaturation 0`, and `--display-tone-headroom 0 --display-black off` (or
+`--exposure 0 --white-balance 1,1,1`, the look's `--contrast 1 --saturation 1
+--channel-grade 1,1 --highlight-desaturation 0`, and `--display-tone-headroom 0 --display-black off` (or
 their defaults) — which is how a flag clears a recipe's stage for a master. The film
 master and a destination axis are one choice, refused at the parser.
 
@@ -2064,7 +2084,7 @@ the headroom, move the anchor up, or write a float output (`--transfer linear` w
 **"no roll measurement: rendered with …"**
 Every `convert` under the `default` rendering warns until the roll is measured, and
 `--strict` fails on it. Run `hanten measure-roll … --out roll.json` and convert with
-`--params roll.json`; or state `--white-balance` and `--contrast`; or render
+`--params roll.json`; or state `--white-balance`, `--contrast` and `--saturation`; or render
 `--rendering direct` (§7).
 
 **"a recipe must state `"recipe_version": 3`"**

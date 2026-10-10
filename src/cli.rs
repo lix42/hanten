@@ -956,11 +956,20 @@ pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
     /// a thin frame's slope (`--roll-thin-slope`), else the roll's (`--roll-white`), else the fallback ≈ 1.41, as if the roll's white
-    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
-    /// mid-grey; slope 1 reproduces the scene's own contrast. Runs after scene
-    /// correction, so an `--exposure` is expanded with the rest of the picture.
+    /// were 1.75 stops up (`direct`: its pinned ≈ 1.41). Luminance only: each pixel's
+    /// ACEScg luminance becomes `0.18 · (Y / 0.18)^slope`, pivoted at mid-grey, and its
+    /// colour is kept (`--saturation` sets that); slope 1 reproduces the scene's own
+    /// contrast. Runs after scene correction, so an `--exposure` is expanded with the
+    /// rest of the picture.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
+    /// Saturation, as a multiplier on the default colour (recipe key `look.saturation`; 1
+    /// keeps it): each pixel's colour ratios are raised to the power
+    /// `base × 1.15 × SATURATION` with its luminance kept (`direct`: × 1 in place of 1.15).
+    /// The base is `--contrast`'s, except a thin frame's slope (`--roll-thin-slope`), which
+    /// never reaches colour; so colour does not move with `--contrast`.
+    #[arg(long, value_name = "SATURATION", allow_hyphen_values = true)]
+    pub saturation: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
     /// fixed at 1, with each pixel's ACEScg luminance restored afterwards — a cast that
     /// grows away from mid in both directions without moving neutral contrast (recipe
@@ -995,7 +1004,7 @@ pub struct LookOverrides {
     pub highlight_desaturation_start: Option<f32>,
     /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
-    /// the whole slope, `--density-gamma` times the look's slope (recipe key
+    /// `--density-gamma` times the look's saturation slope (recipe key
     /// `look.highlight_desaturation.band`, default `0.015,0.025`).
     #[arg(
         long = "highlight-desaturation-band",
@@ -1241,9 +1250,9 @@ pub struct ChainResult {
     /// roll's gains included. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_correction: Option<scene_correction::SceneCorrection>,
-    /// The look's controls as applied: the `contrast` multiplier, the base slope it
-    /// multiplied and where that came from, the resulting `slope`, the grade and highlight
-    /// desaturation. Absent for the film master.
+    /// The look's controls as applied: each multiplier (`contrast`, `saturation`) with the
+    /// base slope it multiplied, where that came from and the resulting slope, then the
+    /// grade and highlight desaturation. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub look: Option<recipe::LookReport>,
     /// Fit range's operator by name, with the headroom, white point and display peak
@@ -2836,7 +2845,8 @@ fn removed_frame_slope_message(slope: &str, args: &ConversionFlags, on_roll: boo
     };
     format!(
         "--roll-frame-slope was removed: a thin frame's lift is its own pair, beside the small \
-         lift. To render as before, {remedy}; or re-run `hanten measure-roll`."
+         lift. To keep the tone scale, {remedy}; colour follows the roll's white (else the fallback slope) and \
+         --saturation. Or re-run `hanten measure-roll`."
     )
 }
 
@@ -4428,7 +4438,11 @@ fn convert_attempt(
         recipe::validate_roll_frames(
             &stated_roll,
             recipe.reconstruction.linearization,
-            recipe.look.contrast,
+            [
+                recipe.look.contrast,
+                recipe.base().saturation,
+                recipe.look.saturation,
+            ],
             KnobNames::FlagAndKey,
         )?;
     }

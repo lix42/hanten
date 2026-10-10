@@ -377,6 +377,10 @@ pub struct LookKeys {
     /// for "unset", reads as 1.
     #[serde(deserialize_with = "null_is_identity")]
     pub contrast: f32,
+    /// `look.saturation`, `--saturation`: a multiplier on the rendering's colour — the
+    /// base slope `contrast` multiplies (never a thin frame's) times the rendering's
+    /// [`Base::saturation`] — so `1` keeps the default, whatever the contrast.
+    pub saturation: f32,
     /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
     pub channel_grade: [f32; 2],
     /// `look.highlight_desaturation`, `--highlight-desaturation*`: each key unset takes
@@ -388,6 +392,7 @@ impl Default for LookKeys {
     fn default() -> Self {
         Self {
             contrast: 1.0,
+            saturation: 1.0,
             channel_grade: IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: DesaturationKeys::default(),
         }
@@ -395,13 +400,18 @@ impl Default for LookKeys {
 }
 
 impl LookKeys {
-    /// The stage's section at `slope` (already the base times `contrast`), with
-    /// `desaturation`'s value for each unstated desaturation key. Destructured without
-    /// `..`, so a new look knob does not compile until it has a base
+    /// The stage's section at `slopes` (already the bases times `contrast` and
+    /// `saturation`), with `desaturation`'s value for each unstated desaturation key.
+    /// Destructured without `..`, so a new look knob does not compile until it has a base
     /// (`crate::rendering`'s module docs).
-    pub fn resolve(&self, slope: f32, desaturation: HighlightDesaturation) -> LookSection {
+    pub fn resolve(
+        &self,
+        slopes: ResolvedSlope,
+        desaturation: HighlightDesaturation,
+    ) -> LookSection {
         let LookKeys {
             contrast: _,
+            saturation: _,
             channel_grade,
             highlight_desaturation:
                 DesaturationKeys {
@@ -411,7 +421,8 @@ impl LookKeys {
                 },
         } = *self;
         LookSection {
-            slope,
+            slope: slopes.slope,
+            saturation_slope: slopes.saturation_slope,
             channel_grade,
             highlight_desaturation: HighlightDesaturation {
                 strength: strength.unwrap_or(desaturation.strength),
@@ -428,9 +439,10 @@ impl LookKeys {
     /// destination does, and refusing it would kill the flags-win reset.
     pub fn asks_for_a_look(&self) -> bool {
         let pull = self
-            .resolve(1.0, HighlightDesaturation::DEFAULT)
+            .resolve(ResolvedSlope::identity(), HighlightDesaturation::DEFAULT)
             .highlight_desaturation;
         self.contrast != 1.0
+            || self.saturation != 1.0
             || self.channel_grade != IDENTITY_CHANNEL_GRADE
             || !(pull.is_off() || pull == HighlightDesaturation::DEFAULT)
     }
@@ -465,16 +477,44 @@ pub enum SlopeBase {
     Thin,
 }
 
-/// The look's slope and its parts: `base_slope × contrast` ([`Recipe::resolved_slope`]).
+/// The look's slopes and their parts: `base_slope × contrast` and
+/// `saturation_base_slope × saturation` ([`Recipe::resolved_slope`]).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ResolvedSlope {
     /// `look.contrast`, the multiplier.
     pub contrast: f32,
     pub base_slope: f32,
     pub base_from: SlopeBase,
-    /// What the look stage receives. Not serialized: the report's section states it.
+    /// `look.saturation`, the multiplier.
+    pub saturation: f32,
+    /// What `saturation` multiplies: the base slope — except that a thin frame's never
+    /// reaches colour, so there the slope the white places — times the rendering's
+    /// [`Base::saturation`].
+    pub saturation_base_slope: f32,
+    /// Where `saturation_base_slope`'s slope came from: `base_from`, except a thin
+    /// frame's, whose colour is the white's (`roll`) or the fallback's.
+    pub saturation_base_from: SlopeBase,
+    /// What the look stage receives. Not serialized: the report's section states them.
     #[serde(skip)]
     pub slope: f32,
+    #[serde(skip)]
+    pub saturation_slope: f32,
+}
+
+impl ResolvedSlope {
+    /// Every slope and multiplier at 1.
+    pub fn identity() -> Self {
+        Self {
+            contrast: 1.0,
+            base_slope: 1.0,
+            base_from: SlopeBase::Direct,
+            saturation: 1.0,
+            saturation_base_slope: 1.0,
+            saturation_base_from: SlopeBase::Direct,
+            slope: 1.0,
+            saturation_slope: 1.0,
+        }
+    }
 }
 
 /// The report's `chain.look`: the knob and the base it multiplied, then the section the
@@ -535,6 +575,8 @@ pub struct TypedStyle {
     pub white_balance: bool,
     /// `--contrast` was typed.
     pub contrast: bool,
+    /// `--saturation` was typed.
+    pub saturation: bool,
     /// `--exposure` was typed.
     pub exposure: bool,
     /// `--highlight-desaturation` (the strength; no warning reads the start or band).
@@ -547,6 +589,7 @@ impl TypedStyle {
         Self {
             white_balance: args.scene.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
+            saturation: args.look.saturation.is_some(),
             exposure: args.scene.exposure.is_some(),
             highlight_desaturation_strength: args.look.highlight_desaturation.is_some(),
         }
@@ -662,9 +705,10 @@ fn thin_pair_moved(
     format!(
         "{slope} is not a recipe key any more: a thin frame's lift is its own pair, \
          `thin_slope` and `thin_exposure`, beside the small lift, so each has its own \
-         switch (`roll.thin_lift`, `roll.small_lift`). To render as before, rename {slope} \
+         switch (`roll.thin_lift`, `roll.small_lift`). To keep the tone scale, rename {slope} \
          to {} and {exposure}, if stated, to {} (beside a slope it was the thin lift's \
-         exposure){entries}{lift}; or re-run `hanten measure-roll --out` for the roll",
+         exposure){entries}{lift}; colour follows the roll's white (else the fallback slope) and \
+         `look.saturation`. Or re-run `hanten measure-roll --out` for the roll",
         renamed.0, renamed.1
     )
 }
@@ -801,7 +845,7 @@ fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> St
     let meaning = format!(
         "`look.contrast` {stated} in a `{VERSION_KEY}` {V2_RECIPE_VERSION} recipe is the \
          slope itself; since version {RECIPE_VERSION} it is a multiplier on the base slope \
-         (1 keeps it)"
+         (1 keeps it), on luminance only: colour follows `look.saturation`"
     );
     let version = format!("`\"{VERSION_KEY}\": {RECIPE_VERSION}`");
     let b = body_base(body);
@@ -811,7 +855,7 @@ fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> St
              `--params` files, over the base they compose to, the report's \
              `chain.look.base_slope`) and {version}",
             if exact {
-                "To render as before"
+                "To keep the tone scale"
             } else {
                 "To keep that slope (to within one f32 step: no multiplier hits it exactly)"
             },
@@ -819,7 +863,7 @@ fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> St
             b.named
         ),
         Some(_) => format!(
-            "To render as before, state {stated} over the frame's base slope (its report's \
+            "To keep the tone scale, state {stated} over the frame's base slope (its report's \
              `chain.look.base_slope`) and {version}"
         ),
         None => format!("State a positive multiplier and {version}"),
@@ -1153,6 +1197,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(v) = args.look.contrast {
         r.look.contrast = v;
     }
+    if let Some(v) = args.look.saturation {
+        r.look.saturation = v;
+    }
     if let Some(v) = args.look.channel_grade {
         r.look.channel_grade = v;
     }
@@ -1224,7 +1271,12 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             // The roll's own values first: each is also a factor in what the stages
             // below receive, so a bad one must be named as itself.
             validate_roll(&r.roll, names)?;
-            validate_roll_frames(&r.roll, d.linearization, r.look.contrast, names)?;
+            validate_roll_frames(
+                &r.roll,
+                d.linearization,
+                [r.look.contrast, r.base().saturation, r.look.saturation],
+                names,
+            )?;
             validate_scene_correction(r, names)?;
             validate_look(r, names)?;
             validate_fit_range(&r.fit_range, names)?;
@@ -1273,19 +1325,15 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
 
 /// The look's value rules, rendered as a usage error naming the knob the way `names`
 /// says the command spells it: the `contrast` multiplier, then the slope it makes with
-/// its base ([`validate_whole_slope`]), then the grade and highlight desaturation
+/// its base ([`validate_whole_slope`]), the same for `saturation`, then the grade and
+/// highlight desaturation
 /// ([`LookSection::check_channel_grade`], [`HighlightDesaturation::check`]).
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
 fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
+    validate_look_multipliers([r.look.contrast, r.look.saturation], names)?;
     let contrast_name = knob_name(names, "look", "--contrast", "contrast");
     let k = r.look.contrast;
-    if !(k.is_finite() && k > 0.0) {
-        return Err(NcError::Usage(format!(
-            "{contrast_name} must be finite and positive (a multiplier on the base slope; \
-             1 keeps it), got {k}"
-        )));
-    }
     let s = r.resolved_slope();
     let white_name = knob_name(names, "roll", "--roll-white", "white_stops");
     let slope_name = knob_name(names, "roll", "--roll-thin-slope", "thin_slope");
@@ -1306,9 +1354,34 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     };
     validate_whole_slope(
         r.reconstruction.linearization,
-        s.slope,
+        WholeSlope::Tone(s.slope),
         &format!("{base} times {contrast_name} {k}"),
         Some(&contrast_name),
+        knob,
+        names,
+    )?;
+    let saturation_name = knob_name(names, "look", "--saturation", "saturation");
+    let (origin, knob) = match s.saturation_base_from {
+        SlopeBase::Roll => (
+            format!("the roll's slope from {white_name}"),
+            Some(SlopeKnob::White(&white_name)),
+        ),
+        SlopeBase::Fallback => ("the fallback slope".to_string(), None),
+        SlopeBase::Direct => ("the `direct` rendering's slope".to_string(), None),
+        // A thin frame's slope never reaches colour (`Recipe::resolved_slope`).
+        SlopeBase::Thin => unreachable!("a thin slope is never the colour's base"),
+    };
+    validate_whole_slope(
+        r.reconstruction.linearization,
+        WholeSlope::Colour(s.saturation_slope),
+        &colour_parts(
+            s.saturation_base_slope,
+            &origin,
+            r.base().saturation,
+            &saturation_name,
+            r.look.saturation,
+        ),
+        Some(&saturation_name),
         knob,
         names,
     )?;
@@ -1348,6 +1421,51 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
     Err(NcError::Usage(message))
 }
 
+/// The saturation slope's factors, named: the colour's base slope `base`, from `origin`
+/// times the rendering's saturation (left out at 1, as under `direct`), and the
+/// multiplier.
+fn colour_parts(
+    base: f32,
+    origin: &str,
+    rendering: f32,
+    saturation_name: &str,
+    saturation: f32,
+) -> String {
+    let rendering = if rendering == 1.0 {
+        String::new()
+    } else {
+        format!(" times the rendering's saturation {rendering}")
+    };
+    format!(
+        "the colour's base slope {base} ({origin}{rendering}) times {saturation_name} \
+         {saturation}"
+    )
+}
+
+/// The look's multipliers, each finite and positive. Run before anything they are a
+/// factor in ([`validate_roll_frames`], the whole slopes), so a bad one is named as
+/// itself rather than as a slope no other remedy can fix.
+fn validate_look_multipliers([contrast, saturation]: [f32; 2], names: KnobNames) -> Result<()> {
+    for (value, flag, key, what) in [
+        (contrast, "--contrast", "contrast", "the base slope"),
+        (
+            saturation,
+            "--saturation",
+            "saturation",
+            "the base slope's colour",
+        ),
+    ] {
+        if !(value.is_finite() && value > 0.0) {
+            return Err(NcError::Usage(format!(
+                "{} must be finite and positive (a multiplier on {what}; 1 keeps it), got \
+                 {value}",
+                knob_name(names, "look", flag, key)
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The roll knob a slope comes from, named: a white (the slope falls as it rises) or a
 /// frame slope (the slope itself).
 #[derive(Clone, Copy)]
@@ -1356,21 +1474,38 @@ enum SlopeKnob<'a> {
     Slope(&'a str),
 }
 
-/// The whole slope, `linearization × slope` — the divisor highlight desaturation
-/// normalises its saturation measure by — must be a normal positive f32. Each factor
+/// A slope the look applies, named by what it shapes.
+#[derive(Clone, Copy)]
+enum WholeSlope {
+    /// [`LookSection::slope`].
+    Tone(f32),
+    /// [`LookSection::saturation_slope`], the divisor highlight desaturation normalises
+    /// its saturation measure by.
+    Colour(f32),
+}
+
+/// The whole slope, `linearization × slope`, must be a normal positive f32. Each factor
 /// can pass its own rule while the product overflows to infinity or underflows to zero
-/// or a subnormal, which the stage cannot use; a whole slope in range puts the slope in
-/// range too. Keyed on the product whether or not desaturation is on: it describes no
-/// usable picture either way. `slope_parts` names the slope's factors; the remedy names
-/// each knob that can move it — the multiplier and the roll's knob when they are factors.
+/// or a subnormal, which describes no usable picture; a whole slope in range puts the
+/// slope in range too. Keyed on the product whether or not desaturation is on.
+/// `slope_parts` names the slope's factors; the remedy names each knob that can move it
+/// — the multiplier and the roll's knob when they are factors.
 fn validate_whole_slope(
     linearization: f32,
-    slope: f32,
+    slope: WholeSlope,
     slope_parts: &str,
     contrast_name: Option<&str>,
     roll_knob: Option<SlopeKnob>,
     names: KnobNames,
 ) -> Result<()> {
+    let (slope, what_slope, why) = match slope {
+        WholeSlope::Tone(s) => (s, "the slope", ""),
+        WholeSlope::Colour(s) => (
+            s,
+            "the saturation slope",
+            " (highlight desaturation divides by it)",
+        ),
+    };
     let whole = linearization * slope;
     if whole.is_normal() {
         return Ok(());
@@ -1394,8 +1529,8 @@ fn validate_whole_slope(
         None => {}
     }
     Err(NcError::Usage(format!(
-        "the whole slope, {gamma} {linearization:e} times the slope {slope:e} \
-         ({slope_parts}), {what} f32 (highlight desaturation divides by it). {remedy}"
+        "the whole slope, {gamma} {linearization:e} times {what_slope} {slope:e} \
+         ({slope_parts}), {what} f32{why}. {remedy}"
     )))
 }
 
@@ -1492,17 +1627,19 @@ fn exposure_fault(ev: f32, name: &str) -> Result<()> {
 }
 
 /// `roll.frames`' rules, each entry named as itself: a file-name key, and a white
-/// finite and positive whose whole slope — at `linearization`, times the `contrast`
-/// multiplier the frame renders under — fits f32. Public so `convert` can judge the
-/// table as stated, before [`Recipe::for_frame`] moves its own entry into
-/// `roll.white_stops`.
+/// finite and positive whose whole slopes — at `linearization`, times the `contrast`,
+/// the rendering's saturation and the `saturation` multiplier the frame renders under —
+/// fit f32. Public so `convert` can judge the table as stated, before
+/// [`Recipe::for_frame`] moves its own entry into `roll.white_stops`.
 pub fn validate_roll_frames(
     p: &RollSection,
     linearization: f32,
-    contrast: f32,
+    [contrast, rendering_saturation, saturation]: [f32; 3],
     names: KnobNames,
 ) -> Result<()> {
+    validate_look_multipliers([contrast, saturation], names)?;
     let contrast_name = knob_name(names, "look", "--contrast", "contrast");
+    let saturation_name = knob_name(names, "look", "--saturation", "saturation");
     for (name, frame) in &p.frames {
         if name.is_empty() || Path::new(name).file_name() != Some(name.as_ref()) {
             return Err(NcError::Usage(format!(
@@ -1533,7 +1670,7 @@ pub fn validate_roll_frames(
             slope_fault(slope, &entry)?;
             validate_whole_slope(
                 linearization,
-                slope * contrast,
+                WholeSlope::Tone(slope * contrast),
                 &format!(
                     "the frame's thin slope {slope} from {entry} times {contrast_name} {contrast}"
                 ),
@@ -1555,9 +1692,23 @@ pub fn validate_roll_frames(
         let base = roll_white::slope_for(stops);
         validate_whole_slope(
             linearization,
-            base * contrast,
+            WholeSlope::Tone(base * contrast),
             &format!("the frame's slope {base} from {white} times {contrast_name} {contrast}"),
             Some(&contrast_name),
+            Some(SlopeKnob::White(&white)),
+            names,
+        )?;
+        validate_whole_slope(
+            linearization,
+            WholeSlope::Colour(base * rendering_saturation * saturation),
+            &colour_parts(
+                base * rendering_saturation,
+                &format!("the frame's slope {base} from {white}"),
+                rendering_saturation,
+                &saturation_name,
+                saturation,
+            ),
+            Some(&saturation_name),
             Some(SlopeKnob::White(&white)),
             names,
         )?;
@@ -1575,7 +1726,7 @@ pub fn validate_roll_frames(
 ///
 /// **A probe, not a bound per knob** — legal values can multiply to zero or overflow:
 /// the film base and the corners of the reachable scan range (each channel at the scan
-/// floor or 1) through the real stages, which are monotone per channel. A base read
+/// floor or 1) through the real stages, whose extremes sit at those corners. A base read
 /// from a region is taken at 1, where the densest sample decodes densest.
 pub fn validate_render(
     r: &Recipe,
@@ -2083,13 +2234,13 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
     if r.look.asks_for_a_look() {
         asked.push(pick(
             (
-                "the look (--contrast, --channel-grade, --highlight-desaturation*, \
-                 recipe `look`)",
-                "--contrast 1 --channel-grade 1,1 --highlight-desaturation 0",
+                "the look (--contrast, --saturation, --channel-grade, \
+                 --highlight-desaturation*, recipe `look`)",
+                "--contrast 1 --saturation 1 --channel-grade 1,1 --highlight-desaturation 0",
             ),
             (
                 "the look (`look`)",
-                "`look.contrast` 1, `look.channel_grade` [1, 1], \
+                "`look.contrast` 1, `look.saturation` 1, `look.channel_grade` [1, 1], \
                  `look.highlight_desaturation.strength` 0",
             ),
         ));
@@ -2396,30 +2547,41 @@ impl Recipe {
             .map(|(line, roll_gains)| MidtoneCorrection { line, roll_gains })
     }
 
-    /// The look's slope and its parts: the base — the applied roll's white, else the
-    /// rendering's [`Base::slope`] — times the `look.contrast` multiplier.
+    /// The look's slopes and their parts: the base — the applied roll's white, else the
+    /// rendering's [`Base::slope`] — times the `look.contrast` multiplier, and the same
+    /// base without a thin frame's slope, times the rendering's [`Base::saturation`] and
+    /// the `look.saturation` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
         let roll = self.applied_roll();
+        let white_slope = roll.white_stops.map(roll_white::slope_for);
         let (base_slope, base_from) = match (roll.slope(), self.rendering) {
             (Some(s), _) if roll.applied_thin_slope().is_some() => (s, SlopeBase::Thin),
             (Some(s), _) => (s, SlopeBase::Roll),
             (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
             (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
         };
+        let (colour_slope, saturation_base_from) = match (base_from, white_slope) {
+            (SlopeBase::Thin, Some(w)) => (w, SlopeBase::Roll),
+            (SlopeBase::Thin, None) => (self.base().slope, SlopeBase::Fallback),
+            (from, _) => (base_slope, from),
+        };
+        let saturation_base_slope = colour_slope * self.base().saturation;
         ResolvedSlope {
             contrast: self.look.contrast,
             base_slope,
             base_from,
+            saturation: self.look.saturation,
+            saturation_base_slope,
+            saturation_base_from,
             slope: base_slope * self.look.contrast,
+            saturation_slope: saturation_base_slope * self.look.saturation,
         }
     }
 
     /// The look as the stage receives it.
     pub fn resolved_look(&self) -> LookSection {
-        self.look.resolve(
-            self.resolved_slope().slope,
-            self.base().highlight_desaturation,
-        )
+        self.look
+            .resolve(self.resolved_slope(), self.base().highlight_desaturation)
     }
 
     /// Fit range's headroom and display black as the stage receives them: stated, else
@@ -2497,7 +2659,8 @@ impl Recipe {
 
     /// `default` without a roll measurement: what fell back. Each half is silenced as
     /// white balance's is: a typed flag, even the identity, is a choice, and so is a
-    /// recipe value off the identity — though both multiply the fallback.
+    /// recipe value off the identity — though both multiply the fallback. The slope's
+    /// half needs a choice for each slope that fell back: contrast and saturation.
     fn fallback_warning(&self, typed: TypedStyle) -> Option<String> {
         let mut fell_back = Vec::new();
         if !typed.white_balance
@@ -2506,12 +2669,21 @@ impl Recipe {
         {
             fell_back.push("neutral white balance (no `roll.white_balance`)".to_string());
         }
-        if !typed.contrast
-            && self.look.contrast == 1.0
-            && self.resolved_slope().base_from == SlopeBase::Fallback
-        {
+        let s = self.resolved_slope();
+        let tone_fell_back =
+            !typed.contrast && self.look.contrast == 1.0 && s.base_from == SlopeBase::Fallback;
+        let colour_fell_back = !typed.saturation
+            && self.look.saturation == 1.0
+            && s.saturation_base_from == SlopeBase::Fallback;
+        let which = match (tone_fell_back, colour_fell_back) {
+            (true, true) => Some(""),
+            (true, false) => Some(" for tone"),
+            (false, true) => Some(" for colour"),
+            (false, false) => None,
+        };
+        if let Some(which) = which {
             fell_back.push(format!(
-                "the fallback slope {} (no `roll.white_stops`)",
+                "the fallback slope {}{which} (no `roll.white_stops`)",
                 self.base().slope
             ));
         }
@@ -2520,9 +2692,9 @@ impl Recipe {
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
                  roll and use the recipe it writes (its `roll` section); or state the white \
                  balance you want (`scene_correction.white_balance`) and the roll's white \
-                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) \
-                 and exposure (`roll.exposure`); \
-                 or use the `direct` rendering (`rendering`: \"direct\"), \
+                 (`roll.white_stops`, which sets the base slope) and exposure \
+                 (`roll.exposure`), or choose your own slope (`look.contrast` and \
+                 `look.saturation` off 1); or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
                 fell_back.join(" and "),
@@ -2651,7 +2823,7 @@ impl Recipe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::look::DEFAULT_SLOPE;
+    use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE};
 
     fn parse(json: &str) -> std::result::Result<Recipe, serde_json::Error> {
         serde_json::from_str(json)
@@ -2727,12 +2899,12 @@ mod tests {
                 "{err}"
             );
             // The remedy works: the stated multiplier, in a version 3 recipe, renders the
-            // old slope — bit for bit when the message says "as before", else within one
-            // f32 step, which it says too.
+            // old slope — bit for bit when the message says "the tone scale", else within
+            // one f32 step, which it says too.
             let r = converted(json, &err, &[]);
             let got = r.resolved_slope();
             assert_eq!(got.base_slope, base, "{json}");
-            if err.contains("To render as before") {
+            if err.contains("To keep the tone scale") {
                 assert_eq!(got.slope, slope, "{json}: {err}");
             } else {
                 let step = f32::from_bits(slope.to_bits() + 1) - slope;
@@ -2748,7 +2920,10 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert!(err.contains("To render as before"), "{err}");
+        assert!(
+            err.contains("To keep the tone scale") && !err.contains("render as before"),
+            "{err}"
+        );
         // With `roll.frames` the old slope overrode every frame's white, so the exact
         // conversion drops the roll's whites: every frame, clamped or not, renders it.
         let frames = r#"{"recipe_version": 2,
@@ -2828,6 +3003,7 @@ mod tests {
         for spared in [
             "{}",
             r#"{"contrast": 1}"#,
+            r#"{"saturation": 1}"#,
             r#"{"channel_grade": [1, 1]}"#,
             r#"{"highlight_desaturation": {"strength": 0}}"#,
             r#"{"highlight_desaturation": {"strength": 0, "band": [0.02, 0.04]}}"#,
@@ -2839,6 +3015,7 @@ mod tests {
         for asked in [
             r#"{"contrast": 1.3}"#,
             r#"{"contrast": 0.9}"#,
+            r#"{"saturation": 1.3}"#,
             r#"{"channel_grade": [1.1, 0.9]}"#,
             r#"{"highlight_desaturation": {"strength": 0.5}}"#,
             r#"{"highlight_desaturation": {"band": [0.02, 0.04]}}"#,
@@ -2897,7 +3074,7 @@ mod tests {
         // knob whose base is the rendering's (`crate::rendering`) is written `null`,
         // unstated — highlight desaturation, fit range's headroom and display black — and
         // so is the roll section; the rest are written at their identity (scene
-        // correction, the look's contrast multiplier, the grade). Keys are written, never left out, so a
+        // correction, the look's contrast and saturation multipliers, the grade). Keys are written, never left out, so a
         // per-frame override merges. (Fit gamut's map runs at every setting; it simply
         // has nothing for a recipe to set.)
         assert_eq!(json["rendering"], "default");
@@ -2906,7 +3083,7 @@ mod tests {
         assert_eq!(json["output"], serde_json::json!({"display": {}}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"contrast":1.0,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":null,"start_stops":null,"band":null}}"#
+            r#"{"contrast":1.0,"saturation":1.0,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":null,"start_stops":null,"band":null}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -2944,8 +3121,8 @@ mod tests {
 
     #[test]
     fn the_look_is_handed_the_decodes_linearization() {
-        // Highlight desaturation's measure is normalised by the whole contrast that
-        // shaped its input — the decode's half of it the look section cannot state, so
+        // Highlight desaturation's measure is normalised by linearization × the
+        // saturation slope — the decode's factor the look section cannot state, so
         // `chain_params` must.
         let r = parse(
             r#"{"recipe_version": 3, "reconstruction": {"linearization": 3.1},
@@ -3078,6 +3255,123 @@ mod tests {
                 && msg.contains("overflows"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn the_saturation_slope_is_judged_whole_naming_each_factor() {
+        let err = |json: &str, extra: &[&str]| {
+            validate(&merged(json, extra), KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string()
+        };
+        let v3 = r#"{"recipe_version": 3}"#;
+        let white = roll_white::slope_for(2.0);
+        let sat = "--saturation (recipe `look.saturation`)";
+        let colour = white * DEFAULT_SATURATION;
+        // Under `default` the rendering's saturation is a factor, named with its value.
+        let msg = err(v3, &["--roll-white", "2", "--saturation", "1.5e38"]);
+        assert!(
+            msg.contains(&format!(
+                "(the colour's base slope {colour} (the roll's slope from --roll-white (recipe \
+                 `roll.white_stops`) times the rendering's saturation {DEFAULT_SATURATION}) \
+                 times {sat} 150000000000000000000000000000000000000)"
+            )) && msg.contains("highlight desaturation divides by it"),
+            "{msg}"
+        );
+        // `direct`'s rendering saturation is 1, and left out.
+        let msg = err(
+            v3,
+            &[
+                "--rendering",
+                "direct",
+                "--density-gamma",
+                "10",
+                "--saturation",
+                "1e38",
+            ],
+        );
+        assert!(
+            msg.contains(&format!(
+                "(the colour's base slope {} (the `direct` rendering's slope) times {sat}",
+                crate::rendering::DIRECT.slope
+            )) && !msg.contains("rendering's saturation"),
+            "{msg}"
+        );
+        // A thin slope never reaches colour: the colour's base is the white's slope, or the
+        // fallback's, never the thin one — and the report says which.
+        let thin_white = r#"{"recipe_version": 3, "roll": {"white_stops": 2, "thin_slope": 0.5},
+                "look": {"saturation": 1.5e38}}"#;
+        let s = merged(thin_white, &[]).resolved_slope();
+        assert_eq!(
+            (s.base_from, s.saturation_base_from),
+            (SlopeBase::Thin, SlopeBase::Roll)
+        );
+        let msg = err(thin_white, &[]);
+        assert!(
+            msg.contains(&format!(
+                "(the colour's base slope {colour} (the roll's slope from --roll-white (recipe \
+                 `roll.white_stops`) times the rendering's saturation"
+            )) && !msg.contains("thin"),
+            "{msg}"
+        );
+        let thin_alone =
+            r#"{"recipe_version": 3, "roll": {"thin_slope": 0.5}, "look": {"saturation": 1.5e38}}"#;
+        let s = merged(thin_alone, &[]).resolved_slope();
+        assert_eq!(
+            (s.base_from, s.saturation_base_from),
+            (SlopeBase::Thin, SlopeBase::Fallback)
+        );
+        let msg = err(thin_alone, &[]);
+        assert!(
+            msg.contains(&format!(
+                "(the colour's base slope {} (the fallback slope times the rendering's saturation",
+                DEFAULT_SLOPE * DEFAULT_SATURATION
+            )) && !msg.contains("thin"),
+            "{msg}"
+        );
+        // A `roll.frames` white is judged at the rendering's saturation too: this one fits
+        // without the 1.15 and overflows with it.
+        let frames = r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 2}}},
+                "look": {"saturation": 1.4e38}}"#;
+        assert!((1.8 * white * 1.4e38_f32).is_finite());
+        let msg = err(frames, &[]);
+        assert!(
+            msg.contains(&format!(
+                "(the colour's base slope {colour} (the frame's slope {white} from recipe \
+                 `roll.frames.\"a.tif\".white_stops` times the rendering's saturation \
+                 {DEFAULT_SATURATION}) times {sat}"
+            )),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_bad_look_multiplier_is_named_before_a_frame_white_it_multiplies() {
+        // A `roll.frames` white times a multiplier of 0 or NaN is no usable slope, but the
+        // fault is the multiplier: named as itself, never as a slope to move the white for.
+        let frames = r#"{"recipe_version": 3,
+            "roll": {"frames": {"other.tif": {"white_stops": 2}}}}"#;
+        for (flag, value) in [
+            ("--saturation", "0"),
+            ("--saturation", "NaN"),
+            ("--contrast", "0"),
+            ("--contrast", "NaN"),
+        ] {
+            let msg = validate(&merged(frames, &[flag, value]), KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string();
+            assert!(
+                msg.starts_with(&format!("{flag} (recipe `look."))
+                    && msg.contains("must be finite and positive"),
+                "{flag} {value}: {msg}"
+            );
+            assert!(
+                !msg.contains("whole slope") && !msg.contains("white_stops"),
+                "{flag} {value}: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -3641,6 +3935,10 @@ mod tests {
             frame(&["--contrast", "1.1"]).resolved_slope().slope,
             2.0 * 1.1
         );
+        // The thin slope never reaches colour: saturation keeps the white's base.
+        let s = frame(&["--saturation", "1.2"]).resolved_slope();
+        assert_eq!(s.saturation_base_slope, roll_slope.0 * DEFAULT_SATURATION);
+        assert_eq!(s.saturation_slope, roll_slope.0 * DEFAULT_SATURATION * 1.2);
         // Another frame keeps the roll's.
         let other = merged(roll, &[]).for_frame(Path::new("b.tif"));
         assert_eq!(other.resolved_slope().base_from, SlopeBase::Roll);
@@ -3748,7 +4046,9 @@ mod tests {
             let msg = loaded(body).unwrap_err();
             assert!(
                 msg.contains("is not a recipe key any more")
-                    && msg.contains("To render as before, rename")
+                    && msg.contains("To keep the tone scale, rename")
+                    && msg
+                        .contains("colour follows the roll's white (else the fallback slope) and")
                     && msg.contains("hanten measure-roll --out"),
                 "{msg}"
             );
@@ -3904,7 +4204,11 @@ mod tests {
                 contrast: 1.0,
                 base_slope: from_white,
                 base_from: SlopeBase::Roll,
+                saturation: 1.0,
+                saturation_base_slope: from_white * DEFAULT_SATURATION,
+                saturation_base_from: SlopeBase::Roll,
                 slope: from_white,
+                saturation_slope: from_white * DEFAULT_SATURATION,
             }
         );
         // Alone, the gains reach the stage exactly: the identity multiplies nothing in.
@@ -3921,7 +4225,11 @@ mod tests {
                 contrast: 1.2,
                 base_slope: from_white,
                 base_from: SlopeBase::Roll,
+                saturation: 1.0,
+                saturation_base_slope: from_white * DEFAULT_SATURATION,
+                saturation_base_from: SlopeBase::Roll,
                 slope: from_white * 1.2,
+                saturation_slope: from_white * DEFAULT_SATURATION,
             }
         );
         assert_eq!(stated.shared_params().look.section.slope, from_white * 1.2);
@@ -3972,8 +4280,8 @@ mod tests {
             q.look.section.highlight_desaturation,
             HighlightDesaturation::DEFAULT
         );
-        // A stated knob builds on either base: the white balance and the contrast
-        // multiply, every other knob replaces.
+        // A stated knob builds on either base: the white balance, the contrast and the
+        // saturation multiply, every other knob replaces.
         let adjusted = merged(
             &format!(r#"{{"recipe_version": 3, {roll}}}"#),
             &[
@@ -3983,6 +4291,8 @@ mod tests {
                 "1.1,1,1",
                 "--contrast",
                 "1.3",
+                "--saturation",
+                "1.2",
                 "--highlight-desaturation",
                 "0.5",
                 "--display-black",
@@ -3995,6 +4305,10 @@ mod tests {
             WhiteBalance::Explicit([1.1, 1.0, 1.0])
         );
         assert_eq!(adjusted.look.section.slope, DIRECT.slope * 1.3);
+        assert_eq!(
+            adjusted.look.section.saturation_slope,
+            DIRECT.slope * DIRECT.saturation * 1.2
+        );
         assert_eq!(adjusted.look.section.highlight_desaturation.strength, 0.5);
         assert_eq!(adjusted.display_black, DisplayBlack::Off);
         assert_eq!(adjusted.headroom_stops, DIRECT.headroom_stops);
@@ -4289,6 +4603,9 @@ mod tests {
                     "`scene_correction.white_balance`) and the roll's white (`roll.white_stops`"
                 )
                 && w[0].contains("and exposure (`roll.exposure`)")
+                && w[0].contains(
+                    "or choose your own slope (`look.contrast` and `look.saturation` off 1)"
+                )
                 && w[0].contains("`rendering`: \"direct\"")
                 && w[0].contains("HDR float TIFF")
                 && !w[0].contains("--"),
@@ -4306,16 +4623,49 @@ mod tests {
             "{w:?}"
         );
         // The slope's half is silenced the same way — typed, or a recipe value off the
-        // identity — though the contrast multiplies the fallback; and by a roll white.
-        let contrast_typed = TypedStyle {
+        // identity — though both multipliers multiply the fallback; it needs a choice for
+        // both slopes, since each fell back. And a roll white silences it.
+        let slopes_typed = TypedStyle {
             white_balance: true,
             contrast: true,
+            saturation: true,
             ..TypedStyle::default()
         };
-        assert!(Recipe::default().recipe_warnings(contrast_typed).is_empty());
+        assert!(Recipe::default().recipe_warnings(slopes_typed).is_empty());
         let mut r = Recipe::default();
         r.look.contrast = 1.3;
+        r.look.saturation = 1.2;
         assert!(r.recipe_warnings(typed).is_empty());
+        // Through the flags: `--contrast` alone leaves the colour on the fallback.
+        let flagged = |extra: &[&str]| {
+            let extra: Vec<&str> = ["--white-balance", "1,1,1"]
+                .iter()
+                .chain(extra)
+                .copied()
+                .collect();
+            merged(r#"{"recipe_version": 3}"#, &extra)
+                .recipe_warnings(TypedStyle::of(&cli_flags(&extra)))
+        };
+        let slope = |which: &str| {
+            format!("the fallback slope {DEFAULT_SLOPE}{which} (no `roll.white_stops`)")
+        };
+        let w = flagged(&["--contrast", "1.2"]);
+        assert!(
+            w.len() == 1 && w[0].contains(&slope(" for colour")),
+            "{w:?}"
+        );
+        assert!(
+            flagged(&["--contrast", "1.2", "--saturation", "1"]).is_empty(),
+            "a typed identity is a choice"
+        );
+        let w = flagged(&["--saturation", "1.3"]);
+        assert!(w.len() == 1 && w[0].contains(&slope(" for tone")), "{w:?}");
+        // Both fell back: no qualifier.
+        let w = flagged(&[]);
+        assert!(
+            w.len() == 1 && w[0].contains(&slope("")) && !w[0].contains(" for "),
+            "{w:?}"
+        );
         let mut r = Recipe::default();
         r.roll.white_stops = Some(1.7);
         r.roll.exposure = Some(0.0);
@@ -4872,6 +5222,9 @@ mod tests {
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3
+            }),
+            ("--saturation", &["--saturation", "1.15"], |r| {
+                r.look.saturation == 1.15
             }),
             ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
                 r.look.channel_grade == [1.1, 0.9]

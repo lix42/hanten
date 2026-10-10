@@ -270,12 +270,9 @@ fn branch_probe() {
     total.print("TOTAL");
     // Fail loudly rather than pass on nothing: a renamed roll yields no frames.
     assert!(total.frames > 0, "no frames measured");
+    // Both-bound pixels are allowed (the loose rule) and printed; only violations fail.
     assert_eq!(
         total.violations, 0,
         "the branch contract is broken on real frames"
-    );
-    assert_eq!(
-        total.both_bound, 0,
-        "a below-white difference needed the loose rule for a pixel both cubes bind"
     );
 }

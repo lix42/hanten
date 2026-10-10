@@ -2015,9 +2015,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   `look::DEFAULT_SLOPE`, or `direct`'s), default 1; absolute values are slopes in the
   report. `recipe_version` 3: a version 2 `look.contrast` number is refused with its
   conversion
-- [ ] [Contrast on luminance, saturation its own
-  setting](tasks/nf-look/contrast-on-luminance.md) — a steeper slope stops adding colour;
-  the default saturation is set by review on corrected colour
+- [x] [Contrast on luminance, saturation its own
+  setting](tasks/nf-look/contrast-on-luminance.md) — **done 2026-10-09:** contrast moves
+  luminance only; `look.saturation` multiplies the colour's base slope × 1.15 (`default`,
+  by review) or × 1 (`direct`); `pipeline_version` 10
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the

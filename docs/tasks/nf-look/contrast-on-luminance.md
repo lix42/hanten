@@ -18,11 +18,21 @@ Known (`docs/spike/poor-development.md`, 2026-10-04):
 - Hanten renders far less saturated than CCR (09-18 colour patches C\* 7.7 vs 26.3).
   Reviewers asked for a little more than the held level; the colour rounds used ×1.15.
 
-Open:
+Decided (user, 2026-10-09):
 
-- The default amount of saturation: a review on cast-corrected colour, since a residual
-  cast is chroma any saturation setting amplifies.
-- How the change is spelled for recipes that set `look.contrast` today.
+- **Saturation scales log channel ratios** (`(x_c / Y)^s`, luminance restored), not a
+  linear chroma scale about luminance. It never makes a channel negative, and highlight
+  desaturation's band keeps its meaning by dividing by the saturation slope.
+- **`look.saturation` is a multiplier, default 1, as `look.contrast` is.** The saturation
+  slope is the base slope (never a thin frame's) × the rendering's saturation × the
+  knob. The `default` rendering's is **1.15** (`look::DEFAULT_SATURATION`), from the
+  review below; `direct` pins 1.
+- **Recipes are not migrated**: a `pipeline_version` bump (10) and a drift row. A recipe
+  stating `look.contrast` now renders its colour at the default saturation.
+- **Review** (`../temp/saturation-review/`; held / ×1.15 / ×1.3 / CCR, 11 frames on 09-18,
+  09-20 and 09-29, today's per-roll placement, display black and highlight desaturation
+  off): ×1.15 chosen. Mean frame C\* 12.3 / 14.1 / 15.9, CCR 14.6. Marked whites'
+  leftover cast 7.7 / 8.8 / 10.0. At most 2.5 % of a frame outside sRGB.
 
 ## How to Verify
 

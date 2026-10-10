@@ -170,16 +170,19 @@ fn run(args: &[&str]) -> (i32, String, String) {
     spawn(args, &[])
 }
 
-/// Identity roll gains and exposure and a stated contrast, for a `--strict` test whose
-/// subject is not the roll: without them the `default` rendering warns that it fell back,
-/// or that the roll has no exposure, and `--strict` fails on that instead.
-const MEASURED: [&str; 6] = [
+/// Identity roll gains and exposure and a stated contrast and saturation, for a `--strict`
+/// test whose subject is not the roll: without them the `default` rendering warns that it
+/// fell back, or that the roll has no exposure, and `--strict` fails on that instead. Off
+/// the identity, so a `--dump-params` of the run replays quiet too.
+const MEASURED: [&str; 8] = [
     "--roll-white-balance",
     "1,1,1",
     "--roll-exposure",
     "0",
     "--contrast",
     "1.1111112",
+    "--saturation",
+    "1.05",
 ];
 
 /// Like [`run`], but with extra environment variables set for the child (used to
@@ -6891,6 +6894,35 @@ fn film_master_refuses_a_stated_headroom_and_accepts_the_reset() {
     );
 }
 
+#[test]
+fn film_master_refuses_a_stated_saturation_and_accepts_its_identity() {
+    // The film master runs no look, so `--saturation` off 1 is refused; 1 is the identity.
+    let tmp = TempDir::new("master-saturation");
+    let scan = fixture("hdr-48bit.tif");
+    let run_master = |saturation: &str| {
+        let out = tmp.path(&format!("master-{saturation}.tiff"));
+        run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "--film-base",
+            "1,1,1",
+            "--film-master",
+            "--saturation",
+            saturation,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+    };
+    let (code, _o, err) = run_master("1.2");
+    assert_eq!(code, 2, "expected a usage error, got:\n{err}");
+    assert!(
+        err.contains("cannot apply the look") && err.contains("--saturation 1"),
+        "{err}"
+    );
+    let (code, _o, err) = run_master("1");
+    assert_eq!(code, 0, "the identity must be accepted:\n{err}");
+}
+
 /// IR-assisted holder detection is decided by measuring the IR plane, not by a
 /// declared `--film-type` (`film-base/ir-usability-detection`). Chemistry is the
 /// wrong predictor: separability tracks the *frame's* accumulated density, so an
@@ -7818,7 +7850,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             applied,
             [
                 "identity",
-                "contrast+highlight-desaturation",
+                "contrast+saturation+highlight-desaturation",
                 "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
@@ -8285,12 +8317,12 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 
     // (5) A stage refuses a key it does not have.
     let (code, err) = run_with(
-        r#"{"recipe_version": 3, "look": {"saturation": 1.1},
+        r#"{"recipe_version": 3, "look": {"vibrance": 1.1},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "look.json",
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("saturation"), "{err}");
+    assert!(err.contains("vibrance"), "{err}");
 
     // (6) The decode's slope before the split is refused by name, with the split's
     // remedy — never read as the linearization it no longer is.
@@ -11115,8 +11147,10 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
             .as_f64()
             .unwrap()
     };
+    // About, not exactly: the solve reads the base's luma before the roll's gains
+    // (`roll_white::thin_lift`).
     assert!(
-        (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.02,
+        (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.05,
         "the base held: {} vs {}",
         base_stops(&steep_report),
         base_stops(&small_report)
@@ -12504,7 +12538,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     let (plain, report) = convert("plain.tiff", &[]);
     assert_eq!(
         look(&report)["applied"],
-        "contrast+highlight-desaturation",
+        "contrast+saturation+highlight-desaturation",
         "{report}"
     );
     assert_eq!(
@@ -12515,7 +12549,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     // default, and with the other two knobs inert — a moved band or start changes
     // nothing when off.
     let (off, report) = convert("off.tiff", &["--highlight-desaturation", "0"]);
-    assert_eq!(look(&report)["applied"], "contrast", "{report}");
+    assert_eq!(look(&report)["applied"], "contrast+saturation", "{report}");
     assert_ne!(plain, off, "the default must move the fixture's highlights");
     let (off_moved, _) = convert(
         "off-moved.tiff",
@@ -12591,9 +12625,16 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
 
 /// The roll white whose slope is exactly 1 (`log2(1/0.18)`, the binary's own value
 /// printed so it parses back to the same `f32`): the look's contrast is then the
-/// identity, for a test that wants the look to do nothing else.
+/// identity, and with [`scene_saturation`] its colour too.
 fn scene_contrast_white() -> String {
     (1.0f32 / 0.18).log2().to_string()
+}
+
+/// The `--saturation` that, beside [`scene_contrast_white`], makes the saturation slope
+/// exactly 1: the reciprocal of the `default` rendering's `look::DEFAULT_SATURATION`
+/// (1.15), which `1.15 × it` rounds back to 1 in `f32`.
+fn scene_saturation() -> String {
+    (1.0f32 / 1.15f32).to_string()
 }
 
 /// The look's contrast (`nf-look/contrast-definition`): a multiplier on the base slope,
@@ -12636,7 +12677,7 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     let fallback = (1.0_f64 / 0.18).log2() / 1.75;
 
     let (default, report) = convert("default.tiff", &[]);
-    assert_eq!(applied(&report), "contrast", "{report}");
+    assert_eq!(applied(&report), "contrast+saturation", "{report}");
     let (k, base, from, slope) = look(&report);
     assert!(
         k == 1.0 && (base - fallback).abs() < 1e-6 && from == "fallback",
@@ -12668,7 +12709,11 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     assert!((slope - base * 1.2).abs() < 1e-6, "{report}");
     // A slope of exactly 1 is the identity, reported as such.
     let white = scene_contrast_white();
-    let (unity, report) = convert("unity.tiff", &["--roll-white", &white]);
+    let saturation = scene_saturation();
+    let (unity, report) = convert(
+        "unity.tiff",
+        &["--roll-white", &white, "--saturation", &saturation],
+    );
     assert_eq!(applied(&report), "identity", "{report}");
     assert_ne!(unity, default);
 
@@ -12690,6 +12735,120 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
         reset, default,
         "the flag's 1 must win over the recipe's 1.5"
     );
+}
+
+/// Contrast on luminance, saturation its own knob (`nf-look/contrast-on-luminance`): with
+/// fit range and the gamut map's work out of the way, a pixel's colour ratios survive any
+/// contrast, `--saturation` stretches them, and the flag and the recipe key are one knob.
+#[test]
+fn contrast_leaves_colour_alone_and_saturation_reaches_the_pixels() {
+    let tmp = TempDir::new("look-saturation");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--range",
+            "hdr",
+            "--transfer",
+            "linear",
+            "--gamut",
+            "bt2020",
+            "--display-tone-headroom",
+            "0",
+            "--display-black",
+            "off",
+            "--highlight-desaturation",
+            "0",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (read_f32_tiff(&out).0, json(&stdout))
+    };
+    // log2(r/g) per pixel, where every channel is positive.
+    let ratios = |v: &[f32]| -> Vec<f32> {
+        v.chunks(3)
+            .filter(|p| p.iter().all(|&c| c > 0.0))
+            .map(|p| (p[0] / p[1]).log2())
+            .collect()
+    };
+    let median_abs = |a: &[f32], b: &[f32]| {
+        let mut d: Vec<f32> = a.iter().zip(b).map(|(x, y)| (x - y).abs()).collect();
+        d.sort_by(f32::total_cmp);
+        d[d.len() / 2]
+    };
+
+    let (flat, report) = convert("flat.tiff", &[]);
+    let look = &report["chain"]["look"];
+    assert_eq!(look["saturation"], 1.0, "{report}");
+    // The default's colour is the base slope's times `look::DEFAULT_SATURATION`.
+    let ratio = look["saturation_slope"].as_f64().unwrap() / look["slope"].as_f64().unwrap();
+    assert!((ratio - 1.15).abs() < 1e-6, "{report}");
+    let (steep, report) = convert("steep.tiff", &["--contrast", "1.5"]);
+    assert_ne!(flat, steep, "not vacuous");
+    // The colour stays where saturation put it.
+    let look = &report["chain"]["look"];
+    assert_eq!(
+        look["saturation_slope"], look["saturation_base_slope"],
+        "{report}"
+    );
+    let (a, b) = (ratios(&flat), ratios(&steep));
+    assert_eq!(a.len(), b.len());
+    assert!(median_abs(&a, &b) < 1e-4, "{}", median_abs(&a, &b));
+
+    // Saturation stretches every ratio by its multiplier.
+    let (rich, report) = convert("rich.tiff", &["--saturation", "1.3"]);
+    assert_eq!(
+        report["chain"]["stages"][1]["applied"], "contrast+saturation",
+        "{report}"
+    );
+    let stretched: Vec<f32> = a.iter().map(|r| r * 1.3).collect();
+    let got = ratios(&rich);
+    assert!(
+        median_abs(&stretched, &got) < 1e-3,
+        "{}",
+        median_abs(&stretched, &got)
+    );
+
+    // The recipe key is the same knob, and a flag wins over it.
+    let recipe = write_file(
+        &tmp.path("look.json"),
+        r#"{ "recipe_version": 3, "look": { "saturation": 1.3 } }"#,
+    );
+    let params = recipe.to_str().unwrap();
+    let (from_recipe, _) = convert("recipe.tiff", &["--params", params]);
+    assert_eq!(
+        rich, from_recipe,
+        "the recipe key and the flag are one knob"
+    );
+    let (reset, _) = convert("reset.tiff", &["--params", params, "--saturation", "1"]);
+    assert_eq!(reset, flat, "the flag's 1 must win over the recipe's 1.3");
+
+    // A non-positive value is refused naming the flag and the key.
+    for value in ["0", "-1"] {
+        let out = tmp.path("x.tiff");
+        let (code, _, err) = run(&[
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--saturation",
+            value,
+        ]);
+        assert_eq!(code, 2, "{value}: {err}");
+        assert!(
+            err.contains("--saturation (recipe `look.saturation`)"),
+            "{err}"
+        );
+    }
 }
 
 #[test]
@@ -12735,6 +12894,7 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
     let tmp = TempDir::new("look-channel-grade");
     let input = fixture("hdr-48bit.tif").display().to_string();
     let white = scene_contrast_white();
+    let saturation = scene_saturation();
     let convert = |name: &str, extra: &[&str]| {
         let out = tmp.path(name);
         let mut argv = vec![
@@ -12744,9 +12904,11 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.55,0.42",
-            // Contrast and desaturation off, so `applied` reads the grade alone.
+            // Contrast, saturation and desaturation off, so `applied` reads the grade alone.
             "--roll-white",
             &white,
+            "--saturation",
+            &saturation,
             "--highlight-desaturation",
             "0",
         ];
@@ -15190,8 +15352,10 @@ fn a_channel_rendered_black_everywhere_warns() {
     assert_ne!(code, 0, "--strict must refuse: {err}");
 
     // One channel, through the white balance.
+    // Saturation held low: a red-less picture saturated further leaves Display P3, and the
+    // gamut map's pull toward neutral puts red back.
     let mut one = roll;
-    one.push("--white-balance=1e-30,1,1");
+    one.extend(["--white-balance=1e-30,1,1", "--saturation", "0.5"]);
     let (code, stdout, err) = convert("red", &one);
     assert_eq!(code, 0, "{err}");
     assert!(

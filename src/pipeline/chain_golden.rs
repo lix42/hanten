@@ -926,6 +926,7 @@ fn look_params() -> LookParams {
     LookParams {
         section: LookSection {
             slope: 1.0,
+            saturation_slope: 1.0,
             channel_grade: look::IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: HighlightDesaturation {
                 strength: 0.8,
@@ -1060,8 +1061,8 @@ const LOOK_BAND_RAMP: [u32; 3] = [0x3f9f996c, 0x3f9c0a9a, 0x3f971ca4];
 const LOOK_BRIGHTNESS_RAMP: [u32; 3] = [0x3f498013, 0x3f48597c, 0x3f474de1];
 
 /// Film RGB for the look's contrast: a near-neutral mid-grey, a deep shadow, a
-/// saturated midtone and a highlight above diffuse white. Each channel makes one libm
-/// call (`powf`), the final one before a multiply by [`look::MID_GREY`].
+/// saturated midtone and a highlight above diffuse white. Each pixel makes one libm
+/// call (`powf` on its luminance), and every channel is scaled by it.
 const LOOK_CONTRAST_FILM: [f32; 12] = [
     0.18, 0.18, 0.18, 0.01, 0.012, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2,
 ];
@@ -1074,11 +1075,24 @@ fn look_contrast_params() -> LookParams {
     params
 }
 
-/// Captured 2026-09-24 when the contrast landed (`nf-reconstruction/gamma-split`).
+/// Recaptured 2026-10-09 when contrast moved onto luminance
+/// (`nf-look/contrast-on-luminance`); first captured 2026-09-24 as a per-channel power.
 const LOOK_CONTRAST: [u32; 12] = [
-    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3c02fd3c, 0x3c102c62, 0x3c34833c, 0x3ee7fc97, 0x3ea96adc,
-    0x3e009182, 0x401733ea, 0x4004981f, 0x3fc84399,
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3c0418c9, 0x3c10013a, 0x3c304b3e, 0x3ee23728, 0x3eaa7a50,
+    0x3e0e899e, 0x40159811, 0x4004eae8, 0x3fce7837,
 ];
+
+/// ACEScg luminance, in the stage's order of operations (`colorimetry::dot`).
+fn look_luminance(q: [f32; 3]) -> f32 {
+    q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2]
+}
+
+/// The contrast for one pixel, written out independently of the stage, with its libm
+/// result supplied: `(Y / MID_GREY)^slope`.
+fn look_contrast_pixel(px: [f32; 3], powered: f32) -> [f32; 3] {
+    let scale = look::MID_GREY * powered / look_luminance(px);
+    px.map(|c| c * scale)
+}
 
 #[test]
 fn golden_look_contrast_is_correct_within_its_libm_window() {
@@ -1097,27 +1111,120 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
         .rgb;
     let k = params.section.slope;
     let mut widest = 0;
-    for (i, (&x, &want)) in before.iter().zip(&LOOK_CONTRAST).enumerate() {
-        let base = x / look::MID_GREY;
+    for p in 0..4 {
+        let px = [before[p * 3], before[p * 3 + 1], before[p * 3 + 2]];
+        let base = look_luminance(px) / look::MID_GREY;
         let rounded = f64::from(base).powf(f64::from(k)) as f32;
         assert!(
             ulps_between(base.powf(k), rounded) <= LIBM_MAX_ERROR_ULPS,
-            "this host's `powf` is not conforming on sample {i}"
+            "this host's `powf` is not conforming on pixel {p}"
         );
-        let render = |p: f32| look::MID_GREY * p;
-        assert_eq!(
-            render(rounded).to_bits(),
-            want,
-            "sample {i}: capture integrity"
-        );
-        let window = reachable_window(render, rounded, 0);
-        widest = widest.max(window);
-        let drift = ulps_between(out[i], f32::from_bits(want));
+        let centre = look_contrast_pixel(px, rounded);
+        for c in 0..3 {
+            let window = reachable_window(|v| look_contrast_pixel(px, v)[c], rounded, 0);
+            widest = widest.max(window);
+            let want = LOOK_CONTRAST[p * 3 + c];
+            assert_eq!(
+                centre[c].to_bits(),
+                want,
+                "pixel {p} sample {c}: capture integrity"
+            );
+            let drift = ulps_between(out[p * 3 + c], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `look` (contrast) pixel {p} sample {c}: {drift} ULP from the \
+                 capture, outside the {window} ULP a conforming libm can reach"
+            );
+        }
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+}
+
+/// Film RGB for the saturation: a shadow, a saturated midtone and a highlight above
+/// diffuse white. Each pixel makes three libm calls (`powf` on each channel over the
+/// largest), and all three enter the luminance restore.
+const LOOK_SATURATION_FILM: [f32; 9] = [0.02, 0.018, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2];
+
+/// The saturation alone: contrast 1, desaturation off.
+const LOOK_SATURATION_SLOPE: f32 = 1.4;
+
+/// Captured 2026-10-09 when saturation landed (`nf-look/contrast-on-luminance`);
+/// recaptured the same day when the stretch was normalised by the largest channel, so
+/// no slope overflows it.
+const LOOK_SATURATION: [u32; 9] = [
+    0x3c9f289a, 0x3c93c9fe, 0x3c6c6e41, 0x3ee4ef7c, 0x3e9a11cf, 0x3db5c2db, 0x3ff283a0, 0x3fcd8760,
+    0x3f904854,
+];
+
+/// The saturation for one pixel, written out independently of the stage, with its
+/// three libm results supplied: `(x_c / max)^s`.
+fn look_saturation_pixel(px: [f32; 3], stretched: [f32; 3]) -> [f32; 3] {
+    let restore = look_luminance(px) / look_luminance(stretched);
+    stretched.map(|c| c * restore)
+}
+
+#[test]
+fn golden_look_saturation_is_correct_within_its_libm_window() {
+    let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
+        LinearImage::new(3, 1, LOOK_SATURATION_FILM.to_vec(), None).unwrap(),
+    ));
+    let before = input.rgb().to_vec();
+    let (corrected, _) =
+        scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
+    let mut params = LookParams::off();
+    params.section.saturation_slope = LOOK_SATURATION_SLOPE;
+    assert_eq!(params.applied(), "saturation");
+    let out = look::apply(corrected, &params)
+        .unwrap()
+        .into_buffer()
+        .into_linear()
+        .rgb;
+    let s = LOOK_SATURATION_SLOPE;
+    let mut widest = 0;
+    for p in 0..3 {
+        let px = [before[p * 3], before[p * 3 + 1], before[p * 3 + 2]];
         assert!(
-            drift <= window,
-            "stage `look` (contrast) sample {i}: {drift} ULP from the capture, outside \
-             the {window} ULP a conforming libm can reach"
+            px.iter().all(|&c| c > 0.0),
+            "pixel {p} must reach every power"
         );
+        let max = px[0].max(px[1]).max(px[2]);
+        let stretched = px.map(|x| {
+            let base = x / max;
+            let rounded = f64::from(base).powf(f64::from(s)) as f32;
+            assert!(
+                ulps_between(base.powf(s), rounded) <= LIBM_MAX_ERROR_ULPS,
+                "this host's `powf` is not conforming on pixel {p}"
+            );
+            rounded
+        });
+        let centre = look_saturation_pixel(px, stretched);
+        let near = |v: f32| [v.next_down(), v, v.next_up()];
+        for c in 0..3 {
+            // The three libm results move independently: enumerate each at its correctly
+            // rounded value and one ULP either side.
+            let mut window = 0;
+            for r in near(stretched[0]) {
+                for g in near(stretched[1]) {
+                    for b in near(stretched[2]) {
+                        let moved = look_saturation_pixel(px, [r, g, b])[c];
+                        window = window.max(ulps_between(moved, centre[c]));
+                    }
+                }
+            }
+            widest = widest.max(window);
+            let want = LOOK_SATURATION[p * 3 + c];
+            assert_eq!(
+                centre[c].to_bits(),
+                want,
+                "pixel {p} sample {c}: capture integrity"
+            );
+            let drift = ulps_between(out[p * 3 + c], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `look` (saturation) pixel {p} sample {c}: {drift} ULP from the \
+                 capture, outside the {window} ULP a conforming libm can reach"
+            );
+        }
     }
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }

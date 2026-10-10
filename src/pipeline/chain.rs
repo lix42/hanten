@@ -3,7 +3,7 @@
 //! The chain every conversion runs (design-spec §6), fed by the fixed decode
 //! (`algo::fixed`) and rendering into the destination `crate::destination` resolves (`cli::convert_frame`). Scene
 //! correction applies the roll's midtone neutral, white balance and exposure; the look
-//! applies print contrast and the per-channel grade and desaturates near-neutral
+//! applies print contrast, saturation and the per-channel grade and desaturates near-neutral
 //! highlights (the rest of its epic fills it); fit range compresses the scene's range against the destination's peak
 //! and places black where the film base renders, and fit gamut maps into the
 //! destination's gamut, keeping hue.
@@ -138,7 +138,7 @@ pub struct RenderedPair {
 
 /// Render an [`AcesCgImage`] through the chain, for one destination.
 ///
-/// **Today this is scene correction's per-channel gains, the look's print contrast,
+/// **Today this is scene correction's per-channel gains, the look's print contrast, saturation,
 /// per-channel grade and highlight desaturation, fit range's luminance operator and
 /// display black, and
 /// the destination's 3×3 with the radial gamut map.** Nothing is clamped: content fit
@@ -1028,6 +1028,7 @@ mod tests {
                 // tests' grid onto the HDR cube's faces.
                 section: LookSection {
                     slope: 2.0 / 1.8,
+                    saturation_slope: 2.0 / 1.8,
                     ..LookSection::default()
                 },
                 linearization: crate::algo::fixed::LINEARIZATION,
@@ -1104,11 +1105,11 @@ mod tests {
             "{agreement:?}"
         );
         // Most differences are re-derived exactly from the HDR pixel. The rest are the
-        // grid's most saturated blues, which the look's print contrast pushes onto a face
-        // of the HDR cube too (the black face, or the peak at ACEScg blue ≈ 6.7 with a
-        // luminance under white), so only the loose rule applies. Real frames have none
-        // (`pipeline::branch_probe` asserts it); a bound, not a count, because `powf`
-        // differs by target.
+        // grid's most saturated blues, which the look's saturation pushes onto a face of
+        // the HDR cube too (the black face, or the peak at ACEScg blue ≈ 6.7 with a
+        // luminance under white), so only the loose rule applies. Real frames have a few
+        // at the default saturation (`pipeline::branch_probe` counts them); a bound, not a
+        // count, because `powf` differs by target.
         assert!(agreement.both_bound < agreement.sdr_bound, "{agreement:?}");
         let differing_samples = sdr
             .rgb

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::destination::{Container, Defaults, Gamut, Range, Transfer};
 use crate::pipeline::fit_range::{DEFAULT_DISPLAY_BLACK_STOPS, DisplayBlack};
-use crate::pipeline::look::{DEFAULT_SLOPE, HighlightDesaturation};
+use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE, HighlightDesaturation};
 use crate::types::DEFAULT_HEADROOM_STOPS;
 
 /// The rendering a run starts from.
@@ -40,8 +40,12 @@ impl Rendering {
 pub struct Base {
     /// Whether the recipe's `roll` section is applied.
     pub applies_roll: bool,
-    /// The slope `look.contrast` multiplies when no applied roll white gives one.
+    /// The slope `look.contrast` and `look.saturation` multiply when no applied roll white
+    /// gives one.
     pub slope: f32,
+    /// The colour over the base slope's that `look.saturation` multiplies: the
+    /// saturation slope is the base slope (never a thin frame's) times this times the knob.
+    pub saturation: f32,
     pub highlight_desaturation: HighlightDesaturation,
     pub headroom_stops: f32,
     pub display_black: DisplayBlack,
@@ -53,6 +57,7 @@ pub struct Base {
 const DEFAULT: Base = Base {
     applies_roll: true,
     slope: DEFAULT_SLOPE,
+    saturation: DEFAULT_SATURATION,
     highlight_desaturation: HighlightDesaturation::DEFAULT,
     headroom_stops: DEFAULT_HEADROOM_STOPS,
     display_black: DisplayBlack::StopsBelowMid(DEFAULT_DISPLAY_BLACK_STOPS),
@@ -65,6 +70,8 @@ pub const DIRECT: Base = Base {
     // The slope, not the whole slope, so a moved linearization still shows. The
     // fallback's value (a white +1.75 stops up) as of `nf-calibration/no-roll-defaults`.
     slope: 1.413_675,
+    // Held: the colour the slope gave as a per-channel power, with no taste added.
+    saturation: 1.0,
     // Off: it hides the residual cast an editor or the loop must see.
     highlight_desaturation: HighlightDesaturation {
         strength: 0.0,
@@ -95,6 +102,7 @@ mod tests {
         let Base {
             applies_roll,
             slope,
+            saturation,
             highlight_desaturation,
             headroom_stops,
             display_black,
@@ -102,6 +110,7 @@ mod tests {
         } = DIRECT;
         assert!(!applies_roll);
         assert_eq!(slope, 1.413_675);
+        assert_eq!(saturation, 1.0);
         assert_eq!(
             highlight_desaturation,
             HighlightDesaturation {
@@ -133,6 +142,7 @@ mod tests {
         let base = Rendering::Default.base();
         assert!(base.applies_roll);
         assert_eq!(base.slope, DEFAULT_SLOPE);
+        assert_eq!(base.saturation, DEFAULT_SATURATION);
         assert_eq!(
             base.highlight_desaturation,
             HighlightDesaturation::default()

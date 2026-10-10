@@ -22,14 +22,19 @@ Known (`docs/spike/poor-development.md`, 2026-10-04/05):
   per-frame midtone-pinned are good alternatives to offer.
 - **It generalises the small and thin lifts**: at α 0.6 night and thin frames render near
   today's thin lift.
-- **It needs contrast on luminance**: it was approved with saturation held; with today's
-  per-channel contrast its steeper frames would also gain saturation, which lost review.
+- **It needs contrast on luminance**, now built (`nf-look/contrast-on-luminance`). Colour
+  follows the base slope × `look::DEFAULT_SATURATION` (1.15), and a thin frame's slope
+  never reaches it. A per-frame slope stays out of colour only if it arrives the way
+  `roll.thin_slope` does. A per-frame `white_stops` sets the colour's base too.
 
 Open:
 
 - How the placement choice and R and α reach the recipe and `measure-roll`; their classes
   (correction / guard / preference).
 - What becomes of the small and thin lifts and their switches.
+- `roll_white::thin_lift` reads the base's luminance before the roll gains, so a thin
+  frame's base drifts slightly (a test allows 0.05 stops); with the slope on luminance an
+  exact solve is possible (`docs/progress/nf-look.md`, `contrast-on-luminance`).
 - Display black's role once contrast is set this way, and the shadow toe steep slopes need
   (1719 loses shadow detail).
 
