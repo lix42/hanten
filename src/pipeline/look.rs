@@ -176,7 +176,7 @@ pub struct LookSection {
     /// `1` is the identity, bit-exact.
     pub slope: f32,
     /// **The saturation slope**: how far the look stretches colour ratios, where 1 keeps
-    /// the decoded scene's. The base the slope multiplies (never a thin frame's) times the
+    /// the decoded scene's. The base the slope multiplies (never a frame's own) times the
     /// `look.saturation` knob (`recipe::Recipe::resolved_slope`), so saturation 1 renders
     /// a pixel's chroma exactly as a per-channel power at the base slope did.
     ///

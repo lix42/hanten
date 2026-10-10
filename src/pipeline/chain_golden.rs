@@ -22,7 +22,7 @@
 //! (`exp2`), fit range one (`log2`) for an HDR peak above diffuse white and, with
 //! display black on, five per frame (the target's `exp2`, exact at a whole-stop
 //! setting, three `log2` and the whole shift's `exp2`) and two per pixel below mid-grey
-//! (`log2`, `exp2`); its golden runs the default whole-stop setting — so its reinhard vectors run with display black off — the look's contrast one `powf` per positive channel, its per-channel
+//! (`log2`, `exp2`); its golden runs a whole-stop setting (6) — so its reinhard vectors run with display black off — the look's contrast one `powf` per positive channel, its per-channel
 //! grade one on red and one on blue (both entering its luminance restore), and highlight
 //! desaturation one per pixel at most: `log10` inside
 //! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
@@ -794,7 +794,7 @@ fn perturbed(host: f64, k: i32) -> f64 {
     v
 }
 
-/// Fit range at the default SDR headroom with display black at its default, one pixel
+/// Fit range at the default SDR headroom with display black at 6 stops, one pixel
 /// written out independently of the stage. Each libm result is supplied through
 /// `libm(call_index, host_value)`, so the window can move each of them: the frame's
 /// `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), then the pixel's `log2(y)` (3) and
@@ -809,7 +809,7 @@ fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
         (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32
     };
     let b = f64::from(reinhard(BLACK_FILM_BASE));
-    let target = 0.18 * 2f64.powi(-(fit_range::DEFAULT_DISPLAY_BLACK_STOPS as i32));
+    let target = 0.18 * 2f64.powi(-(fit_range::REVIEWED_DISPLAY_BLACK_STOPS as i32));
     let stops = libm(0, (target / b).log2());
     let base = libm(1, b.log2());
     let knee = libm(2, 0.18f64.log2());
@@ -831,7 +831,7 @@ fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
 }
 
 /// [`finite_aces`] through fit range at the default SDR headroom with display black at
-/// its default and [`BLACK_FILM_BASE`], as this host rounds it. Pixel 0 sits at
+/// 6 stops and [`BLACK_FILM_BASE`], as this host rounds it. Pixel 0 sits at
 /// mid-grey and 2–4 above it (untouched), 1 in the shift's band, 6 below the base (the
 /// whole shift), 5 at luminance 0. Captured 2026-09-26 when display black
 /// landed (`nf-display-stages/parametric-operator`).
@@ -844,7 +844,7 @@ const FIT_RANGE_BLACK: [u32; 21] = [
 #[test]
 fn golden_display_black_is_correct_within_its_libm_window() {
     let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
-    params.display_black = DisplayBlack::default();
+    params.display_black = DisplayBlack::StopsBelowMid(fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
     params.film_base = BLACK_FILM_BASE;
     let out = through_fit_range(&params).into_buffer().into_linear().rgb;
     let input = finite_aces().rgb().to_vec();

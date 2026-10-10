@@ -6882,7 +6882,7 @@ fn the_coded_hdr_report_block_names_the_fit_range_operator() {
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(
         report["hdr_coded_tiff"]["tone_curve"],
-        "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1"
+        "reinhard-peak-lifted-v1"
     );
 }
 
@@ -7750,6 +7750,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     let (default, report) = convert("default.tiff", &[]);
     assert_eq!(report["chain"]["fit_range"]["headroom_stops"], 6.0);
     let default_clipped = clipped(&report);
+    let report_default_black = report["chain"]["fit_range"]["display_black"].clone();
 
     let (four, report) = convert("four.tiff", &["--display-tone-headroom", "4"]);
     let fr = &report["chain"]["fit_range"];
@@ -7758,8 +7759,11 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     assert_eq!(fr["white_point"], 16.0);
     assert_ne!(read_u16_tiff(&four), read_u16_tiff(&default));
 
-    // Zero headroom leaves reinhard out; display black still runs unless it is off.
-    let (_, report) = convert("zero-black.tiff", &["--display-tone-headroom", "0"]);
+    // Zero headroom leaves reinhard out; display black still runs when it is on.
+    let (_, report) = convert(
+        "zero-black.tiff",
+        &["--display-tone-headroom", "0", "--display-black", "6"],
+    );
     assert_eq!(report["chain"]["fit_range"]["operator"], "identity");
     assert_eq!(
         report["chain"]["stages"][2]["applied"],
@@ -7777,19 +7781,23 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         clipped(&report)
     );
 
-    // Display black: a deeper setting, and off, each render differently.
+    // Display black: off by default; on, and deeper, each render differently.
+    let black = &report_default_black;
+    assert_eq!(black["setting"], "off", "{black}");
+    assert_eq!(black["curve"], "identity");
+    assert_eq!(black["shift_stops"], 0.0);
+    let (on, report) = convert("on.tiff", &["--display-black", "6"]);
+    assert_eq!(
+        report["chain"]["fit_range"]["display_black"]["curve"],
+        "log-shift-to-mid-grey-v1"
+    );
+    assert_ne!(read_u16_tiff(&on), read_u16_tiff(&default));
     let (deeper, report) = convert("deeper.tiff", &["--display-black", "7"]);
     assert_eq!(
         report["chain"]["fit_range"]["display_black"]["setting"],
         7.0
     );
-    assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&default));
-    let (off, report) = convert("off.tiff", &["--display-black", "off"]);
-    let black = &report["chain"]["fit_range"]["display_black"];
-    assert_eq!(black["setting"], "off", "{black}");
-    assert_eq!(black["curve"], "identity");
-    assert_eq!(black["shift_stops"], 0.0);
-    assert_ne!(read_u16_tiff(&off), read_u16_tiff(&default));
+    assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&on));
 
     // A bad headroom is refused by its recipe key as well as its flag.
     let (code, _out, err) = run(&[
@@ -7875,7 +7883,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             [
                 "identity",
                 "contrast+saturation+highlight-desaturation",
-                "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1",
+                "reinhard-peak-lifted-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
             "the report states what each stage did, identities included"
@@ -7885,15 +7893,14 @@ fn the_default_destination_renders_a_display_p3_tiff() {
         assert_eq!(fr["headroom_stops"], 6.0);
         assert_eq!(fr["white_point"], 64.0);
         assert_eq!(fr["display_peak"], 1.0);
-        // At the fallback slope (a white 1.75 stops up) the base renders ≈ 5.0 stops
-        // under mid-grey, so display black shifts it to the default 6.
+        // Display black is off by default: at the fallback slope (a white 1.75 stops
+        // up) the base stays where the grade puts it, ≈ 5.0 stops under mid-grey.
         let black = &fr["display_black"];
-        assert_eq!(black["setting"], 6.0, "{stdout}");
-        assert_eq!(black["curve"], "log-shift-to-mid-grey-v1");
+        assert_eq!(black["setting"], "off", "{stdout}");
+        assert_eq!(black["curve"], "identity");
         let base = black["film_base_stops"].as_f64().unwrap();
-        let shift = black["shift_stops"].as_f64().unwrap();
         assert!((base - 4.96).abs() < 0.05, "{black}");
-        assert!((base - shift - 6.0).abs() < 1e-3, "{black}");
+        assert_eq!(black["shift_stops"], 0.0, "{black}");
         // No section of the removed chain's report survives to claim an operation this
         // run did not perform.
         for absent in [
@@ -9290,7 +9297,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     );
 
     // The fixture is low-key, so the frame is lifted and takes its own flags: the roll's,
-    // plus its lift.
+    // plus its lift and its tones. Rendered at the roll's placement, where the lift applies.
     let lift = report["frames"][0]["lift_ev"].as_f64().unwrap();
     assert!(lift > 0.0, "{report}");
     let by_flag = tmp.path("flag.tiff");
@@ -9303,13 +9310,15 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(flag[2], "--roll-white", "{report}");
     assert_eq!(flag[4], "--roll-dark", "{report}");
     assert_eq!(flag[6], "--roll-exposure", "{report}");
-    assert_eq!(flag[8], "--roll-frame-exposure", "{report}");
+    assert_eq!(flag[8], "--roll-envelope", "{report}");
+    assert_eq!(flag[10], "--roll-frame-exposure", "{report}");
+    assert_eq!(flag[12], "--roll-frame-tones", "{report}");
     assert!(
         report["reuse"]["flag"]
             .as_str()
             .unwrap()
             .ends_with(&flag[..8].join(" ")),
-        "the roll's flag is the frame's without its lift: {report}"
+        "the roll's flag is the frame's without its envelope, lift and tones: {report}"
     );
     let (code, stdout, err) = run(&[
         &[
@@ -9317,6 +9326,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
             &frame,
             "--film-base",
             "0.9,0.55,0.42",
+            "--placement",
+            "roll",
             "-o",
             by_flag.to_str().unwrap(),
         ][..],
@@ -9423,6 +9434,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         &frame,
         "--params",
         recipe.to_str().unwrap(),
+        "--placement",
+        "roll",
         "-o",
         by_recipe.to_str().unwrap(),
     ]);
@@ -9431,6 +9444,41 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         std::fs::read(&by_flag).unwrap(),
         std::fs::read(&by_recipe).unwrap(),
         "the reported flag and the written recipe are one knob"
+    );
+    // And at the default placement, the hybrid the report states.
+    let (by_flag, by_recipe) = (tmp.path("flag-hybrid.tiff"), tmp.path("recipe-hybrid.tiff"));
+    let (code, stdout, err) = run(&[
+        &[
+            "convert",
+            &frame,
+            "--film-base",
+            "0.9,0.55,0.42",
+            "-o",
+            by_flag.to_str().unwrap(),
+        ][..],
+        &flag,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let converted = json(&stdout);
+    let hybrid = &report["frames"][0]["hybrid"];
+    assert_eq!(converted["chain"]["roll"]["hybrid"], *hybrid, "{converted}");
+    assert_eq!(converted["chain"]["look"]["base_from"], "hybrid");
+    assert_eq!(converted["chain"]["look"]["base_slope"], hybrid["slope"]);
+    assert_eq!(converted["chain"]["roll"]["frame_exposure_applied"], false);
+    let (code, _, err) = run(&[
+        "convert",
+        &frame,
+        "--params",
+        recipe.to_str().unwrap(),
+        "-o",
+        by_recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&by_flag).unwrap(),
+        std::fs::read(&by_recipe).unwrap(),
+        "the hybrid renders alike from the flag and the recipe"
     );
 }
 
@@ -10420,7 +10468,7 @@ fn measure_roll_writes_a_midtone_line_on_a_long_roll_that_convert_applies() {
         (json(&stdout), std::fs::read(out).unwrap())
     };
     let (by_recipe, recipe_px) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
-    // A lifted frame takes its own flags, the roll's plus its lift.
+    // A measured frame takes its own flags, the roll's plus its tones (and any lift).
     let own = report["frames"][0]["flag"].as_str().unwrap_or(flag);
     assert!(own.contains("--roll-midtone-line "), "{own}");
     let flag: Vec<&str> = own.split_whitespace().collect();
@@ -10956,18 +11004,16 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
 
     // The reuse forms: the roll's white by flag, and the whole measurement — the
     // clamped frame's own white (the cap) included — as the `--out` recipe, which
-    // `roll` renders with no manifest. Without lifts, so the table holds the clamp alone
-    // (`measure_roll_lifts_a_low_key_frame_…` covers them).
+    // `roll` renders with no manifest. Without lifts, so the table holds the clamp and
+    // the tones (`measure_roll_lifts_a_low_key_frame_…` covers lifts). Rendered at the
+    // roll's placement, where the clamp sets the slope.
     assert!(
-        report["reuse"]["flag"]
-            .as_str()
-            .unwrap()
-            .ends_with(&format!(
-                "--roll-white {} --roll-dark {} --roll-exposure {}",
-                white["stops"].as_f64().unwrap() as f32,
-                dark as f32,
-                report["exposure"]["ev"].as_f64().unwrap() as f32
-            )),
+        report["reuse"]["flag"].as_str().unwrap().contains(&format!(
+            "--roll-white {} --roll-dark {} --roll-exposure {}",
+            white["stops"].as_f64().unwrap() as f32,
+            dark as f32,
+            report["exposure"]["ev"].as_f64().unwrap() as f32
+        )),
         "{report}"
     );
     assert!(report["reuse"].get("frames").is_none(), "{report}");
@@ -10988,12 +11034,16 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(code, 0, "{err}");
     let written = written_recipe(&measured);
     assert_eq!(written["roll"]["white_stops"], white["stops"], "{written}");
+    let frames = &written["roll"]["frames"];
     assert_eq!(
-        written["roll"]["frames"],
-        serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"],
-            "exposure": null, "thin_slope": null, "thin_exposure": null}}),
-        "keyed by file name, the clamped frame only (no lifts): {written}"
+        frames["bright.tif"]["white_stops"], white["rule"]["cap_stops"],
+        "keyed by file name: {written}"
     );
+    assert!(frames["dim.tif"]["white_stops"].is_null(), "{written}");
+    for name in ["dim.tif", "bright.tif"] {
+        assert!(frames[name]["exposure"].is_null(), "no lifts: {written}");
+        assert!(frames[name]["tones"].is_object(), "{written}");
+    }
     // The input it was decoded under travels too: these scans state no transfer.
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
     let out = tmp.path("out");
@@ -11003,6 +11053,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         bright.to_str().unwrap(),
         "--params",
         measured.to_str().unwrap(),
+        "--placement",
+        "roll",
         "-o",
         out.to_str().unwrap(),
     ]);
@@ -11050,6 +11102,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         shared.to_str().unwrap(),
         "--frames",
         manifest.to_str().unwrap(),
+        "--placement",
+        "roll",
         "-o",
         by_manifest.to_str().unwrap(),
     ]);
@@ -11069,6 +11123,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         bright.to_str().unwrap(),
         "--params",
         measured.to_str().unwrap(),
+        "--placement",
+        "roll",
         "-o",
         single.to_str().unwrap(),
     ]);
@@ -11093,6 +11149,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         measured.to_str().unwrap(),
         "--frames",
         beats.to_str().unwrap(),
+        "--placement",
+        "roll",
         "-o",
         tmp.path("beats").to_str().unwrap(),
     ]);
@@ -11128,8 +11186,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
 
     // A roll whose every frame is above the cap lands on the cap: its frames are still
     // disclosed as clamped, but they render at the roll's own slope — the cap's span to
-    // this roll's dark end — so the table names no frame (without lifts: the roll's
-    // exposure binds at -2 EV, so this one frame would be lifted).
+    // this roll's dark end — so the frame's entry holds no white, its tones alone (without
+    // lifts: the roll's exposure binds at -2 EV, so this one frame would be lifted).
     let capped_recipe = tmp.path("capped.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
@@ -11161,11 +11219,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
     let written = written_recipe(&capped_recipe);
-    assert_eq!(
-        written["roll"]["frames"],
-        serde_json::json!({}),
-        "{written}"
-    );
+    let entry = &written["roll"]["frames"]["bright.tif"];
+    assert!(entry["white_stops"].is_null(), "{written}");
+    assert!(entry["tones"].is_object(), "{written}");
 }
 
 #[test]
@@ -11174,7 +11230,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     // and a bright one (~+2.9) on one roll. The lift follows where each white renders
     // after the roll's exposure: the night frame is held at the bound, the bright one is
     // not lifted, and the report names each. Off at measurement (`--no-small-lift`) and
-    // off at render (`--small-lift off`, `roll.small_lift`) render alike.
+    // off at render (`--small-lift off`, `roll.small_lift`) render alike. Rendered at the
+    // roll's placement: the default hybrid replaces the lifts.
     let tmp = TempDir::new("measure-roll-lift");
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
@@ -11239,7 +11296,7 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         report["frames"][0]["flag"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("--roll-frame-exposure {}", lift(0) as f32))
+            .contains(&format!("--roll-frame-exposure {} ", lift(0) as f32))
     );
 
     // `roll` reports each frame's lift as applied.
@@ -11251,6 +11308,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         &s(&bright),
         "--params",
         &s(&lifted),
+        "--placement",
+        "roll",
         "-o",
         &s(&out),
     ]);
@@ -11283,8 +11342,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         "still reported: {report_off}"
     );
     assert!(
-        written_off["roll"]["frames"].get("night.tif").is_none(),
-        "{written_off}"
+        written_off["roll"]["frames"]["night.tif"]["exposure"].is_null(),
+        "its tones alone: {written_off}"
     );
     let off_layer = write_file(
         &tmp.path("off.json"),
@@ -11295,6 +11354,8 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         let mut argv = vec![
             "convert",
             night.to_str().unwrap(),
+            "--placement",
+            "roll",
             "-o",
             output.to_str().unwrap(),
         ];
@@ -11459,6 +11520,12 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let (code, stdout, err) = run(&argv);
         assert_eq!(code, 0, "{err}");
+        // Every render here is at the roll's placement, where the lifts apply: the default
+        // hybrid replaces them.
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap();
+        doc["params"]["roll"]["placement"] = "roll".into();
+        std::fs::write(out, doc.to_string()).unwrap();
         (json(&stdout), written_recipe(out))
     };
     let frame = |report: &serde_json::Value, n: &str| {
@@ -11493,7 +11560,10 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         "a flat frame is not lifted"
     );
     let frames = &written["roll"]["frames"];
-    assert!(frames.get("flat.tif").is_none(), "{written}");
+    assert!(
+        frames["flat.tif"]["exposure"].is_null() && frames["flat.tif"]["thin_slope"].is_null(),
+        "its tones alone: {written}"
+    );
     assert!(frames["thin.tif"]["thin_slope"].is_null(), "{written}");
     let small_ev = frames["thin.tif"]["exposure"].clone();
     assert!(small_ev.as_f64().unwrap() > 0.0, "{written}");
@@ -11526,8 +11596,8 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         frame(&report_l, "thin")["flag"]
             .as_str()
             .unwrap()
-            .ends_with(&format!(
-                "--roll-thin-slope {} --roll-thin-exposure {}",
+            .contains(&format!(
+                "--roll-thin-slope {} --roll-thin-exposure {} ",
                 thin["slope"].as_f64().unwrap() as f32,
                 thin["exposure"].as_f64().unwrap() as f32
             )),
@@ -11614,8 +11684,9 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     assert_eq!(report_u["small_lift"]["written"], false, "{report_u}");
     assert_eq!(report_u["thin_lift"]["written"], false, "{report_u}");
     assert!(
-        written_u["roll"]["frames"].get("thin.tif").is_none(),
-        "{written_u}"
+        written_u["roll"]["frames"]["thin.tif"]["exposure"].is_null()
+            && written_u["roll"]["frames"]["thin.tif"]["thin_slope"].is_null(),
+        "its tones alone: {written_u}"
     );
     let (off, off_report) = convert(
         "off.tiff",
@@ -11746,7 +11817,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         .to_owned();
     assert!(flag.contains("--roll-frame-exposure"), "{flag}");
     let pasted = |name: &str, extra: &[&str]| {
-        let mut argv = vec!["--params", recipe.to_str().unwrap()];
+        let mut argv = vec!["--params", recipe.to_str().unwrap(), "--placement", "roll"];
         argv.extend(flag.split_whitespace());
         argv.extend(extra);
         convert(name, &argv).0
@@ -12386,6 +12457,7 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
                 "white_balance": by_hand["white_balance"]["gains"],
                 "white_stops": by_hand["white"]["stops"],
                 "dark_stops": by_hand["white"]["dark_stops"],
+                "envelope_stops": by_hand["placement"]["envelope_stops"],
                 "exposure": by_hand["exposure"]["ev"],
             },
         })
@@ -12397,8 +12469,14 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
         1,
         "not vacuous: one frame is clamped: {by_hand}"
     );
-    // Each frame's lift as its own `roll.frame_exposure`; both frames are lifted here.
+    // Each frame's lift as its own `roll.frame_exposure`; both frames are lifted here. Its
+    // tones too, which the hybrid places it from.
     let lift = |i: usize| by_hand["frames"][i]["lift_ev"].clone();
+    let tones = |i: usize| {
+        let f = &by_hand["frames"][i];
+        serde_json::json!({"white_stops": f["white_stops"], "level_stops": f["level_stops"],
+            "dark_stops": f["dark_stops"]})
+    };
     assert!(
         (0..2).all(|i| lift(i).as_f64().unwrap() > 0.0),
         "not vacuous: {by_hand}"
@@ -12406,10 +12484,11 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
     let manifest = write_file(
         &tmp.path("frames.json"),
         &serde_json::json!({"frames": [
-            {"input": dim, "params": {"roll": {"frame_exposure": lift(0)}}},
+            {"input": dim, "params": {"roll": {"frame_exposure": lift(0), "frame_tones": tones(0)}}},
             {"input": bright, "params": {"roll": {
                 "white_stops": by_hand["white"]["rule"]["cap_stops"],
                 "frame_exposure": lift(1),
+                "frame_tones": tones(1),
             }}},
         ]})
         .to_string(),
@@ -14212,7 +14291,6 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         &["--display-tone-headroom", "0"][..],
         &["--display-tone-headroom", "6"][..],
         &["--display-black", "off"][..],
-        &["--display-black", "6"][..],
     ]
     .into_iter()
     .enumerate()
@@ -16025,6 +16103,10 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.55,0.42",
+            // `direct`, whose pinned display black reads the film base the offset grades
+            // to nothing.
+            "--rendering",
+            "direct",
             value,
         ]);
         assert_eq!(code, 2, "{value}: {err}");
@@ -17137,4 +17219,174 @@ fn roll_measure_mode_strict_refuses_a_layer_from_another_pipeline_version() {
     let report = json(&stdout);
     assert_eq!(count(&report["measurement"]["warnings"]), 1, "{report}");
     assert!(roll.outputs(&strict).is_empty());
+}
+
+#[test]
+fn the_hybrid_refuses_a_lift_it_would_ignore_and_warns_on_an_unmeasured_frame() {
+    // `nf-calibration/envelope-hybrid-placement`: the default places a measured frame at
+    // its own slope and exposure in place of the lifts, so a lift typed or stated in a
+    // manifest's `params` would be ignored — refused, with remedies that render. A frame
+    // the measurement left out renders at the roll's placement, and says so.
+    let tmp = TempDir::new("hybrid-rules");
+    let base = [0.9f32, 0.55, 0.42];
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let (night, mid, other) = (
+        tmp.path("night.tif"),
+        tmp.path("mid.tif"),
+        tmp.path("other.tif"),
+    );
+    write_picture_density(&night, base, 0.45);
+    write_picture_density(&mid, base, 0.62);
+    write_picture_density(&other, base, 0.62);
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let measured = tmp.path("measured.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        &s(&recipe),
+        &s(&night),
+        &s(&mid),
+        "--out",
+        &s(&measured),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let convert = |input: &Path, extra: &[&str]| {
+        let out = tmp.path("out.tiff");
+        let mut argv = vec![
+            "convert".to_owned(),
+            s(input),
+            "--params".to_owned(),
+            s(&measured),
+            "-o".to_owned(),
+            s(&out),
+        ];
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run(&argv)
+    };
+
+    let (code, _, err) = convert(&night, &["--roll-frame-exposure", "0.2"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-exposure is a lift, which applies at the roll's placement")
+            && err.contains("use --placement roll;")
+            && err.contains("use --exposure"),
+        "{err}"
+    );
+    for remedy in [
+        &["--roll-frame-exposure", "0.2", "--placement", "roll"][..],
+        &["--exposure", "0.2"],
+    ] {
+        let (code, _, err) = convert(&night, remedy);
+        assert_eq!(code, 0, "{remedy:?}: {err}");
+    }
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &serde_json::json!({"frames": [
+            {"input": night, "params": {"roll": {"thin_slope": 2.0}}},
+        ]})
+        .to_string(),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        "--frames",
+        &s(&manifest),
+        "-o",
+        &s(&tmp.path("rolled")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("per-frame `params` override: `roll.thin_slope` is a lift")
+            && err.contains("use `roll.placement` \"roll\";")
+            && err.contains("use `scene_correction.exposure`")
+            && !err.contains("--placement"),
+        "{err}"
+    );
+
+    let (code, _, err) = convert(&other, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(
+            "rendered at the roll's placement, not the hybrid: the recipe lacks this frame's \
+             tones"
+        ),
+        "{err}"
+    );
+    let (code, _, err) = convert(&other, &["--placement", "roll", "--strict"]);
+    assert_eq!(code, 0, "the roll's placement asked for: {err}");
+
+    // A hybrid knob where the frame renders at the roll's placement, or a lift switched on
+    // where the hybrid places it, would be ignored too.
+    let (code, _, err) = convert(&night, &["--placement", "roll", "--hybrid-span", "9"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--hybrid-span tunes the hybrid placement, but --placement roll renders")
+            && err.contains("drop --placement roll to place the frame with the hybrid"),
+        "{err}"
+    );
+    let (code, _, err) = convert(&other, &["--hybrid-level-keep", "0.5"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "--hybrid-level-keep tunes the hybrid placement, but the recipe lacks \
+             this frame's tones"
+        ),
+        "{err}"
+    );
+    let (code, _, err) = convert(&night, &["--thin-lift", "on"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--thin-lift on turns on a lift") && err.contains("use --placement roll"),
+        "{err}"
+    );
+    for fine in [
+        &["--hybrid-span", "9"][..],
+        &["--thin-lift", "on", "--placement", "roll"],
+        &["--small-lift", "off"],
+    ] {
+        let (code, _, err) = convert(&night, fine);
+        assert_eq!(code, 0, "{fine:?}: {err}");
+    }
+
+    // On `roll`, one frame's tones would place every frame.
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        &s(&night),
+        &s(&mid),
+        "--roll-frame-tones",
+        "1,-1,-4",
+        "-o",
+        &s(&tmp.path("rolled-tones")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-frame-tones is one frame's own measurement (its tones)")
+            && err.contains("use --placement roll"),
+        "{err}"
+    );
+    // And the placement knobs, checked against each frame `roll` resolves.
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        &s(&night),
+        &s(&mid),
+        "--thin-lift",
+        "on",
+        "-o",
+        &s(&tmp.path("rolled-lift")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--thin-lift on turns on a lift"), "{err}");
+    // A non-finite measurement is refused by name, not solved.
+    let (code, _, err) = convert(&night, &["--roll-envelope=NaN,2", "--hybrid-span", "7"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-envelope (recipe `roll.envelope_stops`) must be finite"),
+        "{err}"
+    );
 }

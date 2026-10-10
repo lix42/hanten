@@ -614,6 +614,12 @@ base lands is display black's, and its warning is the check.
   `--exposure=-2` → 2.31 stops, silent; `--density-gamma 1.0` → 2.31, silent. The
   warning's remedy (`--exposure`, `--display-black off`) works whichever knob lifted the
   base, so it was left as is. No code change.
+- 2026-10-10: **cross-reference: display black is off by default**
+  (`nf-calibration/envelope-hybrid-placement`, `pipeline_version` 12). The closure above
+  leans on display black placing the base and on its warning; under `default` neither
+  runs now unless `--display-black` is stated (`direct` keeps it on), so a default render
+  whose base grades near mid-grey says nothing. Whether that needs a check of its own is
+  open; this task was not reopened.
 
 ## mono-decode
 

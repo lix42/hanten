@@ -2201,9 +2201,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   1.237–3.5 (1.56–1.74 on the archive); chosen by review over holding the white at L* 91
   or 94, so there is no white target: the white renders where slope and exposure put it.
   A white without its dark end is refused
-- [ ] [Envelope hybrid placement](tasks/nf-calibration/envelope-hybrid-placement.md) —
-  each frame its own contrast and exposure, inside the limits the roll's placement sets
-  (R 7, α 0.6); per-roll stays a choice
+- [x] [Envelope hybrid placement](tasks/nf-calibration/envelope-hybrid-placement.md) —
+  **done 2026-10-10** (`pipeline_version` 12): each measured frame its own slope and
+  exposure inside the roll's envelope (R 7, α 0.6), solved at render time from its stored
+  tones, in place of the lifts; `--placement roll` keeps per-roll. **Display black is off
+  by default** (`--display-black 6` turns it on; `direct` keeps 6)
 - [ ] [Per-frame placements](tasks/nf-calibration/per-frame-placement.md) — white-pinned
   and midtone-pinned, each frame's contrast from its own span, as a user's choice
 - [ ] [The maximum slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the limit every

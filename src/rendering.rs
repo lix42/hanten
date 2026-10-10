@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::destination::{Container, Defaults, Gamut, Range, Transfer};
-use crate::pipeline::fit_range::{DEFAULT_DISPLAY_BLACK_STOPS, DisplayBlack};
+use crate::pipeline::fit_range::DisplayBlack;
 use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE, HighlightDesaturation};
 use crate::types::DEFAULT_HEADROOM_STOPS;
 
@@ -44,7 +44,7 @@ pub struct Base {
     /// gives one.
     pub slope: f32,
     /// The colour over the base slope's that `look.saturation` multiplies: the
-    /// saturation slope is the base slope (never a thin frame's) times this times the knob.
+    /// saturation slope is the base slope (never a frame's own) times this times the knob.
     pub saturation: f32,
     pub highlight_desaturation: HighlightDesaturation,
     pub headroom_stops: f32,
@@ -60,7 +60,7 @@ const DEFAULT: Base = Base {
     saturation: DEFAULT_SATURATION,
     highlight_desaturation: HighlightDesaturation::DEFAULT,
     headroom_stops: DEFAULT_HEADROOM_STOPS,
-    display_black: DisplayBlack::StopsBelowMid(DEFAULT_DISPLAY_BLACK_STOPS),
+    display_black: DisplayBlack::Off,
     axes: Defaults::STANDARD,
 };
 

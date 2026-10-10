@@ -20,7 +20,7 @@
 //!   SDR branch reinhard's per-pixel arithmetic is transcendental-free; its one libm
 //!   call is the white point, `2^headroom_stops` (`exp2`), exact at whole stops.
 //!   **Display black is not**: it calls `log2` and `exp2` per frame and per pixel below
-//!   mid-grey (see below), so with it on — the default — output below mid-grey may
+//!   mid-grey (see below), so with it on, output below mid-grey may
 //!   differ by a ULP across targets. From mid-grey up, and with black off, SDR output
 //!   is bit-reproducible at a whole-stop headroom.
 //! - **Below diffuse white every peak agrees exactly**, because the lift is zero there
@@ -109,13 +109,14 @@ const MID_GREY: f64 = 0.18;
 /// moves the version.
 pub const BLACK_CURVE: &str = "log-shift-to-mid-grey-v1";
 
-/// What the stage list names when reinhard and display black both run — the default —
+/// What the stage list names when reinhard and display black both run,
 /// joined in the order they run, as the look joins its controls.
 pub const OPERATOR_AND_BLACK: &str = "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1";
 
-/// Display black's default: the film base 6 stops below mid-grey on the display
-/// (L\* ≈ 2.5), chosen by review (`nf-display-stages/parametric-operator`).
-pub const DEFAULT_DISPLAY_BLACK_STOPS: f32 = 6.0;
+/// The depth review chose while display black was on by default: the film base 6 stops
+/// below mid-grey (L\* ≈ 2.5; `nf-display-stages/parametric-operator`).
+#[cfg(test)]
+pub const REVIEWED_DISPLAY_BLACK_STOPS: f32 = 6.0;
 
 /// The deepest display black accepted, in stops below mid-grey: 16 stops puts the base
 /// at `0.18 · 2^−16`, under a 16-bit encode's first code value.
@@ -131,9 +132,11 @@ pub enum DisplayBlack {
     StopsBelowMid(f32),
 }
 
+/// Off: the roll's and the hybrid's slopes place the dark end
+/// (`nf-calibration/envelope-hybrid-placement`).
 impl Default for DisplayBlack {
     fn default() -> Self {
-        DisplayBlack::StopsBelowMid(DEFAULT_DISPLAY_BLACK_STOPS)
+        DisplayBlack::Off
     }
 }
 
@@ -364,7 +367,7 @@ pub struct ResolvedBlack {
 
 /// How far under mid-grey the film base must render for display black to place it
 /// well. The shift is spread between the base and mid-grey, so a base closer than this
-/// packs the whole shift into a narrow band — at 2 stops under and the default target,
+/// packs the whole shift into a narrow band — at 2 stops under and a 6-stop target,
 /// a 4-stop shift over 2 stops steepens the band's middle 4× — and at mid-grey or
 /// above black cannot run at all. Only a strong exposure gets a base here (the numbers
 /// for the default contrast: `docs/using-nc.md`, "Display black").
@@ -842,7 +845,11 @@ mod tests {
     #[test]
     fn display_black_leaves_mid_grey_and_everything_above_it_untouched() {
         let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
-        let black = operator(&with_black(DisplayBlack::default(), CAPPED_BASE, 1.0));
+        let black = operator(&with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            1.0,
+        ));
         // Reinhard maps mid-grey to itself, so every input from 0.18 up renders at or
         // above the knee.
         for v in sweep().filter(|v| *v >= 0.18) {
@@ -854,7 +861,11 @@ mod tests {
     #[test]
     fn display_black_keeps_slope_one_below_the_film_base() {
         let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
-        let black = operator(&with_black(DisplayBlack::default(), CAPPED_BASE, 1.0));
+        let black = operator(&with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            1.0,
+        ));
         let ratio = |v: f32| black.apply(v) / plain.apply(v);
         let at_base = ratio(CAPPED_BASE);
         for v in [CAPPED_BASE / 2.0, 1e-4, 1e-6] {
@@ -903,8 +914,16 @@ mod tests {
 
     #[test]
     fn display_black_agrees_across_peaks_below_white() {
-        let sdr = operator(&with_black(DisplayBlack::default(), CAPPED_BASE, 1.0));
-        let hdr = operator(&with_black(DisplayBlack::default(), CAPPED_BASE, HDR_PEAK));
+        let sdr = operator(&with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            1.0,
+        ));
+        let hdr = operator(&with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            HDR_PEAK,
+        ));
         for v in sweep().filter(|v| *v <= DIFFUSE_WHITE) {
             assert_eq!(sdr.apply(v).to_bits(), hdr.apply(v).to_bits(), "at {v}");
         }
@@ -914,25 +933,37 @@ mod tests {
     fn a_film_base_near_or_above_mid_grey_is_warned_about() {
         // 1.9 stops under: black runs, squeezed into the band — warned.
         let near = 0.18 * 2f32.powf(-1.9) / 1.2194;
-        let r = with_black(DisplayBlack::default(), near, 1.0)
-            .resolved()
-            .display_black;
+        let r = with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            near,
+            1.0,
+        )
+        .resolved()
+        .display_black;
         assert_eq!(r.curve, BLACK_CURVE, "{r:?}");
         let w = r.warning().expect("warned");
         assert!(w.contains("crushing") && w.contains("--exposure"), "{w}");
         assert!(w.contains("--display-black off"), "{w}");
         // At mid-grey and above: skipped — warned, not silent.
         for base in [0.18_f32, 0.5] {
-            let r = with_black(DisplayBlack::default(), base, 1.0)
-                .resolved()
-                .display_black;
+            let r = with_black(
+                DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+                base,
+                1.0,
+            )
+            .resolved()
+            .display_black;
             assert_eq!(r.curve, IDENTITY, "{r:?}");
             assert!(r.warning().expect("warned").contains("skipped"));
         }
         // A normal base, and black off, are not.
-        let r = with_black(DisplayBlack::default(), CAPPED_BASE, 1.0)
-            .resolved()
-            .display_black;
+        let r = with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            1.0,
+        )
+        .resolved()
+        .display_black;
         assert_eq!(r.warning(), None);
         let r = with_black(DisplayBlack::Off, 0.5, 1.0)
             .resolved()
@@ -943,11 +974,15 @@ mod tests {
     #[test]
     fn the_report_names_display_black_when_only_it_runs() {
         assert_eq!(OPERATOR_AND_BLACK, format!("{OPERATOR}+{BLACK_CURVE}"));
-        let mut p = with_black(DisplayBlack::default(), CAPPED_BASE, 1.0);
+        let mut p = with_black(
+            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
+            CAPPED_BASE,
+            1.0,
+        );
         assert_eq!(p.resolved().applied(), OPERATOR_AND_BLACK);
         p.display_black = DisplayBlack::Off;
         assert_eq!(p.resolved().applied(), OPERATOR);
-        p.display_black = DisplayBlack::default();
+        p.display_black = DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS);
         p.headroom_stops = 0.0;
         assert_eq!(p.resolved().applied(), BLACK_CURVE);
         p.display_black = DisplayBlack::Off;
