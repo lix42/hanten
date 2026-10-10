@@ -1567,6 +1567,11 @@ frames; the look's default contrast is `no-roll-defaults`'.
     the reuse flag.
   - Declined: refusing a reversed `--roll-envelope` (as on 2026-10-10 above —
     `measure-roll` writes one on a degenerate roll).
+- 2026-10-10: **rebased onto `core/roll-measure-mode`** (`roll --measure-roll`). Its
+  measured-or-switch split now classes `roll.envelope_stops` and `roll.frame_tones` as
+  measured (a typed `--roll-envelope` is refused in measure mode; `--roll-frame-tones` by
+  the every-frame rule) and `roll.placement`, `roll.hybrid_span_stops` and
+  `roll.hybrid_level_keep` as switches, which keep their meaning there.
 
 ## hybrid-slope-bounds
 

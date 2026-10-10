@@ -497,9 +497,9 @@ measurement too, so by hand `measure-roll` must measure under them: pass it
          with this one without measuring
   ```
 
-- **The switches keep their meaning.** `--small-lift`, `--thin-lift`,
-  `--midtone-neutral` and `--neutral-balance` decide what applies at render, as on any
-  `roll`. The measurement runs at `measure-roll`'s defaults; to measure differently
+- **The switches keep their meaning.** `--small-lift`, `--thin-lift`, `--placement`,
+  `--hybrid-span`, `--hybrid-level-keep`, `--midtone-neutral` and `--neutral-balance`
+  decide what applies at render, as on any `roll`. The measurement runs at `measure-roll`'s defaults; to measure differently
   (`measure-roll --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
 - **`--leader`** works as on `measure-roll`, `auto` included: without one the run warns
   and `--strict` refuses before anything is decoded. A frame `auto` finds is left
