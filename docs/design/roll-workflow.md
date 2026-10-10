@@ -183,8 +183,8 @@ measure mode.
   `--unexposed` beside a stated base is refused. A look layer (`--params my-look.json`)
   and style flags are fine.
 - **The roll's switches keep their meaning.** `--small-lift`, `--thin-lift`,
-  `--midtone-neutral` and `--neutral-balance` (and their `roll` keys) decide at render
-  whether a measured value applies, in measure mode as outside it. The measurement
+  `--placement`, `--hybrid-span`, `--hybrid-level-keep`, `--midtone-neutral` and
+  `--neutral-balance` (and their `roll` keys) decide at render how a measured value applies, in measure mode as outside it. The measurement
   itself runs at `measure-roll`'s defaults; to measure differently (`measure-roll
   --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
 - **The base it measures over is explicit**: a stated region is refused, as on

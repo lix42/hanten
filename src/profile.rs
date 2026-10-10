@@ -186,6 +186,11 @@ pub const REFUSED_FLAGS: &[(&str, &str)] = &[
     ("roll", "--roll-thin-slope"),
     ("roll", "--roll-thin-exposure"),
     ("roll", "--thin-lift"),
+    ("roll", "--roll-envelope"),
+    ("roll", "--roll-frame-tones"),
+    ("roll", "--placement"),
+    ("roll", "--hybrid-span"),
+    ("roll", "--hybrid-level-keep"),
     ("roll", "--roll-midtone-line"),
     ("roll", "--midtone-neutral"),
     ("roll", "--neutral-balance"),
@@ -217,7 +222,7 @@ pub fn refusal(knobs: &ConversionFlags, merged: &Recipe) -> Option<String> {
                 .to_string(),
         ),
         ("roll", Some((_, key))) => (
-            "a switch in the roll's section (`roll`)".to_string(),
+            "a choice in the roll's section (`roll`)".to_string(),
             format!("or state `roll.{key}` in the roll's recipe file"),
         ),
         ("roll", None) => (
@@ -254,6 +259,9 @@ pub const PROBE_NOTE: &str = "Probed at a film base thinner than any measured, s
 const ROLL_SWITCHES: &[(&str, &str)] = &[
     ("--small-lift", "small_lift"),
     ("--thin-lift", "thin_lift"),
+    ("--placement", "placement"),
+    ("--hybrid-span", "hybrid_span_stops"),
+    ("--hybrid-level-keep", "hybrid_level_keep"),
     ("--midtone-neutral", "midtone_neutral"),
     ("--neutral-balance", "neutral_balance"),
 ];
@@ -273,6 +281,11 @@ fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
         "--roll-thin-slope" => roll.roll_thin_slope.is_some(),
         "--roll-thin-exposure" => roll.roll_thin_exposure.is_some(),
         "--thin-lift" => roll.thin_lift.is_some(),
+        "--roll-envelope" => roll.roll_envelope.is_some(),
+        "--roll-frame-tones" => roll.roll_frame_tones.is_some(),
+        "--placement" => roll.placement.is_some(),
+        "--hybrid-span" => roll.hybrid_span.is_some(),
+        "--hybrid-level-keep" => roll.hybrid_level_keep.is_some(),
         "--roll-midtone-line" => roll.roll_midtone_line.is_some(),
         "--midtone-neutral" => roll.midtone_neutral.is_some(),
         "--neutral-balance" => roll.neutral_balance.is_some(),
@@ -759,6 +772,9 @@ mod tests {
             "--base-region" => "0,0,10,10",
             "--roll-midtone-line" => "1,0,1,0,-1,1,2",
             "--small-lift" | "--thin-lift" | "--midtone-neutral" | "--neutral-balance" => "off",
+            "--placement" => "roll",
+            "--roll-envelope" => "-4,2",
+            "--roll-frame-tones" => "1,0,-4",
             "--film-base" | "--roll-white-balance" | "--white-balance" => "0.9,0.5,0.4",
             _ => "0.5",
         }

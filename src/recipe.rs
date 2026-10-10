@@ -58,7 +58,7 @@ use crate::pipeline::look::{
     LookParams, LookSection, MAX_START_STOPS,
 };
 use crate::pipeline::midtone_neutral::MidtoneLine;
-use crate::pipeline::roll_white;
+use crate::pipeline::roll_white::{self, FrameStops};
 use crate::pipeline::scene_correction::{
     MidtoneCorrection, SceneCorrectionParams, SceneFault, WhiteBalance,
 };
@@ -227,9 +227,15 @@ pub struct RollSection {
     /// The roll's dark end, in scene stops (`roll_white::roll_dark`): with `white_stops`,
     /// the span the roll's slope spreads. Stated with the white or not at all.
     pub dark_stops: Option<f32>,
+    /// The roll's envelope, `[darkest, brightest]` in scene stops
+    /// (`roll_white::roll_envelope`): the ends a hybrid frame stays inside.
+    pub envelope_stops: Option<[f32; 2]>,
     /// The roll's exposure in EV, a neutral gain added to `scene_correction.exposure`
     /// (`roll_white::roll_exposure`).
     pub exposure: Option<f32>,
+    /// This frame's own white, level and dark end, which the hybrid places it from — where
+    /// [`Recipe::for_frame`] moves a `frames` entry's `tones`.
+    pub frame_tones: Option<FrameStops>,
     /// This frame's small lift in EV (`roll_white::small_lift`), added to `exposure` while
     /// [`Self::small_lift`] is on and no thin lift applies — where [`Recipe::for_frame`]
     /// moves a `frames` entry's `exposure`.
@@ -247,6 +253,17 @@ pub struct RollSection {
     /// Whether the thin pair applies: a taste switch like `small_lift`. Off, a thin frame
     /// renders its small lift.
     pub thin_lift: Option<Switch>,
+    /// How the frame is placed: `hybrid` (unset, the default) gives it its own slope and
+    /// exposure inside the roll's envelope ([`RollSection::hybrid`]), in place of both
+    /// lifts; `roll` renders every frame at the roll's slope and exposure, with the lifts.
+    /// A taste choice (design-spec §6).
+    pub placement: Option<Placement>,
+    /// The fewest look stops a hybrid frame's span renders over; unset is
+    /// `roll_white::HYBRID_SPAN_STOPS`.
+    pub hybrid_span_stops: Option<f32>,
+    /// The share of its level's offset from the roll's a hybrid frame keeps, 0 to 1; unset
+    /// is `roll_white::HYBRID_LEVEL_KEEP`.
+    pub hybrid_level_keep: Option<f32>,
     /// The roll's midtone cast (`pipeline::midtone_neutral`), removed in scene correction
     /// while [`Self::midtone_neutral`] is on. One line for the roll: a `frames` entry
     /// cannot carry one.
@@ -272,6 +289,8 @@ pub struct FrameRoll {
     /// The frame's thin lift (`roll.thin_slope`, `roll.thin_exposure`).
     pub thin_slope: Option<f32>,
     pub thin_exposure: Option<f32>,
+    /// The frame's white, level and dark end (`roll.frame_tones`).
+    pub tones: Option<FrameStops>,
 }
 
 /// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift`,
@@ -284,11 +303,85 @@ pub enum Switch {
     Off,
 }
 
+/// `roll.placement` / `--placement`: how a frame is placed on the roll's tone scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Placement {
+    /// The roll's slope and exposure, with the small and thin lifts.
+    Roll,
+    /// The envelope hybrid (`roll_white::hybrid_placement`).
+    Hybrid,
+}
+
 impl RollSection {
-    /// The slope this frame renders at, if the section sets one: its thin slope while that
-    /// applies, else [`Self::span_slope`].
+    /// The slope this frame renders at, if the section sets one: its hybrid slope, else
+    /// its thin slope while that applies, else [`Self::span_slope`].
     pub fn slope(&self) -> Option<f32> {
-        self.applied_thin_slope().or(self.span_slope())
+        self.hybrid()
+            .map(|h| h.slope)
+            .or(self.applied_thin_slope())
+            .or(self.span_slope())
+    }
+
+    /// The placement asked for: `hybrid` unless stated `roll`.
+    pub fn placement(&self) -> Placement {
+        self.placement.unwrap_or(Placement::Hybrid)
+    }
+
+    /// The frame's hybrid placement, when the section asks for it and states what it needs:
+    /// the roll's span (its slope, [`Self::span_slope`]) and envelope, and the frame's
+    /// tones. The roll's exposure is 0 unless stated. `None` on a non-finite input too:
+    /// presence rules read this before `validate` refuses the value by name.
+    pub fn hybrid(&self) -> Option<roll_white::HybridPlacement> {
+        if self.placement() != Placement::Hybrid {
+            return None;
+        }
+        let tones = self.frame_tones?;
+        let [darkest, brightest] = self.envelope_stops?;
+        let (slope, ev) = (self.span_slope()?, self.exposure.unwrap_or(0.0));
+        let span = self
+            .hybrid_span_stops
+            .unwrap_or(roll_white::HYBRID_SPAN_STOPS);
+        let keep = self
+            .hybrid_level_keep
+            .unwrap_or(roll_white::HYBRID_LEVEL_KEEP);
+        let inputs = [
+            tones.white_stops,
+            tones.level_stops,
+            tones.dark_stops,
+            darkest,
+            brightest,
+            slope,
+            ev,
+            span,
+            keep,
+        ];
+        if !inputs.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        Some(roll_white::hybrid_placement(
+            tones,
+            slope,
+            ev,
+            [darkest, brightest],
+            span,
+            keep,
+        ))
+    }
+
+    /// The half of the hybrid's measurement this frame lacks while the other is stated, so
+    /// it renders at the roll's placement: its tones (a frame `measure-roll` did not
+    /// measure), or the roll's envelope. `None` when the hybrid applies, is not asked for,
+    /// or neither half is stated (a roll written by hand, or before the hybrid).
+    pub fn hybrid_missing(&self) -> Option<&'static str> {
+        if self.placement() != Placement::Hybrid || self.span_slope().is_none() {
+            return None;
+        }
+        match (self.envelope_stops, self.frame_tones) {
+            (Some(_), None) => Some("this frame's tones (a `roll.frames` entry's `tones`)"),
+            (None, Some(_)) => Some("the roll's envelope (`roll.envelope_stops`)"),
+            _ => None,
+        }
     }
 
     /// The slope the roll's span places, from its white to its dark end
@@ -299,10 +392,11 @@ impl RollSection {
             .map(|(w, d)| roll_white::span_slope(w, d))
     }
 
-    /// The thin slope as it applies: `None` under `--thin-lift off`.
+    /// The thin slope as it applies: `None` under `--thin-lift off`, or where the hybrid
+    /// places the frame.
     pub fn applied_thin_slope(&self) -> Option<f32> {
         self.thin_slope
-            .filter(|_| self.thin_lift != Some(Switch::Off))
+            .filter(|_| self.thin_lift != Some(Switch::Off) && self.hybrid().is_none())
     }
 
     /// The thin exposure as it applies: only beside an applied thin slope.
@@ -312,15 +406,21 @@ impl RollSection {
     }
 
     /// The small lift as it applies: `None` under `--small-lift off`, or where a thin lift
-    /// replaces it.
+    /// or the hybrid replaces it.
     pub fn applied_small_exposure(&self) -> Option<f32> {
-        self.frame_exposure
-            .filter(|_| self.small_lift != Some(Switch::Off) && self.applied_thin_slope().is_none())
+        self.frame_exposure.filter(|_| {
+            self.small_lift != Some(Switch::Off)
+                && self.applied_thin_slope().is_none()
+                && self.hybrid().is_none()
+        })
     }
 
-    /// The frame's own exposure as it applies: the thin lift's, else the small lift's.
+    /// The frame's own exposure as it applies: the hybrid's, else the thin lift's, else the
+    /// small lift's.
     pub fn applied_frame_exposure(&self) -> Option<f32> {
-        self.applied_thin_exposure()
+        self.hybrid()
+            .map(|h| h.exposure)
+            .or(self.applied_thin_exposure())
             .or(self.applied_small_exposure())
     }
 
@@ -343,6 +443,7 @@ impl RollSection {
         [
             ("small_lift", self.applied_small_exposure().is_some()),
             ("thin_lift", self.applied_thin_slope().is_some()),
+            ("placement", self.hybrid().is_some()),
         ]
         .into_iter()
         .filter_map(|(key, on)| on.then_some(key))
@@ -372,6 +473,9 @@ impl RollSection {
         if entry.thin_exposure.is_some() && entry.thin_exposure == self.thin_exposure {
             self.thin_exposure = stated.thin_exposure;
         }
+        if entry.tones.is_some() && entry.tones == self.frame_tones {
+            self.frame_tones = stated.frame_tones;
+        }
     }
 }
 
@@ -388,7 +492,7 @@ pub struct LookKeys {
     #[serde(deserialize_with = "null_is_identity")]
     pub contrast: f32,
     /// `look.saturation`, `--saturation`: a multiplier on the rendering's colour — the
-    /// base slope `contrast` multiplies (never a thin frame's) times the rendering's
+    /// base slope `contrast` multiplies (never a frame's own) times the rendering's
     /// [`Base::saturation`] — so `1` keeps the default, whatever the contrast.
     pub saturation: f32,
     /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
@@ -485,6 +589,8 @@ pub enum SlopeBase {
     Direct,
     /// The applied roll's thin slope, `roll.thin_slope` (a thin frame's lift).
     Thin,
+    /// The frame's hybrid placement ([`RollSection::hybrid`]).
+    Hybrid,
 }
 
 /// The look's slopes and their parts: `base_slope × contrast` and
@@ -497,12 +603,12 @@ pub struct ResolvedSlope {
     pub base_from: SlopeBase,
     /// `look.saturation`, the multiplier.
     pub saturation: f32,
-    /// What `saturation` multiplies: the base slope — except that a thin frame's never
-    /// reaches colour, so there the roll's span slope — times the rendering's
-    /// [`Base::saturation`].
+    /// What `saturation` multiplies: the base slope — except that a frame's own (hybrid
+    /// or thin) never reaches colour, so there the roll's span slope — times the
+    /// rendering's [`Base::saturation`].
     pub saturation_base_slope: f32,
-    /// Where `saturation_base_slope`'s slope came from: `base_from`, except a thin
-    /// frame's, whose colour is the roll's (`roll`) or the fallback's.
+    /// Where `saturation_base_slope`'s slope came from: `base_from`, except a frame's own,
+    /// whose colour is the roll's (`roll`) or the fallback's.
     pub saturation_base_from: SlopeBase,
     /// What the look stage receives. Not serialized: the report's section states them.
     #[serde(skip)]
@@ -557,6 +663,15 @@ pub struct RollReport {
     /// This frame's thin lift, as stated.
     pub thin_slope: Option<f32>,
     pub thin_exposure: Option<f32>,
+    /// The roll's envelope, as stated.
+    pub envelope_stops: Option<[f32; 2]>,
+    /// This frame's tones, as stated.
+    pub frame_tones: Option<FrameStops>,
+    /// The placement asked for (`roll.placement`; unset is `hybrid`).
+    pub placement: Placement,
+    /// The frame's hybrid placement, when it applied: its slope and exposure (a delta on
+    /// the roll's) and what bound each.
+    pub hybrid: Option<roll_white::HybridPlacement>,
     /// Whether the gains reached scene correction (not under `direct`, the film master or
     /// `--neutral-balance off`).
     pub white_balance_applied: bool,
@@ -1226,6 +1341,21 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(lift) = args.roll.thin_lift {
         r.roll.thin_lift = Some(lift);
     }
+    if let Some(env) = args.roll.roll_envelope {
+        r.roll.envelope_stops = Some(env);
+    }
+    if let Some(tones) = args.roll.roll_frame_tones {
+        r.roll.frame_tones = Some(tones);
+    }
+    if let Some(placement) = args.roll.placement {
+        r.roll.placement = Some(placement);
+    }
+    if let Some(stops) = args.roll.hybrid_span {
+        r.roll.hybrid_span_stops = Some(stops);
+    }
+    if let Some(keep) = args.roll.hybrid_level_keep {
+        r.roll.hybrid_level_keep = Some(keep);
+    }
     if let Some(line) = args.roll.roll_midtone_line {
         r.roll.midtone_line = Some(line);
     }
@@ -1402,6 +1532,15 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
             format!("the frame's thin slope {slope_name} {}", s.base_slope),
             Some(SlopeKnob::Slope(&slope_name)),
         ),
+        // Held within the same limits as the span slope.
+        SlopeBase::Hybrid => (
+            format!(
+                "the frame's hybrid slope {} ({} \"hybrid\")",
+                s.base_slope,
+                knob_name(names, "roll", "--placement", "placement")
+            ),
+            None,
+        ),
         SlopeBase::Fallback => (format!("the fallback slope {}", s.base_slope), None),
         SlopeBase::Direct => (
             format!("the `direct` rendering's slope {}", s.base_slope),
@@ -1421,8 +1560,10 @@ fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
         SlopeBase::Roll => (format!("the roll's slope from {span_name}"), None),
         SlopeBase::Fallback => ("the fallback slope".to_string(), None),
         SlopeBase::Direct => ("the `direct` rendering's slope".to_string(), None),
-        // A thin frame's slope never reaches colour (`Recipe::resolved_slope`).
-        SlopeBase::Thin => unreachable!("a thin slope is never the colour's base"),
+        // Neither a thin nor a hybrid frame's slope reaches colour (`Recipe::resolved_slope`).
+        SlopeBase::Thin | SlopeBase::Hybrid => {
+            unreachable!("a frame's own slope is never the colour's base")
+        }
     };
     validate_whole_slope(
         r.reconstruction.linearization,
@@ -1664,6 +1805,39 @@ fn validate_roll(p: &RollSection, applies: bool, names: KnobNames) -> Result<()>
             )));
         }
     }
+    if let Some(env) = p.envelope_stops
+        && env.iter().any(|v| !v.is_finite())
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite — the darkest and brightest scene stops, as `hanten \
+             measure-roll` reports them in `placement.envelope_stops` — got {env:?}",
+            knob_name(names, "roll", "--roll-envelope", "envelope_stops")
+        )));
+    }
+    if let Some(tones) = p.frame_tones {
+        tones_fault(
+            tones,
+            &knob_name(names, "roll", "--roll-frame-tones", "frame_tones"),
+        )?;
+    }
+    if let Some(span) = p.hybrid_span_stops
+        && !(span.is_finite() && span > 0.0)
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite and positive — the fewest look stops a frame's span renders \
+             over — got {span}",
+            knob_name(names, "roll", "--hybrid-span", "hybrid_span_stops")
+        )));
+    }
+    if let Some(keep) = p.hybrid_level_keep
+        && !(0.0..=1.0).contains(&keep)
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be within [0, 1] — the share of its level's offset from the roll's a \
+             frame keeps: 1 keeps it, 0 brings every frame to the roll's level — got {keep}",
+            knob_name(names, "roll", "--hybrid-level-keep", "hybrid_level_keep")
+        )));
+    }
     if let Some(line) = p.midtone_line {
         let name = knob_name(names, "roll", "--roll-midtone-line", "midtone_line");
         line.check()
@@ -1690,6 +1864,25 @@ fn slope_fault(slope: f32, name: &str) -> Result<()> {
     Err(NcError::Usage(format!(
         "{name} must be finite and positive — the look's base slope, as `hanten \
          measure-roll` writes it for a thin frame — got {slope}"
+    )))
+}
+
+/// A frame's stated tones, named `name`: every value finite.
+fn tones_fault(tones: FrameStops, name: &str) -> Result<()> {
+    let FrameStops {
+        white_stops,
+        level_stops,
+        dark_stops,
+    } = tones;
+    if [white_stops, level_stops, dark_stops]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return Ok(());
+    }
+    Err(NcError::Usage(format!(
+        "{name} must be finite — the frame's white, level and dark end in scene stops, as \
+         `hanten measure-roll` reports them — got {white_stops}, {level_stops}, {dark_stops}"
     )))
 }
 
@@ -1733,11 +1926,14 @@ pub fn validate_roll_frames(
         if *frame == FrameRoll::default() {
             return Err(NcError::Usage(format!(
                 "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops`, \
-                 an `exposure` or a `thin_slope`, or drop the entry"
+                 an `exposure`, a `thin_slope` or its `tones`, or drop the entry"
             )));
         }
         if let Some(ev) = frame.exposure {
             exposure_fault(ev, &format!("recipe `roll.frames.\"{name}\".exposure`"))?;
+        }
+        if let Some(tones) = frame.tones {
+            tones_fault(tones, &format!("recipe `roll.frames.\"{name}\".tones`"))?;
         }
         if let Some(ev) = frame.thin_exposure {
             let entry = format!("recipe `roll.frames.\"{name}\".thin_exposure`");
@@ -1915,7 +2111,7 @@ struct ProbeKnob {
     reset: fn(&mut Recipe),
 }
 
-const PROBE_KNOBS: [ProbeKnob; 14] = [
+const PROBE_KNOBS: [ProbeKnob; 15] = [
     ProbeKnob {
         section: "reconstruction",
         flag: "--density-offset",
@@ -2022,6 +2218,18 @@ const PROBE_KNOBS: [ProbeKnob; 14] = [
             r.roll.white_balance = None;
             r.roll.midtone_line = None;
         },
+    },
+    ProbeKnob {
+        section: "fit_range",
+        flag: "--display-black",
+        key: "display_black",
+        // Only black reads the base, so the rendering's (off under `default`) clears it.
+        stated: |r| {
+            r.fit_range
+                .display_black
+                .is_some_and(|b| b != r.base().display_black)
+        },
+        reset: |r| r.fit_range.display_black = None,
     },
 ];
 
@@ -2179,9 +2387,13 @@ fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
     let exposures = [
         roll.exposure
             .map(|_| knob_name(names, "roll", "--roll-exposure", "exposure")),
-        frame.map(|_| match roll.applied_thin_exposure() {
-            Some(_) => knob_name(names, "roll", "--roll-thin-exposure", "thin_exposure"),
-            None => knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
+        frame.map(|_| match (roll.hybrid(), roll.applied_thin_exposure()) {
+            (Some(_), _) => format!(
+                "the frame's hybrid exposure ({} \"hybrid\")",
+                knob_name(names, "roll", "--placement", "placement")
+            ),
+            (None, Some(_)) => knob_name(names, "roll", "--roll-thin-exposure", "thin_exposure"),
+            (None, None) => knob_name(names, "roll", "--roll-frame-exposure", "frame_exposure"),
         }),
         Some(name("--exposure", "exposure")),
     ]
@@ -2628,6 +2840,9 @@ impl Recipe {
             if let Some(ev) = frame.thin_exposure {
                 self.roll.thin_exposure = Some(ev);
             }
+            if let Some(tones) = frame.tones {
+                self.roll.frame_tones = Some(tones);
+            }
         }
         self
     }
@@ -2678,22 +2893,24 @@ impl Recipe {
             .map(|(line, roll_gains)| MidtoneCorrection { line, roll_gains })
     }
 
-    /// The look's slopes and their parts: the base — the applied roll's span, else the
-    /// rendering's [`Base::slope`] — times the `look.contrast` multiplier, and the same
-    /// base without a thin frame's slope, times the rendering's [`Base::saturation`] and
-    /// the `look.saturation` multiplier.
+    /// The look's slopes and their parts: the base — the frame's own slope, else the
+    /// applied roll's span, else the rendering's [`Base::slope`] — times the
+    /// `look.contrast` multiplier, and the same base without the frame's own slope, times
+    /// the rendering's [`Base::saturation`] and the `look.saturation` multiplier.
     pub fn resolved_slope(&self) -> ResolvedSlope {
         let roll = self.applied_roll();
         let white_slope = roll.span_slope();
         let (base_slope, base_from) = match (roll.slope(), self.rendering) {
+            (Some(s), _) if roll.hybrid().is_some() => (s, SlopeBase::Hybrid),
             (Some(s), _) if roll.applied_thin_slope().is_some() => (s, SlopeBase::Thin),
             (Some(s), _) => (s, SlopeBase::Roll),
             (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
             (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
         };
+        // Neither a thin nor a hybrid frame's slope reaches colour: it is the roll's.
         let (colour_slope, saturation_base_from) = match (base_from, white_slope) {
-            (SlopeBase::Thin, Some(w)) => (w, SlopeBase::Roll),
-            (SlopeBase::Thin, None) => (self.base().slope, SlopeBase::Fallback),
+            (SlopeBase::Thin | SlopeBase::Hybrid, Some(w)) => (w, SlopeBase::Roll),
+            (SlopeBase::Thin | SlopeBase::Hybrid, None) => (self.base().slope, SlopeBase::Fallback),
             (from, _) => (base_slope, from),
         };
         let saturation_base_slope = colour_slope * self.base().saturation;
@@ -2743,6 +2960,8 @@ impl Recipe {
             || r.frame_exposure.is_some()
             || r.thin_slope.is_some()
             || r.thin_exposure.is_some()
+            || r.envelope_stops.is_some()
+            || r.frame_tones.is_some()
             || r.midtone_line.is_some())
         .then(|| RollReport {
             white_balance: r.white_balance,
@@ -2753,11 +2972,15 @@ impl Recipe {
             frame_exposure: r.frame_exposure,
             thin_slope: r.thin_slope,
             thin_exposure: r.thin_exposure,
+            envelope_stops: r.envelope_stops,
+            frame_tones: r.frame_tones,
+            placement: r.placement(),
+            hybrid: r.hybrid().filter(|_| applies),
             white_balance_applied: applies && r.applied_white_balance().is_some(),
             slope_applied: applies
                 && matches!(
                     self.resolved_slope().base_from,
-                    SlopeBase::Roll | SlopeBase::Thin
+                    SlopeBase::Roll | SlopeBase::Thin | SlopeBase::Hybrid
                 ),
             exposure_applied: applies && r.exposure.is_some(),
             frame_exposure_applied: applies && r.applied_small_exposure().is_some(),
@@ -3268,9 +3491,11 @@ mod tests {
         assert_eq!(
             json["roll"],
             serde_json::json!({"white_balance": null, "neutral_balance": null,
-                "white_stops": null, "dark_stops": null, "exposure": null,
+                "white_stops": null, "dark_stops": null, "envelope_stops": null,
+                "exposure": null, "frame_tones": null,
                 "frame_exposure": null, "small_lift": null, "thin_slope": null,
-                "thin_exposure": null, "thin_lift": null, "midtone_line": null,
+                "thin_exposure": null, "thin_lift": null, "placement": null,
+                "hybrid_span_stops": null, "hybrid_level_keep": null, "midtone_line": null,
                 "midtone_neutral": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
@@ -4144,6 +4369,139 @@ mod tests {
         let direct = frame(&["--rendering", "direct"]);
         assert_eq!(direct.resolved_slope().base_from, SlopeBase::Direct);
         assert!(direct.roll_report(true).unwrap().taste_applied.is_empty());
+    }
+
+    #[test]
+    fn the_hybrid_places_a_measured_frame_in_place_of_its_lifts() {
+        let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75,
+            "exposure": 1.0, "envelope_stops": [-4.5, 2.4],
+            "frames": {"a.tif": {"exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7,
+                "tones": {"white_stops": 0.6, "level_stops": -1.8, "dark_stops": -2.9}}}}}"#;
+        let frame = |extra: &[&str]| {
+            let r = parse(roll).unwrap().for_frame(Path::new("/scans/a.tif"));
+            merge(r, &cli_flags(extra))
+        };
+        let tones = FrameStops {
+            white_stops: 0.6,
+            level_stops: -1.8,
+            dark_stops: -2.9,
+        };
+        let roll_slope = roll_white::span_slope(1.5, -3.75);
+        let expected = roll_white::hybrid_placement(
+            tones,
+            roll_slope,
+            1.0,
+            [-4.5, 2.4],
+            roll_white::HYBRID_SPAN_STOPS,
+            roll_white::HYBRID_LEVEL_KEEP,
+        );
+        let r = frame(&[]);
+        assert_eq!(r.roll.frame_tones, Some(tones));
+        assert_eq!(r.roll.hybrid(), Some(expected));
+        let s = r.resolved_slope();
+        assert_eq!(
+            (s.base_slope, s.base_from),
+            (expected.slope, SlopeBase::Hybrid)
+        );
+        // Colour stays the roll's, as a thin frame's does.
+        assert_eq!(
+            (s.saturation_base_slope, s.saturation_base_from),
+            (roll_slope * r.base().saturation, SlopeBase::Roll)
+        );
+        assert_eq!(
+            r.resolved_scene_correction().exposure,
+            1.0 + expected.exposure
+        );
+        let report = r.roll_report(true).unwrap();
+        assert_eq!(report.taste_applied, vec!["placement"]);
+        assert_eq!(report.hybrid, Some(expected));
+        assert!(
+            report.slope_applied && !report.thin_lift_applied && !report.frame_exposure_applied,
+            "{report:?}"
+        );
+        // The roll's placement renders the lifts; the knobs reach the solve.
+        let per_roll = frame(&["--placement", "roll"]);
+        assert_eq!(per_roll.roll.hybrid(), None);
+        assert_eq!(per_roll.resolved_slope().base_from, SlopeBase::Thin);
+        assert_eq!(
+            per_roll.roll_report(true).unwrap().taste_applied,
+            vec!["thin_lift"]
+        );
+        let level = frame(&["--hybrid-level-keep", "1"]).roll.hybrid().unwrap();
+        assert_eq!(
+            level,
+            roll_white::hybrid_placement(tones, roll_slope, 1.0, [-4.5, 2.4], 7.0, 1.0)
+        );
+        // `direct` applies no roll, so no placement.
+        let direct = frame(&["--rendering", "direct"]);
+        assert_eq!(direct.resolved_slope().base_from, SlopeBase::Direct);
+        assert!(direct.roll_report(true).unwrap().hybrid.is_none());
+    }
+
+    #[test]
+    fn a_frame_without_half_the_hybrids_measurement_says_which() {
+        let with = |roll: &str| {
+            parse(&format!(
+                r#"{{"recipe_version": 3, "roll": {{"white_stops": 1.5, "dark_stops": -3.75{roll}}}}}"#
+            ))
+            .unwrap()
+            .roll
+        };
+        // Written by hand, or before the hybrid: the roll's placement, with nothing missing.
+        assert_eq!(with("").hybrid_missing(), None);
+        assert!(with("").hybrid().is_none());
+        // A frame the measurement left out.
+        let unmeasured = with(r#", "envelope_stops": [-4, 2]"#);
+        assert!(unmeasured.hybrid().is_none());
+        assert!(
+            unmeasured
+                .hybrid_missing()
+                .unwrap()
+                .contains("this frame's tones")
+        );
+        let no_envelope =
+            with(r#", "frame_tones": {"white_stops": 1, "level_stops": 0, "dark_stops": -3}"#);
+        assert!(
+            no_envelope
+                .hybrid_missing()
+                .unwrap()
+                .contains("`roll.envelope_stops`")
+        );
+        // Asked for the roll's placement, nothing is missing.
+        let roll = with(r#", "envelope_stops": [-4, 2], "placement": "roll""#);
+        assert_eq!(roll.hybrid_missing(), None);
+    }
+
+    #[test]
+    fn the_hybrids_knobs_are_checked() {
+        let err = |extra: &[&str]| {
+            validate(
+                &merged(r#"{"recipe_version": 3}"#, extra),
+                KnobNames::FlagAndKey,
+            )
+            .unwrap_err()
+            .message()
+            .to_string()
+        };
+        assert!(err(&["--hybrid-level-keep", "1.5"]).starts_with(
+            "--hybrid-level-keep (recipe `roll.hybrid_level_keep`) must be within [0, 1]"
+        ));
+        assert!(err(&["--hybrid-span", "0"]).starts_with(
+            "--hybrid-span (recipe `roll.hybrid_span_stops`) must be finite and positive"
+        ));
+        assert!(
+            err(&["--roll-envelope", "-4,inf"])
+                .starts_with("--roll-envelope (recipe `roll.envelope_stops`) must be finite")
+        );
+        assert!(
+            err(&["--roll-frame-tones", "1,nan,-3"])
+                .starts_with("--roll-frame-tones (recipe `roll.frame_tones`) must be finite")
+        );
+        let entry = parse(
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"tones":
+                {"white_stops": 1, "level_stops": 0}}}}}"#,
+        );
+        assert!(entry.is_err(), "a tones entry states all three");
     }
 
     #[test]
@@ -5400,6 +5758,32 @@ mod tests {
             ("--thin-lift", &["--thin-lift", "off"], |r| {
                 r.roll.thin_lift == Some(Switch::Off)
             }),
+            ("--roll-envelope", &["--roll-envelope", "-4.5,2.1"], |r| {
+                r.roll.envelope_stops == Some([-4.5, 2.1])
+            }),
+            (
+                "--roll-frame-tones",
+                &["--roll-frame-tones", "1.2,-0.8,-4"],
+                |r| {
+                    r.roll.frame_tones
+                        == Some(FrameStops {
+                            white_stops: 1.2,
+                            level_stops: -0.8,
+                            dark_stops: -4.0,
+                        })
+                },
+            ),
+            ("--placement", &["--placement", "roll"], |r| {
+                r.roll.placement == Some(Placement::Roll)
+            }),
+            ("--hybrid-span", &["--hybrid-span", "6"], |r| {
+                r.roll.hybrid_span_stops == Some(6.0)
+            }),
+            (
+                "--hybrid-level-keep",
+                &["--hybrid-level-keep", "0.5"],
+                |r| r.roll.hybrid_level_keep == Some(0.5),
+            ),
             (
                 "--roll-midtone-line",
                 &[
@@ -5537,7 +5921,9 @@ mod tests {
             ("--anchor-mid-offset", "30", "reconstruction.anchor"),
             ("--contrast", "100", "look.contrast"),
         ] {
-            let err = render_err(V3, &[&format!("{flag}={value}")]).expect(flag);
+            // `direct`, whose pinned display black reads the base without being stated.
+            let err =
+                render_err(V3, &["--rendering", "direct", &format!("{flag}={value}")]).expect(flag);
             assert!(
                 err.starts_with("the film base renders to luminance"),
                 "{flag}: {err}"
@@ -5549,6 +5935,20 @@ mod tests {
                 "{flag}: {err}"
             );
         }
+        // A display black stated under `default` is named too: its default, off, reads
+        // no base.
+        let err = render_err(
+            V3,
+            &["--display-black", "6", "--density-offset=-30,-30,-30"],
+        )
+        .unwrap();
+        assert!(
+            err.ends_with(
+                "It renders with any one of --density-offset (recipe `reconstruction.offset`), \
+                 --display-black (recipe `fit_range.display_black`) at its default"
+            ),
+            "{err}"
+        );
     }
 
     #[test]
@@ -5597,7 +5997,12 @@ mod tests {
         // Either alone at its default renders.
         let err = render_err(
             V3,
-            &["--density-scale=2.5,2.5,2.5", "--density-offset=5,5,5"],
+            &[
+                "--rendering",
+                "direct",
+                "--density-scale=2.5,2.5,2.5",
+                "--density-offset=5,5,5",
+            ],
         )
         .unwrap();
         assert!(
@@ -5608,7 +6013,17 @@ mod tests {
             "{err}"
         );
         // Neither alone renders: both are named, together.
-        let err = render_err(V3, &["--density-offset=-20,-20,-20", "--contrast", "60"]).unwrap();
+        let err = render_err(
+            V3,
+            &[
+                "--rendering",
+                "direct",
+                "--density-offset=-20,-20,-20",
+                "--contrast",
+                "60",
+            ],
+        )
+        .unwrap();
         assert!(
             err.ends_with(
                 "It renders with --density-offset (recipe `reconstruction.offset`) and \

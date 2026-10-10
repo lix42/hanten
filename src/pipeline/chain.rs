@@ -982,11 +982,14 @@ mod tests {
 
     #[test]
     fn display_black_places_the_film_base_itself_at_its_target() {
+        let black_on =
+            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         // A frame holding its own film base renders that pixel at the target, whatever
         // the contrast: the reference is graded with the frame.
         for contrast in [1.2_f32, 1.25, 1.4, 1.65] {
             let mut shared = shared_acting();
             shared.look.section.slope = contrast;
+            shared.display_black = black_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1004,7 +1007,7 @@ mod tests {
             let black = rendered.fit_range.display_black;
             let (out, _) = rendered.image.into_parts();
             let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
-            let want = 0.18 * (-crate::pipeline::fit_range::DEFAULT_DISPLAY_BLACK_STOPS).exp2();
+            let want = 0.18 * (-crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS).exp2();
             // The white balance tints the base, so its Display P3 luminance differs from
             // the ACEScg luminance display black places by a fraction of a percent.
             assert!(
@@ -1017,6 +1020,7 @@ mod tests {
         let shift = |contrast: f32| {
             let mut shared = shared_acting();
             shared.look.section.slope = contrast;
+            shared.display_black = black_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1039,7 +1043,8 @@ mod tests {
     #[test]
     fn a_film_base_that_grades_to_nothing_is_refused() {
         let mut p = shipped_params();
-        p.shared.display_black = DisplayBlack::default();
+        p.shared.display_black =
+            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         let err = render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed)
             .err()
             .expect("refused");
@@ -1047,7 +1052,8 @@ mod tests {
         // With display black off the base is never read, so it cannot fail the render.
         p.shared.display_black = DisplayBlack::Off;
         render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed).unwrap();
-        p.shared.display_black = DisplayBlack::default();
+        p.shared.display_black =
+            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6]), &p, &mut Untimed)
             .err()
             .expect("refused");
@@ -1101,11 +1107,14 @@ mod tests {
     #[test]
     fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
         // At the shipped headroom, and at zero, where reinhard is the identity and
-        // pixels reach fit gamut at luminance near white. Display black stays on at its
-        // default in both, so the contrast is checked with it in the chain.
+        // pixels reach fit gamut at luminance near white. Display black is on in both,
+        // so the contrast is checked with it in the chain.
         for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
             let mut shared = shared_acting();
             shared.headroom_stops = stops;
+            shared.display_black = DisplayBlack::StopsBelowMid(
+                crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS,
+            );
             pair_agrees_below_white(&shared);
         }
     }

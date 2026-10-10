@@ -58,7 +58,9 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 7 | the default display tone `shoulder` → **extended Reinhard at 6 stops of headroom** (2026-09-24, `nf-retire/display-tones`), fit range's operator. `shoulder` and `none` retired with `highlight_compress`; the headroom moved to `fit_range.headroom_stops`. Every default display pixel moves — the whole curve is compressed rather than only the top, with mid-grey held at 0.18 — while `render` and `base` are unmoved, since the gate stops before the display stages. Evidence: `docs/progress/nf-retire.md`. |
 /// | 8 | the chain flip (2026-09-27, `nf-core/default-flip`): the staged rendering chain (design-spec §6) is the only one. The default render is the fixed decode at the linearization **1.8** (not the bundled 2.0) → scene correction (neutral) → the look (contrast 2.0/1.8, highlight desaturation 0.8) → fit range (extended Reinhard at 6 stops, display black 6 stops below mid-grey) → fit gamut into Display P3, written as an **SDR Display P3 16-bit TIFF** where v7 wrote a gain-map JPEG — a container change as well as a render one. `render` now hashes the fixed decode (refreshed by `nf-verification/fingerprints` to reach the ACEScg mapping, over a new vector, with no pixel moved), and `recipe` the recipe document that replaced the old one (`crate::recipe`), so both moved; `base` did not. Evidence: `docs/reports/default-flip.md`. |
 /// | 9 | the look's fallback slope `2.0/1.8` → **`slope_for(1.75)` ≈ 1.414** (2026-09-30, `nf-calibration/no-roll-defaults`): a render without a roll white is placed as if the roll's white were 1.75 scene stops above mid-grey (whole contrast 2.54), where the bundled decode's contrast 2.0 placed it at +2.23, above the white rule's cap. Every default pixel off mid-grey moves; a run with a roll white does not. `render` and `base` are unmoved; `recipe` now also hashes the `default` rendering's base (`crate::rendering`), which holds the fallback. `direct`'s pinned slope moved to the same value. Evidence: `docs/progress/nf-calibration.md` (2026-09-30). |
-/// | 10 | **current** — the look's contrast moved onto luminance and saturation became its own setting (2026-10-09, `nf-look/contrast-on-luminance`): the slope scales each pixel whole by its ACEScg luminance's pivoted power, so colour no longer moves with contrast, and colour takes a **saturation slope** — the base slope (never a thin frame's) × **1.15** (`look::DEFAULT_SATURATION`) × `look.saturation` — on log channel ratios with luminance kept. Every saturated default pixel moves (about 15% more chroma, and a coloured pixel's luminance now follows the neutral curve); neutrals hold. Highlight desaturation's band divides by the saturation slope. `direct` pins its saturation at 1. `render` and `base` are unmoved; `recipe` moved with the new key and base. Evidence: `docs/progress/nf-look.md` (2026-10-09). |
+/// | 10 | the look's contrast moved onto luminance and saturation became its own setting (2026-10-09, `nf-look/contrast-on-luminance`): the slope scales each pixel whole by its ACEScg luminance's pivoted power, so colour no longer moves with contrast, and colour takes a **saturation slope** — the base slope (never a thin frame's) × **1.15** (`look::DEFAULT_SATURATION`) × `look.saturation` — on log channel ratios with luminance kept. Every saturated default pixel moves (about 15% more chroma, and a coloured pixel's luminance now follows the neutral curve); neutrals hold. Highlight desaturation's band divides by the saturation slope. `direct` pins its saturation at 1. `render` and `base` are unmoved; `recipe` moved with the new key and base. Evidence: `docs/progress/nf-look.md` (2026-10-09). |
+/// | 11 | the roll's slope from its span (2026-10-09, `nf-calibration/span-roll-slope`): `roll.white_stops` and `roll.dark_stops` stated together, the slope `9.049 / (white − dark)` within 1.237–3.5. No default pixel moved; the bump is for a stated roll. |
+/// | 12 | **current** — the envelope hybrid is a measured roll's default placement (2026-10-10, `nf-calibration/envelope-hybrid-placement`): each frame with its tones (`roll.frames` entry `tones`) and the roll's `roll.envelope_stops` renders at its own slope and exposure inside the envelope, in place of the lifts (`--placement roll` keeps the old placement); and **display black is off by default** (was 6 stops below mid-grey), since the roll's and the hybrid's slopes place the dark end. Every default pixel under mid-grey moves (the shadows lighten); `direct` keeps its pinned 6. `render` and `base` are unmoved; `recipe` moved with the new keys and the `default` rendering's base. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -133,7 +135,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// commands' own algorithms, which change what a new measurement writes but not how a
 /// written one replays. It cannot tell a document that pins every value it relies on
 /// from one that does not, so a bump warns on both.
-pub const PIPELINE_VERSION: u32 = 11;
+pub const PIPELINE_VERSION: u32 = 12;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -436,6 +438,25 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
         recipe: "07e194eeba5d6d8b",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v12 bump took the constant over.
+        behavior: "SDR Display P3 16-bit TIFF default output; the fixed decode (linearization \
+                   1.8, mid-grey 0.62 density above the film base, neutral-patch-calibrated \
+                   per-channel density gain); look slope on luminance spreading a measured \
+                   roll's span, white to dark end, over 9.049 stops, or placing a white 1.75 \
+                   stops above mid-grey when none is given, saturation 1.15 times the slope's \
+                   colour, with highlight desaturation; extended-Reinhard fit range at 6 stops \
+                   with display black 6 stops below mid-grey; radial gamut map into Display \
+                   P3; no auto white balance",
+    },
+    // v12 — the envelope hybrid is a measured roll's default placement, and display black
+    // is off by default (2026-10-10, `nf-calibration/envelope-hybrid-placement`). `render`
+    // and `base` are unchanged (the gate stops before fit range); `recipe` gains the
+    // placement keys and the `default` base's display black.
+    PipelineFingerprint {
+        pipeline_version: 12,
+        render: "f51d3397c7364160",
+        base: "01c5acccc36a3388",
+        recipe: "c16e937e5ade63dc",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -581,10 +602,11 @@ pub struct PipelineFingerprint {
 pub const PIPELINE_BEHAVIOR: &str = "SDR Display P3 16-bit TIFF default output; the fixed \
      decode (linearization 1.8, mid-grey 0.62 density above the film base, \
      neutral-patch-calibrated per-channel density gain); look slope on luminance spreading a \
-     measured roll's span, white to dark end, over 9.049 stops, or placing a white 1.75 \
-     stops above mid-grey when none is given, saturation 1.15 times the slope's colour, \
-     with highlight desaturation; extended-Reinhard fit range at 6 \
-     stops with display black 6 stops below mid-grey; radial gamut map into Display P3; no auto white balance";
+     measured roll's span, white to dark end, over 9.049 stops, each frame placed inside the \
+     roll's envelope at its own slope and exposure, or placing a white 1.75 stops above \
+     mid-grey when none is given, saturation 1.15 times the roll's slope's colour, with \
+     highlight desaturation; extended-Reinhard fit range at 6 stops with display black off; \
+     radial gamut map into Display P3; no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it
 /// (source tarball / no `git` / not this package's repository). `None` is reported

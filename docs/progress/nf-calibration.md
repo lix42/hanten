@@ -100,6 +100,21 @@ roll's exposure unchanged, so the white has no target (round 1 chose this over h
 at L\* 91 or 94). The white rule (cap, floor, clamp) is unchanged; a clamped frame spreads
 the cap's span. It is the base of every placement the epic adds next.
 
+**`envelope-hybrid-placement` is done (2026-10-10, `pipeline_version` 12): each measured
+frame is placed inside the roll's envelope.** `measure-roll` stores the envelope
+(`roll.envelope_stops`, the frames' lowest dark end and highest white) and each frame's
+tones (`roll.frames` entry `tones`); `convert` solves the frame's slope (spreading its span
+over at least R = 7 look stops, inside the envelope, within the cap's slope and 3.5) and
+exposure (keeping α = 0.6 of its level's offset, inside the envelope, then −1.5 / +0.5 EV)
+at render time, so `--hybrid-span` and `--hybrid-level-keep` need no re-measure. It
+replaces both lifts; `--placement roll` renders per-roll with them. Colour stays at the
+roll's slope. **Display black is off by default under `default`**: it compensated a roll
+slope taken from the white alone, and with the span slope and the hybrid it worked against
+them, darkening low-key frames throughout; read "with display black at its default" above
+as 6 stops, before this. Open in `hybrid-slope-bounds`: the EV limit can push a frame's dark
+end below the roll's (17 archive frames), and the kept exposure's and envelope top's
+references.
+
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
 slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
@@ -1406,8 +1421,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## envelope-hybrid-placement
 
-**Status:** not started
-**Updated:** 2026-10-09
+**Status:** done
+**Updated:** 2026-10-10
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`;
   `../temp/roll-neutral-spike/TODO.md` A4, G3, G5). Whole-roll review on 09-29 and 09-18
@@ -1418,6 +1433,145 @@ frames; the look's default contrast is `no-roll-defaults`'.
   task now depends on; the two per-frame placements are `per-frame-placement`, which
   depends on this one for the placement choice. This task keeps the hybrid and the
   choice between it and per-roll.
+- 2026-10-09: **started; decided (user)**: the hybrid is solved **at render time** from
+  stored measurements, so R and α are recipe keys and flags (sweepable without
+  re-measuring); the lifts stay, applying at the roll's placement only; the review matches
+  a4 (display black off), and display black's role and the shadow toe go to
+  `hybrid-slope-bounds`.
+- 2026-10-09: **implemented** (`pipeline_version` 12).
+  - `roll_white::hybrid_placement`, term for term the spike's `plans()`
+    (`docs/spike/poor-development.md`, "As reviewed"), with one change: the frame's
+    per-roll slope (the span slope, or a clamped frame's cap slope) scales the envelope
+    and is the floor term, where the spike used the roll's for every frame (it had no
+    clamp). This keeps every input in the frame's own recipe after `Recipe::for_frame`
+    moved its clamp into `roll.white_stops`, so a `--save-recipe` dump replays.
+  - **Recipe**: `roll.envelope_stops` `[darkest, brightest]` (roll-wide; the frames' lowest
+    dark end and highest white, unclamped, as measurements, not look stops); a frame
+    entry's `tones` `{white_stops, level_stops, dark_stops}` → `roll.frame_tones`;
+    `roll.placement` (`roll` | `hybrid`, unset = hybrid), `roll.hybrid_span_stops`,
+    `roll.hybrid_level_keep`. Flags `--roll-envelope`, `--roll-frame-tones`,
+    `--placement`, `--hybrid-span`, `--hybrid-level-keep`. Deviation from the plan: the
+    envelope is stored, not derived from the frame table at render time (a frame's
+    render would then depend on every other entry and on manifest overrides).
+  - **Render**: the hybrid sets the look's base slope (`base_from` `hybrid`) and the
+    frame's exposure delta, replacing both lifts; colour stays at the frame's per-roll
+    slope × 1.15, as a thin frame's does (a4 also held saturation at per-roll's level).
+    `taste_applied` gains `placement`; `chain.roll` gains `placement`, `hybrid` (slope,
+    exposure, `slope_bound`, `exposure_bound`), `envelope_stops`, `frame_tones`.
+  - **Missing inputs**: a frame with no tones beside a stated envelope (one `measure-roll`
+    did not measure), or the reverse, renders per-roll and warns; a roll section with
+    neither (hand-written, or written before v12) renders per-roll silently — warning there
+    fired on every hand-stated roll.
+  - **Presence rule**: a lift typed (or in a manifest's `params`) where the hybrid places
+    the frame is refused, remedies `--placement roll` / `--exposure`; spared beside the
+    frame's tones (its `frames[].flag`, the `--placement roll` fallback). Found by a test:
+    typed lifts were silently ignored.
+  - **`measure-roll`**: every measured frame gets an entry (its tones), so `frames[].flag`
+    exists for every frame; `placement` section (`kind: "taste"`, envelope, defaults) and
+    `frames[].hybrid` at the defaults; `reuse.flag` carries `--roll-envelope`.
+  - v12 drift-gate row: `render` and `base` unchanged, `recipe` gains the new keys; the
+    bump is for a measured roll, whose frames now render differently.
+  - Tests that pinned per-roll renders of measured rolls now state `--placement roll`
+    (the thin-lift test stamps `"placement": "roll"` into its measured files).
+- 2026-10-09: **archive re-measure** (`../temp/envelope-hybrid-placement/`, `table.txt`;
+  eleven rolls, full archive). Hybrid slopes 1.55–3.50, exposure deltas −0.45 … +0.50 EV.
+  Slope bound mostly `span` or `roll`; `max` on two frames (09-09, 09-14).
+  - **Inside the envelope**: every frame whose exposure the envelope or α set; the
+    roll's brightest rendered point never rises above per-roll's.
+  - **Not inside: the frames the +0.5 EV limit holds** (7 on 09-29, 4 on 09-28, 2 each on
+    09-11 and 09-13, 1 on 09-09 and 09-14). Their steeper slope wants more lift to keep the
+    dark end up than the limit allows, so the roll's darkest point falls below per-roll's:
+    09-29 −5.68 against −4.42 look stops, 09-13 −4.49 / −3.46, 09-28 −3.65 / −2.92, 09-11
+    −3.38 / −2.96. The spike's definition applies the limit last too; display black places
+    the dark end either way. So "the roll's ends equal per-roll's" holds for the brightest
+    point only.
+  - **Against the spike's a4 plans** (same frames): 09-18 slope Δ median 0.025 (max 0.34),
+    exposure Δ median 0.000 (max 0.09 EV); 09-29 slope Δ median 0.097 (max 0.23),
+    exposure Δ median 0.000 (max 0.10 EV). The inputs moved since (whites after colour
+    correction, `midtone-neutral`; the dark end measured by `measure-roll`); not separated.
+- 2026-10-09: review set built (`../temp/envelope-hybrid-placement/review/`): 09-29 and
+  09-18, the 66 frames a4 reviewed, display black off — per-roll (lifts off) / the hybrid
+  as implemented / a4's hybrid render; colour and black-and-white. Verdict pending. All CI
+  gates and the asset probes pass; `using-nc.md` and design-spec §6–§9 updated.
+- 2026-10-10: **review verdict (user): the implemented hybrid matches a4's** ("looks
+  good"). The set ran with the roll's white balance, midtone line, exposure and white, and
+  the default highlight desaturation (0.8); display black off, as a4 was.
+- 2026-10-10: **measured: display black on (the default 6) under the hybrid**, same 66 frames,
+  per-roll (lifts off) and hybrid, output L\* from `nctool metrics`
+  (`../temp/envelope-hybrid-placement/review/black-table.json`, `scripts/black.py`).
+  - **Black places the dark end, not the hybrid.** Display black moves each frame's film base
+    to 6 stops under mid-grey. Per-roll gives every frame of a roll the same shift (2.35
+    stops on 09-29, 2.06 on 09-18); the hybrid's frames range 0–2.7. With black on, the
+    hybrid's p1 matches per-roll's (median difference 0.0 L\* on both rolls, against −6.2 on
+    09-29 with black off), the frames held at the +0.5 EV limit included. So the darkest point
+    falling below per-roll's (archive re-measure above) does not survive display black.
+  - **Except where the hybrid's slope puts the base deeper than 6 stops** (slope ≳ 2.5; 2
+    frames on 09-29, 5 on 09-18): black is identity there and never lifts, so those frames'
+    blacks are darker than per-roll's (p1 −18 L\* on 09-29/2038, −13 on 09-18/1813).
+  - **The midtone lift survives**: hybrid minus per-roll p50 median +1.2 / +1.6 L\* (up to
+    +13), the same with black on or off.
+  - **Low-key frames get crushed under either placement** (09-29/2017, 2052; 09-18/1774):
+    35–65 % of pixels under L\* 10 with black on, against ~0 % off. Display black's shift
+    fades only at mid-grey, so a frame lying mostly under mid-grey is darkened throughout; the
+    hybrid's +0.5 EV barely offsets it (2017 p50 4.9 against per-roll's 4.2). Not reviewed by eye.
+- 2026-10-10: **decided (user): display black is off by default** under `default`, in this
+  task. It works against the roll's and the hybrid's slopes: it was needed while the
+  roll's slope came from its white alone (as the old −0.6 exposure was), which left the
+  base pale; the span slope and the hybrid now place the dark end, and per-frame placement
+  will give one less reason. The code stays: `--display-black 6` turns it on, and
+  `direct` keeps its pinned 6. Review set `review-black.json` (hybrid / per-roll × off /
+  6) served for the user's check.
+  - Folded into `pipeline_version` 12 rather than a v13: v12 is unreleased on this branch.
+    `recipe` hash `91c83ff8460a6fba` → `c16e937e5ade63dc`; every default pixel under
+    mid-grey moves.
+  - `fit_range::DEFAULT_DISPLAY_BLACK_STOPS` became the test-only
+    `REVIEWED_DISPLAY_BLACK_STOPS`; tests that exercise black now state it on.
+  - The film master no longer spares `--display-black 6` (no longer the default).
+  - The "film base renders to luminance 0" refusal now needs display black stated on; its
+    remedy list still omits `--display-black` (its default, off, would also clear it).
+- 2026-10-10: **code review fixes** (`/code-review`, 10 findings).
+  - Fixed: `roll` refuses `--roll-frame-tones` / a shared `roll.frame_tones`, which placed
+    every frame from one frame's tones; `--hybrid-span` / `--hybrid-level-keep` are refused
+    where the frame renders at the roll's placement, and `--small-lift on` /
+    `--thin-lift on` where the hybrid places it (typed, or in a manifest's `params`);
+    `reuse.flag` no longer carries `--roll-envelope` (alone it placed nothing and warned on
+    every frame, failing `--strict`) — frame flags with tones still do; `measure-roll`
+    computes the envelope after the white rule, whose dark-end fault is more specific.
+  - **Not adopted: an ordering rule** on `roll.envelope_stops` and a frame's tones (dark
+    end below white). `measure-roll` writes a flat frame's dark end above its white (the
+    fixtures do: white 2.28, dark 2.46) and an envelope crossed the same way; the
+    placement already handles both (no span: the maximum slope; crossed exposure bounds:
+    centred).
+  - Kept: `hybrid_placement`'s floor `min(k_f, cap slope)` is the documented formula,
+    though `span_slope` already keeps `k_f` at or above the cap's slope.
+  - Deferred to `hybrid-slope-bounds` (its task file): the ±EV limit applied after the
+    envelope, the kept exposure's level-0 reference, the envelope's top under a clamped
+    frame.
+  - Accepted: `--film-master` now refuses an old recipe's `display_black: 6`.
+- 2026-10-10: **ship review** (`ship:diff-reviewer` + Codex). Fixed: a non-finite envelope
+  or tones panicked the solver inside the presence rules (exit 101) — `RollSection::hybrid`
+  now returns `None` on any non-finite input, and `validate` refuses it by name; `roll`
+  checks the typed placement knobs against each resolved frame; the "film base renders to
+  luminance 0" remedy now names `--display-black`, whose default (off) reads no base (tests
+  that need black on use `direct`). Edge left: a picture frame the pool kept nothing of
+  gets no tones, and its warning's remedy (measure it among the inputs) cannot help;
+  `--placement roll` does. **Done**: all CI gates and the asset probes pass.
+- 2026-10-10: **PR #263 review** (Codex on GitHub, then `/review-fix-loop` with
+  `nc-reviewer` alone: the Codex CLI was out of credits).
+  - Fixed: a hybrid knob is refused when the roll's white and dark end are missing (tones
+    and envelope alone place nothing), but steps aside when only one end is stated, so
+    `validate`'s white-without-dark message wins. On `roll`, a typed hybrid knob is refused
+    only when no frame is hybrid-placed, and `--small-lift on` / `--thin-lift on` only when
+    no frame renders at the roll's placement: one frame without tones no longer fails the
+    run (it warns). `design-spec`'s `measure-roll` row no longer shows `--roll-envelope` in
+    the reuse flag.
+  - Declined: refusing a reversed `--roll-envelope` (as on 2026-10-10 above —
+    `measure-roll` writes one on a degenerate roll).
+- 2026-10-10: **rebased onto `core/roll-measure-mode`** (`roll --measure-roll`). Its
+  measured-or-switch split now classes `roll.envelope_stops` and `roll.frame_tones` as
+  measured (a typed `--roll-envelope` is refused in measure mode; `--roll-frame-tones` by
+  the every-frame rule) and `roll.placement`, `roll.hybrid_span_stops` and
+  `roll.hybrid_level_keep` as switches, which keep their meaning there.
 
 ## hybrid-slope-bounds
 
@@ -1430,6 +1584,12 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-09: the span slope's anchor and the 1 % / 5 % dark end moved to
   `span-roll-slope`, which also introduces the maximum at 3.5; this task tunes it across
   the hybrid and the per-frame placements, so it now waits on `per-frame-placement`.
+- 2026-10-09: from `envelope-hybrid-placement` (user): display black's role once the
+  hybrid sets each frame's contrast, and the shadow toe steep slopes need (1719 loses
+  shadow detail), move here. Also measured there: the +0.5 EV exposure limit, applied after
+  the envelope, holds 17 archive frames (7 on 09-29) whose dark end then falls below the
+  roll's (09-29 −5.68 against −4.42 look stops); whether the limit or the slope should give
+  way belongs with the maximum.
 
 ## display-white
 
