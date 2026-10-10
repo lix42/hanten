@@ -768,8 +768,10 @@ A post-rebase review found four more issues, all fixed:
   the directories are created before the measurement when `--save-recipe` or
   `--strict --report-file` may write there first.
 - Under `auto`, the pre-measurement plan still holds the frames the measurement drops,
-  so its output-collision check is skipped there; the final plan is guarded before any
-  write. A found frame sharing a picture's stem no longer refuses the roll.
+  so it guards every input but not the frames' outputs. The final plan guards those, and
+  treats the frames `auto` found as read targets too. A found frame sharing a picture's
+  stem no longer refuses the roll, and nothing may write over a found frame, a `--strict`
+  refusal's report included.
 - `nctool roll convert` fails (exit 1) when a measured run succeeds without a usable
   resolved recipe, rather than tagging `roll_measured` with no `roll_section`.
 

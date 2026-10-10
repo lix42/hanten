@@ -6113,12 +6113,11 @@ fn measure_for_roll(
     validate_shared_stated(&shared)?;
     let inputs = roll_inputs(&args.inputs)?;
     let planned = resolve_frames(args, Some(&inputs), &stated, &shared, &mut Vec::new(), log)?;
-    // Under `auto` this plan still holds the frames the measurement drops, so two of them
-    // can collide falsely; the final plan is guarded before anything is written.
+    // Every input is protected now. Under `auto` this plan still holds the frames the
+    // measurement drops, whose outputs could collide falsely, so the frames' outputs are
+    // guarded on the final plan instead.
     let auto = args.leader == Some(Reference::Auto) || args.unexposed == Some(Reference::Auto);
-    if !auto {
-        guard_roll_targets(args, &planned, &args.references())?;
-    }
+    guard_roll_targets(args, &planned, &args.references(), !auto)?;
     // The output directories first when something is written before the frames: the
     // recipe, or a `--strict` refusal's report, may go into one. A path the recipe cannot
     // be written to fails before the measurement, not after it.
@@ -6149,11 +6148,7 @@ fn measure_for_roll(
     };
     let stated_base = req.check()?;
     let m = measure_roll(&req, stated_base, started, warnings, log)?;
-    let found: Vec<String> = inputs
-        .iter()
-        .filter(|i| !m.pictures.contains(i))
-        .map(|i| i.display().to_string())
-        .collect();
+    let found: Vec<String> = m.found.iter().map(|i| i.display().to_string()).collect();
     if !found.is_empty() {
         log.note(&format!(
             "not converting {}: `auto` found them as reference frames (the report's \
@@ -6199,12 +6194,13 @@ fn measured_layer(recipe: &MeasuredRecipe) -> Result<serde_json::Value> {
 /// Guard every roll write target (per-frame outputs and exports, `--report-file`,
 /// `--save-recipe`) against every file the roll reads and against one another, before
 /// anything is decoded. `references` are measure mode's leader and unexposed scans.
-/// Outside measure mode, `--save-recipe` may replace a sole `--params` layer, as on
-/// `convert`.
+/// Without `frame_outputs`, the frames are guarded only as inputs. Outside measure mode,
+/// `--save-recipe` may replace a sole `--params` layer, as on `convert`.
 fn guard_roll_targets(
     args: &RollArgs,
     planned: &[PlannedFrame],
     references: &[(&Path, &str)],
+    frame_outputs: bool,
 ) -> Result<()> {
     let save_key = args.save_recipe.as_deref().map(collision_key);
     let overwrites = |p: &Path| {
@@ -6244,7 +6240,7 @@ fn guard_roll_targets(
             .map(|p| (p.as_path(), "the --params recipe")),
     );
     let mut targets: Vec<(String, PathBuf, RollTarget)> = Vec::new();
-    for (i, pf) in planned.iter().enumerate() {
+    for (i, pf) in planned.iter().enumerate().filter(|_| frame_outputs) {
         targets.push((
             format!("output for {}", pf.input.display()),
             pf.output.clone(),
@@ -6417,7 +6413,16 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // above), so `roll_warnings` is passed in to collect it.
     let pictures = measurement.as_ref().map(|m| m.pictures.as_slice());
     let planned = resolve_frames(&args, pictures, &stated, &shared, &mut roll_warnings, &log)?;
-    guard_roll_targets(&args, &planned, &args.references())?;
+    // The frames `auto` found are read too, though not converted.
+    let mut reads = args.references();
+    if let Some(m) = &measurement {
+        reads.extend(
+            m.found
+                .iter()
+                .map(|p| (p.as_path(), "an auto-found reference scan")),
+        );
+    }
+    guard_roll_targets(&args, &planned, &reads, true)?;
     // Now that the plan is known-good, and before the recipe is staged into one.
     create_roll_dirs(&args, &planned)?;
 
@@ -8242,12 +8247,13 @@ impl RollMeasureRequest<'_> {
     }
 }
 
-/// What [`measure_roll`] returns: the report, the recipe `measure-roll --out` writes, and
-/// the frames measured as picture (the inputs, less the frames `auto` found).
+/// What [`measure_roll`] returns: the report, the recipe `measure-roll --out` writes, the
+/// frames measured as picture, and the inputs `auto` found as reference frames.
 struct RollMeasurement {
     report: MeasureRollReport,
     recipe: MeasuredRecipe,
     pictures: Vec<PathBuf>,
+    found: Vec<PathBuf>,
 }
 
 /// Measure what a roll shares, over a request that passed [`RollMeasureRequest::check`]:
@@ -8775,10 +8781,17 @@ fn measure_roll(
         warnings,
         elapsed_ms: elapsed_ms(started),
     };
+    let found = req
+        .inputs
+        .iter()
+        .filter(|i| !pictures.contains(i))
+        .cloned()
+        .collect();
     Ok(RollMeasurement {
         report,
         recipe: measured,
         pictures,
+        found,
     })
 }
 

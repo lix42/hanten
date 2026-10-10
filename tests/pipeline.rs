@@ -17029,6 +17029,52 @@ fn roll_measure_mode_leaves_auto_found_frames_unconverted() {
     ]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(written(&stem_out), ["a_positive.tiff", "b_positive.tiff"]);
+    // A found frame is still read, so no write may land on it.
+    let before = std::fs::read(&same_stem).unwrap();
+    for flag in ["--report-file", "--save-recipe"] {
+        let (code, _, err) = run(&[
+            "roll",
+            &s(&same_stem),
+            &a,
+            &b,
+            "--unexposed",
+            "auto",
+            "--params",
+            &input,
+            flag,
+            &s(&same_stem),
+            "-o",
+            &s(&tmp.path("guarded")),
+        ]);
+        assert_eq!(code, 2, "{flag}: {err}");
+        assert_eq!(std::fs::read(&same_stem).unwrap(), before, "{flag}");
+    }
+    // Nor a `--strict` refusal's report, written before the final plan: a layer from
+    // another pipeline version makes the measurement warn.
+    let old = s(&tmp.path("old.json"));
+    let body: serde_json::Value = serde_json::from_str(AUTO_INPUT).unwrap();
+    let doc = serde_json::json!({"meta": {"pipeline_version": 9999}, "params": body});
+    std::fs::write(&old, doc.to_string()).unwrap();
+    let before = std::fs::read(&leader).unwrap();
+    let (code, _, err) = run(&[
+        "roll",
+        &leader,
+        &a,
+        &b,
+        "--unexposed",
+        &blank,
+        "--leader",
+        "auto",
+        "--params",
+        &old,
+        "--strict",
+        "--report-file",
+        &leader,
+        "-o",
+        &s(&tmp.path("strict-guarded")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(std::fs::read(&leader).unwrap(), before);
     // The replay names the pictures alone: a plain `roll` converts every input it is given.
     let replay = s(&tmp.path("replay"));
     let (code, _, err) = run(&["roll", &a, &b, "--params", &saved, "-o", &replay]);
