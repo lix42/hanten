@@ -173,7 +173,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// Identity roll gains and exposure and a stated contrast and saturation, for a `--strict`
 /// test whose subject is not the roll: without them the `default` rendering warns that it
 /// fell back, or that the roll has no exposure, and `--strict` fails on that instead. Off
-/// the identity, so a `--dump-params` of the run replays quiet too.
+/// the identity, so a `--save-recipe` of the run replays quiet too.
 const MEASURED: [&str; 8] = [
     "--roll-white-balance",
     "1,1,1",
@@ -4739,7 +4739,7 @@ fn report_carries_every_identity_layer() {
     assert!(!id["target"].as_str().unwrap().is_empty());
 }
 
-/// The recipe in a document hanten wrote — `--dump-params`, `hanten params`,
+/// The recipe in a document hanten wrote — `--save-recipe`, `hanten profile`,
 /// `measure-base --out`, `measure-roll --out` — checked to be the stamped envelope.
 fn recipe_in(doc: &serde_json::Value) -> serde_json::Value {
     assert!(
@@ -4840,7 +4840,7 @@ fn convert_report_echoes_a_declared_film_type_only() {
 fn params_hash_is_the_hash_of_the_dumped_recipe() {
     // The documented contract (`Recipe::params_hash`): the report's
     // `identity.params_hash` and the record's `conversion.params_hash` are FNV-1a-64
-    // over the `params` body `--dump-params` writes, dedented to the top level, so
+    // over the `params` body `--save-recipe` writes, dedented to the top level, so
     // either can be matched to a kept recipe file.
     let tmp = TempDir::new("paramshash");
     let out = tmp.path("out.tiff");
@@ -4850,7 +4850,7 @@ fn params_hash_is_the_hash_of_the_dumped_recipe() {
         &fixture("hdr-48bit.tif"),
         &out,
         &[
-            "--dump-params",
+            "--save-recipe",
             dump.to_str().unwrap(),
             "--telemetry-file",
             rec.to_str().unwrap(),
@@ -4919,7 +4919,7 @@ fn the_reports_recipe_replays_the_run() {
 
 #[test]
 fn recipe_dumped_by_this_build_replays_clean_under_strict() {
-    // The documented reproducibility path is `--dump-params` → replay, and it must
+    // The documented reproducibility path is `--save-recipe` → replay, and it must
     // survive `--strict`: nothing else checks the one file the tool itself writes.
     //
     // The roll measurement is stated so the dump carries one; without it the replay
@@ -4930,7 +4930,7 @@ fn recipe_dumped_by_this_build_replays_clean_under_strict() {
     let (code, _, err) = convert_p3(
         &fixture("hdr-48bit.tif"),
         &first,
-        &[&["--dump-params", dump.to_str().unwrap()][..], &MEASURED].concat(),
+        &[&["--save-recipe", dump.to_str().unwrap()][..], &MEASURED].concat(),
     );
     assert_eq!(code, 0, "{err}");
 
@@ -5489,7 +5489,7 @@ fn identity_stamping_does_not_perturb_the_output_pixels() {
         &input,
         &base,
         &[
-            "--dump-params",
+            "--save-recipe",
             envelope.to_str().unwrap(),
             "--report",
             "none",
@@ -5989,7 +5989,7 @@ fn max_memory_is_operational_not_a_recipe_key() {
             vec![
                 "--max-memory",
                 "3GiB",
-                "--dump-params",
+                "--save-recipe",
                 dump.to_str().unwrap(),
             ],
         ),
@@ -7696,7 +7696,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
         &[
             "--params",
             recipe.to_str().unwrap(),
-            "--dump-params",
+            "--save-recipe",
             dump.to_str().unwrap(),
         ],
     );
@@ -8118,9 +8118,9 @@ fn the_regional_balance_is_a_migration_error() {
         "0.9,0.55,0.42",
     ]);
     assert_eq!(code, 0, "{err}");
-    let (code, params, err) = run(&["params"]);
+    let (code, profile, err) = run(&["profile"]);
     assert_eq!(code, 0, "{err}");
-    for (what, text) in [("report", &stdout), ("params", &params)] {
+    for (what, text) in [("report", &stdout), ("profile", &profile)] {
         for key in ["balance_range", "shadow_balance", "highlight_balance"] {
             assert!(!text.contains(key), "{what} still carries {key}: {text}");
         }
@@ -8291,7 +8291,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
     );
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("\"recipe_version\": 3"), "{err}");
-    assert!(err.contains("hanten params"), "{err}");
+    assert!(err.contains("hanten profile"), "{err}");
 
     // (2) Versioned, but still carrying the removed chain's reconstruction keys:
     // refused by key, with where each one went.
@@ -8362,37 +8362,210 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
     );
 }
 
+/// A profile's text as JSON: it is JSONC, so each `//` comment outside a string goes
+/// first. (The binary's own reader is what `--params` tests; this is the test's view.)
+fn profile_json(text: &str) -> serde_json::Value {
+    let mut json = String::new();
+    for line in text.lines() {
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut end = line.len();
+        for (i, c) in line.char_indices() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if in_string => escaped = true,
+                '"' => in_string = !in_string,
+                '/' if !in_string && line[i..].starts_with("//") => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        json.push_str(&line[..end]);
+        json.push('\n');
+    }
+    serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}: {json}"))
+}
+
+/// A look's flags, off every default, for the profile tests.
+const LOOK: [&str; 8] = [
+    "--contrast",
+    "1.2",
+    "--saturation",
+    "0.9",
+    "--display-black",
+    "5",
+    "--gamut",
+    "srgb",
+];
+
 #[test]
-fn hanten_params_writes_the_recipe_convert_reads() {
-    let (code, params, err) = run(&["params"]);
+fn a_profile_is_written_without_a_scan_and_renders_as_its_flags() {
+    let tmp = TempDir::new("profile-roundtrip");
+    let look = tmp.path("look.jsonc");
+    let look_s = look.to_str().unwrap();
+    let (code, out, err) = run(&[&["profile", "--out", look_s][..], &LOOK].concat());
     assert_eq!(code, 0, "{err}");
-    let written: serde_json::Value = serde_json::from_str(&params).unwrap();
-    let doc = recipe_in(&written);
-    assert_eq!(doc["recipe_version"], 3);
-    assert!(doc.get("print").is_none(), "{doc}");
+    assert!(out.is_empty(), "{out}");
+    let text = std::fs::read_to_string(&look).unwrap();
+    assert!(text.starts_with("// A Hanten look profile"), "{text}");
+    assert!(
+        text.contains("\"contrast\": 1.2,  // multiplier on the base slope"),
+        "{text}"
+    );
+    let doc = recipe_in(&profile_json(&text));
+    for section in ["calibration", "roll", "scene_correction"] {
+        assert!(doc.get(section).is_none(), "{section}: {doc}");
+    }
 
-    // The selector it once took is a removed flag.
-    let (code, _out, err) = run(&["params", "--new-flow"]);
-    assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--new-flow was removed"), "{err}");
+    // `--params` reads it as written, comments and all, and renders what the flags do.
+    let input = fixture("hdr-48bit.tif");
+    let render = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, _, err) = run(&[
+            &[
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--report",
+                "none",
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        std::fs::read(out).unwrap()
+    };
+    let from_flags = render("flags.tiff", &LOOK);
+    assert_eq!(render("profile.tiff", &["--params", look_s]), from_flags);
+    // Read, never rewritten: the comments are still there.
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), text);
+}
 
-    // What it writes is what `convert` reads, envelope and all, once a film base is
-    // stated.
-    let tmp = TempDir::new("params-roundtrip");
-    let mut doc = written;
-    doc["params"]["calibration"]["film_base"] = serde_json::json!({"explicit": [0.9, 0.55, 0.42]});
-    let recipe = write_file(&tmp.path("r.json"), &doc.to_string());
-    let (code, _out, err) = run(&[
+#[test]
+fn a_profile_holds_what_save_recipe_holds_but_the_rolls_own() {
+    let tmp = TempDir::new("profile-vs-save");
+    let saved = tmp.path("saved.json");
+    let (code, _, err) = run(&[
+        &[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.tiff").to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--save-recipe",
+            saved.to_str().unwrap(),
+            "--report",
+            "none",
+        ][..],
+        &LOOK,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let mut expected = written_recipe(&saved);
+    let sections = expected.as_object_mut().unwrap();
+    for section in ["calibration", "roll", "scene_correction"] {
+        sections.remove(section).unwrap();
+    }
+
+    let (code, out, err) = run(&[&["profile"][..], &LOOK].concat());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(recipe_in(&profile_json(&out)), expected);
+}
+
+#[test]
+fn a_profile_refuses_what_it_cannot_hold() {
+    let refused = |args: &[&str]| {
+        let (code, out, err) = run(&[&["profile"][..], args].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(out.is_empty(), "{out}");
+        err
+    };
+    // The roll's values belong to one roll, and the refusal says where they go.
+    let err = refused(&["--film-base", "0.9,0.55,0.42"]);
+    assert!(err.contains("hanten measure-base"), "{err}");
+    let err = refused(&["--roll-white", "2"]);
+    assert!(err.contains("hanten measure-roll"), "{err}");
+    // So does the adjustment made on top of them: as a recipe value it would warn
+    // beside every roll's measured exposure.
+    let err = refused(&["--exposure", "0.3"]);
+    assert!(err.contains("--exposure sets an adjustment"), "{err}");
+    // A retired roll spelling is diagnosed as retired, and its remedy placed.
+    let err = refused(&["--roll-frame-slope", "2"]);
+    assert!(err.contains("--roll-frame-slope was removed"), "{err}");
+    assert!(
+        err.contains("a profile holds no film base, roll values"),
+        "{err}"
+    );
+    let err = refused(&["--auto-base"]);
+    assert!(err.contains("a profile holds no film base"), "{err}");
+    // …and its help does not offer them.
+    let (_, help, _) = run(&["profile", "--help"]);
+    for flag in ["--film-base", "--roll-white ", "--exposure", "--thin-lift"] {
+        assert!(
+            !help.lines().any(|l| l.trim_start().starts_with(flag)),
+            "{flag} in: {help}"
+        );
+    }
+    assert!(help.contains("--contrast"), "{help}");
+    // Contradictions are found here, not when the profile is applied.
+    let err = refused(&["--range", "sdr", "--transfer", "pq"]);
+    assert!(err.contains("no destination combines"), "{err}");
+    let err = refused(&["--film-master", "--contrast", "1.2"]);
+    assert!(err.contains("cannot apply the look"), "{err}");
+
+    // `--out` never clobbers a file, unless forced.
+    let tmp = TempDir::new("profile-out");
+    let look = write_file(&tmp.path("look.jsonc"), "{} // mine\n");
+    let look_s = look.to_str().unwrap();
+    let err = refused(&["--out", look_s]);
+    assert!(err.contains("--force"), "{err}");
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), "{} // mine\n");
+    let (code, _, err) = run(&["profile", "--out", look_s, "--force"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        std::fs::read_to_string(&look)
+            .unwrap()
+            .starts_with("// A Hanten look profile")
+    );
+}
+
+#[test]
+fn the_renamed_params_and_dump_params_name_their_successors() {
+    for args in [
+        &["params"][..],
+        &["params", "--help"],
+        &["params", "--new-flow"],
+    ] {
+        let (code, out, err) = run(args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(out.is_empty(), "{out}");
+        assert!(err.contains("renamed `hanten profile`"), "{err}");
+    }
+    let tmp = TempDir::new("dump-params-renamed");
+    let dump = tmp.path("dump.json");
+    let (code, _, err) = run(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
-        tmp.path("out").to_str().unwrap(),
-        "--params",
-        recipe.to_str().unwrap(),
-        "--report",
-        "none",
+        tmp.path("out.tiff").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--dump-params",
+        dump.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0, "{err}");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("pass --save-recipe"), "{err}");
+    assert!(!dump.exists() && !tmp.path("out.tiff").exists());
+    // Bare, too: the rename is named, not a missing value.
+    let (code, _, err) = run(&["convert", "in.tif", "-o", "out", "--dump-params"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("pass --save-recipe"), "{err}");
 }
 
 #[test]
@@ -8686,13 +8859,13 @@ fn convert_never_removes_the_recipe_it_read() {
 
 #[test]
 fn a_dump_named_like_a_sidecar_is_not_removed_as_one() {
-    // A `--dump-params` file has the sidecar's envelope and identity, so only the
+    // A `--save-recipe` file has the sidecar's envelope and identity, so only the
     // version that wrote it tells the two apart. One at `<output>.json` must survive
     // its own run and every later run over that output.
     let tmp = TempDir::new("dump-as-sidecar");
     let out = tmp.path("out.tiff");
     let dump = sidecar_of(&out);
-    for extra in [&["--dump-params", dump.to_str().unwrap()][..], &[]] {
+    for extra in [&["--save-recipe", dump.to_str().unwrap()][..], &[]] {
         let (code, stdout, err) = convert_p3(&fixture("hdr-48bit.tif"), &out, extra);
         assert_eq!(code, 0, "{err}");
         assert!(dump.exists(), "the dump must survive: {extra:?}");
@@ -9351,7 +9524,7 @@ fn the_roll_exposure_adds_to_the_stated_one_and_direct_leaves_it_out() {
 
 #[test]
 fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
-    // Nothing is read as unset by its value: a `--dump-params` recipe replays exactly
+    // Nothing is read as unset by its value: a `--save-recipe` recipe replays exactly
     // what it rendered. A recipe white balance beside the roll's gains may be a leftover
     // an earlier `measure-roll` wrote there, so the run warns; a typed flag is a choice
     // made now, and never does. A contrast beside the roll's white is not a leftover —
@@ -9388,7 +9561,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             "0",
             "--contrast",
             "1.2",
-            "--dump-params",
+            "--save-recipe",
             dumped.to_str().unwrap(),
             "--strict",
         ],
@@ -9541,7 +9714,7 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
             "--highlight-desaturation",
             "0.5",
             "--strict",
-            "--dump-params",
+            "--save-recipe",
             dumped.to_str().unwrap(),
         ],
     );
@@ -9591,7 +9764,7 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
                     "--rendering",
                     "direct",
                     "--strict",
-                    "--dump-params",
+                    "--save-recipe",
                     dump.to_str().unwrap(),
                 ][..],
                 flag,
@@ -9625,7 +9798,7 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
             "direct",
             "--contrast",
             "1.3",
-            "--dump-params",
+            "--save-recipe",
             dump.to_str().unwrap(),
         ],
     );
@@ -11475,7 +11648,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     );
 
     // A typed small lift on a thin-lifted frame would be ignored: refused, with remedies
-    // that work. A `--dump-params` of the frame carries both and replays.
+    // that work. A `--save-recipe` of the frame carries both and replays.
     let (code, _, err) = run(&[
         "convert",
         &s(&path("thin")),
@@ -11507,7 +11680,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     let dumped = tmp.path("dumped.json");
     convert(
         "dumping.tiff",
-        &["--params", &s(&lifted), "--dump-params", &s(&dumped)],
+        &["--params", &s(&lifted), "--save-recipe", &s(&dumped)],
     );
     let (replayed, _) = convert("replayed.tiff", &["--params", &s(&dumped)]);
     assert_eq!(replayed, steep, "a dump of a thin frame replays");
@@ -12698,7 +12871,7 @@ fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
 }
 
 #[test]
-fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
+fn a_flag_over_a_frames_own_white_replays_from_save_recipe() {
     // `--roll-white` beats the frame's `roll.frames` entry; the dumped recipe must
     // replay what rendered, not re-apply the entry the flag overrode.
     let tmp = TempDir::new("roll-frames-replay");
@@ -12719,7 +12892,7 @@ fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
         "1.7",
         "--roll-dark",
         "-3.75",
-        "--dump-params",
+        "--save-recipe",
         dump.to_str().unwrap(),
         "-o",
         first.to_str().unwrap(),
@@ -13099,7 +13272,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         &[
             "--params",
             recipe.to_str().unwrap(),
-            "--dump-params",
+            "--save-recipe",
             dump.to_str().unwrap(),
         ],
     );
@@ -14561,10 +14734,9 @@ fn a_later_layer_wins_and_a_flag_beats_every_layer_by_source() {
 
 #[test]
 fn a_complete_look_file_layered_after_the_measurement_keeps_it() {
-    // `hanten params` states every key, the unset base and roll ones `null`. A `null`
-    // states nothing, so either order keeps those; but its restated default
-    // `reconstruction.linearization` wins wherever it lands, so the measured file
-    // goes last.
+    // `hanten profile` states every key but the base and roll ones, so either order
+    // keeps those; but its restated default `reconstruction.linearization` wins wherever
+    // it lands, so the measured file goes last.
     let tmp = TempDir::new("layers-null");
     let measured = write_file(
         &tmp.path("measured.json"),
@@ -14573,11 +14745,11 @@ fn a_complete_look_file_layered_after_the_measurement_keeps_it() {
             "reconstruction": {"linearization": 1.6},
             "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5, "dark_stops": -3.75}}"#,
     );
-    let (code, complete, err) = run(&["params"]);
+    let (code, complete, err) = run(&["profile"]);
     assert_eq!(code, 0, "{err}");
-    assert!(complete.contains(r#""film_base": null"#), "{complete}");
+    assert!(!complete.contains("film_base"), "{complete}");
     assert!(complete.contains(r#""linearization": 1.8"#), "{complete}");
-    let look = write_file(&tmp.path("complete.json"), &complete);
+    let look = write_file(&tmp.path("complete.jsonc"), &complete);
     let (measured, look) = (measured.to_str().unwrap(), look.to_str().unwrap());
     for (name, layers, linearization) in [
         ("measured-last", [look, measured], 1.6),
@@ -14598,7 +14770,7 @@ fn a_complete_look_file_layered_after_the_measurement_keeps_it() {
 
 #[test]
 fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
-    // A `--dump-params` file carries its roll's `roll.frames` table. Tables union and
+    // A `--save-recipe` file carries its roll's `roll.frames` table. Tables union and
     // absence states nothing, so layered under another roll's file its clamp survives;
     // with `calibration` and `roll` stripped, only the measured file's roll applies.
     let tmp = TempDir::new("layers-dump-as-look");
@@ -14628,7 +14800,7 @@ fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
         roll1.to_str().unwrap(),
         "--exposure",
         "0.3",
-        "--dump-params",
+        "--save-recipe",
         dump.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
@@ -14686,13 +14858,13 @@ fn convert_refuses_a_report_file_or_a_layered_dump_over_a_params_layer() {
     assert!(!out.exists());
     assert_eq!(std::fs::read_to_string(&look).unwrap(), LOOK_LAYER);
     // A dump over one of several layers would fold the others into it.
-    let (code, _, err) = convert(&["--dump-params", m]);
+    let (code, _, err) = convert(&["--save-recipe", m]);
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains("--params layer") && err.contains("measured.json"),
         "{err}"
     );
-    assert!(err.contains("Dump to another path"), "{err}");
+    assert!(err.contains("Save it to another path"), "{err}");
     assert!(!out.exists());
     assert_eq!(std::fs::read_to_string(&measured).unwrap(), MEASURED_LAYER);
     // Over the sole layer, rewriting the recipe it replays stays allowed.
@@ -14703,7 +14875,7 @@ fn convert_refuses_a_report_file_or_a_layered_dump_over_a_params_layer() {
         out.to_str().unwrap(),
         "--params",
         m,
-        "--dump-params",
+        "--save-recipe",
         m,
     ]);
     assert_eq!(code, 0, "{err}");
@@ -15265,7 +15437,7 @@ fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
     let (code, _, err) = convert_p3(
         &scan,
         &tmp.path("dumped.tiff"),
-        &["--dump-params", dump.to_str().unwrap()],
+        &["--save-recipe", dump.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{err}");
     let measured_base = tmp.path("measured-base.json");
@@ -15288,18 +15460,17 @@ fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
         measured_roll.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let (code, params, err) = run(&["params"]);
+    let (code, profile, err) = run(&["profile"]);
     assert_eq!(code, 0, "{err}");
-    let template = write_file(&tmp.path("params.json"), &params);
+    let template = write_file(&tmp.path("look.jsonc"), &profile);
 
     let skew = format!("pipeline_version {}", current - 1);
     for doc in [&dump, &measured_base, &measured_roll, &template] {
         let name = doc.file_name().unwrap().to_str().unwrap();
-        let mut written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(doc).unwrap()).unwrap();
+        let mut written = profile_json(&std::fs::read_to_string(doc).unwrap());
         recipe_in(&written);
         assert_eq!(written["meta"]["pipeline_version"], current, "{name}");
-        // `convert_p3` states a base, which `hanten params` leaves unset, and `MEASURED`
+        // `convert_p3` states a base, which `hanten profile` leaves out, and `MEASURED`
         // the roll values only `measure-roll` writes, so `--strict` fails on the stamp alone.
         // The fixture's one bright frame measures a dark end three stops under its white,
         // a span the roll's slope stretches until it clips: a deeper one keeps it quiet.
@@ -15343,7 +15514,7 @@ fn every_written_recipe_is_stamped_and_warns_on_a_later_build() {
 
 #[test]
 fn a_failed_run_writes_no_dump() {
-    // `--dump-params` is written only once the run has passed, so a failed replay
+    // `--save-recipe` is written only once the run has passed, so a failed replay
     // leaves the recipe it would rewrite as it was.
     let tmp = TempDir::new("dump-after-success");
     let scan = fixture("hdr-48bit.tif");
@@ -15366,7 +15537,7 @@ fn a_failed_run_writes_no_dump() {
         convert_p3(
             &scan,
             &tmp.path("out.tiff"),
-            &[&["--params", l, "--dump-params", l][..], &MEASURED, extra].concat(),
+            &[&["--params", l, "--save-recipe", l][..], &MEASURED, extra].concat(),
         )
     };
     let (code, _, err) = replay(&["--strict"]);
@@ -15394,7 +15565,7 @@ fn a_failed_run_writes_no_dump() {
     let (code, _, err) = convert_p3(
         &bad,
         &tmp.path("bad-out.tiff"),
-        &["--dump-params", dump.to_str().unwrap()],
+        &["--save-recipe", dump.to_str().unwrap()],
     );
     assert_eq!(code, 3, "{err}");
     assert!(!dump.exists(), "{err}");
@@ -15433,7 +15604,7 @@ fn an_unwritable_dump_fails_before_the_decode() {
             &fixture("hdr-48bit.tif"),
             &out,
             &[
-                "--dump-params",
+                "--save-recipe",
                 dump.to_str().unwrap(),
                 "--report-file",
                 report.to_str().unwrap(),
@@ -15471,10 +15642,10 @@ fn a_dump_linked_to_the_image_is_refused_before_the_decode() {
         case_link.to_str().unwrap(),
     );
     for (out, extra) in [
-        (&image, vec!["--dump-params", l]),
-        (&linked_out, vec!["--dump-params", d]),
-        (&image, vec!["--dump-params", d, "--report-file", r]),
-        (&image, vec!["--dump-params", c]),
+        (&image, vec!["--save-recipe", l]),
+        (&linked_out, vec!["--save-recipe", d]),
+        (&image, vec!["--save-recipe", d, "--report-file", r]),
+        (&image, vec!["--save-recipe", c]),
     ] {
         let (code, _, err) = convert_p3(&fixture("hdr-48bit.tif"), out, &extra);
         assert_eq!(code, 2, "{extra:?}: {err}");
@@ -15509,10 +15680,9 @@ fn measure_roll_out_states_the_decode_even_at_its_default() {
         measured.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let (code, params, err) = run(&["params"]);
+    let (code, profile, err) = run(&["profile"]);
     assert_eq!(code, 0, "{err}");
-    let default_decode =
-        recipe_in(&serde_json::from_str(&params).unwrap())["reconstruction"].clone();
+    let default_decode = recipe_in(&profile_json(&profile))["reconstruction"].clone();
     let written = written_recipe(&measured);
     assert_eq!(written["reconstruction"], default_decode, "{written}");
 
@@ -15665,7 +15835,7 @@ fn a_closed_stdout_is_not_a_failure_and_the_run_finishes() {
     let roll_recipe = tmp.path("roll.json");
     let roll_dir = tmp.path("roll");
     let runs: [Vec<&str>; 6] = [
-        vec!["params"],
+        vec!["profile"],
         vec!["inspect", fix],
         [&["convert", fix, "-o", out.to_str().unwrap()][..], &BASE].concat(),
         // `--out` is written after the report.
@@ -15794,7 +15964,7 @@ fn a_closed_stderr_is_not_a_failure() {
 fn a_failing_stdout_is_a_write_error() {
     let fix = fixture("hdr-48bit.tif");
     let runs = [
-        (vec!["params"], "writing params to stdout"),
+        (vec!["profile"], "writing the profile to stdout"),
         (
             vec!["inspect", fix.to_str().unwrap()],
             "writing the report to stdout",

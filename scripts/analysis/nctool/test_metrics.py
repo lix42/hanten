@@ -1220,7 +1220,7 @@ class SpaceFromRecipe(unittest.TestCase):
         self.assertIn("gain-map-hdr", why)
 
     def test_a_run_reads_a_derived_destination_off_its_report(self):
-        """`hanten params` writes `{"display": {}}`, so a frozen v2 recipe routinely
+        """The default recipe writes `{"display": {}}`, so a frozen v2 recipe routinely
         leaves every axis to nc. The roll report states the resolved destination per
         frame, and that is what the run is measured by."""
         recipe = {"recipe_version": 2, "output": {"display": {}}}

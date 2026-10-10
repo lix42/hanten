@@ -40,7 +40,7 @@ What other epics need to know about `core`:
   takes an already-resolved `&FilmBase`. Every command that decodes runs the
   stage-0 memory preflight first (`io/memory-preflight`, exit 6 over budget).
 - **`ResolvedConfig` is the recipe.** One nested per-stage struct doubles as the
-  recipe, `--dump-params`, and `hanten params` output, so the three can't drift.
+  recipe, `--save-recipe`, and `hanten profile` output, so they can't drift.
   Merge model is `defaults ← --params layers ← CLI` (flags win, **by source rather
   than by value**; `recipe::compose`, `core/recipe-composition`); an absent presence
   flag never clobbers a recipe value. Every recipe
@@ -125,18 +125,25 @@ What other epics need to know about `core`:
   edit a row's `render`/`base` in place for a moved default**; the in-place edits
   it does sanction are listed on `PIPELINE_FINGERPRINTS`.
 - **Every recipe document hanten writes is `{ "meta": {…identity…}, "params": {…recipe…} }`**
-  (`cli::RecipeEnvelope`: `--dump-params`, `hanten params`, `measure-base --out`,
+  (`cli::RecipeEnvelope`: `--save-recipe`, `hanten profile`, `measure-base --out`,
   `measure-roll --out`; `core/recipe-replay-fidelity`), the shape the pre-8 sidecar had.
   `--params` accepts it *and* a bare recipe; a replay of one stamped with another
   `pipeline_version` warns (`--strict`-promotable). A report's `recipe` stays bare.
   Identity must never become a recipe key (`deny_unknown_fields` would reject every
   written document), and identity / `output_stats` / `compare` are **operational** like
   `--report` and telemetry: no recipe keys, no `merge` arms, no effect on output bytes.
-  A reader of `hanten params` or a written recipe must unwrap `params` — and accept a
-  bare one from the reference build (`nctool roll`'s `_unwrap_envelope`).
+  A reader of a written recipe must unwrap `params` — and accept a bare one from the
+  reference build (`nctool roll`'s `_unwrap_envelope`).
+- **`hanten profile` writes a look** (`core/profile-authoring`): every key but
+  `calibration`, `roll` and `scene_correction`, whose flags it refuses, as annotated JSONC
+  (`crate::profile`). `--params` reads JSONC everywhere (`crate::jsonc`), so a recipe
+  reader outside the binary strips comments first (`nctool roll`'s `_strip_jsonc`). A new
+  knob gets a `profile::NOTES` entry (a test refuses a key without one), and a new flag
+  that sets one of those three sections joins `profile::REFUSED_FLAGS` and the `mut_arg`
+  list on `ProfileArgs`. `hanten params` and `--dump-params` are removed names.
 - **`measure-roll --out` always states `reconstruction`**, the decode its gains were
   measured through, default or not. Layered last, it beats a look's decode.
-- **`--dump-params` is staged before the decode and committed after the `--strict`
+- **`--save-recipe` is staged before the decode and committed after the `--strict`
   gate**: a run that fails writes none, and a path it cannot write, or one landing on
   another artifact through a symlink, fails up front. `staged::stage` now refuses a
   directory, read-only or non-regular target at staging, for every staged write.
@@ -1208,8 +1215,8 @@ complete profile restates the decode, so it must be layered before the measured 
 
 ## profile-authoring
 
-**Status:** not started
-**Updated:** 2026-08-11
+**Status:** done (2026-10-09)
+**Updated:** 2026-10-09
 
 - Goal: `nc params` → `nc profile`; takes overrides, validates config-only, writes
   annotated JSONC with `--out`, no image. Deletes `--dump-params`.
@@ -1224,6 +1231,87 @@ complete profile restates the decode, so it must be layered before the measured 
   contracts (stdout report, sidecar) stay plain JSON. Comments are generated from
   the schema and **not preserved** across a round trip, so nc must never rewrite a
   user's file in place.
+
+### 2026-10-09 — executed
+
+- **Shipped:** `hanten profile` (`crate::profile`, `cli::run_profile_command`);
+  `hanten params` is a hidden removed command exiting 2 naming it. `--params` reads
+  JSONC everywhere (`crate::jsonc`, blanking comments so serde's line/column hold).
+  `convert --dump-params` is renamed `--save-recipe`, its old name a hidden flag exiting
+  2 (`reject_dump_params`).
+- **Decisions (user, 2026-10-09):** a profile is **complete** (every key but
+  `calibration`/`roll`) and **stamped** (the envelope, so a `pipeline_version` bump
+  warns); `--dump-params` became `--save-recipe`, the name `core/roll-measure-mode` gives
+  `roll`, after push-back that retiring it would leave replay to `jq .recipe` — breaking
+  "no `jq` between steps" and losing the stamp. Design-doc questions 5 and 6 are recorded.
+- **Validation scope:** removed flags, then the measured-section flags (`--film-base`,
+  `--base-region`, every `roll` flag, refused naming `measure-base`/`measure-roll`),
+  `recipe::validate`, `validate_shared_stated` (split out of `validate_shared`, which
+  keeps the missing-base rule last), destination resolution. Not `validate_render`: it
+  probes through a film base. A retired roll flag keeps its removal message, with
+  `NO_ROLL_VALUES` appended, since that message names a roll flag `profile` refuses.
+- **The comments** come from `profile::NOTES` (path, flag, short note) plus clap's
+  possible values for the flag. Two tests hold the table to the document both ways.
+- **Gotcha:** rendering from a `serde_json::Value` sorts keys (no `preserve_order`) and
+  widens `f32` (`1.2000000476837158`). `profile::render` parses serde's own text into an
+  order-keeping tree that keeps each scalar's spelling instead.
+- **`nctool roll`** asks the binary whether `profile` exists (`profile --help`), falls
+  back to `params` for the reference build, and strips comments before parsing. A
+  profile has no `calibration`/`roll`; `_freeze_recipe` already `setdefault`s them.
+- **Left open:** `--small-lift`, `--thin-lift`, `--midtone-neutral` and
+  `--neutral-balance` are taste switches that live in `roll`, so a profile refuses them
+  too; a look that wants `--thin-lift off` cannot carry it.
+- **Verified:** fmt, machete, clippy, build, doc; 753 unit, 256 integration, 1 + 32
+  other, 573 `nctool`. A profile through `--params` renders byte-identically to its
+  flags, and its values equal `--save-recipe`'s minus `calibration`/`roll`
+  (`tests/pipeline.rs`). `docs/using-nc.md` §3, §4, §5 and §10 re-run on the fixtures.
+
+### 2026-10-09 — review fixes (`/code-review`)
+
+This entry supersedes the two "complete … so a default moving does not move it" claims and
+the validation list above.
+- **A profile leaves out `scene_correction` too** (user decision). Its white balance or
+  exposure would land as a recipe value, and beside a measured roll the roll's warnings read
+  a recipe value as a stale adjustment: `--params look.jsonc --params roll.json --strict`
+  exited 1 on the guide's own example. `--exposure` and `--white-balance` are refused,
+  naming `convert`/`roll`.
+- **"Complete" was false for the nulls** (user decision: keep them, fix the wording). Highlight
+  desaturation, fit range and unstated destination axes are written `null`, meaning the
+  rendering's value, which a later build may move; the header, design spec, roll-workflow
+  doc and guide now say so.
+- **The refusal is decided on the sections** (`profile::refusal`): after the merge,
+  `calibration`, `roll` or `scene_correction` off the default refuses, so a new flag cannot
+  be dropped silently. `REFUSED_FLAGS` only names the flag, and those flags are hidden from
+  `profile --help` (`mut_arg` on `ProfileArgs`).
+- **A removed flag whose remedy names a refused flag** (`--auto-base`, `--auto-wb`, the
+  retired roll spellings) gets where that flag goes (`profile::removed_flag_message`).
+- Also fixed: `profile --out` logs the staged write's notes; a bare `--dump-params` reaches
+  the rename message; clap is built once per run; `jsonc::strip_comments` blanks a
+  multi-byte character byte for byte; `nctool`'s stripper keeps a block comment's line
+  breaks and refuses an unclosed one; the two TASKS.md lines calling question 5 open.
+- **Not changed:** `profile --film-master --small-lift on` names `convert`/`roll` as the
+  remedy, though `convert` refuses `--small-lift on` under the film master. Rare, and the
+  refusal's subject (a roll value in a look) is still right.
+
+### 2026-10-09 — closed
+
+Reviewed by a user-run `/code-review` and ship's `ship:diff-reviewer`; Codex did not run
+(its workspace was out of credits). The ship review's three findings, fixed: the roll
+switches (`--small-lift`, `--thin-lift`, `--midtone-neutral`, `--neutral-balance`) named
+`measure-roll` as a remedy, which never writes them, so their refusal names their
+`roll.<key>` instead; a listed flag at its default (`--exposure 0`) passed the section
+comparison, so a listed flag is now refused by presence and the comparison is the
+fallback; and the pre-v8 migration error sent users to `hanten profile` for sections it no
+longer writes. The header's "never rewrites" became "`hanten profile` never overwrites": a
+`convert --params look.jsonc --save-recipe look.jsonc` still can.
+
+Final gates on stable 1.99.0: fmt, machete, clippy, build, doc; 758 unit, 256
+integration, 1 + 32 other, 575 `nctool`.
+
+**For dependent work.** `core/roll-measure-mode`'s `--save-recipe` should share
+`convert`'s name, staging and collision guards (`run_convert`'s `save_recipe` path). A
+look holds no roll switches; if users want one in a look, that is a new decision, since
+the switches live in `roll`.
 
 ## unfrozen-auto-mode-warning
 

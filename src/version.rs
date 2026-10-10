@@ -9,7 +9,7 @@
 //!    **independent of semver** and bumps *only* when the **default** conversion
 //!    behavior changes. Answers "would this build render my frame differently".
 //! 3. **Params hash** — [`stable_hash`] over the canonical recipe JSON, the
-//!    `params` `--dump-params` writes. Answers "was this the same configuration". The
+//!    `params` `--save-recipe` writes. Answers "was this the same configuration". The
 //!    report's [`Identity::params_hash`] and the telemetry record carry it.
 //!
 //! All of it is **operational metadata**, in the same class as `--report` and the
@@ -820,7 +820,7 @@ pub(crate) mod drift_gate {
     }
 
     /// The default *configuration*'s fingerprint input: the default recipe — the
-    /// `params` that `hanten params` and an untouched default `--dump-params` write.
+    /// `params` an untouched default `--save-recipe` writes.
     /// Then the `default` rendering's base, which holds the values the document leaves
     /// unset (the fallback slope, the default saturation, and each stage knob written
     /// `null`).

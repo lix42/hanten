@@ -32,7 +32,7 @@ pub fn compose<'a>(layers: impl IntoIterator<Item = &'a Value>) -> serde_json::R
 /// Merge `overlay` into `base`: objects merge key by key (recursively), a `null`
 /// is skipped, and any other value replaces.
 ///
-/// **`null` states nothing**, so `hanten params`' unset keys erase no earlier layer
+/// **`null` states nothing**, so a complete document's unset keys erase no earlier layer
 /// and no layer can unset one. Any stated value wins, a restated default included:
 /// put a measured file last.
 ///
@@ -222,7 +222,7 @@ mod tests {
             "calibration": {"film_base": {"explicit": [0.6, 0.3, 0.2]}},
             "roll": {"white_balance": [0.8, 1.0, 1.2], "white_stops": 2.5},
             "scene_correction": {"exposure": 0.5}});
-        // `hanten params`: every key, the unset base and roll ones `null`.
+        // A complete document: every key, the unset base and roll ones `null`.
         let mut look = serde_json::to_value(Recipe::default()).unwrap();
         look["scene_correction"]["exposure"] = json!(-0.25);
         let r = compose([&measured, &look]).unwrap();

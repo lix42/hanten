@@ -63,7 +63,7 @@ move. Worked cases:
 
 | | How to check |
 |---|---|
-| the default recipe in §5 | `hanten params` |
+| the default recipe in §5 | `hanten profile` |
 | accepted preset names and suffixes | try each; the help text has been wrong when the parser was right |
 | exit codes | provoke each one; do not copy them from the spec |
 | quoted report values | re-run the command that produced them |

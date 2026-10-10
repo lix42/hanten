@@ -166,7 +166,7 @@ class TestConvert(unittest.TestCase):
         values.update(updates)
         return argparse.Namespace(**values)
 
-    #: `hanten params` from a build that takes destinations (`recipe_version` 3).
+    #: The default recipe from a build that takes destinations (`recipe_version` 3).
     DEFAULTS = {
         "recipe_version": 3,
         "calibration": {"film_base": None},
@@ -188,14 +188,28 @@ class TestConvert(unittest.TestCase):
     }
 
     defaults = DEFAULTS
+    #: The default-recipe command the fake binary has: `params` before the rename.
+    defaults_command = "profile"
     #: What the fake build's sourceless film-base command reports it measured.
     area_source = "effective_area"
     #: The film-base command the fake binary has: `estimate` before the rename.
     base_command = "measure-base"
 
     def fake_run(self, argv, **_kwargs):
-        if argv[1] == "params":
-            return mock.Mock(returncode=0, stdout=json.dumps(self.defaults), stderr="")
+        if argv[1:] == ["profile", "--help"]:
+            ok = self.defaults_command == "profile"
+            return mock.Mock(returncode=0 if ok else 2, stdout="", stderr="")
+        if argv[1] in ("profile", "params"):
+            if argv[1] != self.defaults_command:
+                return mock.Mock(returncode=2, stdout="", stderr="renamed")
+            if argv[1] == "params":
+                return mock.Mock(returncode=0, stdout=json.dumps(self.defaults), stderr="")
+            # A profile is JSONC and leaves out the measured sections.
+            profile = {k: v for k, v in self.defaults.items()
+                       if k not in ("calibration", "roll")}
+            text = "// a look profile\n" + json.dumps(profile).replace(
+                '"recipe_version": 3,', '"recipe_version": 3,  // "a // b" /* c */\n')
+            return mock.Mock(returncode=0, stdout=text, stderr="")
         if argv[1:] == ["measure-base", "--help"]:
             ok = self.base_command == "measure-base"
             return mock.Mock(returncode=0 if ok else 2, stdout="", stderr="")
@@ -317,21 +331,22 @@ class TestConvert(unittest.TestCase):
                 code = roll.cmd_convert(self.args(recipe=str(recipe_path)))
             self.assertEqual(code, 2, meta)
             self.assertIn("envelope `meta` must be an object", err.getvalue())
-            self.assertEqual(run.call_count, 1, meta)  # `params` only
+            self.assertEqual(run.call_count, 2, meta)  # the default-recipe probe and query only
 
     # Refused before the Dmin estimate: everything it depends on is known by then.
     def test_the_destination_flags_on_a_preset_build_are_refused_before_measuring(self):
         self.defaults = self.PRESET_DEFAULTS
+        self.defaults_command = "params"
         with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run) as run, \
              contextlib.redirect_stdout(io.StringIO()), \
              contextlib.redirect_stderr(io.StringIO()) as err:
             code = roll.cmd_convert(self.args(film_master=True))
         self.assertEqual(code, 2)
         self.assertIn("recipe_version 2 and later", err.getvalue())
-        self.assertEqual(run.call_count, 1)  # `params` only
+        self.assertEqual(run.call_count, 2)  # the default-recipe probe and query only
 
     def test_a_version_2_partial_recipe_takes_the_builds_version(self):
-        # `hanten params` writes `look.contrast` 1.0, a version 3 multiplier; merged under
+        # The default recipe writes `look.contrast` 1.0, a version 3 multiplier; merged under
         # a stated version 2 it would read as an old slope and be refused.
         for i, (partial, version) in enumerate((
                 ({"recipe_version": 2}, 3),
@@ -351,6 +366,7 @@ class TestConvert(unittest.TestCase):
 
     def test_the_retired_density_tag_does_not_replace_the_default_reconstruction(self):
         self.defaults = self.PRESET_DEFAULTS
+        self.defaults_command = "params"
         recipe_path = self.root / "partial.json"
         recipe_path.write_text(json.dumps({"reconstruction": {
             "type": "density", "density": {"offset": [.1, 0, 0]}}}))
@@ -433,6 +449,19 @@ class TestConvert(unittest.TestCase):
                          if argv[1] == "measure-base" and argv[2:] != ["--help"])
         self.assertNotIn("--grid", dmin_argv)
 
+    def test_the_default_recipe_command_is_chosen_per_build(self):
+        # The reference build predates `profile`; a current one refuses `params`.
+        for command in ("profile", "params"):
+            self.defaults_command = command
+            with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                code = roll.cmd_convert(self.args(config=f"by-{command}"))
+            self.assertEqual(code, 0, f"{command}: {err.getvalue()}")
+            recipe = json.loads(
+                (self.root / f"converted/nc/by-{command}/R/recipe.json").read_text())
+            self.assertEqual(recipe["calibration"]["film_base"], {"explicit": [.1, .2, .3]})
+
     def test_the_film_base_command_is_chosen_per_build(self):
         # The reference build predates the rename; a current one refuses `estimate`.
         for command in ("measure-base", "estimate"):
@@ -452,8 +481,21 @@ class TestConvert(unittest.TestCase):
         # Calibration precedes config hashing/output resolution, but the existing
         # directory is still refused before hanten roll can overwrite an artifact.
         self.assertEqual(code, 2)
-        # `params`, the film-base command probe, and the Dmin measurement.
-        self.assertEqual(run_mock.call_count, 3)
+        # The default-recipe probe and query, the film-base probe, and the Dmin
+        # measurement.
+        self.assertEqual(run_mock.call_count, 4)
+
+
+class TestStripJsonc(unittest.TestCase):
+    def test_comments_go_and_strings_and_lines_stay(self):
+        text = '{"a": "x // y", /* two\nlines */ "b": 1} // end'
+        stripped = roll._strip_jsonc(text)
+        self.assertEqual(json.loads(stripped), {"a": "x // y", "b": 1})
+        self.assertEqual(stripped.count("\n"), text.count("\n"))
+
+    def test_an_unclosed_comment_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "line 2"):
+            roll._strip_jsonc('{\n/* open\n}')
 
 
 class TestAnalyze(unittest.TestCase):

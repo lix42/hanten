@@ -886,9 +886,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   Implements [the roll workflow](design/roll-workflow.md)
 - `core/profile-authoring` (post-MVP): `core/recipe-composition`, `core/cli-framework`, `core/calibration-recipe-section`
   — `hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes an
-  annotated JSONC look with `--out`, no image. Whether `--dump-params` goes is open
-  (roll-workflow open question 5): no sidecar is written since `nf-core/default-flip`, so it is
-  the only recipe a `convert` leaves
+  annotated JSONC look with `--out`, no image. `--dump-params` is renamed `--save-recipe`
+  (roll-workflow open question 5, resolved 2026-10-09)
 - `core/unfrozen-auto-mode-warning` (post-MVP, **closed—moot**; the deps below are decision history, not a live prerequisite set): `core/roll-conversion`
 - `core/product-naming` (cross-cutting): none
   — name the product Hanten; the **binary is `hanten`** while `nc` stays the crate and
@@ -1412,11 +1411,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
   `defaults < params A < params B < … < flags`. Enables the look / roll-measurement split;
   layering needs no schema change, an in-recipe clamp table would
-- [ ] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `hanten params` becomes
+- [x] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `hanten params` becomes
   `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via
-  `--out`, needs no image. Whether `--dump-params` goes is the roll-workflow design's open
-  question 5: no sidecar is written since `nf-core/default-flip`, so it is the only recipe a
-  run leaves
+  `--out`, needs no image; `--dump-params` is renamed `--save-recipe` (roll-workflow open
+  question 5, resolved 2026-10-09)
 - [x] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — **closed—moot
   2026-09-30**: every auto mode retired (`dmax: "auto"` and `balance_range: "auto"` with the
   reference density and the regional balance, the per-frame white balance with

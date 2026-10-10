@@ -256,8 +256,8 @@ committed.
   change the image and are not recipe keys.
 - **Recipe shape follows design-spec §8–§9** (every struct is `deny_unknown_fields`).
   Mutually exclusive knobs are one enum field, never parallel `Option`s or bools.
-- **Retiring a recipe key:** strip its old default (every `--dump-params` and
-  `hanten params` document serializes it), refuse any other value with a migration
+- **Retiring a recipe key:** strip its old default (every `--save-recipe` and
+  `hanten profile` document serializes it), refuse any other value with a migration
   message (`recipe::check_body`), and never alias. Refuse even the old default if
   replaying it would now render differently.
 - **Report prose that names an operation is a claim about the run** — derive it

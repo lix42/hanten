@@ -2,7 +2,7 @@
 //!
 //! This is the scriptable contract an agent drives: clap argument parsing for
 //! every subcommand and flag (design-spec §8–9), layered JSON recipes (flags
-//! override every `--params` layer; `recipe::compose`), `--dump-params` / `params` for discovery, a JSON
+//! override every `--params` layer; `recipe::compose`), `--save-recipe` and `profile` to write recipes, a JSON
 //! report, and stable exit codes via [`NcError`]. The conversion runs here:
 //! `convert` drives the full read → film-base → fixed decode → scene correction →
 //! look → fit range → fit gamut → encode chain (delegating the pure stages to
@@ -30,6 +30,7 @@ use crate::destination::{
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::encode::{PreEncodePage, PreEncodeSamples};
 use crate::io::{encode, iso_gain_map, staged};
+use crate::jsonc;
 use crate::pipeline::chain;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range;
@@ -43,6 +44,7 @@ use crate::pipeline::{
     color, correction_confidence, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral,
     reference_frames, roll_white, scene_correction, working_space,
 };
+use crate::profile;
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
 use crate::stdio::{self, Delivery};
@@ -100,8 +102,13 @@ pub enum Command {
     /// and with --unexposed its film base — once; emit JSON, and write it as a recipe with
     /// --out.
     MeasureRoll(MeasureRollArgs),
-    /// Print the full default parameter set as JSON (recipe scaffolding).
-    Params(ParamsArgs),
+    /// Write a look as an annotated recipe (JSONC) from conversion flags, with no scan:
+    /// every setting but what belongs to one roll (its film base, roll values, white
+    /// balance and exposure).
+    Profile(ProfileArgs),
+    /// Removed: renamed `profile`. Hidden, and kept only to emit a migration error.
+    #[command(hide = true, disable_help_flag = true)]
+    Params(RemovedCommandArgs),
     /// Manage opt-in upload of anonymous `convert` telemetry: enable, disable, status,
     /// preview, flush, purge.
     Telemetry(TelemetryArgs),
@@ -149,12 +156,35 @@ pub enum TelemetryCommand {
     },
 }
 
-/// `hanten params` options.
+/// `hanten profile`: the look's flags, and where the profile is written. The flags that
+/// set what a profile leaves out (`profile::REFUSED_FLAGS`) are parsed, to be refused by
+/// name, but hidden from its help.
 #[derive(Args, Debug)]
-pub struct ParamsArgs {
-    /// Removed: see [`reject_new_flow`].
-    #[arg(long = "new-flow", hide = true)]
-    pub new_flow: bool,
+#[command(mut_arg("film_base", |a| a.hide(true)))]
+#[command(mut_arg("base_region", |a| a.hide(true)))]
+#[command(mut_arg("roll_white_balance", |a| a.hide(true)))]
+#[command(mut_arg("roll_white", |a| a.hide(true)))]
+#[command(mut_arg("roll_exposure", |a| a.hide(true)))]
+#[command(mut_arg("roll_frame_exposure", |a| a.hide(true)))]
+#[command(mut_arg("small_lift", |a| a.hide(true)))]
+#[command(mut_arg("roll_thin_slope", |a| a.hide(true)))]
+#[command(mut_arg("roll_thin_exposure", |a| a.hide(true)))]
+#[command(mut_arg("thin_lift", |a| a.hide(true)))]
+#[command(mut_arg("roll_midtone_line", |a| a.hide(true)))]
+#[command(mut_arg("midtone_neutral", |a| a.hide(true)))]
+#[command(mut_arg("neutral_balance", |a| a.hide(true)))]
+#[command(mut_arg("white_balance", |a| a.hide(true)))]
+#[command(mut_arg("exposure", |a| a.hide(true)))]
+pub struct ProfileArgs {
+    #[command(flatten)]
+    pub knobs: ConversionFlags,
+    /// Write the profile to PATH rather than stdout. Refused if PATH exists, unless
+    /// --force: Hanten never rewrites a file whose comments and edits a user may own.
+    #[arg(long = "out", value_name = "PATH")]
+    pub out: Option<PathBuf>,
+    /// Replace an existing --out file.
+    #[arg(long, requires = "out")]
+    pub force: bool,
 }
 
 /// Refuse the removed `--new-flow` selector (`nf-core/default-flip`), on every command
@@ -165,7 +195,7 @@ fn reject_new_flow(new_flow: bool) -> Result<()> {
         return Err(NcError::Usage(
             "--new-flow was removed: the rendering chain it selected is now the only one \
              (pipeline_version 8). Drop the flag. A recipe written before that version is \
-             refused on load; `hanten params` writes the current layout."
+             refused on load; `hanten profile` writes a look in the current layout."
                 .into(),
         ));
     }
@@ -418,8 +448,12 @@ pub struct ConvertArgs {
     /// `--flag`s win over them all.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Vec<PathBuf>,
-    /// Write the effective (resolved) parameters to JSON, once the run has succeeded.
-    #[arg(long, value_name = "JSON")]
+    /// Write the resolved recipe — every layer and flag, the base and roll values
+    /// included — to PATH once the run has succeeded, so `--params PATH` replays it.
+    #[arg(long, value_name = "PATH")]
+    pub save_recipe: Option<PathBuf>,
+    /// Removed: renamed `--save-recipe`. Hidden, and kept only to emit a migration error.
+    #[arg(long = "dump-params", hide = true, value_name = "JSON", num_args = 0..=1, default_missing_value = "PATH")]
     pub dump_params: Option<PathBuf>,
     /// Treat warnings (clipping, no roll measurement, …) as hard errors.
     #[arg(long)]
@@ -1352,7 +1386,7 @@ pub struct Report {
     /// stage and the destination. See [`ChainResult`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<ChainResult>,
-    /// The resolved recipe (`convert`): the `params` of a `--dump-params` file, so it
+    /// The resolved recipe (`convert`): the `params` of a `--save-recipe` file, so it
     /// reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
@@ -1568,8 +1602,8 @@ struct LoadedRecipe {
     provenance_warnings: Vec<String>,
 }
 
-/// The envelope every recipe document hanten writes is wrapped in — `--dump-params`,
-/// `hanten params`, `measure-base --out`, `measure-roll --out` — so a replay on another
+/// The envelope every recipe document hanten writes is wrapped in — `--save-recipe`,
+/// `hanten profile`, `measure-base --out`, `measure-roll --out` — so a replay on another
 /// `pipeline_version` warns ([`pipeline_version_warning`]). `params` is last, so the
 /// recipe's text is [`Recipe::params_hash`]'s input indented two spaces deeper.
 #[derive(Serialize)]
@@ -1675,6 +1709,8 @@ struct Layer {
 /// presence of a top-level `params` key, which is not (and must never become) a recipe
 /// key.
 fn read_layer(txt: &str, name: &str) -> Result<Layer> {
+    let txt = &jsonc::strip_comments(txt)
+        .map_err(|e| NcError::Usage(format!("invalid recipe {name}: {e}")))?;
     // Parse to a raw Value first to pick the shape and to run the migration checks on
     // the recipe *body*; the typed parse below still owns shape and unknown-key
     // validation. Unparseable JSON falls through to the typed parse's error (its
@@ -2331,6 +2367,18 @@ pub const MISSING_FILM_BASE: &str = "no film base selected: pass --film-base R,G
 /// Shared verbatim by `convert` and `roll` (and each `roll` per-frame override); the
 /// stage sections' rules are [`recipe::validate`]'s.
 pub fn validate_shared(r: &Recipe) -> Result<()> {
+    validate_shared_stated(r)?;
+    // Last, deliberately: `calibration.film_base` has no default, and `Dmin` is the
+    // divisor of the density conversion, so it must be stated.
+    if r.calibration.film_base.is_none() {
+        return Err(NcError::Usage(MISSING_FILM_BASE.into()));
+    }
+    Ok(())
+}
+
+/// [`validate_shared`]'s rules on what the recipe states, without requiring a film base:
+/// all of them for `profile`, which writes a recipe that has none.
+fn validate_shared_stated(r: &Recipe) -> Result<()> {
     // Film base: an explicit base is a per-channel transmission in (0, 1] — the
     // decoded scan is [0, 1]-normalized, so a value above 1 (e.g. a "90" typo for
     // "0.90") would silently render every real sample denser than the base; a
@@ -2354,15 +2402,7 @@ pub fn validate_shared(r: &Recipe) -> Result<()> {
     // it too — a stage-only check would let a whole roll decode before failing per
     // frame. The bound itself is `types::check_measure_inset`, the one definition
     // `film_base::effective_area` also calls.
-    check_measure_inset(r.measure.inset)?;
-
-    // Last, deliberately: `calibration.film_base` has no default, and `Dmin` is the
-    // divisor of the density conversion, so it must be stated.
-    if r.calibration.film_base.is_none() {
-        return Err(NcError::Usage(MISSING_FILM_BASE.into()));
-    }
-
-    Ok(())
+    check_measure_inset(r.measure.inset)
 }
 
 // ---------------------------------------------------------------------------
@@ -2390,7 +2430,7 @@ fn stage_json<T: Serialize>(path: &Path, value: &T) -> Result<staged::Staged> {
 fn commit_json(doc: staged::Staged, log: &Log) -> Result<()> {
     // Promotion notes (currently: a hard-linked target whose aliases keep the old bytes)
     // go to stderr here rather than into `report.warnings`. These are *operational*
-    // artifacts — `--dump-params`, `--report-file` — and folding them into the conversion's
+    // artifacts — `--save-recipe`, `--report-file` — and folding them into the conversion's
     // warning set would let a hard-linked report file fail a `--strict` render, which is not
     // what `--strict` is about.
     //
@@ -2579,7 +2619,13 @@ pub fn run() -> Result<()> {
         }
     };
     match cli.command {
-        Command::Params(args) => run_params(&args),
+        Command::Profile(args) => run_profile_command(&args),
+        Command::Params(_) => Err(NcError::Usage(
+            "`hanten params` was renamed `hanten profile`: it takes the conversion flags, \
+             writes every setting but the roll's measurements as an annotated recipe, and \
+             writes it to a file with `--out PATH`"
+                .into(),
+        )),
         Command::Convert(args) => run_convert(args),
         Command::Roll(args) => run_roll(args),
         Command::Inspect(args) => run_inspect(args),
@@ -2610,12 +2656,58 @@ fn run_telemetry(args: TelemetryArgs) -> Result<()> {
     }
 }
 
-/// `hanten params` — print the full default recipe, in its [`RecipeEnvelope`], to stdout.
-fn run_params(args: &ParamsArgs) -> Result<()> {
-    reject_new_flow(args.new_flow)?;
-    let json = serde_json::to_string_pretty(&RecipeEnvelope::new(&Recipe::default()))
-        .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
-    print_stdout(&json, "params")?;
+/// `hanten profile` — the look the flags describe, checked without a scan, as an
+/// annotated recipe in its [`RecipeEnvelope`] (`crate::profile`).
+fn run_profile_command(args: &ProfileArgs) -> Result<()> {
+    use clap::CommandFactory;
+    let knobs = &args.knobs;
+    reject_deprecated_input_flags(&knobs.input_opts)?;
+    reject_removed_flags(knobs, false, false).map_err(|e| match e {
+        NcError::Usage(m) => NcError::Usage(profile::removed_flag_message(m)),
+        e => e,
+    })?;
+    let recipe = recipe::merge(Recipe::default(), knobs);
+    if let Some(message) = profile::refusal(knobs, &recipe) {
+        return Err(NcError::Usage(message));
+    }
+    check_out(args.out.as_deref(), args.force)?;
+    recipe::validate(&recipe, KnobNames::FlagAndKey)?;
+    validate_shared_stated(&recipe)?;
+    OutputTarget::resolve(
+        &recipe,
+        KnobNames::FlagAndKey,
+        knobs.destination.film_master,
+    )?;
+
+    let json = serde_json::to_string(&RecipeEnvelope::new(&recipe))
+        .map_err(|e| NcError::Other(format!("serializing the profile: {e}")))?;
+    let cli = Cli::command();
+    let command = cli.find_subcommand("profile");
+    // The values a flag accepts, as its help lists them; none for a free value.
+    let possible_values = |flag: &str| -> Vec<String> {
+        let long = flag.trim_start_matches("--");
+        command
+            .and_then(|c| c.get_arguments().find(|a| a.get_long() == Some(long)))
+            .map(|a| {
+                a.get_possible_values()
+                    .iter()
+                    .filter(|v| !v.is_hide_set())
+                    .map(|v| v.get_name().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let text = profile::render(&json, &possible_values);
+    match &args.out {
+        Some(path) => {
+            for note in staged::stage_bytes(path, text.as_bytes())?.commit()? {
+                stdio::stderr_line(format_args!("hanten: warning: {note}"));
+            }
+        }
+        None => {
+            print_stdout(text.trim_end(), "the profile")?;
+        }
+    }
     Ok(())
 }
 
@@ -3716,7 +3808,7 @@ const LAST_SIDECAR_PIPELINE_VERSION: u64 = 7;
 /// `meta` carrying the identity every sidecar stamps (`nc_version`,
 /// `pipeline_version`, `target`), from a build that wrote sidecars. Every recipe
 /// document a later build writes has the same envelope ([`RecipeEnvelope`]), so the
-/// version is what keeps a `--dump-params` file named `<output>.json` from being
+/// version is what keeps a `--save-recipe` file named `<output>.json` from being
 /// deleted. Deleting is destructive, so anything short of that — missing, unreadable,
 /// or a different file that merely shares the shape — is not ours to remove.
 fn is_nc_sidecar(path: &Path) -> bool {
@@ -4390,12 +4482,12 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
 #[derive(Clone, Copy, Debug, Default)]
 enum ConvertPhase {
     /// Before the frame: recipe, validation, output path, the write-target guard, the
-    /// `--dump-params` staging.
+    /// `--save-recipe` staging.
     #[default]
     Setup,
     /// Inside [`convert_frame`]; its stage clock says where.
     Frame,
-    /// After the frame: the report, the `--strict` gate and the `--dump-params` commit.
+    /// After the frame: the report, the `--strict` gate and the `--save-recipe` commit.
     Finalize(FinishedFrame),
 }
 
@@ -4447,6 +4539,18 @@ impl ConvertAttempt {
     }
 }
 
+/// Refuse `convert`'s one removed flag that is not a conversion knob.
+fn reject_dump_params(args: &ConvertArgs) -> Result<()> {
+    match &args.dump_params {
+        Some(path) => Err(NcError::Usage(format!(
+            "--dump-params was renamed: pass --save-recipe {}. For a look alone, with no \
+             film base or roll values, use `hanten profile`",
+            path.display()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// The body of [`run_convert`], recording what it learns into `attempt`.
 fn convert_attempt(
     args: &ConvertArgs,
@@ -4455,6 +4559,7 @@ fn convert_attempt(
     telemetry_log: Option<&Path>,
     attempt: &mut ConvertAttempt,
 ) -> Result<()> {
+    reject_dump_params(args)?;
     reject_deprecated_input_flags(&args.knobs.input_opts)?;
     // Removed flags run first, so a retired spelling is diagnosed as retired before any
     // rule reasons about the values the recipe resolves.
@@ -4541,17 +4646,17 @@ fn convert_attempt(
     // telemetry *write* failure, which is fail-soft.
     let targets = write_targets(args, &output, telemetry_log);
     ensure_write_targets_distinct(&args.input, &targets)?;
-    // `--dump-params X --params X` is allowed only when X is the sole layer: it
+    // `--save-recipe X --params X` is allowed only when X is the sole layer: it
     // rewrites the recipe it replays. Over one of several, it would fold the others in.
-    if let Some(dump) = &args.dump_params
+    if let Some(dump) = &args.save_recipe
         && args.recipe_in.len() > 1
         && let Some(layer) = recipe_files(&args.recipe_in)
             .find(|p| keys_collide(&collision_key(p), &collision_key(dump)))
     {
         return Err(NcError::Usage(format!(
-            "--dump-params ({}) would overwrite the --params layer {}: with several layers \
+            "--save-recipe ({}) would overwrite the --params layer {}: with several layers \
              it would rewrite that layer into the whole resolved run (its base, roll values \
-             and roll.frames table), carrying them into later runs. Dump to another path",
+             and roll.frames table), carrying them into later runs. Save it to another path",
             dump.display(),
             layer.display()
         )));
@@ -4578,14 +4683,14 @@ fn convert_attempt(
     // so a bad path fails before the decode, and committed only once the run has passed,
     // so a failed one leaves a replayed layer as it was (dropping it removes the temp).
     let dump = args
-        .dump_params
+        .save_recipe
         .as_deref()
         .map(|path| stage_json(path, &RecipeEnvelope::new(&recipe)))
         .transpose()?;
     // The guard above cannot resolve a dangling symlink, so a dump linked to an artifact
     // written before it commits (or one linked to the dump) is caught here, by where it
     // lands.
-    if let (Some(dump), Some(dump_path)) = (&dump, &args.dump_params) {
+    if let (Some(dump), Some(dump_path)) = (&dump, &args.save_recipe) {
         let earlier = [
             ("--output", Some(output.as_path())),
             ("--export-film-rgb", args.export_film_rgb.as_deref()),
@@ -4594,7 +4699,7 @@ fn convert_attempt(
         for (label, path) in earlier {
             if let Some(path) = path.filter(|p| dump.lands_on(p)) {
                 return Err(NcError::Usage(format!(
-                    "--dump-params ({}) and {label} ({}) resolve to the same file — one \
+                    "--save-recipe ({}) and {label} ({}) resolve to the same file — one \
                      would silently overwrite the other. This can happen when a symlinked \
                      path points at another artifact's path",
                     dump_path.display(),
@@ -4705,7 +4810,7 @@ fn convert_attempt(
 }
 
 /// Every path a `convert` writes, labelled for [`ensure_write_targets_distinct`]:
-/// the output, `--dump-params`, `--report-file`, `--export-film-rgb`,
+/// the output, `--save-recipe`, `--report-file`, `--export-film-rgb`,
 /// `--export-pre-encode`, and telemetry's sinks (`--telemetry-file` unless it is `-`,
 /// and the resolved log).
 fn write_targets<'a>(
@@ -4714,8 +4819,8 @@ fn write_targets<'a>(
     telemetry_log: Option<&'a Path>,
 ) -> Vec<(&'static str, &'a Path)> {
     let mut targets: Vec<(&str, &Path)> = vec![("--output", output)];
-    if let Some(p) = &args.dump_params {
-        targets.push(("--dump-params", p));
+    if let Some(p) = &args.save_recipe {
+        targets.push(("--save-recipe", p));
     }
     if let Some(p) = args.report.report_file.as_deref() {
         targets.push(("--report-file", p));
@@ -5675,7 +5780,7 @@ fn reject_a_small_lift_beside_a_thin_one(
 
 /// `roll`: a frame's lift (`roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure`)
 /// in the shared recipe or typed lifts every frame alike, the bright ones too — one frame's
-/// lift (a `convert --dump-params` file carries it) or a whole-roll adjustment in the wrong
+/// lift (a `convert --save-recipe` file carries it) or a whole-roll adjustment in the wrong
 /// key. Spared under `direct` and the film master, which apply no roll value; not under a
 /// lift switched off, which a manifest can undo.
 fn reject_a_lift_for_every_frame(args: &ConversionFlags, shared: &Recipe) -> Result<()> {
@@ -6475,8 +6580,13 @@ struct MeasuredRecipe {
 
 /// Refuse an existing `--out` file unless `--force`, before anything is decoded.
 fn check_recipe_out(out: &RecipeOutArgs) -> Result<()> {
-    match out.out.as_deref() {
-        Some(path) if !out.force && path.exists() => Err(NcError::Usage(format!(
+    check_out(out.out.as_deref(), out.force)
+}
+
+/// Refuse an existing `--out` file unless `--force`.
+fn check_out(out: Option<&Path>, force: bool) -> Result<()> {
+    match out {
+        Some(path) if !force && path.exists() => Err(NcError::Usage(format!(
             "--out {} exists; pass --force to replace it",
             path.display()
         ))),
@@ -8283,7 +8393,7 @@ fn managed_queue_clear(
 /// Where a telemetry sink would land on a file it must not overwrite — the input,
 /// the `--params` recipe the run reads, an output, or the other sink — as a message
 /// naming both; `None` when every sink is clear. `--params` is guarded here rather
-/// than in [`write_targets`], which would refuse `--dump-params X --params X` (allowed
+/// than in [`write_targets`], which would refuse `--save-recipe X --params X` (allowed
 /// when X is the sole layer; `convert_attempt` refuses it over one of several).
 fn telemetry_sink_collision(
     args: &ConvertArgs,
@@ -8877,9 +8987,10 @@ mod tests {
             } else {
                 vec![flag.as_str()]
             };
-            // The two gates `run_convert` opens with, in its order.
+            // The gates `run_convert` opens with, in its order.
             let args = parse_convert(&argv);
-            let err = reject_deprecated_input_flags(&args.knobs.input_opts)
+            let err = reject_dump_params(&args)
+                .and_then(|()| reject_deprecated_input_flags(&args.knobs.input_opts))
                 .and_then(|()| removed(&args))
                 .err()
                 .unwrap_or_else(|| panic!("{flag} parsed and was not refused"));
@@ -8899,6 +9010,7 @@ mod tests {
         use clap::CommandFactory;
         const CONVERT_ONLY: &[&str] = &[
             "--output",
+            "--save-recipe",
             "--dump-params",
             "--seed",
             "--export-pre-encode",
@@ -8928,12 +9040,12 @@ mod tests {
         for argv in [
             vec!["hanten", "convert", "in.tif", "-o", "out", "--new-flow"],
             vec!["hanten", "roll", "in.tif", "-o", "dir", "--new-flow"],
-            vec!["hanten", "params", "--new-flow"],
+            vec!["hanten", "profile", "--new-flow"],
         ] {
             let new_flow = match Cli::try_parse_from(&argv).unwrap().command {
                 Command::Convert(a) => a.knobs.new_flow,
                 Command::Roll(a) => a.knobs.new_flow,
-                Command::Params(a) => a.new_flow,
+                Command::Profile(a) => a.knobs.new_flow,
                 _ => unreachable!(),
             };
             let err = reject_new_flow(new_flow).unwrap_err();
@@ -9216,16 +9328,14 @@ mod tests {
 
     #[test]
     fn params_default_is_parseable_json_but_no_longer_runnable() {
-        // The subject is `Recipe::default()`, the `params` of what `hanten params` prints
-        // (`hanten_params_writes_the_recipe_convert_reads` covers the envelope), so this
+        // The subject is `Recipe::default()`, which every layer composes onto, so this
         // must stay on the real default, not on a film-base-stated stand-in.
         let json = serde_json::to_string_pretty(&Recipe::default()).unwrap();
         let back: Recipe = serde_json::from_str(&json).unwrap();
         assert_eq!(back, Recipe::default());
 
-        // ...and the scaffold is deliberately NOT runnable as printed: it states no
-        // film base, so `validate_shared` rejects it — `hanten params` emits a template to
-        // edit, not a recipe to run.
+        // ...and it is deliberately NOT runnable as it stands: it states no film base,
+        // so `validate_shared` rejects it.
         let msg = match validate_shared(&back) {
             Err(NcError::Usage(m)) => m,
             other => panic!(
@@ -9680,7 +9790,7 @@ mod tests {
             assert_eq!(err.exit_code(), 2, "{body}");
             let msg = err.to_string();
             assert!(msg.contains("recipe_version"), "{msg}");
-            assert!(msg.contains("`hanten params`"), "{msg}");
+            assert!(msg.contains("`hanten profile`"), "{msg}");
             assert!(!msg.contains("--new-flow"), "{msg}");
         }
     }

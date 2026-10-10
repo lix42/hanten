@@ -955,7 +955,8 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                 "a recipe must state `\"{VERSION_KEY}\": {RECIPE_VERSION}`. A document without \
                  it — every sidecar and `--dump-params` file written before `pipeline_version` \
                  8 — describes the rendering chain that version removed, and there is no \
-                 converter. `hanten params` writes the current layout in its `params`: \
+                 converter. In the current layout (`hanten profile` writes a look's \
+                 sections, `hanten measure-base --out` the base's), \
                  `input`, `measure` and a `region` or `explicit` `calibration.film_base` \
                  carry over unchanged (an \
                  `\"auto\"` one retired: measure the base with `hanten measure-base \
@@ -2567,7 +2568,7 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 
 impl Recipe {
     /// The recipe's `params_hash` (`version::stable_hash`) over its pretty JSON — the
-    /// `params` `--dump-params` writes, dedented — so a dumped recipe hashes to the run
+    /// `params` `--save-recipe` writes, dedented — so a dumped recipe hashes to the run
     /// it came from. The report's `identity` and the telemetry record carry the same value.
     pub fn params_hash(&self) -> String {
         // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
@@ -2610,7 +2611,7 @@ impl Recipe {
     /// any, moves into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope` and
     /// `roll.thin_exposure`.
     /// `convert` and every `roll` frame go through it, so the two stay byte-identical. The entry is removed, not copied, so a flag
-    /// that then beats it is what a `--dump-params` replay renders; the other entries
+    /// that then beats it is what a `--save-recipe` replay renders; the other entries
     /// stay for [`validate`].
     pub fn for_frame(mut self, input: &Path) -> Self {
         let name = input.file_name().and_then(|n| n.to_str());
@@ -3614,7 +3615,7 @@ mod tests {
         let base = r#"{"calibration": {"film_base": {"explicit": [0.5, 0.4, 0.3]}}}"#;
         let err = check(base, true).unwrap_err();
         assert!(err.contains("\"recipe_version\": 3"), "{err}");
-        assert!(err.contains("`hanten params`"), "{err}");
+        assert!(err.contains("`hanten profile`"), "{err}");
         assert!(err.contains("pipeline_version` 8"), "{err}");
         assert!(!err.contains("--new-flow"), "{err}");
         // A per-frame overlay is partial and may omit it…
@@ -4716,7 +4717,7 @@ mod tests {
         };
         assert!(parse(old).unwrap().recipe_warnings(typed).is_empty());
         // A deliberate value — anything but the old serialized default — is what a
-        // `--dump-params` recipe replays, so it must pass `--strict`: no warning.
+        // `--save-recipe` recipe replays, so it must pass `--strict`: no warning.
         for deliberate in [
             r#"{"recipe_version": 3, "rendering": "direct",
                 "look": {"highlight_desaturation": {"strength": 0.5, "start_stops": -2.0,
@@ -5282,7 +5283,7 @@ mod tests {
         "--input-profile",
         "--output",
         "--params",
-        "--dump-params",
+        "--save-recipe",
         "--strict",
         "--seed",
         "--export-film-rgb",

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 
-# The fixed decode's defaults (`hanten params`: `reconstruction`), and the film base the
+# The fixed decode's defaults (`hanten profile`: `reconstruction`), and the film base the
 # benchmark fixture cases state.
 FILM_BASE = (0.9, 0.55, 0.42)
 DENSITY_SCALE = (1.0, 0.84, 0.73)
