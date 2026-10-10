@@ -612,16 +612,25 @@ def cmd_convert(args) -> int:
         "summary": roll_report.get("summary"),
         "roll_measured": measures_roll,
     }
-    # The measured `roll` section, from the resolved run (written only when it succeeded).
-    resolved, _ = _load_object(resolved_path) if resolved_path.is_file() else (None, None)
-    if resolved is not None:
-        params, _ = _unwrap_envelope(resolved, str(resolved_path))
-        tags["resolved_recipe_file"] = _relative(resolved_path, root)
-        tags["roll_section"] = (params or {}).get("roll")
+    # The measured `roll` section, from the resolved run (written only when it succeeded);
+    # a successful measured run without a usable one fails, so no tag claims a measurement
+    # it cannot show.
+    resolved_error = None
+    if measures_roll and proc.returncode == 0:
+        resolved, resolved_error = _load_object(resolved_path)
+        if resolved is not None:
+            params, resolved_error = _unwrap_envelope(resolved, str(resolved_path))
+            if params is not None:
+                tags["resolved_recipe_file"] = _relative(resolved_path, root)
+                tags["roll_section"] = params.get("roll")
     tags["calibration"]["dmin"].pop("report")
     _write_json(tags_path, tags)
     if proc.returncode != 0:
         print(f"error: hanten roll exited {proc.returncode}; tags preserve the failed run",
+              file=sys.stderr)
+        return 1
+    if resolved_error:
+        print(f"error: the measured roll's resolved recipe is unusable: {resolved_error}",
               file=sys.stderr)
         return 1
     print(json.dumps(tags, indent=2, sort_keys=True))

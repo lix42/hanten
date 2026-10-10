@@ -16556,6 +16556,29 @@ fn roll_save_recipe_is_written_only_when_the_roll_succeeds() {
     assert_eq!(report["frames"], serde_json::json!([]), "{report}");
     assert!(roll.outputs(&strict_out).is_empty(), "no image written");
     assert!(!Path::new(&saved).exists(), "no recipe written");
+    // The refusal's report reaches a `--report-file` inside a new `--out-dir`.
+    let fresh = roll.path("fresh");
+    let report_file = Path::new(&fresh).join("report.json");
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--strict",
+            "--report-file",
+            report_file.to_str().unwrap(),
+            "-o",
+            &fresh,
+        ],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no frame converted"), "{err}");
+    let report = json(&std::fs::read_to_string(&report_file).unwrap());
+    assert!(report["measurement"].is_object(), "{report}");
 }
 
 #[test]
@@ -16987,6 +17010,25 @@ fn roll_measure_mode_leaves_auto_found_frames_unconverted() {
         .unwrap_or_else(|| panic!("a note: {err}"));
     assert!(note.contains(&blank) && note.contains(&leader), "{note}");
     assert!(!note.contains(&a) && !note.contains(&b), "{note}");
+    // A found frame sharing a picture's stem does not collide: it is never converted.
+    let same_stem = tmp.path("refs/a.tif");
+    std::fs::create_dir_all(same_stem.parent().unwrap()).unwrap();
+    write_uniform_density(&same_stem, AUTO_BASE, 0.0);
+    let stem_out = s(&tmp.path("stem-out"));
+    let (code, _, err) = run(&[
+        "roll",
+        &s(&same_stem),
+        &a,
+        &b,
+        "--unexposed",
+        "auto",
+        "--params",
+        &input,
+        "-o",
+        &stem_out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(written(&stem_out), ["a_positive.tiff", "b_positive.tiff"]);
     // The replay names the pictures alone: a plain `roll` converts every input it is given.
     let replay = s(&tmp.path("replay"));
     let (code, _, err) = run(&["roll", &a, &b, "--params", &saved, "-o", &replay]);

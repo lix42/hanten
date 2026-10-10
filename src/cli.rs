@@ -6113,11 +6113,19 @@ fn measure_for_roll(
     validate_shared_stated(&shared)?;
     let inputs = roll_inputs(&args.inputs)?;
     let planned = resolve_frames(args, Some(&inputs), &stated, &shared, &mut Vec::new(), log)?;
-    guard_roll_targets(args, &planned, &args.references())?;
-    // A path the recipe cannot be written to fails before the measurement, not after it;
-    // the output directories first, since the recipe may be saved into one.
-    if let Some(path) = &args.save_recipe {
+    // Under `auto` this plan still holds the frames the measurement drops, so two of them
+    // can collide falsely; the final plan is guarded before anything is written.
+    let auto = args.leader == Some(Reference::Auto) || args.unexposed == Some(Reference::Auto);
+    if !auto {
+        guard_roll_targets(args, &planned, &args.references())?;
+    }
+    // The output directories first when something is written before the frames: the
+    // recipe, or a `--strict` refusal's report, may go into one. A path the recipe cannot
+    // be written to fails before the measurement, not after it.
+    if args.save_recipe.is_some() || (args.strict && args.report.report_file.is_some()) {
         create_roll_dirs(args, &planned)?;
+    }
+    if let Some(path) = &args.save_recipe {
         drop(staged::stage_bytes(path, b"")?);
     }
     let mut warnings = Vec::new();

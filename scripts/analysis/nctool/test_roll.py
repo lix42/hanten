@@ -196,6 +196,9 @@ class TestConvert(unittest.TestCase):
     base_command = "measure-base"
     #: Whether the fake build's `roll` has measure mode; the reference build's has not.
     measure_mode = True
+    #: What the fake build writes to `--save-recipe`, or `None` to write nothing.
+    resolved_recipe: str | None = json.dumps(
+        {"meta": {}, "params": {"recipe_version": 3, "roll": {"exposure": .5}}})
 
     def fake_run(self, argv, **_kwargs):
         if argv[1:] == ["roll", "--help"]:
@@ -240,9 +243,8 @@ class TestConvert(unittest.TestCase):
             "summary": {"total": 2, "succeeded": 2, "failed": 0},
         }
         report_path.write_text(json.dumps(report))
-        if "--save-recipe" in argv:
-            Path(argv[argv.index("--save-recipe") + 1]).write_text(json.dumps(
-                {"meta": {}, "params": {"recipe_version": 3, "roll": {"exposure": .5}}}))
+        if "--save-recipe" in argv and self.resolved_recipe is not None:
+            Path(argv[argv.index("--save-recipe") + 1]).write_text(self.resolved_recipe)
         return mock.Mock(returncode=0, stdout="", stderr="")
 
     def converted_roll_argv(self, **updates) -> tuple[list[str], int, str]:
@@ -273,6 +275,18 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(tags["roll_section"], {"exposure": .5})
         # The leader is read now, so it is checksummed with the frames.
         self.assertIn("rolls/R/l.tif", [f["file"] for f in tags["source_frames"]])
+
+    def test_a_measured_run_without_a_usable_resolved_recipe_fails(self):
+        for name, written in (("missing", None), ("invalid", "{"),
+                              ("bad-envelope", json.dumps({"meta": {}, "params": 1}))):
+            with self.subTest(name):
+                self.resolved_recipe = written
+                _, code, err = self.converted_roll_argv(config=name)
+                self.assertEqual(code, 1, err)
+                self.assertIn("resolved recipe is unusable", err)
+                tags = json.loads(
+                    (self.root / f"converted/nc/{name}/R/tags.json").read_text())
+                self.assertNotIn("roll_section", tags)
 
     def test_the_reference_build_measures_no_roll(self):
         self.measure_mode = False

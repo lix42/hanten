@@ -762,6 +762,17 @@ A post-rebase review found four more issues, all fixed:
   - **Open for the user:** `roll --midtone-neutral on` stays silent when the roll
     measured no line (fewer than 10 frames). This predates this task.
 
+### 2026-10-10 — PR review (#262) fixed
+
+- A `--strict` refusal's report can go to a `--report-file` inside a new `--out-dir`:
+  the directories are created before the measurement when `--save-recipe` or
+  `--strict --report-file` may write there first.
+- Under `auto`, the pre-measurement plan still holds the frames the measurement drops,
+  so its output-collision check is skipped there; the final plan is guarded before any
+  write. A found frame sharing a picture's stem no longer refuses the roll.
+- `nctool roll convert` fails (exit 1) when a measured run succeeds without a usable
+  resolved recipe, rather than tagging `roll_measured` with no `roll_section`.
+
 ## conversion-versioning
 
 **Status:** done (2026-07-28, PR #60; four review rounds, ~30 findings fixed)
