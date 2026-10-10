@@ -86,6 +86,12 @@ What other epics need to know about `core`:
   density above the base. Found frames leave the picture pool. A roll with no trustworthy
   unexposed frame is refused (exit 2), never converted per frame. `measure-base` and the
   `unexposed` evidence carry `area_spread`.
+- **`roll` measures the roll in one command** (`core/roll-measure-mode`, 2026-10-10):
+  `roll --unexposed <file|auto> [--leader L]`, or `--measure-roll` over a stated base, runs
+  `measure-roll`'s code and layers its recipe after every `--params`. The images are
+  byte-identical to `measure-roll --out` then `roll --params`. The roll report gains
+  `measurement`; `--save-recipe` writes a replayable run. `nctool roll convert` uses it on
+  builds that have it, so its renders carry a measured roll.
 - **Exit codes (design-spec §11):** Usage=2, Decode=3, Unsupported=4, Write=5,
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
@@ -646,8 +652,8 @@ A post-rebase review found four more issues, all fixed:
 
 ## roll-measure-mode
 
-**Status:** not started
-**Updated:** 2026-09-28
+**Status:** done
+**Updated:** 2026-10-10
 
 - Goal: `roll --measure-roll [--leader L]` measures the roll's white balance, white and
   clamps over its frames (`measure-roll`'s code) with the recipe's base, then converts;
@@ -666,6 +672,108 @@ A post-rebase review found four more issues, all fixed:
     another roll; the file is for re-rendering this one (a changed look, or a subset of
     frames with the whole roll's numbers — measuring a subset gives different ones). It
     holds the whole run, so `roll --params` replays it byte for byte.
+
+### 2026-10-10 — implemented
+
+- **Shipped:** `roll --measure-roll`, `--leader`, `--unexposed` (a path or `auto`) and
+  `--save-recipe`; the roll report's `measurement`. `nctool roll convert` runs measure
+  mode on builds that have it (`roll --help` probe), so its renders now carry a measured
+  roll; the reference build keeps its base-only steps.
+- **Decisions (user, 2026-10-09/10):** the switches (`--small-lift`, `--thin-lift`,
+  `--midtone-neutral`, `--neutral-balance`) keep `roll`'s render meaning in measure mode,
+  and the measurement runs at `measure-roll`'s defaults (`--midtone-neutral` means
+  different things on the two commands, and the switch's `off` changes no whites); the
+  report embeds the measurement; `--frames` is refused (design-doc Q9); a measurement
+  warning under `--strict` refuses before any frame (Q7); `nctool roll` measures.
+  Mine: a frame `auto` finds is not converted, since a named one is refused among the
+  frames.
+- **How:** `run_measure_roll` split into `RollMeasureRequest::check` (every rule before a
+  decode) and `measure_roll` (returns report, recipe, pictures), shared by both commands.
+  Measure mode serializes the measured recipe in its envelope and reads it back through
+  `read_layer` as the last layer, so the run *is* the hand route's. `load_recipes` split
+  into `load_layers` + `compose_layers` for that.
+- **`--save-recipe` on `roll`** writes the shared recipe before `for_frame`, minus each
+  `roll.frames` value a typed flag beat (`saved_roll_recipe`): a frame's entry applies
+  before the flags, so leaving a clamp in would replay it over `--roll-white`.
+- **Gotcha — a degenerate synthetic roll:** ramps of 0.75–1.35 density measured a dark end
+  above the white, so every frame took the 3.5 maximum slope and the white had no effect;
+  the replay test passed with the stripping disabled. The ramps now span 0.1–0.9. The
+  first switch test was vacuous too: the midtone line fades to zero at the roll's white,
+  so measuring with it off moves no white on that roll; the test now asserts the
+  measurement's `mode` and `line`.
+- **Verified** on 2026-09-18 Gold 200 (8 frames): `--unexposed` and `--measure-roll` over
+  a `measure-base` file each byte-identical to `measure-roll` then `roll`; `measurement`
+  equals `measure-roll`'s report bar `elapsed_ms`/`identity`; `--save-recipe` replays
+  byte-identically. Peak RSS 341 MiB against `measure-roll` 326 and `roll` 299; the
+  preflight estimate (452 MiB) still covers it, and no buffer was added.
+
+### 2026-10-10 — review round 1 fixed
+
+- `--save-recipe` into a not-yet-created `--out-dir` failed (exit 5): the out-dir and
+  frame parents are now created before the recipe is staged, and before measure mode's
+  probe of the path.
+- Every rule that needs no decode runs before the measurement: a midtone line without
+  its gains, and a frame's lift (`--roll-frame-exposure`, `--roll-thin-*`, their `roll`
+  keys) — which now gets `roll`'s "one frame's own lift" refusal, not measure mode's
+  "render without measuring", which `roll` would refuse next. `saved_roll_recipe` lost
+  its branches for the typed lifts, which never reach it.
+- Remedies per mode: under `--unexposed` a stated roll value suggests a look only;
+  `--unexposed auto` finding nothing on `roll` adds `--measure-roll`; a region base names
+  the explicit-base requirement.
+- `--save-recipe` over the sole `--params` layer is refused in measure mode (the
+  overwritten file would be refused by the same command next).
+- A layer's `pipeline_version` warning is the measurement's in measure mode, so
+  `--strict` refuses before any frame converts; it is not repeated as a roll warning.
+- Frames `auto` finds get a `note:` line naming them as not converted.
+- Docs: the decode, input and measure flags apply to the measurement (so the hand route
+  states them in a layer `measure-roll` reads); design-spec §8/§9/§11, `using-nc` §4 and
+  the nctool README brought in step.
+
+### 2026-10-10 — review round 2 fixed
+
+- Measure mode's frame-lift refusal names only routes that work there (measure first,
+  then a `--frames` manifest; or the whole-roll flag); the region-base refusal names
+  `--unexposed` beside the `measure-base --base-region` file on both commands. The
+  "same as by hand" claim now says `measure-roll` must measure under the same decode
+  (`--measure-inset` passed to it; a decode flag such as `--density-gamma` as
+  `reconstruction.linearization` in a layer) — checked with the binary.
+
+### 2026-10-10 — done
+
+- **The unexposed frame is the usual way in; the leader is an optional guard.** The
+  common command is `roll --unexposed <file|auto> [--leader L]`; `--measure-roll` alone
+  is for a base already stated (`--params base.json`, `--film-base`). With no base,
+  measure mode exits 2 naming `--unexposed <file>`, `--unexposed auto` and a stated base.
+  The guide, `--help` and the task file lead with `--unexposed`.
+- **Ship review fixed two remedies the same command refused next:**
+  - `--leader` without measure mode offers "Add --measure-roll" only when the command
+    has no `--frames`, no measured `--roll-*` flag and no layer stating a measured
+    `roll` value. Otherwise it names the two-command route. The rule now runs after the
+    layers load.
+  - `--unexposed` beside a stated base, on `roll`, says to drop the stated base or
+    replace `--unexposed` with `--measure-roll` (or just "Drop --base-region" for a
+    region). Dropping `--unexposed` would leave measure mode.
+- **Left as is (Low):**
+  - A failed measurement under `--save-recipe` leaves an empty `--out-dir`.
+  - Replaying a saved recipe with a `--frames` manifest is untested.
+  - Measure mode measures in sorted input order; `measure-roll` uses argument order.
+  - Under `--report none`, the `--strict` refusal still points at the report's
+    `measurement`.
+  - **Open for the user:** `roll --midtone-neutral on` stays silent when the roll
+    measured no line (fewer than 10 frames). This predates this task.
+
+### 2026-10-10 — PR review (#262) fixed
+
+- A `--strict` refusal's report can go to a `--report-file` inside a new `--out-dir`:
+  the directories are created before the measurement when `--save-recipe` or
+  `--strict --report-file` may write there first.
+- Under `auto`, the pre-measurement plan still holds the frames the measurement drops,
+  so it guards every input but not the frames' outputs. The final plan guards those, and
+  treats the frames `auto` found as read targets too. A found frame sharing a picture's
+  stem no longer refuses the roll, and nothing may write over a found frame, a `--strict`
+  refusal's report included.
+- `nctool roll convert` fails (exit 1) when a measured run succeeds without a usable
+  resolved recipe, rather than tagging `roll_measured` with no `roll_section`.
 
 ## conversion-versioning
 

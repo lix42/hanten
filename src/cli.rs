@@ -558,9 +558,10 @@ pub struct ConversionFlags {
 ///
 /// This is the batch-**apply** half of plan→recipe→apply: it replays a *provided*
 /// frozen recipe — resolved like `convert`'s, from `--params` layers and the same
-/// flags — over N frames. It deliberately owns no auto-cascade that *generates* the
-/// recipe — that is `core/auto-calibration`. Frame-local params can be overridden per
-/// frame via a `--frames` manifest.
+/// flags — over N frames. In measure mode (`--measure-roll`) it first runs
+/// `measure-roll`'s measurement ([`measure_roll`]) and layers it last, so the plan half
+/// is the same code. Frame-local params can be overridden per frame via a `--frames`
+/// manifest.
 ///
 /// Unlike `convert`'s single `-o <file>`, roll writes per-frame outputs into an
 /// `--out-dir` (named `<stem>_positive.<ext>`, the suffix of the frame's resolved
@@ -591,6 +592,34 @@ pub struct RollArgs {
     /// over both.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Vec<PathBuf>,
+    /// Measure mode: measure the roll first, as `hanten measure-roll` does over the same
+    /// frames — its white balance, midtone line, white, dark end, exposure and clamps —
+    /// then convert with the measurement layered after every `--params` recipe. The
+    /// decode, input and measure flags (`--density-gamma`, `--input-transfer`,
+    /// `--measure-inset`, …) apply to the measurement too.
+    /// Needs a film base: `--unexposed <PATH|auto>` (which implies this flag), or a stated
+    /// one (`--film-base`, a recipe's). The
+    /// measured `roll` values are refused from a recipe or a `--roll-*` flag, and so is
+    /// `--frames`; the switches (`--small-lift`, `--thin-lift`, `--midtone-neutral`,
+    /// `--neutral-balance`) still decide what applies.
+    #[arg(long)]
+    pub measure_roll: bool,
+    /// Measure mode's leader, as on `measure-roll`: a fully exposed frame that guards the
+    /// white balance and checks each frame for film saturation, or `auto` to find it among
+    /// the inputs (then left unconverted). Without it the measurement warns, and
+    /// `--strict` refuses. Refused outside measure mode, where it guards nothing.
+    #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
+    pub leader: Option<Reference>,
+    /// Measure the film base from the roll's unexposed frame, as `measure-roll
+    /// --unexposed` does, or `auto` to find it among the inputs (then left unconverted).
+    /// Implies `--measure-roll`. Refused beside a stated base.
+    #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
+    pub unexposed: Option<Reference>,
+    /// Write the resolved recipe — every layer and flag, and in measure mode the
+    /// measurement — to PATH once the roll has succeeded, so `roll --params PATH` over the
+    /// same frames (and the same `--frames` manifest) replays it.
+    #[arg(long, value_name = "PATH")]
+    pub save_recipe: Option<PathBuf>,
     #[command(flatten)]
     pub knobs: ConversionFlags,
     /// Also write each frame's film RGB, as `convert --export-film-rgb` does, to
@@ -607,6 +636,25 @@ pub struct RollArgs {
     pub memory: MemoryArgs,
     #[command(flatten)]
     pub report: ReportArgs,
+}
+
+impl RollArgs {
+    /// Whether the roll is measured before it converts: `--measure-roll`, or implied by
+    /// `--unexposed`.
+    fn measures(&self) -> bool {
+        self.measure_roll || self.unexposed.is_some()
+    }
+
+    /// Measure mode's named reference scans, which no write target may overwrite.
+    fn references(&self) -> Vec<(&Path, &'static str)> {
+        [
+            (self.leader.as_ref(), "the --leader scan"),
+            (self.unexposed.as_ref(), "the --unexposed scan"),
+        ]
+        .into_iter()
+        .filter_map(|(r, what)| r.and_then(Reference::path).map(|p| (p, what)))
+        .collect()
+    }
 }
 
 // --- per-stage override groups (all-Option; presence flags for booleans) ----
@@ -978,6 +1026,22 @@ impl RollOverrides {
     /// Whether any roll flag was typed.
     pub(crate) fn any(&self) -> bool {
         !self.typed().is_empty()
+    }
+
+    /// The typed flags that state a measured roll-wide value — every roll flag but the
+    /// switches and a frame's lifts, which `roll` refuses typed in any mode
+    /// ([`reject_a_lift_for_every_frame`]).
+    fn measured(&self) -> Vec<&'static str> {
+        [
+            ("--roll-white-balance", self.roll_white_balance.is_some()),
+            ("--roll-white", self.roll_white.is_some()),
+            ("--roll-dark", self.roll_dark.is_some()),
+            ("--roll-exposure", self.roll_exposure.is_some()),
+            ("--roll-midtone-line", self.roll_midtone_line.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, typed)| typed.then_some(flag))
+        .collect()
     }
 }
 
@@ -1658,6 +1722,32 @@ fn recipe_files(paths: &[PathBuf]) -> impl Iterator<Item = &PathBuf> {
 ///
 /// `-` reads stdin, and only once: a second `-` is refused rather than read as empty.
 fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
+    let layers = load_layers(paths)?;
+    Ok(LoadedRecipe {
+        recipe: compose_layers(&layers.bodies)?,
+        provenance_warnings: layers.provenance_warnings,
+    })
+}
+
+/// The `--params` layers as read, each checked alone, before they compose.
+struct LoadedLayers {
+    bodies: Vec<serde_json::Value>,
+    /// Each layer's name in messages: its path, or stdin.
+    names: Vec<String>,
+    provenance_warnings: Vec<String>,
+}
+
+/// Compose checked layers, later winning ([`recipe::compose`]).
+fn compose_layers(bodies: &[serde_json::Value]) -> Result<Recipe> {
+    recipe::compose(bodies).map_err(|e| {
+        NcError::Usage(format!(
+            "the --params recipes each load, but not together: {e}"
+        ))
+    })
+}
+
+/// [`load_recipes`]'s reading half.
+fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
     if paths.iter().filter(|p| is_stdin_recipe(p)).count() > 1 {
         return Err(NcError::Usage(
             "--params - is given more than once, but stdin can be read only once: save \
@@ -1666,6 +1756,7 @@ fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
         ));
     }
     let mut layers = Vec::with_capacity(paths.len());
+    let mut names = Vec::with_capacity(paths.len());
     let mut provenance_warnings = Vec::new();
     for p in paths {
         let (txt, name) = if is_stdin_recipe(p) {
@@ -1680,14 +1771,11 @@ fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
         let layer = read_layer(&txt, &name)?;
         provenance_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
         layers.push(layer.body);
+        names.push(name);
     }
-    let recipe = recipe::compose(&layers).map_err(|e| {
-        NcError::Usage(format!(
-            "the --params recipes each load, but not together: {e}"
-        ))
-    })?;
-    Ok(LoadedRecipe {
-        recipe,
+    Ok(LoadedLayers {
+        bodies: layers,
+        names,
         provenance_warnings,
     })
 }
@@ -4913,6 +5001,9 @@ struct RollReport {
     /// by `--strict`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+    /// Measure mode's measurement: what `measure-roll`'s report holds for the same run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    measurement: Option<Box<MeasureRollReport>>,
     frames: Vec<FrameReport>,
     summary: RollSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5384,8 +5475,10 @@ fn roll_wide_breaks(input: &Path, frame: &Recipe, shared: &Recipe) -> Result<Vec
 /// A frame resolves as `convert` would: `stated` (the `--params` layers) with its own
 /// `roll.frames` entry, then the flags, then its manifest `params`. `shared` is the
 /// roll's recipe with the flags applied, which the roll-wide warnings compare against.
+/// `pictures`, from measure mode, replaces the positional inputs.
 fn resolve_frames(
     args: &RollArgs,
+    pictures: Option<&[PathBuf]>,
     stated: &Recipe,
     shared: &Recipe,
     roll_warnings: &mut Vec<String>,
@@ -5509,17 +5602,10 @@ fn resolve_frames(
             }
         }
         None => {
-            let mut inputs = Vec::new();
-            for p in &args.inputs {
-                expand_input(p, &mut inputs)?;
-            }
-            inputs.sort();
-            inputs.dedup();
-            if inputs.is_empty() {
-                return Err(NcError::Usage(
-                    "no input frames to convert (the inputs matched no files)".into(),
-                ));
-            }
+            let inputs = match pictures {
+                Some(p) => p.to_vec(),
+                None => roll_inputs(&args.inputs)?,
+            };
             let target = OutputTarget::resolve(shared, KnobNames::FlagAndKey, false)?;
             for input in inputs {
                 let output = default_output_name(&input, out_dir, target);
@@ -5536,6 +5622,22 @@ fn resolve_frames(
         }
     }
     Ok(planned)
+}
+
+/// `roll`'s positional inputs, directories expanded, sorted and deduplicated.
+fn roll_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut inputs = Vec::new();
+    for p in paths {
+        expand_input(p, &mut inputs)?;
+    }
+    inputs.sort();
+    inputs.dedup();
+    if inputs.is_empty() {
+        return Err(NcError::Usage(
+            "no input frames to convert (the inputs matched no files)".into(),
+        ));
+    }
+    Ok(inputs)
 }
 
 /// The path of the first `null` in `v` (`look.contrast`, `roll.white_balance[1]`),
@@ -5791,8 +5893,13 @@ fn reject_a_small_lift_beside_a_thin_one(
 /// in the shared recipe or typed lifts every frame alike, the bright ones too — one frame's
 /// lift (a `convert --save-recipe` file carries it) or a whole-roll adjustment in the wrong
 /// key. Spared under `direct` and the film master, which apply no roll value; not under a
-/// lift switched off, which a manifest can undo.
-fn reject_a_lift_for_every_frame(args: &ConversionFlags, shared: &Recipe) -> Result<()> {
+/// lift switched off, which a manifest can undo. `measuring`: measure mode, which refuses
+/// `roll.frames` and `--frames`, so its remedy measures first.
+fn reject_a_lift_for_every_frame(
+    args: &ConversionFlags,
+    shared: &Recipe,
+    measuring: bool,
+) -> Result<()> {
     if !shared.applies_roll_to_scene_correction() {
         return Ok(());
     }
@@ -5837,12 +5944,352 @@ fn reject_a_lift_for_every_frame(args: &ConversionFlags, shared: &Recipe) -> Res
     else {
         return Ok(());
     };
+    let own = if measuring {
+        format!(
+            "To set one frame's, measure first (`hanten measure-roll <frames> --out \
+             roll.json`), then `hanten roll --frames <manifest> --params roll.json` with \
+             `roll.{key}` in that frame's `params`"
+        )
+    } else {
+        format!(
+            "State each frame's in the shared recipe's `roll.frames` (as `hanten measure-roll \
+             --out` writes it) or as `roll.{key}` in a --frames manifest's `params`"
+        )
+    };
     Err(NcError::Usage(format!(
         "{flag} is one frame's own lift, and on `roll` it would lift every frame alike. \
-         State each frame's in the shared recipe's `roll.frames` (as `hanten measure-roll \
-         --out` writes it) or as `roll.{key}` in a --frames manifest's `params`; to move the \
-         whole roll, use {whole}"
+         {own}; to move the whole roll, use {whole}"
     )))
+}
+
+/// The `roll` keys a measurement writes, so measure mode refuses them stated. The rest of
+/// the section is switches, which keep their meaning (`roll_section_is_measured_or_switch`
+/// holds the split).
+const MEASURED_ROLL_KEYS: &[&str] = &[
+    "white_balance",
+    "white_stops",
+    "dark_stops",
+    "exposure",
+    "frame_exposure",
+    "thin_slope",
+    "thin_exposure",
+    "midtone_line",
+    "frames",
+];
+
+/// Measure mode's presence rules, before any recipe is read: a `--frames` manifest's
+/// `params` could change the decode a frame is measured under, and a typed measured value
+/// would be measured over.
+fn reject_measure_mode_flags(args: &RollArgs) -> Result<()> {
+    if !args.measures() {
+        return Ok(());
+    }
+    let mode = measure_mode_name(args);
+    if args.frames.is_some() {
+        return Err(NcError::Usage(format!(
+            "{mode} measures the positional frames and refuses --frames: a manifest's `params` \
+             can change the decode a frame is measured under. Measure first with `hanten \
+             measure-roll <frames> --out roll.json`, then `hanten roll --frames <manifest> \
+             --params roll.json`"
+        )));
+    }
+    if let Some(flag) = args.knobs.roll.measured().first() {
+        return Err(NcError::Usage(format!(
+            "{flag} states a roll value, and {mode} measures the roll's values. Drop {flag}, \
+             or render with it without measuring: `hanten measure-roll <frames> --out \
+             roll.json`, then `hanten roll … --params roll.json {flag} …`"
+        )));
+    }
+    Ok(())
+}
+
+/// How a refusal names measure mode: by the flag that asked for it.
+fn measure_mode_name(args: &RollArgs) -> &'static str {
+    if args.measure_roll {
+        "--measure-roll"
+    } else {
+        "--unexposed, which implies --measure-roll,"
+    }
+}
+
+/// A measured `roll` value stated in a `--params` layer, refused in measure mode by the
+/// layer that states it. A look states none ([`MEASURED_ROLL_KEYS`]).
+fn refuse_stated_roll_values(args: &RollArgs, layers: &LoadedLayers) -> Result<()> {
+    if let Some((name, key)) = stated_roll_value(layers) {
+        // `--unexposed` is refused beside a stated base.
+        let instead = if args.unexposed.is_some() {
+            "a look from `hanten profile`"
+        } else {
+            "a look from `hanten profile`, a base from `hanten measure-base --out`"
+        };
+        return Err(NcError::Usage(format!(
+            "recipe {name} states `roll.{key}`, a roll value, and {} measures the roll's \
+             values. Layer a recipe without a measured `roll` section ({instead}), or render \
+             with this one without measuring",
+            measure_mode_name(args)
+        )));
+    }
+    Ok(())
+}
+
+/// The first `--params` layer stating a measured `roll` value, and the key.
+fn stated_roll_value(layers: &LoadedLayers) -> Option<(&str, &'static str)> {
+    layers
+        .bodies
+        .iter()
+        .zip(&layers.names)
+        .find_map(|(body, name)| {
+            let key = MEASURED_ROLL_KEYS.iter().find(|k| {
+                body.pointer(&format!("/roll/{k}"))
+                    .is_some_and(|v| match v {
+                        serde_json::Value::Null => false,
+                        serde_json::Value::Object(m) => !m.is_empty(),
+                        _ => true,
+                    })
+            })?;
+            Some((name.as_str(), *key))
+        })
+}
+
+/// `--leader` guards only a measurement. Adding `--measure-roll` is offered only where it
+/// would be accepted: no `--frames`, no measured `--roll-*` flag, no layer stating a
+/// measured `roll` value.
+fn reject_a_leader_without_measuring(args: &RollArgs, layers: &LoadedLayers) -> Result<()> {
+    let Some(leader) = args.leader.as_ref().filter(|_| !args.measures()) else {
+        return Ok(());
+    };
+    let remedy = if args.frames.is_none()
+        && args.knobs.roll.measured().is_empty()
+        && stated_roll_value(layers).is_none()
+    {
+        "Add --measure-roll, or drop --leader".to_owned()
+    } else {
+        format!(
+            "Drop --leader; to guard a measurement, measure first: `hanten measure-roll \
+             <frames> --leader {leader} --out roll.json`, then `hanten roll … --params \
+             roll.json`"
+        )
+    };
+    Err(NcError::Usage(format!(
+        "--leader {leader} guards the roll's measurement, and without --measure-roll (or \
+         --unexposed) roll measures nothing. {remedy}"
+    )))
+}
+
+/// Measure mode's measurement ([`measure_roll`]) over the roll's frames, under the layers
+/// and flags; every rule that can refuse without a decode runs first, the write targets'
+/// included.
+fn measure_for_roll(
+    args: &RollArgs,
+    layers: &LoadedLayers,
+    started: Instant,
+    log: &Log,
+) -> Result<RollMeasurement> {
+    let stated = compose_layers(&layers.bodies)?;
+    let shared = recipe::merge(stated.clone(), &args.knobs);
+    // A frame's lift is refused on any `roll`, so before the measured values are, whose
+    // remedy (render without measuring) it would refuse next.
+    reject_a_lift_for_every_frame(&args.knobs, &shared, true)?;
+    refuse_stated_roll_values(args, layers)?;
+    if let Some(unexposed) = &args.unexposed {
+        let flags = &args.knobs.film_base;
+        let stated_by = if flags.film_base.is_some() {
+            Some("--film-base")
+        } else if flags.base_region.is_some() {
+            Some("--base-region")
+        } else if stated.calibration.film_base.is_some() {
+            Some("the recipe's `calibration.film_base`")
+        } else {
+            None
+        };
+        refuse_unexposed_beside_a_base(unexposed, stated_by, true)?;
+    }
+    // What the recipe and flags state, before a scan is decoded; the base is measured or
+    // checked by the measurement's own rules below.
+    reject_roll_unsupported_input(&shared)?;
+    reject_a_line_without_its_gains(&args.knobs, &shared)?;
+    reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
+    recipe::validate(&shared, KnobNames::FlagAndKey)?;
+    validate_shared_stated(&shared)?;
+    let inputs = roll_inputs(&args.inputs)?;
+    let planned = resolve_frames(args, Some(&inputs), &stated, &shared, &mut Vec::new(), log)?;
+    // Every input is protected now. Under `auto` this plan still holds the frames the
+    // measurement drops, whose outputs could collide falsely, so the frames' outputs are
+    // guarded on the final plan instead.
+    let auto = args.leader == Some(Reference::Auto) || args.unexposed == Some(Reference::Auto);
+    guard_roll_targets(args, &planned, &args.references(), !auto)?;
+    // The output directories first when something is written before the frames: the
+    // recipe, or a `--strict` refusal's report, may go into one. A path the recipe cannot
+    // be written to fails before the measurement, not after it.
+    if args.save_recipe.is_some() || (args.strict && args.report.report_file.is_some()) {
+        create_roll_dirs(args, &planned)?;
+    }
+    if let Some(path) = &args.save_recipe {
+        drop(staged::stage_bytes(path, b"")?);
+    }
+    let mut warnings = Vec::new();
+    for msg in &layers.provenance_warnings {
+        push_warning_buf(&mut warnings, log, msg.clone());
+    }
+    let mut req = RollMeasureRequest {
+        inputs: &inputs,
+        leader: args.leader.as_ref(),
+        unexposed: args.unexposed.as_ref(),
+        recipe: shared,
+        midtone: MidtoneMode::Auto,
+        lifts: Lifts {
+            small: true,
+            thin: true,
+        },
+        strict: args.strict,
+        keyed: true,
+        budget: args.memory.budget(),
+        on_roll: true,
+    };
+    let stated_base = req.check()?;
+    let m = measure_roll(&req, stated_base, started, warnings, log)?;
+    let found: Vec<String> = m.found.iter().map(|i| i.display().to_string()).collect();
+    if !found.is_empty() {
+        log.note(&format!(
+            "not converting {}: `auto` found them as reference frames (the report's \
+             `measurement.references`)",
+            found.join(", ")
+        ));
+    }
+    Ok(m)
+}
+
+/// Create `--out-dir` and every frame's output directory (a manifest may name a per-frame
+/// output in a subdirectory).
+fn create_roll_dirs(args: &RollArgs, planned: &[PlannedFrame]) -> Result<()> {
+    std::fs::create_dir_all(&args.out_dir).map_err(|e| {
+        NcError::Write(format!(
+            "cannot create --out-dir {}: {e}",
+            args.out_dir.display()
+        ))
+    })?;
+    for pf in planned {
+        if let Some(parent) = pf.output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                NcError::Write(format!(
+                    "cannot create output directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// The measurement as a `--params` layer, read back as `measure-roll --out`'s file would
+/// be, so the run is the one `measure-roll` then `roll` gives.
+fn measured_layer(recipe: &MeasuredRecipe) -> Result<serde_json::Value> {
+    let doc = serde_json::to_string(&RecipeEnvelope::new(recipe))
+        .map_err(|e| NcError::Other(format!("serializing the measured recipe: {e}")))?;
+    Ok(read_layer(&doc, "measured by --measure-roll")?.body)
+}
+
+/// Guard every roll write target (per-frame outputs and exports, `--report-file`,
+/// `--save-recipe`) against every file the roll reads and against one another, before
+/// anything is decoded. `references` are measure mode's leader and unexposed scans.
+/// Without `frame_outputs`, the frames are guarded only as inputs. Outside measure mode,
+/// `--save-recipe` may replace a sole `--params` layer, as on `convert`.
+fn guard_roll_targets(
+    args: &RollArgs,
+    planned: &[PlannedFrame],
+    references: &[(&Path, &str)],
+    frame_outputs: bool,
+) -> Result<()> {
+    let save_key = args.save_recipe.as_deref().map(collision_key);
+    let overwrites = |p: &Path| {
+        save_key
+            .as_ref()
+            .is_some_and(|k| keys_collide(&collision_key(p), k))
+    };
+    if let Some(layer) = recipe_files(&args.recipe_in).find(|p| overwrites(p))
+        && (args.recipe_in.len() > 1 || args.measures())
+    {
+        let why = if args.measures() {
+            "in measure mode it would rewrite that layer into the measured run, which the \
+             same command then refuses as stating roll values"
+        } else {
+            "with several layers it would rewrite that layer into the whole resolved run \
+             (its base, roll values and roll.frames table), carrying them into later runs"
+        };
+        return Err(NcError::Usage(format!(
+            "--save-recipe ({}) would overwrite the --params layer {}: {why}. Save it to \
+             another path",
+            args.save_recipe.as_deref().unwrap_or(layer).display(),
+            layer.display()
+        )));
+    }
+    // The --frames manifest is read too, so a target aimed at it is refused.
+    let mut inputs: Vec<(&Path, &str)> = planned
+        .iter()
+        .map(|p| (p.input.as_path(), "an input scan"))
+        .collect();
+    inputs.extend(references);
+    inputs.extend(args.frames.as_deref().map(|p| (p, "the --frames manifest")));
+    // A sole layer `--save-recipe` replaces is guarded by that target instead: anything
+    // else aimed at it collides with `--save-recipe`.
+    inputs.extend(
+        recipe_files(&args.recipe_in)
+            .filter(|p| !overwrites(p))
+            .map(|p| (p.as_path(), "the --params recipe")),
+    );
+    let mut targets: Vec<(String, PathBuf, RollTarget)> = Vec::new();
+    for (i, pf) in planned.iter().enumerate().filter(|_| frame_outputs) {
+        targets.push((
+            format!("output for {}", pf.input.display()),
+            pf.output.clone(),
+            RollTarget::Output(i),
+        ));
+        if let Some(film_rgb) = &pf.film_rgb {
+            targets.push((
+                format!("film RGB export for {}", pf.input.display()),
+                film_rgb.clone(),
+                RollTarget::FilmRgb(i),
+            ));
+        }
+    }
+    if let Some(rf) = args.report.report_file.as_deref() {
+        targets.push((
+            "--report-file".to_string(),
+            rf.to_path_buf(),
+            RollTarget::Other,
+        ));
+    }
+    if let Some(save) = args.save_recipe.as_deref() {
+        targets.push((
+            "--save-recipe".to_string(),
+            save.to_path_buf(),
+            RollTarget::Other,
+        ));
+    }
+    ensure_roll_targets_distinct(&inputs, &targets)
+}
+
+/// The recipe `roll --save-recipe` writes: the roll's, flags applied, with each
+/// `roll.frames` entry's values that a typed flag beat taken out, so every frame replays
+/// as it ran (a frame's entry applies before the flags, [`resolve_frames`]). An entry left
+/// with nothing is dropped.
+fn saved_roll_recipe(shared: &Recipe, roll: &RollOverrides) -> Recipe {
+    let mut saved = shared.clone();
+    saved.roll.frames.retain(|_, entry| {
+        // A typed white or dark end drops the thin lift beneath it, as `merge` does.
+        if roll.roll_white.is_some() || roll.roll_dark.is_some() {
+            entry.thin_slope = None;
+            entry.thin_exposure = None;
+        }
+        if roll.roll_white.is_some() {
+            entry.white_stops = None;
+        }
+        // A typed frame lift is refused on `roll` ([`reject_a_lift_for_every_frame`]).
+        *entry != recipe::FrameRoll::default()
+    });
+    saved
 }
 
 /// `hanten roll` — convert a batch of frames from one shared, frozen recipe (the
@@ -5866,16 +6313,53 @@ fn run_roll(args: RollArgs) -> Result<()> {
             path.display()
         )));
     }
-    let loaded = load_recipes(&args.recipe_in)?;
+    reject_measure_mode_flags(&args)?;
+    let mut layers = load_layers(&args.recipe_in)?;
+    reject_a_leader_without_measuring(&args, &layers)?;
+    // Measure mode: the measurement joins the layers last, as `measure-roll --out`'s file
+    // would. Under `--strict` a warning refuses before any frame is converted.
+    let measurement = if args.measures() {
+        let m = measure_for_roll(&args, &layers, started, &log)?;
+        if args.strict && !m.report.warnings.is_empty() {
+            let roll = RollReport {
+                command: "roll",
+                identity: Identity::new(),
+                warnings: Vec::new(),
+                measurement: Some(Box::new(m.report)),
+                frames: Vec::new(),
+                summary: RollSummary {
+                    total: 0,
+                    succeeded: 0,
+                    failed: 0,
+                },
+                elapsed_ms: Some(elapsed_ms(started)),
+            };
+            emit_json(
+                &roll,
+                args.report.report,
+                args.report.report_file.as_deref(),
+                &log,
+            )?;
+            return Err(NcError::Other(
+                "--strict: the roll's measurement warned (see the report's `measurement`); \
+                 no frame converted"
+                    .into(),
+            ));
+        }
+        layers.bodies.push(measured_layer(&m.recipe)?);
+        Some(m)
+    } else {
+        None
+    };
     // The roll's recipe, flags applied: what the roll-wide warnings compare each frame
     // against, so a value a flag set is not read as a frame's break. Each frame resolves
     // from the recipes alone (`resolve_frames`), since its `roll.frames` entry comes
     // before the flags.
-    let stated = loaded.recipe;
+    let stated = compose_layers(&layers.bodies)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
-    reject_a_lift_for_every_frame(&args.knobs, &shared)?;
+    reject_a_lift_for_every_frame(&args.knobs, &shared, args.measures())?;
 
     // Validated once up front so a broken recipe fails loudly before any frame is
     // touched. Roll-specific rejections run first and the missing-base rule last
@@ -5893,10 +6377,13 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let mut roll_warnings: Vec<String> = Vec::new();
     // A frozen recipe replayed under a different behavioral `pipeline_version` than
     // it was captured under is a roll-level fact (one shared recipe, N frames), so
-    // it rides `roll_warnings` rather than any single frame's list.
-    for msg in loaded.provenance_warnings {
-        log.warn(&msg);
-        roll_warnings.push(msg);
+    // it rides `roll_warnings` rather than any single frame's list — or, in measure mode,
+    // the measurement's, which `--strict` checks before any frame converts.
+    if measurement.is_none() {
+        for msg in layers.provenance_warnings {
+            log.warn(&msg);
+            roll_warnings.push(msg);
+        }
     }
     // The shared recipe's fallbacks and possible leftovers, once for the roll; a typed
     // style flag never warns. A per-frame override is that frame's explicit choice, so it
@@ -5924,62 +6411,50 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // Resolve the plan. A per-frame override that changes a roll-wide value appends
     // its own roll-level warning here (warn-and-continue, like the not-frozen warning
     // above), so `roll_warnings` is passed in to collect it.
-    let planned = resolve_frames(&args, &stated, &shared, &mut roll_warnings, &log)?;
-
-    // Guard every write target (per-frame outputs and exports, the report file) against every
-    // input and against one another before writing anything. The `--frames` manifest
-    // is a read input too — a write target aimed at it (e.g. `--report-file` equal to
-    // the manifest path) must be rejected, not silently clobbered — so include it in
-    // the protected read set.
-    let mut inputs: Vec<(&Path, &str)> = planned
-        .iter()
-        .map(|p| (p.input.as_path(), "an input scan"))
-        .collect();
-    inputs.extend(args.frames.as_deref().map(|p| (p, "the --frames manifest")));
-    inputs.extend(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
-    let mut targets: Vec<(String, PathBuf, RollTarget)> = Vec::new();
-    for (i, pf) in planned.iter().enumerate() {
-        targets.push((
-            format!("output for {}", pf.input.display()),
-            pf.output.clone(),
-            RollTarget::Output(i),
-        ));
-        if let Some(film_rgb) = &pf.film_rgb {
-            targets.push((
-                format!("film RGB export for {}", pf.input.display()),
-                film_rgb.clone(),
-                RollTarget::FilmRgb(i),
-            ));
-        }
+    let pictures = measurement.as_ref().map(|m| m.pictures.as_slice());
+    let planned = resolve_frames(&args, pictures, &stated, &shared, &mut roll_warnings, &log)?;
+    // The frames `auto` found are read too, though not converted.
+    let mut reads = args.references();
+    if let Some(m) = &measurement {
+        reads.extend(
+            m.found
+                .iter()
+                .map(|p| (p.as_path(), "an auto-found reference scan")),
+        );
     }
-    if let Some(rf) = args.report.report_file.as_deref() {
-        targets.push((
-            "--report-file".to_string(),
-            rf.to_path_buf(),
-            RollTarget::Other,
-        ));
-    }
-    ensure_roll_targets_distinct(&inputs, &targets)?;
+    guard_roll_targets(&args, &planned, &reads, true)?;
+    // Now that the plan is known-good, and before the recipe is staged into one.
+    create_roll_dirs(&args, &planned)?;
 
-    // Create the output directory now that the plan is known-good. A manifest may
-    // name a per-frame output in a subdirectory (`sub/x.tiff`), so create each
-    // frame's output parent too — otherwise the encode fails on a missing dir.
-    std::fs::create_dir_all(&args.out_dir).map_err(|e| {
-        NcError::Write(format!(
-            "cannot create --out-dir {}: {e}",
-            args.out_dir.display()
-        ))
-    })?;
-    for pf in &planned {
-        if let Some(parent) = pf.output.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                NcError::Write(format!(
-                    "cannot create output directory {}: {e}",
-                    parent.display()
-                ))
-            })?;
+    // The resolved recipe, which reloads through `--params` to the same roll. Staged here,
+    // so a bad path fails before the first frame, and committed only once the roll has
+    // passed. A symlink the guard above cannot resolve is caught by where it lands.
+    let saved = args
+        .save_recipe
+        .as_deref()
+        .map(|path| {
+            stage_json(
+                path,
+                &RecipeEnvelope::new(&saved_roll_recipe(&shared, &args.knobs.roll)),
+            )
+        })
+        .transpose()?;
+    if let (Some(saved), Some(path)) = (&saved, &args.save_recipe) {
+        let earlier = planned
+            .iter()
+            .flat_map(|pf| std::iter::once(&pf.output).chain(&pf.film_rgb))
+            .map(PathBuf::as_path)
+            .chain(args.report.report_file.as_deref());
+        for other in earlier {
+            if saved.lands_on(other) {
+                return Err(NcError::Usage(format!(
+                    "--save-recipe ({}) and {} resolve to the same file — one would silently \
+                     overwrite the other. This can happen when a symlinked path points at \
+                     another artifact's path",
+                    path.display(),
+                    other.display()
+                )));
+            }
         }
     }
 
@@ -6038,6 +6513,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         command: "roll",
         identity: Identity::new(),
         warnings: roll_warnings,
+        measurement: measurement.map(|m| Box::new(m.report)),
         frames,
         summary: RollSummary {
             total,
@@ -6065,6 +6541,9 @@ fn run_roll(args: RollArgs) -> Result<()> {
         return Err(NcError::Other(
             "--strict: the roll produced warnings (see report)".into(),
         ));
+    }
+    if let Some(saved) = saved {
+        commit_json(saved, &log)?;
     }
     Ok(())
 }
@@ -7360,6 +7839,7 @@ fn find_unexposed(
     stats: &[Option<reference_frames::AreaStats>],
     areas: &mut [AreaMeasurement],
     strict: bool,
+    on_roll: bool,
     log: &Log,
     warnings: &mut Vec<String>,
 ) -> Result<(reference_frames::Unexposed, Vec<BaseMeasurement>)> {
@@ -7385,12 +7865,18 @@ fn find_unexposed(
                 inputs[by].display()
             ),
         };
+        // On `roll`, dropping `--unexposed` would leave measure mode too.
+        let pass = if on_roll {
+            "--params base.json --measure-roll"
+        } else {
+            "--params base.json"
+        };
         NcError::Usage(format!(
             "--unexposed auto found no unexposed frame among the inputs: {why}. Name the \
              roll's unexposed frame with --unexposed <file>, leaving it out of the frames; \
              or, with none on the roll, measure a region of clear film (`hanten \
-             measure-base <frame> --base-region X,Y,W,H --out base.json`) and pass \
-             --params base.json in place of --unexposed"
+             measure-base <frame> --base-region X,Y,W,H --out base.json`) and pass {pass} \
+             in place of --unexposed"
         ))
     })?;
     if reuse_ready(found.base).is_none() {
@@ -7499,12 +7985,6 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         ));
     }
 
-    let named_leader = args.leader.as_ref().and_then(Reference::path);
-    let named_unexposed = args.unexposed.as_ref().and_then(Reference::path);
-    let auto_unexposed = args.unexposed == Some(Reference::Auto);
-    let auto_leader = args.leader == Some(Reference::Auto);
-    let auto = auto_unexposed || auto_leader;
-
     let loaded = load_recipes(&args.recipe_in)?;
     let mut recipe = loaded.recipe;
     // A measured base is not overridden: the unexposed frame is refused beside any
@@ -7517,12 +7997,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         } else {
             None
         };
-        if let Some(stated) = stated {
-            return Err(NcError::Usage(format!(
-                "--unexposed {unexposed} measures the film base, and {stated} states one; the base \
-                 is measured or stated, never both. Drop one of them"
-            )));
-        }
+        refuse_unexposed_beside_a_base(unexposed, stated, false)?;
     }
     if let Some(b) = args.film_base {
         recipe.calibration.film_base = Some(FilmBaseSource::Explicit(b));
@@ -7530,98 +8005,22 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if let Some(f) = args.measure.measure_inset {
         recipe.measure.inset = f;
     }
-    // Before any decode: a bad inset would otherwise surface from the first frame's
-    // effective area, blamed on that file.
-    check_measure_inset(recipe.measure.inset)?;
-    // What this command measures — the roll section, and the style knobs a roll recipe
-    // may carry beside it — is never read, and none of it may refuse the run. Nor may
-    // the rendering, since this command renders nothing: a roll recipe stating `direct`
-    // beside a film master would otherwise be refused as that pair. Keys only: this
-    // command takes none of the conversion flags.
-    recipe.roll = recipe::RollSection::default();
-    recipe.rendering = crate::rendering::Rendering::default();
-    recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
-    recipe.look = recipe::LookKeys::default();
-    recipe::validate(&recipe, KnobNames::KeyOnly)?;
-    if args.strict && args.leader.is_none() {
-        return Err(NcError::Usage(
-            "--strict refuses an unguarded measurement: without --leader a fully exposed \
-             frame among the inputs would set the roll's white balance, and no frame is \
-             checked for film saturation. Pass the roll's leader scan"
-                .into(),
-        ));
-    }
-    // A frame named twice would weigh twice in the pool — silently, since every
-    // frame contributes the same sample count. The leader named as a frame too (the
-    // natural glob when it sits beside them) would pool its unguarded edges.
-    // The unexposed frame likewise: it is film base, not picture.
-    let mut seen: Vec<(PathBuf, &Path)> = Vec::new();
-    let references = [
-        ("--leader", "leader", named_leader),
-        ("--unexposed", "unexposed frame", named_unexposed),
-    ];
-    for (flag, what, path) in references {
-        let Some(path) = path else { continue };
-        let key = collision_key(path);
-        if let Some(input) = args
-            .inputs
-            .iter()
-            .find(|i| keys_collide(&collision_key(i), &key))
-        {
-            return Err(NcError::Usage(format!(
-                "{} is both the {flag} and an input frame; every input is pooled as \
-                 picture, so leave the {what} out of the frames",
-                input.display()
-            )));
-        }
-    }
-    if let (Some(leader), Some(unexposed)) = (named_leader, named_unexposed)
-        && keys_collide(&collision_key(leader), &collision_key(unexposed))
-    {
-        return Err(NcError::Usage(format!(
-            "{} is both the --leader and the --unexposed frame; the leader is fully \
-             exposed and the unexposed frame is not exposed at all",
-            leader.display()
-        )));
-    }
-    for input in &args.inputs {
-        let key = collision_key(input);
-        if let Some((_, first)) = seen.iter().find(|(k, _)| keys_collide(k, &key)) {
-            let spelled = if *first == input.as_path() {
-                String::new()
-            } else {
-                format!(" (also as {})", first.display())
-            };
-            return Err(NcError::Usage(format!(
-                "{} is named twice{spelled}; each frame is pooled once, so a repeat would \
-                 double its weight in the roll's white",
-                input.display()
-            )));
-        }
-        seen.push((key, input));
-    }
-    // After the exact repeat above: a file named twice is that fault, not a clash. With
-    // `auto`, only the picture frames key `roll.frames`, so they are checked once found.
-    if args.out.out.is_some() && !auto {
-        refuse_shared_file_names(&args.inputs)?;
-    }
-    let stated_base = match (&args.unexposed, &recipe.calibration.film_base) {
-        (Some(_), _) => None,
-        (None, Some(FilmBaseSource::Explicit(b))) => {
-            validate_explicit_film_base(b)?;
-            Some(FilmBase::from(*b))
-        }
-        (None, _) => {
-            return Err(NcError::Usage(
-                "measure-roll needs the roll's film base: `--unexposed <unexposed.tif>` to \
-                 measure it here, or stated explicitly — `--film-base R,G,B`, or \
-                 `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the recipe (what \
-                 `hanten measure-base --out` writes). A base estimated per frame would \
-                 measure each frame under a different decode"
-                    .into(),
-            ));
-        }
+    let mut req = RollMeasureRequest {
+        inputs: &args.inputs,
+        leader: args.leader.as_ref(),
+        unexposed: args.unexposed.as_ref(),
+        recipe,
+        midtone: args.midtone_neutral,
+        lifts: Lifts {
+            small: !args.no_small_lift,
+            thin: !args.no_thin_lift,
+        },
+        strict: args.strict,
+        keyed: args.out.out.is_some(),
+        budget: args.memory.budget(),
+        on_roll: false,
     };
+    let stated_base = req.check()?;
     let mut targets = Vec::new();
     if let Some(out) = args.out.out.as_deref() {
         targets.push(("--out", out));
@@ -7629,37 +8028,263 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if let Some(rf) = args.report.report_file.as_deref() {
         targets.push(("--report-file", rf));
     }
-    let read = args
-        .inputs
-        .iter()
-        .map(|p| (p.as_path(), "an input scan"))
-        .chain(named_leader.map(|p| (p, "the --leader scan")))
-        .chain(named_unexposed.map(|p| (p, "the --unexposed scan")))
+    let read = req
+        .reads()
         .chain(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
     for (input, what) in read {
         ensure_write_targets_spare(input, what, &targets)?;
     }
     check_recipe_out(&args.out)?;
 
-    let budget = args.memory.budget();
     let mut warnings = Vec::new();
     for msg in loaded.provenance_warnings {
         push_warning_buf(&mut warnings, &log, msg);
     }
+    let measured = measure_roll(&req, stated_base, started, warnings, &log)?;
+    let report = &measured.report;
+    emit_json(
+        report,
+        args.report.report,
+        args.report.report_file.as_deref(),
+        &log,
+    )?;
+    if args.strict && !report.warnings.is_empty() {
+        return Err(NcError::Other(format!(
+            "--strict: {} warning(s) present (see report){}",
+            report.warnings.len(),
+            if args.out.out.is_some() {
+                "; no recipe written"
+            } else {
+                ""
+            }
+        )));
+    }
+    if let Some(out) = args.out.out.as_deref() {
+        write_recipe_out(out, &measured.recipe, &log)?;
+    }
+    Ok(())
+}
+
+/// `--unexposed` measures the base, so a base stated beside it (`stated` names where) is
+/// refused: the base is measured or stated, never both. On `roll`, dropping `--unexposed`
+/// also leaves measure mode, so the remedy names `--measure-roll` in its place.
+fn refuse_unexposed_beside_a_base(
+    unexposed: &Reference,
+    stated: Option<&str>,
+    on_roll: bool,
+) -> Result<()> {
+    let Some(stated) = stated else {
+        return Ok(());
+    };
+    let remedy = if !on_roll {
+        "Drop one of them".to_owned()
+    } else if stated == "--base-region" {
+        // `--measure-roll` refuses a region base too.
+        "Drop --base-region".to_owned()
+    } else {
+        format!(
+            "Drop {stated}, or replace --unexposed with --measure-roll to measure the roll \
+             over the stated base"
+        )
+    };
+    Err(NcError::Usage(format!(
+        "--unexposed {unexposed} measures the film base, and {stated} states one; the base is \
+         measured or stated, never both. {remedy}"
+    )))
+}
+
+/// One roll measurement's inputs ([`measure_roll`]): `measure-roll`'s, and `roll`'s
+/// measure mode's.
+struct RollMeasureRequest<'a> {
+    /// The frames, in the order they are measured.
+    inputs: &'a [PathBuf],
+    leader: Option<&'a Reference>,
+    unexposed: Option<&'a Reference>,
+    /// The recipe the frames are measured under: the layers, and the base and inset flags.
+    recipe: Recipe,
+    midtone: MidtoneMode,
+    lifts: Lifts,
+    strict: bool,
+    /// Whether the measured recipe is kept, so the frames key `roll.frames` and may not
+    /// share a file name.
+    keyed: bool,
+    budget: memory::Budget,
+    /// `roll`'s measure mode, whose remedies name `--measure-roll`.
+    on_roll: bool,
+}
+
+impl RollMeasureRequest<'_> {
+    fn named_leader(&self) -> Option<&Path> {
+        self.leader.and_then(Reference::path)
+    }
+
+    fn named_unexposed(&self) -> Option<&Path> {
+        self.unexposed.and_then(Reference::path)
+    }
+
+    fn auto(&self) -> bool {
+        self.leader == Some(&Reference::Auto) || self.unexposed == Some(&Reference::Auto)
+    }
+
+    /// The scans the measurement reads, named for a write-target clash.
+    fn reads(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.inputs
+            .iter()
+            .map(|p| (p.as_path(), "an input scan"))
+            .chain(self.named_leader().map(|p| (p, "the --leader scan")))
+            .chain(self.named_unexposed().map(|p| (p, "the --unexposed scan")))
+    }
+
+    /// Every rule decidable before a scan is decoded; returns the stated base (none when
+    /// `--unexposed` measures it). Clears what the measurement never reads from the recipe.
+    fn check(&mut self) -> Result<Option<FilmBase>> {
+        let recipe = &mut self.recipe;
+        // Before any decode: a bad inset would otherwise surface from the first frame's
+        // effective area, blamed on that file.
+        check_measure_inset(recipe.measure.inset)?;
+        // What this measures — the roll section, and the style knobs a roll recipe may
+        // carry beside it — is never read, and none of it may refuse the run. Nor may the
+        // rendering, since a measurement renders nothing: a roll recipe stating `direct`
+        // beside a film master would otherwise be refused as that pair. Keys only: the
+        // measurement takes none of the conversion flags.
+        recipe.roll = recipe::RollSection::default();
+        recipe.rendering = crate::rendering::Rendering::default();
+        recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
+        recipe.look = recipe::LookKeys::default();
+        recipe::validate(recipe, KnobNames::KeyOnly)?;
+        if self.strict && self.leader.is_none() {
+            return Err(NcError::Usage(
+                "--strict refuses an unguarded measurement: without --leader a fully exposed \
+                 frame among the inputs would set the roll's white balance, and no frame is \
+                 checked for film saturation. Pass the roll's leader scan"
+                    .into(),
+            ));
+        }
+        let (named_leader, named_unexposed) = (self.named_leader(), self.named_unexposed());
+        // A frame named twice would weigh twice in the pool — silently, since every
+        // frame contributes the same sample count. The leader named as a frame too (the
+        // natural glob when it sits beside them) would pool its unguarded edges.
+        // The unexposed frame likewise: it is film base, not picture.
+        let references = [
+            ("--leader", "leader", named_leader),
+            ("--unexposed", "unexposed frame", named_unexposed),
+        ];
+        for (flag, what, path) in references {
+            let Some(path) = path else { continue };
+            let key = collision_key(path);
+            if let Some(input) = self
+                .inputs
+                .iter()
+                .find(|i| keys_collide(&collision_key(i), &key))
+            {
+                return Err(NcError::Usage(format!(
+                    "{} is both the {flag} and an input frame; every input is pooled as \
+                     picture, so leave the {what} out of the frames",
+                    input.display()
+                )));
+            }
+        }
+        if let (Some(leader), Some(unexposed)) = (named_leader, named_unexposed)
+            && keys_collide(&collision_key(leader), &collision_key(unexposed))
+        {
+            return Err(NcError::Usage(format!(
+                "{} is both the --leader and the --unexposed frame; the leader is fully \
+                 exposed and the unexposed frame is not exposed at all",
+                leader.display()
+            )));
+        }
+        let mut seen: Vec<(PathBuf, &Path)> = Vec::new();
+        for input in self.inputs {
+            let key = collision_key(input);
+            if let Some((_, first)) = seen.iter().find(|(k, _)| keys_collide(k, &key)) {
+                let spelled = if *first == input.as_path() {
+                    String::new()
+                } else {
+                    format!(" (also as {})", first.display())
+                };
+                return Err(NcError::Usage(format!(
+                    "{} is named twice{spelled}; each frame is pooled once, so a repeat would \
+                     double its weight in the roll's white",
+                    input.display()
+                )));
+            }
+            seen.push((key, input));
+        }
+        // After the exact repeat above: a file named twice is that fault, not a clash. With
+        // `auto`, only the picture frames key `roll.frames`, so they are checked once found.
+        if self.keyed && !self.auto() {
+            refuse_shared_file_names(self.inputs)?;
+        }
+        match (self.unexposed, &self.recipe.calibration.film_base) {
+            (Some(_), _) => Ok(None),
+            (None, Some(FilmBaseSource::Explicit(b))) => {
+                validate_explicit_film_base(b)?;
+                Ok(Some(FilmBase::from(*b)))
+            }
+            (None, Some(FilmBaseSource::Region(_))) => Err(NcError::Usage(format!(
+                "measuring the roll needs an explicit film base, and {} is a region, which \
+                 re-reads the base from each frame and so measures each under a different \
+                 decode. In place of the region, measure the base from the roll's unexposed \
+                 frame with `--unexposed <unexposed.tif>`, or measure the region once — \
+                 `hanten measure-base <frame> --base-region X,Y,W,H --out base.json` — and \
+                 pass --params base.json",
+                if self.on_roll {
+                    "the stated base (`--base-region` or the recipe's `calibration.film_base`)"
+                } else {
+                    "the recipe's `calibration.film_base`"
+                }
+            ))),
+            (None, None) => Err(NcError::Usage(
+                "measuring the roll needs its film base: `--unexposed <unexposed.tif>` to \
+                 measure it too, `--unexposed auto` to find the unexposed frame among the \
+                 inputs, or stated explicitly — `--film-base R,G,B`, or \
+                 `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the recipe (what \
+                 `hanten measure-base --out` writes). A base estimated per frame would \
+                 measure each frame under a different decode"
+                    .into(),
+            )),
+        }
+    }
+}
+
+/// What [`measure_roll`] returns: the report, the recipe `measure-roll --out` writes, the
+/// frames measured as picture, and the inputs `auto` found as reference frames.
+struct RollMeasurement {
+    report: MeasureRollReport,
+    recipe: MeasuredRecipe,
+    pictures: Vec<PathBuf>,
+    found: Vec<PathBuf>,
+}
+
+/// Measure what a roll shares, over a request that passed [`RollMeasureRequest::check`]:
+/// with `--unexposed` its film base ([`measure_base`]), then its white balance, midtone
+/// line, white and exposure over its picture frames. The report carries `warnings` on.
+fn measure_roll(
+    req: &RollMeasureRequest,
+    stated_base: Option<FilmBase>,
+    started: Instant,
+    mut warnings: Vec<String>,
+    log: &Log,
+) -> Result<RollMeasurement> {
+    let recipe = &req.recipe;
+    let budget = req.budget;
+    let auto_unexposed = req.unexposed == Some(&Reference::Auto);
+    let auto_leader = req.leader == Some(&Reference::Auto);
+    let auto = auto_unexposed || auto_leader;
     let mut decode = None;
 
     // The unexposed frame first: every other frame is decoded with its base, and a bad one
     // refuses before the inputs are measured. Measured exactly as `measure-base` measures
     // it with no source flag: its effective area at the median.
-    let unexposed = match &args.unexposed {
+    let unexposed = match req.unexposed {
         Some(Reference::Path(path)) => {
-            let req = BaseRequest {
+            let base_req = BaseRequest {
                 input: path,
                 source: None,
                 inset: recipe.measure.inset,
                 film_type: None,
             };
-            let m = measure_base(&req, budget, true, &log, &mut warnings)?;
+            let m = measure_base(&base_req, budget, true, log, &mut warnings)?;
             // Refused before this command's report, so the evidence is measure-base's.
             if m.reuse.is_none() {
                 return Err(NcError::Other(format!(
@@ -7679,7 +8304,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // `measure-base` measures it with no source flag; the base and the leader are found
     // from those measurements. `None` is an input whose area could not be measured.
     let mut areas = if auto {
-        measure_areas(&args.inputs, recipe.measure.inset, budget, &log)?
+        measure_areas(req.inputs, recipe.measure.inset, budget, log)?
     } else {
         Vec::new()
     };
@@ -7694,11 +8319,12 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         .collect();
     let found_unexposed = if auto_unexposed {
         Some(find_unexposed(
-            &args.inputs,
+            req.inputs,
             &stats,
             &mut areas,
-            args.strict,
-            &log,
+            req.strict,
+            req.on_roll,
+            log,
             &mut warnings,
         )?)
     } else {
@@ -7722,17 +8348,17 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             base.into(),
         )
     });
-    let leader_path = match &args.leader {
+    let leader_path = match req.leader {
         Some(Reference::Path(p)) => Some(p.clone()),
         Some(Reference::Auto) => found_leader
             .as_ref()
             .and_then(|l| l.as_ref())
-            .map(|(guard, _)| args.inputs[*guard].clone()),
+            .map(|(guard, _)| req.inputs[*guard].clone()),
         None => None,
     };
     let references = (auto_unexposed || auto_leader).then(|| {
         found_references(
-            &args.inputs,
+            req.inputs,
             &stats,
             base,
             found_unexposed,
@@ -7746,7 +8372,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             .filter(|i| i.class == FoundClass::Picture)
             .map(|i| i.input.clone())
             .collect(),
-        None => args.inputs.clone(),
+        None => req.inputs.to_vec(),
     };
     if pictures.is_empty() {
         return Err(NcError::Usage(
@@ -7756,11 +8382,11 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 .into(),
         ));
     }
-    if auto && args.out.out.is_some() {
+    if auto && req.keyed {
         refuse_shared_file_names(&pictures)?;
     }
     // Before the pictures are measured (pass 2); pass 1 has decoded every input.
-    if args.strict && auto_leader && leader_path.is_none() {
+    if req.strict && auto_leader && leader_path.is_none() {
         return Err(NcError::Usage(format!(
             "--strict refuses an unguarded measurement: --leader auto found no leader among \
              the inputs (a flat frame at least {} density above the roll's base on every \
@@ -7785,10 +8411,10 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             let (aces, _, film_peak, _, memory) = decode_for_roll_white(
                 path,
                 RollScan::Leader,
-                &recipe,
+                recipe,
                 &base,
                 budget,
-                &log,
+                log,
                 &mut warnings,
                 |film, _| {
                     roll_white::leader_peak(film.rgb(), film.width(), film.height())
@@ -7820,7 +8446,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         None => {
             push_warning_buf(
                 &mut warnings,
-                &log,
+                log,
                 format!(
                     "{}: the measurement is unguarded, so a fully exposed frame among the \
                      inputs would set the roll's white balance (measured: it moves the gains \
@@ -7846,10 +8472,10 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         let (aces, area, film_sample, decoded, memory) = decode_for_roll_white(
             input,
             RollScan::Frame,
-            &recipe,
+            recipe,
             &base,
             budget,
-            &log,
+            log,
             &mut warnings,
             |film, area| match area {
                 Ok(a) => roll_white::frame_sample(film.rgb(), film.width(), a.region)
@@ -7872,7 +8498,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         // as picture, and a capped one misread the IR — the same warnings `convert`
         // gives, so `--strict` sees them.
         for w in film_base::effective_area_warnings(&area) {
-            push_warning_buf(&mut warnings, &log, format!("{}: {w}", input.display()));
+            push_warning_buf(&mut warnings, log, format!("{}: {w}", input.display()));
         }
         let level = roll_white::frame_level(aces.rgb(), aces.width(), area.region)
             .map_err(|e| e.prefixed(input.display()))?;
@@ -7892,7 +8518,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         if let Some(d) = leader_distance_stops.filter(|d| roll_white::near_saturation(*d)) {
             push_warning_buf(
                 &mut warnings,
-                &log,
+                log,
                 format!(
                     "{}: near film saturation — its white sits {d:.2} stop under the \
                      leader (margin {} stop); the film compresses highlights there, which \
@@ -7905,7 +8531,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         if counts.kept == 0 {
             push_warning_buf(
                 &mut warnings,
-                &log,
+                log,
                 format!(
                     "{}: contributed no pixel ({} guarded, {} unusable) — is it a picture \
                      frame of this roll?",
@@ -7953,7 +8579,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         .zip(&frames)
         .filter(|(_, f)| f.counts.kept > 0)
         .map(|(s, _)| s);
-    let midtone = if args.midtone_neutral == MidtoneMode::Off {
+    let midtone = if req.midtone == MidtoneMode::Off {
         midtone_neutral::Measured::asked(picture.filter(|s| !s.is_empty()).count())
     } else {
         let picture: Vec<Vec<f32>> = picture.map(|s| roll_white::acescg_sample(s)).collect();
@@ -7961,7 +8587,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             &picture.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             gains,
             roll_white::pooled_white_stops(&picture, gains),
-            args.midtone_neutral == MidtoneMode::Auto,
+            req.midtone == MidtoneMode::Auto,
         )
     };
     match (midtone.line, midtone.off_because) {
@@ -7996,7 +8622,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if exposure.bounded {
         push_warning_buf(
             &mut warnings,
-            &log,
+            log,
             format!(
                 "the roll's median frame level is {:+.2} stops from mid-grey, so its exposure \
                  is limited to {:+} EV (bound {} EV) and it renders off the normal level; \
@@ -8009,10 +8635,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             ),
         );
     }
-    let lifts = Lifts {
-        small: !args.no_small_lift,
-        thin: !args.no_thin_lift,
-    };
+    let lifts = req.lifts;
     for f in &mut frames {
         let flat = f.flat;
         f.lift_ev = f.white_stops.map(|w| {
@@ -8130,7 +8753,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         },
         midtone_neutral: MeasuredMidtone {
             kind: "correction",
-            mode: args.midtone_neutral,
+            mode: req.midtone,
             measured: midtone,
             min_frames: midtone_neutral::MIN_FRAMES,
             min_bands: midtone_neutral::MIN_BANDS,
@@ -8158,27 +8781,18 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         warnings,
         elapsed_ms: elapsed_ms(started),
     };
-    emit_json(
-        &report,
-        args.report.report,
-        args.report.report_file.as_deref(),
-        &log,
-    )?;
-    if args.strict && !report.warnings.is_empty() {
-        return Err(NcError::Other(format!(
-            "--strict: {} warning(s) present (see report){}",
-            report.warnings.len(),
-            if args.out.out.is_some() {
-                "; no recipe written"
-            } else {
-                ""
-            }
-        )));
-    }
-    if let Some(out) = args.out.out.as_deref() {
-        write_recipe_out(out, &measured, &log)?;
-    }
-    Ok(())
+    let found = req
+        .inputs
+        .iter()
+        .filter(|i| !pictures.contains(i))
+        .cloned()
+        .collect();
+    Ok(RollMeasurement {
+        report,
+        recipe: measured,
+        pictures,
+        found,
+    })
 }
 
 /// Whether this run should collect telemetry — opt-in via either flag.
@@ -10040,6 +10654,151 @@ mod tests {
         assert!(Cli::try_parse_from(["hanten", "roll", "a.tif"]).is_err());
     }
 
+    #[test]
+    fn roll_section_is_measured_or_switch() {
+        // Measure mode refuses the measured keys and keeps the switches: every key of the
+        // section is one or the other, so a new key is classified here.
+        const SWITCHES: &[&str] = &[
+            "small_lift",
+            "thin_lift",
+            "midtone_neutral",
+            "neutral_balance",
+        ];
+        let section = serde_json::to_value(recipe::RollSection::default()).unwrap();
+        let keys: Vec<&str> = section
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for key in &keys {
+            assert!(
+                MEASURED_ROLL_KEYS.contains(key) != SWITCHES.contains(key),
+                "`roll.{key}` is measured or a switch, not both or neither"
+            );
+        }
+        for key in MEASURED_ROLL_KEYS.iter().chain(SWITCHES) {
+            assert!(keys.contains(key), "`roll.{key}` exists");
+        }
+    }
+
+    #[test]
+    fn the_measured_roll_flags_are_every_typed_flag_but_the_switches_and_lifts() {
+        let cli = Cli::try_parse_from([
+            "hanten",
+            "roll",
+            "a.tif",
+            "-o",
+            "out",
+            "--roll-white-balance",
+            "1,1,1",
+            "--roll-white",
+            "1",
+            "--roll-dark",
+            "-3",
+            "--roll-exposure",
+            "0",
+            "--roll-frame-exposure",
+            "0",
+            "--roll-thin-slope",
+            "2",
+            "--roll-thin-exposure",
+            "0",
+            "--roll-midtone-line",
+            "0,0,0,0,-1,1,2",
+            "--small-lift",
+            "on",
+            "--thin-lift",
+            "on",
+            "--midtone-neutral",
+            "on",
+            "--neutral-balance",
+            "on",
+        ])
+        .unwrap();
+        let Command::Roll(args) = cli.command else {
+            panic!("roll")
+        };
+        let roll = &args.knobs.roll;
+        // The lifts are refused on every `roll` by `reject_a_lift_for_every_frame`.
+        let not_measured = [
+            "--small-lift on",
+            "--thin-lift on",
+            "--midtone-neutral on",
+            "--neutral-balance on",
+            "--roll-frame-exposure",
+            "--roll-thin-slope",
+            "--roll-thin-exposure",
+        ];
+        let typed: Vec<_> = roll
+            .typed()
+            .into_iter()
+            .filter(|f| !not_measured.contains(f))
+            .collect();
+        assert_eq!(typed.len(), roll.typed().len() - not_measured.len());
+        assert_eq!(roll.measured(), typed);
+        let lifts = Recipe::default();
+        assert!(
+            reject_a_lift_for_every_frame(&args.knobs, &lifts, false)
+                .is_err_and(|e| e.to_string().contains("one frame's own lift"))
+        );
+    }
+
+    #[test]
+    fn saved_roll_recipe_drops_what_a_typed_end_beat() {
+        let entry = recipe::FrameRoll {
+            white_stops: Some(1.2),
+            exposure: Some(0.4),
+            thin_slope: Some(1.5),
+            thin_exposure: Some(0.2),
+        };
+        let mut shared = Recipe::default();
+        shared.roll.frames.insert("a.tif".into(), entry);
+        shared.roll.frames.insert(
+            "b.tif".into(),
+            recipe::FrameRoll {
+                thin_slope: Some(1.5),
+                thin_exposure: Some(0.2),
+                ..Default::default()
+            },
+        );
+        let saved = |roll: RollOverrides| saved_roll_recipe(&shared, &roll).roll.frames;
+        // `--roll-dark` drops the thin lift beneath it, keeping the white and small lift;
+        // an entry left with nothing is dropped.
+        let dark = saved(RollOverrides {
+            roll_dark: Some(-3.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            dark.into_iter().collect::<Vec<_>>(),
+            [(
+                "a.tif".to_string(),
+                recipe::FrameRoll {
+                    white_stops: Some(1.2),
+                    exposure: Some(0.4),
+                    ..Default::default()
+                }
+            )]
+        );
+        // `--roll-white` drops the white too.
+        let white = saved(RollOverrides {
+            roll_white: Some(1.5),
+            ..Default::default()
+        });
+        assert_eq!(
+            white.into_iter().collect::<Vec<_>>(),
+            [(
+                "a.tif".to_string(),
+                recipe::FrameRoll {
+                    exposure: Some(0.4),
+                    ..Default::default()
+                }
+            )]
+        );
+        // No typed end: every entry as it was.
+        assert_eq!(saved(RollOverrides::default()), shared.roll.frames);
+    }
+
     /// `roll` over a `--frames` manifest at `manifest`, writing into `dir`.
     fn roll_args(manifest: &Path, dir: &Path) -> RollArgs {
         RollArgs {
@@ -10047,6 +10806,10 @@ mod tests {
             frames: Some(manifest.to_path_buf()),
             out_dir: dir.to_path_buf(),
             recipe_in: vec![],
+            measure_roll: false,
+            leader: None,
+            unexposed: None,
+            save_recipe: None,
             knobs: ConversionFlags::default(),
             export_film_rgb: None,
             strict: false,
@@ -10067,7 +10830,14 @@ mod tests {
         let log = Log::new(&args.report);
         let plan = |frames: &str| {
             std::fs::write(&manifest, frames).unwrap();
-            resolve_frames(&args, &base_recipe(), &base_recipe(), &mut Vec::new(), &log)
+            resolve_frames(
+                &args,
+                None,
+                &base_recipe(),
+                &base_recipe(),
+                &mut Vec::new(),
+                &log,
+            )
         };
         for (params, names) in [
             (r#"{"print":{"print_exposure":0.2}}"#, "`print`"),
@@ -10110,7 +10880,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Region([10, 10, 20, 20]));
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, &shared, &mut warnings, &log);
+        let planned = resolve_frames(&args, None, &shared, &shared, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("region→explicit override should apply, not error");
         assert_eq!(planned.len(), 1);
@@ -10349,7 +11119,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.look.contrast = 1.3;
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, &shared, &mut Vec::new(), &log);
+        let planned = resolve_frames(&args, None, &shared, &shared, &mut Vec::new(), &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.unwrap();
         let a = &planned[0].recipe;
@@ -10646,6 +11416,7 @@ mod tests {
             command: "roll",
             identity: Identity::new(),
             warnings: vec![],
+            measurement: None,
             frames: vec![FrameReport {
                 input: PathBuf::from("f1.tif"),
                 output: Some(PathBuf::from("out/f1_positive.tiff")),

@@ -813,7 +813,7 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | Command | Purpose |
 |---|---|
 | `hanten convert` | The main pipeline: negative file → positive image at the resolved destination (§5; the SDR Display P3 16-bit TIFF by default). |
-| `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. |
+| `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. In measure mode (`--measure-roll`, or implied by `--unexposed`) it first measures the roll as `measure-roll` does and layers the measurement last; its report carries it as `measurement` (`docs/design/roll-workflow.md`). |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
 | `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5); a frame above the cap is clamped to the cap and disclosed. Each frame's dark end is the p1 of its ACEScg luma in scene stops, and the roll's is the p10 over its picture frames; the look's slope spreads the span from the roll's dark end to its white over 9.049 stops, mid-grey pinned, held within the cap's slope and 3.5 (`nf-calibration/span-roll-slope`); a clamped frame's spreads the cap's span instead. The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to mid-grey, within ±3 EV (a bound that binds warns). Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-dark … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `--unexposed auto` and `--leader auto` find those frames among the inputs and leave them out of the pictures, recording each input's class in the report's `references`; a roll with no trustworthy unexposed frame is refused (`core/auto-calibration`). `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
@@ -942,8 +942,9 @@ the reverse, is refused where the roll applies (every `roll` section written bef
 
 **The target CLI workflow — measuring, layered recipes, `roll`'s measure mode — is
 [`docs/design/roll-workflow.md`](design/roll-workflow.md)**, the single source for the
-tasks that build it. The structural half has shipped: the measurements live in their
-own `calibration` and `roll` sections, described above.
+tasks that build it. It has shipped: the measurements live in their own `calibration`
+and `roll` sections, described above, and `roll`'s measure mode measures and converts
+in one command.
 
 ### Reports & determinism
 
@@ -1938,7 +1939,10 @@ alias, on flags and recipe keys alike. The reference build
 converts many frames from one shared recipe, resolved like `convert`'s — the
 layered `--params` and every conversion flag `convert` takes — and adds no new
 conversion knobs. Its own flags are operational (like `--report`): `--out-dir <dir>` (per-frame outputs `<stem>_positive.<ext>`, the
-suffix following each frame's resolved destination),
+suffix following each frame's resolved destination), `--save-recipe <path>` (the
+resolved recipe, written once the roll succeeds), the measure-mode flags
+`--measure-roll`, `--leader <path|auto>` and `--unexposed <path|auto>` (which
+implies `--measure-roll`; `docs/design/roll-workflow.md`),
 positional `inputs` (files and directories — a directory is expanded to its
 `.tif`/`.tiff` files, sorted; shell globs are expanded by the shell, not by nc)
 **or** `--frames <manifest.json>` (explicit per-frame `input`/`output`/partial-recipe
@@ -2199,9 +2203,10 @@ Over budget is a **resource** error, deliberately distinct from *unsupported*
 (exit 4) — the input is fine; it is this run on this budget that cannot proceed,
 so an agent can retry with a larger `--max-memory` (or on a bigger machine)
 rather than discard the file. `measure-roll` gates each frame it decodes, and a refusal
-keeps exit 6. On `convert`, `inspect`, and `measure-base` no image
-or report is produced on that path, and no `--save-recipe` file. On **`roll`** the same rejection is
-one frame's error: it is recorded in that frame's report entry, the roll continues
+keeps exit 6; so does `roll`'s measure mode, whose refusal during the measurement is
+the command's exit, with no report and no frame converted. On `convert`, `inspect`, and `measure-base` no image
+or report is produced on that path, and no `--save-recipe` file. On **`roll`** the same rejection of a
+frame's conversion is that frame's error: it is recorded in that frame's report entry, the roll continues
 (sibling frames are converted and written), the report is emitted, and the roll
 exits **1** — the batch-level "frames failed" code, as for any per-frame error.
 An estimate that fits the budget but exceeds ~70% of detected physical RAM
@@ -2246,11 +2251,10 @@ shipped or retired item keeps its number and shrinks to one line.
    EXR for HDR interchange. HEIC gain maps are deferred pending a portable
    final-standard encoder and an approved HEVC licensing/packaging policy.
 6. **Roll workflow & automatic calibration.** Shipped: `hanten roll` (one frozen
-   recipe, per-frame manifest overrides, one roll report), `measure-base` and
-   `measure-roll` (§8). Open: `roll`'s measure mode (`core/roll-measure-mode`), the
-   acquisition cascade that *generates* the recipe (`core/auto-calibration`), reusable
-   pipeline profiles (`core/profile-authoring`), and bounded per-frame lifts
-   (`nf-calibration/thin-frame-lift`, `frame-level-trim`).
+   recipe, per-frame manifest overrides, one roll report) and its measure mode
+   (`--measure-roll`, `--save-recipe`), `measure-base` and `measure-roll` (§8), the
+   reference frames found among the inputs (`auto`), looks from `hanten profile`, and
+   the per-frame lifts. The design is `docs/design/roll-workflow.md`.
 7. **Optional color-correction QA harness.** Target-based fitting and ΔE2000 /
    SSIM regression testing against controlled negatives may support explicitly
    selected correction profiles. It is not part of the default film-preserving

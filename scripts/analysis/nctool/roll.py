@@ -2,7 +2,9 @@
 
 This module turns the manual workflow in ``docs/using-nc.md`` into one command:
 measure Dmin from the manifest's unexposed frame, freeze it into a partial recipe,
-and run ``hanten roll`` over every real frame.
+and run ``hanten roll`` over every real frame — in measure mode where the build has it,
+so the roll's white balance, white and exposure are measured too (the reference build
+renders with none).
 The durable ``tags.json`` and ``roll-report.json`` can be normalized into a
 deterministic ``analysis.json`` artifact. Ordinary diff tools can then compare
 configurations without opening their image pixels again.
@@ -187,6 +189,18 @@ def _base_command(nc: str) -> str:
     except OSError:
         return "measure-base"  # the Dmin step reports the start failure itself
     return "measure-base" if proc.returncode == 0 else "estimate"
+
+
+def _measures_roll(nc: str) -> bool:
+    """Whether the build's `roll` has measure mode (`--measure-roll`): it then measures
+    the roll's white balance, white and exposure before converting. The reference build
+    predates it and renders with no roll measurement. Asked of the binary."""
+    try:
+        proc = subprocess.run([nc, "roll", "--help"], capture_output=True,
+                              text=True, check=False)
+    except OSError:
+        return False  # the conversion reports the start failure itself
+    return proc.returncode == 0 and "--measure-roll" in proc.stdout
 
 
 def _recipe_input(path: str | None) -> tuple[dict | None, dict | None, str | None]:
@@ -467,9 +481,17 @@ def cmd_convert(args) -> int:
     strict = ["--strict"] if args.strict_estimate else []
     film_type = ["--film-type", args.film_type] if args.film_type else []
     unexposed_path = root / unexposed["file"]
-    # Only the frames this run reads: a manifest `leader` is no longer measured, so a
-    # missing or drifted one must not fail the run.
-    all_frames = roles["unexposed"] + roles["real"]
+    # Measure mode reads the leader, which guards the roll's white balance; without one
+    # in the manifest the roll is measured unguarded, and `hanten` warns. The reference
+    # build measures no roll, so its leader is not read and cannot fail the run.
+    measures_roll = _measures_roll(args.nc)
+    leaders = roles["leader"] if measures_roll else []
+    if len(leaders) > 1:
+        print(f"error: roll {args.roll!r} has {len(leaders)} leader frames; measure mode "
+              "takes one", file=sys.stderr)
+        return 2
+    # Only the frames this run reads.
+    all_frames = roles["unexposed"] + leaders + roles["real"]
     sources = []
     for frame in all_frames:
         path, label = root / frame["file"], frame.get("role", "frame")
@@ -549,6 +571,12 @@ def cmd_convert(args) -> int:
     argv = [args.nc, "roll", *real_paths, "--out-dir", str(out_dir),
             "--params", str(recipe_path), "--report-file", str(report_path),
             "--max-memory", args.max_memory]
+    # Measured over the frozen base, as `measure-roll` then `roll` would; the resolved run
+    # (the measured `roll` section included) is kept beside the recipe.
+    resolved_path = out_dir / "resolved-recipe.json"
+    if measures_roll:
+        argv += ["--measure-roll", "--save-recipe", str(resolved_path)]
+        argv += [arg for leader in leaders for arg in ("--leader", str(root / leader["file"]))]
     if args.strict_roll:
         argv.append("--strict")
     try:
@@ -582,11 +610,27 @@ def cmd_convert(args) -> int:
         "recipe": recipe,
         "calibration": {"dmin": calibration["dmin"] | {"report": None}},
         "summary": roll_report.get("summary"),
+        "roll_measured": measures_roll,
     }
+    # The measured `roll` section, from the resolved run (written only when it succeeded);
+    # a successful measured run without a usable one fails, so no tag claims a measurement
+    # it cannot show.
+    resolved_error = None
+    if measures_roll and proc.returncode == 0:
+        resolved, resolved_error = _load_object(resolved_path)
+        if resolved is not None:
+            params, resolved_error = _unwrap_envelope(resolved, str(resolved_path))
+            if params is not None:
+                tags["resolved_recipe_file"] = _relative(resolved_path, root)
+                tags["roll_section"] = params.get("roll")
     tags["calibration"]["dmin"].pop("report")
     _write_json(tags_path, tags)
     if proc.returncode != 0:
         print(f"error: hanten roll exited {proc.returncode}; tags preserve the failed run",
+              file=sys.stderr)
+        return 1
+    if resolved_error:
+        print(f"error: the measured roll's resolved recipe is unusable: {resolved_error}",
               file=sys.stderr)
         return 1
     print(json.dumps(tags, indent=2, sort_keys=True))
@@ -765,6 +809,8 @@ def cmd_analyze(args) -> int:
         "output_depth": depth,
         "recipe": tag.get("recipe"),
         "calibration": tag.get("calibration"),
+        # A run in measure mode: what the roll measured (`roll_section`), else absent.
+        **({"roll_section": tag["roll_section"]} if "roll_section" in tag else {}),
         "summary": report.get("summary", tag.get("summary")),
         "frames": frames,
         "note": ("Stable analysis of nc's recorded per-frame conversion facts; it does "

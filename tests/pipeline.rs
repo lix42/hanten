@@ -11398,6 +11398,12 @@ fn small_lift_off_is_spared_where_nothing_lifts_and_roll_refuses_a_shared_frame_
         err.contains("--roll-frame-exposure is one frame's own lift, and on `roll`"),
         "{err}"
     );
+    // Outside measure mode, a frame's own entry is the remedy.
+    assert!(
+        err.contains("in the shared recipe's `roll.frames`")
+            && err.contains("as `roll.frame_exposure` in a --frames manifest's `params`"),
+        "{err}"
+    );
     let dumped = write_file(
         &tmp.path("dumped.json"),
         r#"{"recipe_version": 3, "roll": {"exposure": 0.5, "frame_exposure": 0.2}}"#,
@@ -12606,7 +12612,7 @@ fn measure_roll_auto_refuses_when_nothing_is_trustworthy() {
         (
             vec![a.as_str(), &b, "--unexposed", "auto", "--params", &input],
             "--unexposed auto found no unexposed frame among the inputs: none is flat enough",
-            "needs the roll's film base",
+            "measuring the roll needs its film base",
         ),
         // No unexposed frame among the inputs: the leader is the clearest flat frame, and
         // the pictures are far clearer than it.
@@ -16147,4 +16153,988 @@ fn a_channel_rendered_black_everywhere_warns() {
         warnings(&stdout).iter().any(|w| w.contains(MARKER)),
         "{stdout}"
     );
+}
+
+/// `roll`'s measure mode's synthetic roll: an unexposed frame, a leader, and twelve picture
+/// frames — ten ramps, so the midtone line has votes, and a dim and a bright frame, the
+/// bright one clamped — with the recipe stating the scans' input semantics.
+struct MeasureModeRoll {
+    tmp: TempDir,
+    input: String,
+    blank: String,
+    leader: String,
+    frames: Vec<String>,
+}
+
+impl MeasureModeRoll {
+    fn new(name: &str) -> Self {
+        let tmp = TempDir::new(name);
+        let s = |p: &Path| p.to_str().unwrap().to_owned();
+        let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+        let (blank, leader) = (tmp.path("blank.tif"), tmp.path("leader.tif"));
+        write_uniform_density(&blank, AUTO_BASE, 0.0);
+        write_uniform_density(&leader, AUTO_BASE, 1.5);
+        let mut frames = Vec::new();
+        for i in 0..10 {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, AUTO_BASE, 0.10 + 0.01 * i as f32, 0.90);
+            frames.push(s(&p));
+        }
+        let (dim, bright) = (tmp.path("dim.tif"), tmp.path("bright.tif"));
+        write_split_density(&dim, AUTO_BASE, 0.904, 0.704, 7);
+        write_split_density(&bright, AUTO_BASE, 1.30, 1.10, 7);
+        frames.extend([s(&dim), s(&bright)]);
+        frames.sort();
+        Self {
+            input,
+            blank: s(&blank),
+            leader: s(&leader),
+            frames,
+            tmp,
+        }
+    }
+
+    fn path(&self, name: &str) -> String {
+        self.tmp.path(name).to_str().unwrap().to_owned()
+    }
+
+    /// Run `command` over the frames with `args` after them.
+    fn run(&self, command: &str, args: &[&str]) -> (i32, String, String) {
+        let frames: Vec<&str> = self.frames.iter().map(String::as_str).collect();
+        run(&[&[command][..], &frames, args].concat())
+    }
+
+    /// The `*_positive.tiff` files in `dir`, by name.
+    fn outputs(&self, dir: &str) -> Vec<(String, Vec<u8>)> {
+        let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .map(|d| {
+                d.map(|e| e.unwrap().path())
+                    .filter(|p| p.to_str().unwrap().ends_with("_positive.tiff"))
+                    .map(|p| {
+                        let name = p.file_name().unwrap().to_str().unwrap().to_owned();
+                        (name, std::fs::read(&p).unwrap())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out
+    }
+}
+
+/// The same images, frame for frame, and one per picture frame.
+fn assert_same_outputs(roll: &MeasureModeRoll, a: &str, b: &str, what: &str) {
+    let (a, b) = (roll.outputs(a), roll.outputs(b));
+    assert_eq!(a.len(), roll.frames.len(), "{what}: every frame converted");
+    assert_eq!(
+        a.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        b.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        "{what}"
+    );
+    for ((name, x), (_, y)) in a.iter().zip(&b) {
+        assert!(x == y, "{what}: {name} is byte-identical");
+    }
+}
+
+#[test]
+fn roll_measure_mode_is_byte_identical_to_measure_roll_then_roll() {
+    let roll = MeasureModeRoll::new("roll-measure-mode-identity");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+
+    // By hand: `measure-roll --unexposed --out`, then `roll --params` over the same frames,
+    // a style flag over both.
+    let measured = roll.path("roll.json");
+    let (code, stdout, err) = roll.run(
+        "measure-roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--out",
+            &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let by_hand = json(&stdout);
+    let file = json(&std::fs::read_to_string(&measured).unwrap());
+    let roll_section = &file["params"]["roll"];
+    assert!(
+        !roll_section["midtone_line"].is_null()
+            && roll_section["frames"]["bright.tif"]["white_stops"].is_number(),
+        "not vacuous: a midtone line and a clamp: {roll_section}"
+    );
+    let hand = roll.path("hand");
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params",
+            input,
+            "--params",
+            &measured,
+            "--exposure",
+            "0.3",
+            "-o",
+            &hand,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+
+    // One command.
+    let one = roll.path("one");
+    let (code, stdout, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--exposure",
+            "0.3",
+            "-o",
+            &one,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_same_outputs(&roll, &one, &hand, "--unexposed");
+    let report = json(&stdout);
+    let measurement = &report["measurement"];
+    assert_eq!(measurement["command"], "measure-roll", "{report}");
+    for key in [
+        "unexposed",
+        "film_base",
+        "white_balance",
+        "midtone_neutral",
+        "white",
+        "exposure",
+        "frames",
+    ] {
+        assert_eq!(measurement[key], by_hand[key], "measurement.{key}");
+    }
+    assert_eq!(
+        report["summary"]["succeeded"],
+        roll.frames.len(),
+        "{report}"
+    );
+
+    // A base from `measure-base --out`, then `--measure-roll`: as `measure-roll --params`.
+    let base = roll.path("base.json");
+    let (code, _, err) = run(&["measure-base", blank, "--out", &base]);
+    assert_eq!(code, 0, "{err}");
+    let measured2 = roll.path("roll2.json");
+    let (code, _, err) = roll.run(
+        "measure-roll",
+        &[
+            "--params", input, "--params", &base, "--leader", leader, "--out", &measured2,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (hand2, one2) = (roll.path("hand2"), roll.path("one2"));
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params", input, "--params", &base, "--params", &measured2, "-o", &hand2,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params",
+            input,
+            "--params",
+            &base,
+            "--measure-roll",
+            "--leader",
+            leader,
+            "-o",
+            &one2,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_same_outputs(&roll, &one2, &hand2, "--measure-roll over a stated base");
+    // Without `--save-recipe`, no recipe is left beside the images.
+    for dir in [&one, &one2] {
+        let files = std::fs::read_dir(dir).unwrap().count();
+        assert_eq!(files, roll.frames.len(), "{dir}: the images alone");
+    }
+}
+
+#[test]
+fn roll_measure_mode_switches_keep_their_render_meaning() {
+    // `--small-lift off` in measure mode is the render switch over the measured lifts,
+    // as on a plain `roll` of the measured file — not `measure-roll --no-small-lift`.
+    let roll = MeasureModeRoll::new("roll-measure-mode-switch");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let measured = roll.path("roll.json");
+    let (code, _, err) = roll.run(
+        "measure-roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--out",
+            &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (hand, one) = (roll.path("hand"), roll.path("one"));
+    for (dir, args) in [
+        (&hand, vec!["--params", input, "--params", &measured]),
+        (
+            &one,
+            vec!["--unexposed", blank, "--leader", leader, "--params", input],
+        ),
+    ] {
+        let (code, stdout, err) = roll.run(
+            "roll",
+            &[
+                &args[..],
+                &["--small-lift", "off", "--midtone-neutral", "off", "-o", dir],
+            ]
+            .concat(),
+        );
+        assert_eq!(code, 0, "{err}");
+        // The measurement runs at `measure-roll`'s defaults: the line is still measured,
+        // and the switch leaves it out at render.
+        if dir == &one {
+            let midtone = &json(&stdout)["measurement"]["midtone_neutral"];
+            assert_eq!(midtone["mode"], "auto", "{midtone}");
+            assert!(midtone["line"].is_object(), "{midtone}");
+        }
+    }
+    assert_same_outputs(&roll, &one, &hand, "switches");
+}
+
+#[test]
+fn roll_save_recipe_replays_byte_identically() {
+    let roll = MeasureModeRoll::new("roll-save-recipe");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+
+    // Measure mode: the measurement, the layers and the flags in one file.
+    let (one, saved) = (roll.path("one"), roll.path("saved.json"));
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--contrast",
+            "1.2",
+            "--save-recipe",
+            &saved,
+            "-o",
+            &one,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let replay = roll.path("replay");
+    let (code, _, err) = roll.run("roll", &["--params", &saved, "-o", &replay]);
+    assert_eq!(code, 0, "{err}");
+    assert_same_outputs(&roll, &replay, &one, "measure mode's --save-recipe");
+
+    // Without measure mode: a typed `--roll-white` beats the clamp in `roll.frames`, so the
+    // saved file leaves the clamp out and the clamped frame replays at the typed white.
+    let measured = roll.path("roll.json");
+    let (code, _, err) = roll.run(
+        "measure-roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--out",
+            &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (flagged, saved2) = (roll.path("flagged"), roll.path("saved2.json"));
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params",
+            input,
+            "--params",
+            &measured,
+            "--roll-white",
+            "1.5",
+            "--save-recipe",
+            &saved2,
+            "-o",
+            &flagged,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let doc = json(&std::fs::read_to_string(&saved2).unwrap());
+    assert!(
+        doc["params"]["roll"]["frames"]["bright.tif"]["white_stops"].is_null(),
+        "the typed white beat the clamp: {doc}"
+    );
+    let replay2 = roll.path("replay2");
+    let (code, _, err) = roll.run("roll", &["--params", &saved2, "-o", &replay2]);
+    assert_eq!(code, 0, "{err}");
+    assert_same_outputs(
+        &roll,
+        &replay2,
+        &flagged,
+        "--save-recipe under --roll-white",
+    );
+}
+
+#[test]
+fn roll_save_recipe_is_written_only_when_the_roll_succeeds() {
+    let mut roll = MeasureModeRoll::new("roll-save-recipe-strict");
+    // A frame as dense as the leader: the guard leaves nothing of it, and the measurement
+    // warns, which `--strict` refuses before any frame converts.
+    let flat = roll.tmp.path("zz-flat.tif");
+    write_uniform_density(&flat, AUTO_BASE, 1.5);
+    roll.frames.push(flat.to_str().unwrap().to_owned());
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let saved = roll.path("saved.json");
+    let out = roll.path("out");
+    let (code, stdout, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--save-recipe",
+            &saved,
+            "-o",
+            &out,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert!(
+        report["measurement"]["warnings"]
+            .as_array()
+            .is_some_and(|w| !w.is_empty()),
+        "not vacuous: the measurement warns: {report}"
+    );
+    assert!(Path::new(&saved).exists(), "written on success");
+    std::fs::remove_file(&saved).unwrap();
+    let strict_out = roll.path("strict");
+    let (code, stdout, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--strict",
+            "--save-recipe",
+            &saved,
+            "-o",
+            &strict_out,
+        ],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no frame converted"), "{err}");
+    let report = json(&stdout);
+    assert!(
+        report["measurement"].is_object(),
+        "the report lands: {report}"
+    );
+    assert_eq!(report["frames"], serde_json::json!([]), "{report}");
+    assert!(roll.outputs(&strict_out).is_empty(), "no image written");
+    assert!(!Path::new(&saved).exists(), "no recipe written");
+    // The refusal's report reaches a `--report-file` inside a new `--out-dir`.
+    let fresh = roll.path("fresh");
+    let report_file = Path::new(&fresh).join("report.json");
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--strict",
+            "--report-file",
+            report_file.to_str().unwrap(),
+            "-o",
+            &fresh,
+        ],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no frame converted"), "{err}");
+    let report = json(&std::fs::read_to_string(&report_file).unwrap());
+    assert!(report["measurement"].is_object(), "{report}");
+}
+
+#[test]
+fn roll_measure_mode_refuses_what_it_would_measure_over() {
+    let roll = MeasureModeRoll::new("roll-measure-mode-refusals");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let measured = roll.path("roll.json");
+    let (code, _, err) = roll.run(
+        "measure-roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--out",
+            &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let base = roll.path("base.json");
+    let (code, _, err) = run(&["measure-base", blank, "--out", &base]);
+    assert_eq!(code, 0, "{err}");
+    let manifest = write_file(
+        &roll.tmp.path("frames.json"),
+        &serde_json::json!({"frames": [{"input": roll.frames[0]}]}).to_string(),
+    );
+    let manifest = manifest.to_str().unwrap();
+    let out = roll.path("out");
+    for (args, expect) in [
+        (
+            vec!["--params", input, "--params", &base, "--leader", leader],
+            "guards the roll's measurement, and without --measure-roll",
+        ),
+        (
+            vec![
+                "--params",
+                input,
+                "--params",
+                &base,
+                "--measure-roll",
+                "--roll-white",
+                "1.5",
+            ],
+            "--roll-white states a roll value, and --measure-roll measures",
+        ),
+        (
+            vec!["--params", input, "--params", &measured, "--measure-roll"],
+            "states `roll.",
+        ),
+        (
+            vec!["--params", input, "--params", &base, "--unexposed", blank],
+            "measures the film base, and the recipe's `calibration.film_base` states one",
+        ),
+        (
+            vec![
+                "--params",
+                input,
+                "--unexposed",
+                blank,
+                "--film-base",
+                "0.9,0.55,0.42",
+            ],
+            "measures the film base, and --film-base states one",
+        ),
+        (
+            vec!["--params", input, "--measure-roll"],
+            "`--unexposed auto` to find the unexposed frame among the inputs",
+        ),
+        (
+            vec!["--params", input, "--unexposed", &roll.frames[0]],
+            "is both the --unexposed and an input frame",
+        ),
+    ] {
+        let (code, _, err) = roll.run("roll", &[&args[..], &["-o", &out]].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+        assert!(roll.outputs(&out).is_empty(), "{args:?}: nothing converted");
+    }
+    // `--leader` outside measure mode names the mode, not a measurement fault.
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params", input, "--params", &base, "--leader", leader, "-o", &out,
+        ],
+    );
+    assert_eq!(code, 2);
+    assert!(err.contains("guards the roll's measurement"), "{err}");
+    assert!(!err.contains("film base"), "{err}");
+    // The stated base beside `--unexposed`, named as a base, not as a measured roll value.
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params",
+            input,
+            "--params",
+            &base,
+            "--unexposed",
+            blank,
+            "-o",
+            &out,
+        ],
+    );
+    assert_eq!(code, 2);
+    // Dropping `--unexposed` would leave measure mode: `--measure-roll` takes its place.
+    assert!(
+        err.contains("states one; the base is measured or stated")
+            && err.contains("or replace --unexposed with --measure-roll")
+            && !err.contains("Drop one of them"),
+        "{err}"
+    );
+    // `--leader` outside measure mode offers `--measure-roll` only where it is accepted.
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--params", input, "--params", &base, "--leader", leader, "-o", &out,
+        ],
+    );
+    assert_eq!(code, 2);
+    assert!(
+        err.contains("Add --measure-roll, or drop --leader"),
+        "{err}"
+    );
+    let with_frames = [
+        "roll", "--frames", manifest, "--params", input, "--params", &base, "--leader", leader,
+        "-o", &out,
+    ];
+    let with_flag = [
+        "roll",
+        &roll.frames[0],
+        "--params",
+        input,
+        "--params",
+        &base,
+        "--roll-white",
+        "1.5",
+        "--leader",
+        leader,
+        "-o",
+        &out,
+    ];
+    let with_layer = [
+        "roll",
+        &roll.frames[0],
+        "--params",
+        input,
+        "--params",
+        &measured,
+        "--leader",
+        leader,
+        "-o",
+        &out,
+    ];
+    for args in [&with_frames[..], &with_flag[..], &with_layer[..]] {
+        let (code, _, err) = run(args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(
+            err.contains("Drop --leader; to guard a measurement, measure first")
+                && !err.contains("Add --measure-roll"),
+            "{args:?}: {err}"
+        );
+    }
+    // `--frames` in measure mode.
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        manifest,
+        "--params",
+        input,
+        "--params",
+        &base,
+        "--measure-roll",
+        "-o",
+        &out,
+    ]);
+    assert_eq!(code, 2);
+    assert!(err.contains("refuses --frames"), "{err}");
+    // A recipe with a base and no `roll` section renders as before, outside measure mode.
+    let (code, _, err) = roll.run("roll", &["--params", input, "--params", &base, "-o", &out]);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn a_roll_measurement_failure_writes_no_image_and_keeps_its_exit_code() {
+    let roll = MeasureModeRoll::new("roll-measure-mode-failure");
+    let bad = write_file(&roll.tmp.path("bad.tif"), "not a tiff");
+    let out = roll.path("out");
+    let (code, stdout, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            bad.to_str().unwrap(),
+            "--leader",
+            &roll.leader,
+            "--params",
+            &roll.input,
+            "-o",
+            &out,
+        ],
+    );
+    let (direct, _, _) = run(&["measure-base", bad.to_str().unwrap()]);
+    assert_ne!(code, 0, "{err}");
+    assert_eq!(code, direct, "the measurement's own code: {err}");
+    assert!(stdout.is_empty(), "no roll report: {stdout}");
+    assert!(roll.outputs(&out).is_empty(), "no image written");
+}
+
+#[test]
+fn roll_save_recipe_into_a_new_out_dir() {
+    // The out-dir is created before the recipe is staged into it, in both modes.
+    let roll = MeasureModeRoll::new("roll-save-recipe-out-dir");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let out = roll.path("out");
+    let saved = format!("{out}/r.json");
+    let (code, _, err) = roll.run(
+        "roll",
+        &[
+            "--unexposed",
+            blank,
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--save-recipe",
+            &saved,
+            "-o",
+            &out,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(Path::new(&saved).exists(), "measure mode");
+    let out2 = roll.path("out2");
+    let saved2 = format!("{out2}/r.json");
+    let (code, _, err) = roll.run(
+        "roll",
+        &["--params", &saved, "--save-recipe", &saved2, "-o", &out2],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(Path::new(&saved2).exists(), "a plain roll");
+}
+
+#[test]
+fn roll_measure_mode_refuses_before_measuring() {
+    let roll = MeasureModeRoll::new("roll-measure-mode-early");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let base = roll.path("base.json");
+    let (code, _, err) = run(&["measure-base", blank, "--out", &base]);
+    assert_eq!(code, 0, "{err}");
+    let out = roll.path("out");
+    let check = |args: &[&str], expect: &str, absent: &str| {
+        let (code, stdout, err) = roll.run("roll", &[args, &["-o", &out]].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+        assert!(!err.contains(absent), "{args:?}: {err}");
+        // No leader, so a measurement would have warned that it is unguarded.
+        assert!(!err.contains("unguarded"), "{args:?}: measured: {err}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(roll.outputs(&out).is_empty(), "{args:?}");
+        err
+    };
+    let mm = ["--params", input, "--params", &base, "--measure-roll"];
+    // A midtone line without its gains.
+    check(
+        &[
+            &mm[..],
+            &["--midtone-neutral", "on", "--neutral-balance", "off"],
+        ]
+        .concat(),
+        "--midtone-neutral on asks for the roll's midtone line",
+        "states a roll value",
+    );
+    // A frame's lift, typed or in a layer, is that refusal, not measure mode's: rendering
+    // without measuring would refuse it too.
+    let lift = write_file(
+        &roll.tmp.path("lift.json"),
+        r#"{ "recipe_version": 3, "roll": { "thin_slope": 1.5 } }"#,
+    );
+    for args in [
+        [&mm[..], &["--roll-frame-exposure", "0.2"]].concat(),
+        [&mm[..], &["--roll-thin-slope", "1.5"]].concat(),
+        [&mm[..], &["--roll-thin-exposure", "0.2"]].concat(),
+        [&mm[..], &["--params", lift.to_str().unwrap()]].concat(),
+    ] {
+        let err = check(
+            &args,
+            "is one frame's own lift",
+            "measures the roll's values",
+        );
+        // Measure mode refuses `roll.frames` and `--frames`, so its remedy measures first.
+        assert!(err.contains("measure first"), "{args:?}: {err}");
+        assert!(!err.contains("`roll.frames`"), "{args:?}: {err}");
+        assert!(!err.contains("--frames manifest"), "{args:?}: {err}");
+    }
+    // A stated roll value beside `--unexposed`: the remedy is a look, not a base.
+    let measured = roll.path("roll.json");
+    let (code, _, err) = roll.run(
+        "measure-roll",
+        &[
+            "--params", input, "--params", &base, "--leader", leader, "--out", &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    check(
+        &[
+            "--params",
+            input,
+            "--params",
+            &measured,
+            "--unexposed",
+            blank,
+        ],
+        "(a look from `hanten profile`)",
+        "measure-base --out",
+    );
+    // A region is a stated base, but not an explicit one; each remedy replaces it.
+    let err = check(
+        &[
+            "--params",
+            input,
+            "--measure-roll",
+            "--base-region",
+            "0,0,4,4",
+        ],
+        "needs an explicit film base, and the stated base (`--base-region`",
+        "needs its film base",
+    );
+    assert!(
+        err.contains("In place of the region, measure the base from the roll's unexposed frame with `--unexposed <unexposed.tif>`")
+            && err.contains("--out base.json` — and pass --params base.json"),
+        "{err}"
+    );
+    // On `measure-roll`, a recipe's region.
+    let region = write_file(
+        &roll.tmp.path("region.json"),
+        r#"{ "recipe_version": 3, "calibration": { "film_base": { "region": [0, 0, 4, 4] } } }"#,
+    );
+    let (code, stdout, err) = roll.run(
+        "measure-roll",
+        &["--params", input, "--params", region.to_str().unwrap()],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(stdout.is_empty(), "{stdout}");
+    for expect in [
+        "needs an explicit film base, and the recipe's `calibration.film_base` is a region",
+        "with `--unexposed <unexposed.tif>`",
+        "--out base.json` — and pass --params base.json",
+    ] {
+        assert!(err.contains(expect), "{expect}: {err}");
+    }
+    assert!(!err.contains("--base-region` or"), "{err}");
+    // `--save-recipe` over a layer: the sole one in measure mode, one of several in any.
+    for (args, expect) in [
+        (
+            vec!["--params", &base, "--measure-roll", "--save-recipe", &base],
+            "in measure mode it would rewrite that layer",
+        ),
+        (
+            vec!["--params", input, "--params", &base, "--save-recipe", &base],
+            "with several layers it would rewrite that layer",
+        ),
+    ] {
+        let before = std::fs::read(&base).unwrap();
+        check(&args, expect, "staging");
+        assert_eq!(std::fs::read(&base).unwrap(), before, "{args:?}");
+    }
+}
+
+#[test]
+fn roll_unexposed_auto_names_measure_roll_in_its_remedy() {
+    // No unexposed frame among the inputs: on `roll`, the base file's remedy keeps measure
+    // mode.
+    let roll = MeasureModeRoll::new("roll-unexposed-auto-none");
+    let out = roll.path("out");
+    let (code, _, err) = roll.run(
+        "roll",
+        &["--unexposed", "auto", "--params", &roll.input, "-o", &out],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("pass --params base.json --measure-roll in place of --unexposed"),
+        "{err}"
+    );
+    assert!(roll.outputs(&out).is_empty());
+}
+
+#[test]
+fn roll_measure_mode_leaves_auto_found_frames_unconverted() {
+    let tmp = TempDir::new("roll-measure-mode-auto");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [blank, leader, a, b] = ["blank.tif", "leader.tif", "a.tif", "b.tif"].map(|n| tmp.path(n));
+    write_uniform_density(&blank, AUTO_BASE, 0.0);
+    write_uniform_density(&leader, AUTO_BASE, 1.5);
+    write_picture_density(&a, AUTO_BASE, 0.9);
+    write_picture_density(&b, AUTO_BASE, 1.1);
+    let [blank, leader, a, b] = [&blank, &leader, &a, &b].map(|p| s(p));
+    let (out, saved) = (s(&tmp.path("out")), s(&tmp.path("saved.json")));
+    let (code, _, err) = run(&[
+        "roll",
+        &leader,
+        &a,
+        &blank,
+        &b,
+        "--unexposed",
+        "auto",
+        "--leader",
+        "auto",
+        "--params",
+        &input,
+        "--save-recipe",
+        &saved,
+        "-o",
+        &out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let written = |dir: &str| {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(written(&out), ["a_positive.tiff", "b_positive.tiff"]);
+    let note = err
+        .lines()
+        .find(|l| l.contains("note: not converting"))
+        .unwrap_or_else(|| panic!("a note: {err}"));
+    assert!(note.contains(&blank) && note.contains(&leader), "{note}");
+    assert!(!note.contains(&a) && !note.contains(&b), "{note}");
+    // A found frame sharing a picture's stem does not collide: it is never converted.
+    let same_stem = tmp.path("refs/a.tif");
+    std::fs::create_dir_all(same_stem.parent().unwrap()).unwrap();
+    write_uniform_density(&same_stem, AUTO_BASE, 0.0);
+    let stem_out = s(&tmp.path("stem-out"));
+    let (code, _, err) = run(&[
+        "roll",
+        &s(&same_stem),
+        &a,
+        &b,
+        "--unexposed",
+        "auto",
+        "--params",
+        &input,
+        "-o",
+        &stem_out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(written(&stem_out), ["a_positive.tiff", "b_positive.tiff"]);
+    // A found frame is still read, so no write may land on it.
+    let before = std::fs::read(&same_stem).unwrap();
+    for flag in ["--report-file", "--save-recipe"] {
+        let (code, _, err) = run(&[
+            "roll",
+            &s(&same_stem),
+            &a,
+            &b,
+            "--unexposed",
+            "auto",
+            "--params",
+            &input,
+            flag,
+            &s(&same_stem),
+            "-o",
+            &s(&tmp.path("guarded")),
+        ]);
+        assert_eq!(code, 2, "{flag}: {err}");
+        assert_eq!(std::fs::read(&same_stem).unwrap(), before, "{flag}");
+    }
+    // Nor a `--strict` refusal's report, written before the final plan: a layer from
+    // another pipeline version makes the measurement warn.
+    let old = s(&tmp.path("old.json"));
+    let body: serde_json::Value = serde_json::from_str(AUTO_INPUT).unwrap();
+    let doc = serde_json::json!({"meta": {"pipeline_version": 9999}, "params": body});
+    std::fs::write(&old, doc.to_string()).unwrap();
+    let before = std::fs::read(&leader).unwrap();
+    let (code, _, err) = run(&[
+        "roll",
+        &leader,
+        &a,
+        &b,
+        "--unexposed",
+        &blank,
+        "--leader",
+        "auto",
+        "--params",
+        &old,
+        "--strict",
+        "--report-file",
+        &leader,
+        "-o",
+        &s(&tmp.path("strict-guarded")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(std::fs::read(&leader).unwrap(), before);
+    // The replay names the pictures alone: a plain `roll` converts every input it is given.
+    let replay = s(&tmp.path("replay"));
+    let (code, _, err) = run(&["roll", &a, &b, "--params", &saved, "-o", &replay]);
+    assert_eq!(code, 0, "{err}");
+    for name in written(&out) {
+        let (x, y) = (Path::new(&out).join(&name), Path::new(&replay).join(&name));
+        assert!(
+            std::fs::read(x).unwrap() == std::fs::read(y).unwrap(),
+            "{name}"
+        );
+    }
+    let all = s(&tmp.path("all"));
+    let (code, _, err) = run(&[
+        "roll", &leader, &a, &blank, &b, "--params", &saved, "-o", &all,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(written(&all).len(), 4, "the found frames converted too");
+}
+
+#[test]
+fn roll_measure_mode_strict_refuses_a_layer_from_another_pipeline_version() {
+    // A layer's provenance warning is the measurement's, so `--strict` refuses before any
+    // frame converts, and it is not repeated as a roll warning.
+    let roll = MeasureModeRoll::new("roll-measure-mode-provenance");
+    let old = roll.path("old.json");
+    let body: serde_json::Value = serde_json::from_str(AUTO_INPUT).unwrap();
+    std::fs::write(
+        &old,
+        serde_json::json!({"meta": {"pipeline_version": 9999}, "params": body}).to_string(),
+    )
+    .unwrap();
+    // An empty `warnings` is left out of the report.
+    let count = |w: &serde_json::Value| {
+        w.as_array().map_or(0, |w| {
+            w.iter()
+                .filter(|m| m.as_str().unwrap().contains("pipeline_version 9999"))
+                .count()
+        })
+    };
+    let out = roll.path("out");
+    let base = [
+        "--unexposed",
+        roll.blank.as_str(),
+        "--leader",
+        roll.leader.as_str(),
+        "--params",
+        old.as_str(),
+    ];
+    let (code, stdout, err) = roll.run("roll", &[&base[..], &["-o", &out]].concat());
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(count(&report["measurement"]["warnings"]), 1, "{report}");
+    assert_eq!(count(&report["warnings"]), 0, "{report}");
+    assert_eq!(err.matches("pipeline_version 9999").count(), 1, "{err}");
+
+    let strict = roll.path("strict");
+    let (code, stdout, err) = roll.run("roll", &[&base[..], &["--strict", "-o", &strict]].concat());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no frame converted"), "{err}");
+    let report = json(&stdout);
+    assert_eq!(count(&report["measurement"]["warnings"]), 1, "{report}");
+    assert!(roll.outputs(&strict).is_empty());
 }

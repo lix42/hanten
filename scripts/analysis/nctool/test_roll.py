@@ -194,8 +194,16 @@ class TestConvert(unittest.TestCase):
     area_source = "effective_area"
     #: The film-base command the fake binary has: `estimate` before the rename.
     base_command = "measure-base"
+    #: Whether the fake build's `roll` has measure mode; the reference build's has not.
+    measure_mode = True
+    #: What the fake build writes to `--save-recipe`, or `None` to write nothing.
+    resolved_recipe: str | None = json.dumps(
+        {"meta": {}, "params": {"recipe_version": 3, "roll": {"exposure": .5}}})
 
     def fake_run(self, argv, **_kwargs):
+        if argv[1:] == ["roll", "--help"]:
+            return mock.Mock(returncode=0, stderr="",
+                             stdout="  --measure-roll\n" if self.measure_mode else "")
         if argv[1:] == ["profile", "--help"]:
             ok = self.defaults_command == "profile"
             return mock.Mock(returncode=0 if ok else 2, stdout="", stderr="")
@@ -235,7 +243,70 @@ class TestConvert(unittest.TestCase):
             "summary": {"total": 2, "succeeded": 2, "failed": 0},
         }
         report_path.write_text(json.dumps(report))
+        if "--save-recipe" in argv and self.resolved_recipe is not None:
+            Path(argv[argv.index("--save-recipe") + 1]).write_text(self.resolved_recipe)
         return mock.Mock(returncode=0, stdout="", stderr="")
+
+    def converted_roll_argv(self, **updates) -> tuple[list[str], int, str]:
+        """The `hanten roll` command line a conversion ran, its exit code and stderr."""
+        seen = []
+
+        def capture(argv, **kwargs):
+            seen.append(argv)
+            return self.fake_run(argv, **kwargs)
+
+        with mock.patch.object(roll.subprocess, "run", side_effect=capture), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(**updates))
+        argv = next((a for a in seen if a[1] == "roll" and a[2:] != ["--help"]), [])
+        return argv, code, err.getvalue()
+
+    def test_measure_mode_measures_the_roll_with_the_manifests_leader(self):
+        argv, code, err = self.converted_roll_argv(config="measured")
+        self.assertEqual(code, 0, err)
+        self.assertIn("--measure-roll", argv)
+        root = self.root.resolve()
+        self.assertEqual(argv[argv.index("--leader") + 1], str(root / "rolls/R/l.tif"))
+        run = root / "converted/nc/measured/R"
+        self.assertEqual(Path(argv[argv.index("--save-recipe") + 1]), run / "resolved-recipe.json")
+        tags = json.loads((run / "tags.json").read_text())
+        self.assertTrue(tags["roll_measured"])
+        self.assertEqual(tags["roll_section"], {"exposure": .5})
+        # The leader is read now, so it is checksummed with the frames.
+        self.assertIn("rolls/R/l.tif", [f["file"] for f in tags["source_frames"]])
+
+    def test_a_measured_run_without_a_usable_resolved_recipe_fails(self):
+        for name, written in (("missing", None), ("invalid", "{"),
+                              ("bad-envelope", json.dumps({"meta": {}, "params": 1}))):
+            with self.subTest(name):
+                self.resolved_recipe = written
+                _, code, err = self.converted_roll_argv(config=name)
+                self.assertEqual(code, 1, err)
+                self.assertIn("resolved recipe is unusable", err)
+                tags = json.loads(
+                    (self.root / f"converted/nc/{name}/R/tags.json").read_text())
+                self.assertNotIn("roll_section", tags)
+
+    def test_the_reference_build_measures_no_roll(self):
+        self.measure_mode = False
+        argv, code, err = self.converted_roll_argv(config="reference")
+        self.assertEqual(code, 0, err)
+        for flag in ("--measure-roll", "--leader", "--save-recipe"):
+            self.assertNotIn(flag, argv)
+        tags = json.loads((self.root / "converted/nc/reference/R/tags.json").read_text())
+        self.assertFalse(tags["roll_measured"])
+        self.assertNotIn("roll_section", tags)
+
+    def test_a_roll_without_a_leader_is_measured_unguarded(self):
+        manifest = json.loads((self.root / "manifest.json").read_text())
+        frames = manifest["rolls"]["R"]["frames"]
+        manifest["rolls"]["R"]["frames"] = [f for f in frames if f["role"] != "leader"]
+        (self.root / "manifest.json").write_text(json.dumps(manifest))
+        argv, code, err = self.converted_roll_argv(config="unguarded")
+        self.assertEqual(code, 0, err)
+        self.assertIn("--measure-roll", argv)
+        self.assertNotIn("--leader", argv)
 
     def test_converts_manifest_real_frames_and_writes_provenance(self):
         seen = []
@@ -256,7 +327,7 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(tags["roll"], "R")
         self.assertEqual(tags["summary"]["succeeded"], 2)
         self.assertEqual(recipe["calibration"], {"film_base": {"explicit": [.1, .2, .3]}})
-        # Only the unexposed frame is estimated; a manifest leader is not measured.
+        # Only the unexposed frame's base is measured.
         self.assertEqual(len([a for a in seen if a[1] == "measure-base" and a[2:] != ["--help"]]), 1)
         # The default measures the effective area: no region, no grid.
         dmin_argv = next(a for a in seen if a[1] == "measure-base" and a[2:] != ["--help"])
@@ -394,13 +465,17 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(reconstruction["curve"]["gamma"], 2.0)
         self.assertEqual(reconstruction["curve"]["anchor"], {"mid-at-base-offset": .62})
 
-    def test_a_missing_leader_does_not_fail_the_run(self):
+    def test_a_missing_leader_fails_only_a_run_that_reads_it(self):
         (self.root / "rolls/R/l.tif").unlink()
-        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
-             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
-            code = roll.cmd_convert(self.args(config="noleader"))
-        self.assertEqual(code, 0, err.getvalue())
-        tags = json.loads((self.root / "converted/nc/noleader/R/tags.json").read_text())
+        # Measure mode reads it.
+        _, code, err = self.converted_roll_argv(config="noleader")
+        self.assertEqual(code, 2, err)
+        self.assertIn("leader frame is missing", err)
+        # The reference build measures no roll, so a missing leader cannot fail it.
+        self.measure_mode = False
+        _, code, err = self.converted_roll_argv(config="noleader-ref")
+        self.assertEqual(code, 0, err)
+        tags = json.loads((self.root / "converted/nc/noleader-ref/R/tags.json").read_text())
         self.assertNotIn("rolls/R/l.tif", [f["file"] for f in tags["source_frames"]])
 
     def test_grid_mode_reads_the_default_region_with_the_grid(self):
@@ -494,9 +569,9 @@ class TestConvert(unittest.TestCase):
         # Calibration precedes config hashing/output resolution, but the existing
         # directory is still refused before hanten roll can overwrite an artifact.
         self.assertEqual(code, 2)
-        # The default-recipe probe and query, the film-base probe, and the Dmin
-        # measurement.
-        self.assertEqual(run_mock.call_count, 4)
+        # The default-recipe probe and query, the film-base probe, the measure-mode probe
+        # and the Dmin measurement.
+        self.assertEqual(run_mock.call_count, 5)
 
 
 class TestStripJsonc(unittest.TestCase):
@@ -566,10 +641,23 @@ class TestAnalyze(unittest.TestCase):
         self.assertNotIn("input", result["frames"][0])
         self.assertNotIn("output", result["frames"][0])
         self.assertNotIn("memory", result["frames"][0])
+        self.assertNotIn("roll_section", result, "a run that measured no roll")
 
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(roll.cmd_analyze(args), 0)
         self.assertEqual(path.read_bytes(), first)
+
+    def test_a_measured_runs_roll_section_reaches_the_analysis(self):
+        self.write_run("m", [.1, .2, .3], destination="film-master")
+        tags_path = self.root / "converted/nc/m/R/tags.json"
+        tags = json.loads(tags_path.read_text())
+        tags["roll_section"] = {"exposure": .5}
+        tags_path.write_text(json.dumps(tags))
+        args = argparse.Namespace(asset_root=str(self.root), roll="R", run="m", out=None)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(roll.cmd_analyze(args), 0)
+        result = json.loads((self.root / "converted/nc/m/R/analysis.json").read_text())
+        self.assertEqual(result["roll_section"], {"exposure": .5})
 
     # A destination build's recipe may leave the axes to nc, so the depth comes from
     # what each frame reports it resolved.

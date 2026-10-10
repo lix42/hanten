@@ -103,9 +103,18 @@ It performs these operations:
    params` on the reference build), overlays the optional partial recipe, then
    freezes the measurements. This pins defaults such as the curve's anchor placement
    instead of letting a later build reinterpret an underspecified recipe.
-5. Runs `hanten roll` over the real frames with that shared recipe.
+5. Runs `hanten roll` over the real frames with that shared recipe — in measure mode
+   (`--measure-roll`, with the manifest's `leader`) on a build that has it, so the
+   roll's white balance, midtone line, white and exposure are measured over that base
+   first, as `measure-roll` then `roll` would. The reference build measures no roll.
+   Asked of the binary (`roll --help`). A manifest leader is then read, so it must be
+   present and match its checksum; a roll with none is measured unguarded, which
+   `hanten` warns about — and `--strict-roll` refuses, since `roll --strict` refuses
+   an unguarded measurement. A `--recipe` stating measured `roll` values is refused
+   too: measure mode measures them.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
-   beside the converted images.
+   beside the converted images, and in measure mode `resolved-recipe.json`, the whole
+   run with its measured `roll` section (`roll --save-recipe`).
 
 The default destination is:
 
@@ -134,7 +143,8 @@ legitimately emits its unused-IR warning.
 
 `tags.json` is a small index for the run. It records the configuration ID, source
 roll, source-frame checksums, frozen recipe, calibration frames/regions/values, build identity, report
-path, and roll summary. `calibration.json` retains the complete `hanten measure-base`
+path, and roll summary; `roll_measured` says whether the roll was measured, and then
+`roll_section` holds what was (`analysis.json` carries it too). `calibration.json` retains the complete `hanten measure-base`
 reports (`estimate` on a build from before the rename, which `nctool roll` detects by
 asking the binary). The roll report carries each frame's identity (with the hash of the recipe
 the frame ran) and, on a destination build, its resolved destination (`chain`, named

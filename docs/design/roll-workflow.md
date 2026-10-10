@@ -1,9 +1,10 @@
 # The roll workflow: measuring, composing and converting from the CLI
 
-**Status:** target design, decided 2026-09-28. The measuring commands (`measure-base`,
+**Status:** decided 2026-09-28, and shipped. The measuring commands (`measure-base`,
 `measure-roll --unexposed`, `--out`) shipped with `core/measure-base`, layering and
-`roll`'s override flags with `core/recipe-composition`, and `profile` with
-`core/profile-authoring`; `roll`'s measure mode has not. Where this document and a task
+`roll`'s override flags with `core/recipe-composition`, `profile` with
+`core/profile-authoring`, and `roll`'s measure mode with `core/roll-measure-mode`; open
+question 8 remains. Where this document and a task
 file disagree, this document wins — change it first, then the task. `docs/using-nc.md` §4
 describes what ships today.
 
@@ -157,8 +158,8 @@ the `roll` section and every style knob are optional, with today's defaults — 
 refuses only when a required value has no source.
 
 **Measure mode** is entered by `--measure-roll`: before converting, `roll` measures the
-roll's white balance, white and clamps over its frames, exactly as `measure-roll` does
-with the same inputs. `--unexposed U` is one more source for the base, and implies
+roll's white balance, white and clamps over its frames, as `measure-roll` does with
+the same inputs. `--unexposed U` is one more source for the base, and implies
 measure mode.
 
 | Base from | plain `roll` | `roll --measure-roll` |
@@ -170,16 +171,35 @@ measure mode.
 ¹ `--film-base`, like the `--roll-*` flags below, is one of `roll`'s override flags
 (`core/recipe-composition`).
 
-- **Measure mode adds no measurement of its own**: its images are byte-identical to
-  `measure-roll` then `roll` over the same inputs.
+- **Measure mode adds no measurement of its own**: it measures under the decode it
+  renders, so the decode, input and measure flags apply to the measurement too. Its
+  images are byte-identical to `measure-roll` then `roll` over the same frames, layers
+  and style flags, with `measure-roll` measuring under the same decode (`--measure-inset`
+  passed to it, the decode and input flags stated in a layer it reads). The measured
+  recipe is layered last, as `--params roll.json` would be, and the flags apply over it.
 - **A measured value is stated once.** A layer *states* a value when it holds it
-  non-null. In measure mode, a recipe stating a `roll` value or a `--roll-*` flag is
-  refused (the section is being measured), and `--unexposed` beside a stated base is
-  refused. A look layer (`--params my-look.json`) and style flags are fine.
+  non-null. In measure mode, a recipe stating a measured `roll` value (`roll.frames`
+  included) or a `--roll-*` flag is refused (the section is being measured), and
+  `--unexposed` beside a stated base is refused. A look layer (`--params my-look.json`)
+  and style flags are fine.
+- **The roll's switches keep their meaning.** `--small-lift`, `--thin-lift`,
+  `--midtone-neutral` and `--neutral-balance` (and their `roll` keys) decide at render
+  whether a measured value applies, in measure mode as outside it. The measurement
+  itself runs at `measure-roll`'s defaults; to measure differently (`measure-roll
+  --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
+- **The base it measures over is explicit**: a stated region is refused, as on
+  `measure-roll`, since it would measure each frame under a different decode.
 - **`--leader` is optional, as in `measure-roll`**: without it the run warns that no
   frame is checked for saturation and the white-balance guard is off, and `--strict`
-  refuses. Outside measure mode it guards nothing and is refused.
+  refuses. Outside measure mode it guards nothing and is refused. `--unexposed auto`
+  and `--leader auto` work as on `measure-roll`, and a frame they find is not converted.
 - The unexposed file and the leader are refused among the frames.
+- **The report** is `roll`'s, with a `measurement` object holding what `measure-roll`'s
+  report would.
+- **A measurement failure writes no image** and exits with the measurement's code.
+  Under `--strict`, a measurement warning refuses once the report is emitted, before
+  any frame is converted (question 7).
+- **`--frames` is refused in measure mode** (question 9).
 - `measure-roll` stays the command for measuring without converting — to read the
   numbers first, or to keep the file.
 
@@ -198,7 +218,7 @@ values, and re-running over the same full frame set measures the same numbers.
 ### Automatic calibration
 
 **Shipped 2026-10-09** as `measure-roll --unexposed auto` and `--leader auto` (each
-separately; `roll`'s measure mode will inherit them). Every input's effective area is
+separately; `roll`'s measure mode takes them too). Every input's effective area is
 measured first. The unexposed frame is the clearest flat frame, provided no input is
 clearer than it, and other flat frames within 0.01 density of it corroborate it. A denser flat frame is a near-blank picture.
 The leader is flat and at least 0.7 density above the roll's base. Found frames leave
@@ -248,13 +268,16 @@ Each is owned by the task named; its answer is recorded here.
    value it warns beside every measured roll), a key the rendering decides written
    `null`, and stamped like every written recipe, so a `pipeline_version` change warns.
    It restates the decode, so it is layered before the measured file.
-7. **`--strict` across measure mode's phases**: does a measurement warning refuse
-   before any frame is written? — `core/roll-measure-mode`
+7. ~~`--strict` across measure mode's phases~~ **Resolved 2026-10-09: yes** — under
+   `--strict` a measurement warning refuses (exit 1) once the report, with its
+   `measurement`, is emitted, and before any frame is converted, as `measure-roll
+   --strict` refuses before writing its recipe.
 8. **Does `--unexposed` take a region** of a part-exposed frame, for a roll whose only
    unexposed film is half a frame? — `film-base/half-frame-calibration`
-9. **`roll --frames manifest.json` in measure mode**: measuring over the manifest's frames
-   is clear; how the clamps it measures combine with the manifest's own per-frame
-   `params` is not. — `core/roll-measure-mode`
+9. ~~`roll --frames manifest.json` in measure mode~~ **Resolved 2026-10-09: refused**
+   (exit 2), naming the two-command route. A manifest's `params` can change the decode
+   a frame would be measured under, which needs its own design; measure the roll with
+   `measure-roll --out`, then `roll --frames … --params` its file.
 10. ~~Does a `null` in a later layer override an earlier value?~~ **Resolved
     2026-09-28: no — a `null` states nothing** in a `--params` layer (above), and a
     frame's `params` refuses one: hand-written there, it is an attempt to unset,

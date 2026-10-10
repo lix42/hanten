@@ -1398,10 +1398,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   unexposed frame, and writes its
   fragment as a file. No `jq` between measuring and converting. **Done 2026-09-28**: `--out`
   (refused over a file unless `--force`), clamps as `roll.frames` keyed by file name
-- [ ] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --measure-roll
-  [--leader L]` measures the roll over the recipe's base, then converts; `--unexposed U`
-  measures the base too and implies it. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the
-  resolved run for re-rendering the same roll
+- [x] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --unexposed
+  <file|auto> [--leader L]` measures the base and the roll, then converts; `--measure-roll`
+  does the same over a base the recipe already states. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the
+  resolved run for re-rendering the same roll. **Done 2026-10-10**
 - [x] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed
   from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll,
   cross-frame agreement, provenance + confidence, a loud refusal. An opt-in mode of
