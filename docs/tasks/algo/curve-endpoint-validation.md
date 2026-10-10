@@ -3,7 +3,9 @@
 > **Superseded 2026-09-19 by `nf-reconstruction/curve-endpoint-warning`** —
 > what survives is reading the endpoint off the renderer's own curve, at
 > warning tier. Kept so existing references resolve; see
-> `docs/nf-migration.md` for the migration plan.
+> `docs/nf-migration.md` for the migration plan. That task closed as not needed
+> (2026-10-09): display black's warning (`fit_range::ResolvedBlack::warning`) is
+> the check.
 
 > **Needs re-evaluation before pickup (2026-09-13).** Written against exponential and
 > sigmoid only. Since then: the reference-free placements (`black-at-base`,

@@ -1,5 +1,10 @@
 # Warn when the curve's endpoint is unreachable
 
+**Closed — not needed (2026-10-09).** Display black
+(`nf-display-stages/parametric-operator`) places the film base, and its warning
+(`fit_range::ResolvedBlack::warning`) is this check. Reasons and the binary check:
+`docs/progress/nf-reconstruction.md`.
+
 ## Goal
 
 Report — before decoding — when a resolved curve places its black endpoint so high

@@ -1127,7 +1127,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   mid aim; which white it references moved to `nf-calibration/anchor-comparison`
 - `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
   — the film-linearization half stays; print contrast becomes a look knob
-- `nf-reconstruction/curve-endpoint-warning` (new flow): `nf-reconstruction/anchor-rule`
+- `nf-reconstruction/curve-endpoint-warning` (new flow, **closed—not needed**; the dep below is decision history): `nf-reconstruction/anchor-rule`
   — supersedes `algo/curve-endpoint-validation`: read the endpoint off the
   renderer's own curve, at warning tier
 - `nf-reconstruction/mono-decode` (new flow): `nf-reconstruction/fixed-decode`
@@ -1941,10 +1941,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   the single 2.0 did, saturated colour moves slightly. The pre-split
   `reconstruction.contrast` is refused by name. The current chain keeps the bundled 2.0,
   so no pixel or fingerprint moved there
-- [ ] [Warn when the curve's endpoint is
-  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — supersedes
-  `algo/curve-endpoint-validation`: read the endpoint off the renderer's own
-  curve, at warning tier
+- [x] [Warn when the curve's endpoint is
+  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — **closed—not
+  needed 2026-10-09**: display black places the film base, and already warns when the
+  base, read off the frame's own grade, renders under 2 stops below mid-grey
 - [ ] [Where black-and-white fits the new
   chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
   written for three dye layers and says nothing about where mono pools
