@@ -55,6 +55,9 @@ reachable as `--anchor-mid-offset`. What the anchor is *referenced to* was
 `nf-calibration/anchor-comparison`'s, and it ruled (2026-09-25): the anchor stays
 base-referenced, and the roll's white acts through `look.contrast`.
 
+**No curve-endpoint check** (`curve-endpoint-warning`, closed 2026-10-09): where the film
+base lands is display black's, and its warning is the check.
+
 ## fixed-decode
 
 **Status:** done
@@ -577,10 +580,40 @@ base-referenced, and the roll's white acts through `look.contrast`.
 
 ## curve-endpoint-warning
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** closed — not needed
+**Updated:** 2026-10-09
 
 - 2026-09-19: created with the new-flow plan. Goal: warn when the curve's endpoint is unreachable.
+- 2026-10-09: **closed — not needed.** The task was filed while the decode's output was
+  where black landed. Read against what shipped since, every part of it is covered:
+
+  - **The decode's base is a convention, not black.** The film base decodes to
+    `0.18 · 10^(linearization · (offset_c − d))` (≈0.014 at the defaults); `scale` has
+    no effect there, since `D = 0`. Display black (`nf-display-stages/parametric-operator`)
+    then moves the graded base to its target on the display per frame — the only
+    black placement.
+  - **The warning exists.** `fit_range::ResolvedBlack::warning` fires when the graded
+    base renders under `MIN_FILM_BASE_STOPS` (2) below mid-grey: read off the frame's
+    own grade rather than a closed form, at warning tier, promoted by `--strict` — the
+    two things this task said survive.
+  - **The degenerate end is `algo/density-safety-bounds`'s** (`recipe::validate_render`
+    and the black-channel warning).
+  - **The measured placement cancels the decode's knobs.** A moved `d` is a pure gain,
+    which the roll exposure removes; a flatter linearization is re-steepened by the
+    span slope (`nf-calibration/span-roll-slope`). The poor-development spike
+    (`docs/spike/poor-development.md`) found only that display black is still needed and
+    steep slopes lose shadow detail — `envelope-hybrid-placement`'s, not a curve check.
+  - **Per-channel.** Only `offset` gives one channel a different base, and it is 0
+    pending `nf-calibration/offset-question`.
+
+  **Checked on the binary** (`tests/fixtures/hdr-48bit.tif --film-base 0.9,0.55,0.42`,
+  roll stated as `--roll-white 2.5 --roll-dark=-6 --roll-white-balance 1,1,1
+  --roll-exposure 0`, so measurement cannot cancel the knob): defaults put the base 4.31
+  stops under mid-grey, no warning; `--anchor-mid-offset 0.3` → 2.00 stops and
+  `0.01` → 0.06 stops, both warn; `--strict` on the latter exits 1; adding
+  `--exposure=-2` → 2.31 stops, silent; `--density-gamma 1.0` → 2.31, silent. The
+  warning's remedy (`--exposure`, `--display-black off`) works whichever knob lifted the
+  base, so it was left as is. No code change.
 
 ## mono-decode
 
