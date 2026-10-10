@@ -6049,12 +6049,18 @@ fn reject_a_knob_the_placement_ignores(
         .find_map(|(s, n)| s.then_some(n));
     // What the frame lacks to be placed by the hybrid; `None` when both halves are stated
     // (and the hybrid applies, or a value is invalid, which `validate` names).
-    let missing = match (roll.envelope_stops, roll.frame_tones) {
-        (None, None) => Some("the roll's envelope and this frame's tones"),
+    let missing = match (roll.envelope_stops, roll.frame_tones, roll.span_slope()) {
+        (None, None, _) => Some("the roll's envelope and this frame's tones"),
+        (_, _, None) => {
+            Some("the roll's white and dark end (`roll.white_stops`, `roll.dark_stops`)")
+        }
         _ => roll.hybrid_missing(),
     };
+    // A white without its dark end (or the reverse) is `validate`'s more specific fault.
+    let half_span = roll.white_stops.is_some() != roll.dark_stops.is_some();
     if let Some(knob) = knob
         && roll.hybrid().is_none()
+        && !half_span
     {
         let message = if roll.placement() == recipe::Placement::Roll {
             let by = if stated.roll_placement {
@@ -6695,14 +6701,22 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let pictures = measurement.as_ref().map(|m| m.pictures.as_slice());
     let planned = resolve_frames(&args, pictures, &stated, &shared, &mut roll_warnings, &log)?;
     // The typed placement knobs against each frame as it resolves: its placement, and
-    // whether it has the hybrid's measurement, differ by frame.
+    // whether it has the hybrid's measurement, differ by frame. A typed knob is refused
+    // only when no frame would use it; a frame without its tones warns (`convert_frame`).
     let typed = &args.knobs.roll;
     let on = Some(recipe::Switch::On);
+    let placed_by = |hybrid: bool| {
+        planned.iter().any(|pf| {
+            pf.recipe.applies_roll_to_scene_correction()
+                && pf.recipe.roll.hybrid().is_some() == hybrid
+        })
+    };
+    let (some_hybrid, some_roll) = (placed_by(true), placed_by(false));
     let placement_flags = PlacementStated {
-        span: typed.hybrid_span.is_some(),
-        keep: typed.hybrid_level_keep.is_some(),
-        small_on: typed.small_lift == on,
-        thin_on: typed.thin_lift == on,
+        span: typed.hybrid_span.is_some() && !some_hybrid,
+        keep: typed.hybrid_level_keep.is_some() && !some_hybrid,
+        small_on: typed.small_lift == on && !some_roll,
+        thin_on: typed.thin_lift == on && !some_roll,
         roll_placement: typed.placement == Some(recipe::Placement::Roll),
     };
     for pf in &planned {

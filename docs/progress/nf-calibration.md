@@ -1556,6 +1556,17 @@ frames; the look's default contrast is `no-roll-defaults`'.
   that need black on use `direct`). Edge left: a picture frame the pool kept nothing of
   gets no tones, and its warning's remedy (measure it among the inputs) cannot help;
   `--placement roll` does. **Done**: all CI gates and the asset probes pass.
+- 2026-10-10: **PR #263 review** (Codex on GitHub, then `/review-fix-loop` with
+  `nc-reviewer` alone: the Codex CLI was out of credits).
+  - Fixed: a hybrid knob is refused when the roll's white and dark end are missing (tones
+    and envelope alone place nothing), but steps aside when only one end is stated, so
+    `validate`'s white-without-dark message wins. On `roll`, a typed hybrid knob is refused
+    only when no frame is hybrid-placed, and `--small-lift on` / `--thin-lift on` only when
+    no frame renders at the roll's placement: one frame without tones no longer fails the
+    run (it warns). `design-spec`'s `measure-roll` row no longer shows `--roll-envelope` in
+    the reuse flag.
+  - Declined: refusing a reversed `--roll-envelope` (as on 2026-10-10 above —
+    `measure-roll` writes one on a degenerate roll).
 
 ## hybrid-slope-bounds
 

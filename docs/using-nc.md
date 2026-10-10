@@ -1436,7 +1436,8 @@ usage: --roll-frame-exposure is a lift, which applies at the roll's placement, b
 Stated with the frame's tones, as in its `frames[].flag`, it is spared: it is the
 `--placement roll` fallback. Refused the same way: `--hybrid-span` or
 `--hybrid-level-keep` where the frame renders at the roll's placement, `--small-lift on`
-or `--thin-lift on` where the hybrid places it, and on `roll`, `--roll-frame-tones` (or a
+or `--thin-lift on` where the hybrid places it (typed on `roll`, only when no frame
+would use it; a frame without its tones warns), and on `roll`, `--roll-frame-tones` (or a
 shared recipe's `roll.frame_tones`), since one frame's tones would place every frame.
 `reuse.flag` carries no envelope: without tones it would place nothing. Each switch is
 unset (`null`) by default, which is on, so a measured file layered last never undoes an

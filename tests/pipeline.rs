@@ -17368,7 +17368,8 @@ fn the_hybrid_refuses_a_lift_it_would_ignore_and_warns_on_an_unmeasured_frame() 
             && err.contains("use --placement roll"),
         "{err}"
     );
-    // And the placement knobs, checked against each frame `roll` resolves.
+    // And the placement knobs, refused only when no frame `roll` resolves would use them:
+    // here the hybrid places every frame.
     let (code, _, err) = run(&[
         "roll",
         "--params",
@@ -17382,6 +17383,75 @@ fn the_hybrid_refuses_a_lift_it_would_ignore_and_warns_on_an_unmeasured_frame() 
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--thin-lift on turns on a lift"), "{err}");
+    // A mixed roll uses a hybrid knob on its measured frame; the other one warns.
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        &s(&night),
+        &s(&other),
+        "--hybrid-span",
+        "9",
+        "-o",
+        &s(&tmp.path("rolled-mixed")),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("rendered at the roll's placement, not the hybrid"),
+        "{err}"
+    );
+    // And a lift on its unmeasured frame, rendered at the roll's placement.
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        &s(&night),
+        &s(&other),
+        "--thin-lift",
+        "on",
+        "-o",
+        &s(&tmp.path("rolled-mixed-lift")),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    // A white without its dark end is `validate`'s fault, not a hybrid knob's.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&night),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--roll-white",
+        "1.5",
+        "--roll-envelope=-4,2",
+        "--roll-frame-tones=1,-1,-3",
+        "--hybrid-span",
+        "9",
+        "-o",
+        &s(&tmp.path("half-span.tiff")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-white (recipe `roll.white_stops`) 1.5 without --roll-dark")
+            && !err.contains("tunes the hybrid placement"),
+        "{err}"
+    );
+    // Tones and an envelope without the roll's span place nothing either.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&night),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--roll-envelope=-4,2",
+        "--roll-frame-tones=1,-1,-3",
+        "--hybrid-span",
+        "9",
+        "-o",
+        &s(&tmp.path("no-span.tiff")),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--hybrid-span tunes the hybrid placement, but the recipe lacks the roll's white and dark end"),
+        "{err}"
+    );
     // A non-finite measurement is refused by name, not solved.
     let (code, _, err) = convert(&night, &["--roll-envelope=NaN,2", "--hybrid-span", "7"]);
     assert_eq!(code, 2, "{err}");
