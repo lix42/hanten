@@ -38,7 +38,7 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 
 | Stage | What it does |
 |---|---|
-| `classify` | classify every frame per roll by its effective-area median and uniformity → unexposed / fully-exposed / real |
+| `classify` | classify every frame per roll with `measure-roll --unexposed auto --leader auto`, beside the manifest's roles; `MISS` marks a disagreement |
 | `freeze` | measure per-roll `Dmin` (the unexposed frame's effective area, at its median), write `recipes/` |
 | `convert` | roll-convert every real frame, 16-bit + float HDR, into the output dir |
 | `ir` | convert one IR frame; check its IR plane raises no warning |

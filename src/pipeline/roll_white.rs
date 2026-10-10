@@ -443,13 +443,7 @@ pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
             "roll exposure: no frame has a usable pixel, so the roll has no level".into(),
         ));
     }
-    known.sort_by(f32::total_cmp);
-    let mid = known.len() / 2;
-    let level_stops = if known.len().is_multiple_of(2) {
-        (known[mid - 1] + known[mid]) / 2.0
-    } else {
-        known[mid]
-    };
+    let level_stops = median(&mut known);
     let wanted = LEVEL_TARGET_STOPS - level_stops;
     let ev = wanted.clamp(-EXPOSURE_BOUND_EV, EXPOSURE_BOUND_EV);
     Ok(RollExposure {
@@ -478,6 +472,17 @@ pub fn span_slope(white_stops: f32, dark_stops: f32) -> f32 {
         MAX_SLOPE
     };
     k.clamp(slope_for(WHITE_CAP_STOPS), MAX_SLOPE)
+}
+
+/// The median of a non-empty set, sorting it; the mean of the middle two when even.
+pub fn median(values: &mut [f32]) -> f32 {
+    values.sort_by(f32::total_cmp);
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
 }
 
 /// A frame's lift in EV, `0..=LIFT_BOUND_EV`: from its white ([`sample_white`], scene

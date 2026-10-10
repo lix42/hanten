@@ -12248,6 +12248,275 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
     }
 }
 
+/// The `auto` references' synthetic roll: its input semantics, and the base every frame
+/// is written over.
+const AUTO_BASE: [f32; 3] = [0.9, 0.55, 0.42];
+const AUTO_INPUT: &str = r#"{ "recipe_version": 3,
+    "input": { "transfer": "linear", "meaning": "scanner-device" } }"#;
+
+#[test]
+fn measure_roll_auto_finds_the_unexposed_frame_and_leader_among_the_inputs() {
+    // `--unexposed auto --leader auto` over the whole folder writes the recipe that naming
+    // the two frames writes.
+    let tmp = TempDir::new("measure-roll-auto");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [blank, leader, a, b] = ["blank.tif", "leader.tif", "a.tif", "b.tif"].map(|n| tmp.path(n));
+    write_uniform_density(&blank, AUTO_BASE, 0.0);
+    write_uniform_density(&leader, AUTO_BASE, 1.5);
+    write_picture_density(&a, AUTO_BASE, 0.9);
+    write_picture_density(&b, AUTO_BASE, 1.1);
+    let [blank, leader, a, b] = [&blank, &leader, &a, &b].map(|p| s(p));
+    let (auto_out, named_out) = (s(&tmp.path("auto.json")), s(&tmp.path("named.json")));
+    let folder = [leader.as_str(), &a, &blank, &b];
+    let auto_args = [&folder[..], &["--unexposed", "auto", "--leader", "auto"]].concat();
+    let (code, stdout, err) = run(&[
+        &["measure-roll"][..],
+        &auto_args,
+        &["--params", &input, "--out", &auto_out],
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let auto = json(&stdout);
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &a,
+        &b,
+        "--unexposed",
+        &blank,
+        "--leader",
+        &leader,
+        "--params",
+        &input,
+        "--out",
+        &named_out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let named = json(&stdout);
+    assert_eq!(
+        std::fs::read(&auto_out).unwrap(),
+        std::fs::read(&named_out).unwrap(),
+        "the recipe naming the frames writes"
+    );
+    assert_eq!(auto["leader"]["input"], named["leader"]["input"]);
+    assert_eq!(auto["frames"].as_array().unwrap().len(), 2, "{auto}");
+    let class = |path: &str| {
+        auto["references"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["input"] == path)
+            .map(|i| i["class"].as_str().unwrap().to_owned())
+            .unwrap()
+    };
+    assert_eq!(class(&blank), "unexposed");
+    assert_eq!(class(&leader), "leader");
+    assert_eq!(class(&a), "picture");
+    assert_eq!(class(&b), "picture");
+    let found = &auto["references"]["unexposed"];
+    assert_eq!(found["confidence"], "uncorroborated", "{found}");
+    assert_eq!(
+        found["rejected"],
+        serde_json::json!([]),
+        "the leader is no picture"
+    );
+    // The frame's measurement is measure-base's evidence, as `--unexposed FILE` reports.
+    assert_eq!(found["measurements"][0], named["unexposed"]);
+    let warned = |r: &serde_json::Value| r["warnings"].to_string().contains("uncorroborated");
+    assert!(warned(&auto), "{auto}");
+    assert!(!warned(&named), "{named}");
+
+    // `--strict` refuses it before the pictures are measured, and its remedy passes.
+    let strict_out = s(&tmp.path("strict.json"));
+    let (code, stdout, err) = run(&[
+        &["measure-roll"][..],
+        &auto_args,
+        &["--params", &input, "--strict", "--out", &strict_out],
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(stdout.is_empty(), "no report: refused before measuring");
+    assert!(
+        err.contains("--strict refuses an uncorroborated base")
+            && !err.contains("warning(s) present"),
+        "{err}"
+    );
+    assert!(!Path::new(&strict_out).exists());
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &leader,
+        &a,
+        &b,
+        "--unexposed",
+        &blank,
+        "--leader",
+        "auto",
+        "--params",
+        &input,
+        "--strict",
+    ]);
+    assert_eq!(code, 0, "naming the frame passes --strict: {err}");
+}
+
+#[test]
+fn measure_roll_auto_corroborates_agreeing_frames_and_keeps_a_near_blank_picture() {
+    let tmp = TempDir::new("measure-roll-auto-agree");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let paths = ["one.tif", "two.tif", "near.tif", "a.tif", "b.tif"].map(|n| tmp.path(n));
+    write_uniform_density(&paths[0], AUTO_BASE, 0.0);
+    write_uniform_density(&paths[1], AUTO_BASE, 0.004);
+    // A near-blank picture: flat, and 0.03 denser than the base.
+    write_uniform_density(&paths[2], AUTO_BASE, 0.03);
+    write_picture_density(&paths[3], AUTO_BASE, 0.9);
+    write_picture_density(&paths[4], AUTO_BASE, 1.1);
+    let paths = paths.map(|p| s(&p));
+    let flags = [
+        "--unexposed",
+        "auto",
+        "--leader",
+        "auto",
+        "--params",
+        &input,
+    ];
+    let (code, stdout, err) = run(&[
+        &["measure-roll"][..],
+        &paths.each_ref().map(String::as_str),
+        &flags,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let found = &report["references"]["unexposed"];
+    assert_eq!(found["confidence"], "corroborated", "{found}");
+    assert_eq!(found["frames"], serde_json::json!(paths[..2]), "{found}");
+    let spread = found["spread_density"].as_f64().unwrap();
+    assert!((spread - 0.004).abs() < 0.001, "{spread}");
+    assert_eq!(found["rejected"], serde_json::json!([paths[2]]));
+    assert_eq!(
+        report["frames"].as_array().unwrap().len(),
+        3,
+        "the near-blank frame is picture"
+    );
+    let warnings = report["warnings"].to_string();
+    assert!(!warnings.contains("uncorroborated"), "{warnings}");
+    assert!(
+        warnings.contains("--leader auto found no leader among the inputs"),
+        "{warnings}"
+    );
+    assert_eq!(
+        report["references"]["leader"]["frames"],
+        serde_json::json!([])
+    );
+    assert!(report.get("leader").is_none(), "{report}");
+}
+
+#[test]
+fn measure_roll_auto_refuses_when_nothing_is_trustworthy() {
+    let tmp = TempDir::new("measure-roll-auto-refusals");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [blank, leader, a, b] = ["blank.tif", "leader.tif", "a.tif", "b.tif"].map(|n| tmp.path(n));
+    write_uniform_density(&blank, AUTO_BASE, 0.0);
+    write_uniform_density(&leader, AUTO_BASE, 1.5);
+    write_picture_density(&a, AUTO_BASE, 0.9);
+    write_picture_density(&b, AUTO_BASE, 1.1);
+    let [blank, leader, a, b] = [&blank, &leader, &a, &b].map(|p| s(p));
+    for (args, expect, absent) in [
+        (
+            vec![a.as_str(), &b, "--unexposed", "auto", "--params", &input],
+            "--unexposed auto found no unexposed frame among the inputs: none is flat enough",
+            "needs the roll's film base",
+        ),
+        // No unexposed frame among the inputs: the leader is the clearest flat frame, and
+        // the pictures are far clearer than it.
+        (
+            vec![
+                leader.as_str(),
+                &a,
+                &b,
+                "--unexposed",
+                "auto",
+                "--params",
+                &input,
+            ],
+            "is no film base",
+            "none is flat enough",
+        ),
+        // Refused before the pictures are measured (pass 2).
+        (
+            vec![
+                a.as_str(),
+                &b,
+                "--unexposed",
+                &blank,
+                "--leader",
+                "auto",
+                "--params",
+                &input,
+                "--strict",
+            ],
+            "--strict refuses an unguarded measurement: --leader auto found no leader",
+            "warning(s) present",
+        ),
+        (
+            vec![blank.as_str(), "--unexposed", "auto", "--params", &input],
+            "every input was taken as a reference frame",
+            "found no unexposed frame",
+        ),
+        (
+            vec![
+                a.as_str(),
+                "--unexposed",
+                "auto",
+                "--film-base",
+                "0.9,0.55,0.42",
+            ],
+            "--unexposed auto measures the film base, and --film-base states one",
+            "found no",
+        ),
+    ] {
+        let (code, stdout, err) = run(&[&["measure-roll"][..], &args].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(stdout.is_empty(), "{args:?}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+        assert!(!err.contains(absent), "{args:?}: {err}");
+    }
+    // A found leader keys no `roll.frames` entry, so its file name may repeat a picture's.
+    let sub = tmp.path("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let twin = sub.join("a.tif");
+    write_uniform_density(&twin, AUTO_BASE, 1.5);
+    let out = s(&tmp.path("roll.json"));
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &blank,
+        &a,
+        &b,
+        &s(&twin),
+        "--unexposed",
+        "auto",
+        "--leader",
+        "auto",
+        "--params",
+        &input,
+        "--out",
+        &out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    // The refusal's first remedy is a route `measure-roll` accepts.
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &a,
+        &b,
+        "--unexposed",
+        &blank,
+        "--params",
+        &input,
+    ]);
+    assert_eq!(code, 0, "{err}");
+}
+
 #[test]
 fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
     let tmp = TempDir::new("measure-roll-unexposed-refusals");

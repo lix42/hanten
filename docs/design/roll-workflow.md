@@ -197,13 +197,20 @@ values, and re-running over the same full frame set measures the same numbers.
 
 ### Automatic calibration
 
-When the unexposed frame and leader are not named, an **opt-in** mode of
-`measure-roll` (and so of `roll`'s measure mode) finds them among the inputs. Its
-cascade may fall back to region and automatic base measurement on the picture frames
-(a *named* `--unexposed` always measures its whole frame); it prefers cross-frame agreement,
-records which source won and how confident it is, and drops **loudly** to single-frame conversion when nothing is
-trustworthy. Content-based base estimation is never an automatic rung. Detail:
-[`core/auto-calibration`](../tasks/core/auto-calibration.md).
+**Shipped 2026-10-09** as `measure-roll --unexposed auto` and `--leader auto` (each
+separately; `roll`'s measure mode will inherit them). Every input's effective area is
+measured first. The unexposed frame is the clearest flat frame, provided no input is
+clearer than it, and other flat frames within 0.01 density of it corroborate it. A denser flat frame is a near-blank picture.
+The leader is flat and at least 0.7 density above the roll's base. Found frames leave
+the picture pool, so the recipe matches the one that naming them writes. The report's
+`references` object records each input's class and evidence, and the base's confidence.
+
+There is no automatic region rung, since nothing searches for a rebate, and no drop to
+single-frame conversion, since no per-frame base exists. **Nothing trustworthy is a
+refusal** (exit 2) naming `--unexposed FILE` and `measure-base --base-region`. A base
+from one frame is used with a warning, which `--strict` refuses. Content-based base
+estimation is never an automatic rung. Evidence and constants:
+`pipeline::reference_frames`.
 
 ### Authored files
 
