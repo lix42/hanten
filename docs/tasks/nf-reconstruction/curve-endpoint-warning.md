@@ -1,9 +1,11 @@
 # Warn when the curve's endpoint is unreachable
 
-**Closed — not needed (2026-10-09).** Display black
-(`nf-display-stages/parametric-operator`) places the film base, and its warning
-(`fit_range::ResolvedBlack::warning`) is this check. Reasons and the binary check:
-`docs/progress/nf-reconstruction.md`.
+**Reopened (2026-10-10).** It closed on 2026-10-09 because display black
+(`nf-display-stages/parametric-operator`) placed the film base and its warning
+(`fit_range::ResolvedBlack::warning`) was this check. Display black is now off by default
+(`nf-calibration/envelope-hybrid-placement`), and its warning runs only when it is on, so
+the default render has no check on where the base lands. The closure's other findings
+still hold: `docs/progress/nf-reconstruction.md`.
 
 ## Goal
 
@@ -63,3 +65,5 @@ not displayed black, since later stages still move where black lands.
 ## Dependencies
 
 - [One anchor rule, with a value for `d`](anchor-rule.md)
+- [Envelope hybrid placement](../nf-calibration/envelope-hybrid-placement.md) — turned
+  display black off by default, which left the default render without this check

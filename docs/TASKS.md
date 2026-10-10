@@ -703,6 +703,7 @@ graph TD
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
+  nf-calibration/envelope-hybrid-placement --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
   nf-core/stage-skeleton --> nf-scene-correction/stage
   nf-reconstruction/fixed-decode --> nf-scene-correction/stage
@@ -1127,7 +1128,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   mid aim; which white it references moved to `nf-calibration/anchor-comparison`
 - `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
   — the film-linearization half stays; print contrast becomes a look knob
-- `nf-reconstruction/curve-endpoint-warning` (new flow, **closed—not needed**; the dep below is decision history): `nf-reconstruction/anchor-rule`
+- `nf-reconstruction/curve-endpoint-warning` (new flow; reopened 2026-10-10): `nf-reconstruction/anchor-rule`, `nf-calibration/envelope-hybrid-placement`
   — supersedes `algo/curve-endpoint-validation`: read the endpoint off the
   renderer's own curve, at warning tier
 - `nf-reconstruction/mono-decode` (new flow): `nf-reconstruction/fixed-decode`
@@ -1941,10 +1942,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   the single 2.0 did, saturated colour moves slightly. The pre-split
   `reconstruction.contrast` is refused by name. The current chain keeps the bundled 2.0,
   so no pixel or fingerprint moved there
-- [x] [Warn when the curve's endpoint is
-  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — **closed—not
-  needed 2026-10-09**: display black places the film base, and already warns when the
-  base, read off the frame's own grade, renders under 2 stops below mid-grey
+- [ ] [Warn when the curve's endpoint is
+  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — **reopened
+  2026-10-10**: closed 2026-10-09 because display black's warning covered it, but display
+  black is now off by default (`nf-calibration/envelope-hybrid-placement`), so a default
+  render whose base grades near mid-grey warns about nothing
 - [ ] [Where black-and-white fits the new
   chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
   written for three dye layers and says nothing about where mono pools

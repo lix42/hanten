@@ -55,8 +55,9 @@ reachable as `--anchor-mid-offset`. What the anchor is *referenced to* was
 `nf-calibration/anchor-comparison`'s, and it ruled (2026-09-25): the anchor stays
 base-referenced, and the roll's white acts through `look.contrast`.
 
-**No curve-endpoint check** (`curve-endpoint-warning`, closed 2026-10-09): where the film
-base lands is display black's, and its warning is the check.
+**No curve-endpoint check yet** (`curve-endpoint-warning`, closed 2026-10-09, reopened
+2026-10-10): display black's warning was the check, but display black is off by default
+since `nf-calibration/envelope-hybrid-placement`, so the default render has none.
 
 ## fixed-decode
 
@@ -580,8 +581,8 @@ base lands is display black's, and its warning is the check.
 
 ## curve-endpoint-warning
 
-**Status:** closed — not needed
-**Updated:** 2026-10-09
+**Status:** not started (reopened)
+**Updated:** 2026-10-10
 
 - 2026-09-19: created with the new-flow plan. Goal: warn when the curve's endpoint is unreachable.
 - 2026-10-09: **closed — not needed.** The task was filed while the decode's output was
@@ -620,6 +621,11 @@ base lands is display black's, and its warning is the check.
   runs now unless `--display-black` is stated (`direct` keeps it on), so a default render
   whose base grades near mid-grey says nothing. Whether that needs a check of its own is
   open; this task was not reopened.
+- 2026-10-10: **reopened (user).** The closure's findings stand except the one it rested
+  on: display black's warning is no longer on the default path. Start from
+  `fit_range::ResolvedBlack::warning`'s measure (the graded base's stops under mid-grey,
+  off the frame's own grade), which `ResolvedBlack` already reports as `film_base_stops`
+  with black off.
 
 ## mono-decode
 
