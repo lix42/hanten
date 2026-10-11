@@ -16,20 +16,18 @@ What remains here are the carried-over findings below.
   colour.**~~ Resolved by `output/content-light-levels` (2026-10-01): MaxCLL is now
   CTA-861.3's per-pixel max(R, G, B), and the warning keeps it as its trigger, so a
   saturated channel above reference white silences it.
-- **The telemetry record's preset enum has outrun its schema version.** `OutputPreset`
-  has twelve variants, ten added after the record last bumped for a preset reason. Is
-  *adding* an enum member a wire-shape change (the module's rustdoc rule, read
-  strictly) or an additive one a forward-compatible consumer tolerates?
-  `telemetry/ingestion-service` is the consumer that makes it matter. The v4 bump on
-  2026-08-09 was for the `output_hdr` → `output_depth` field rename and does not answer
-  this.
-- **The asset manifest infers encoding from bit depth alone**
-  (`scripts/analysis/nctool/manifest.py`, the `bits == 16` arm). Every 16-bit `nc`
-  output is labelled `u16-srgb`, true only while `nc` had no other 16-bit SDR encoding.
-  A `display-p3` result dropped into `converted/nc/` would be recorded as sRGB and any
-  cross-encoding analysis would decode it with the wrong primaries. Latent today; the
-  fix needs real provenance (the sidecar's `output_render.encoding`), not a second
-  filename guess.
+- ~~**The telemetry record's preset enum has outrun its schema version.**~~ Settled
+  2026-10-11: adding or removing an enum member is not a schema bump (stated in
+  `telemetry::SCHEMA_VERSION`'s doc and the `perf-telemetry` skill). The upload's
+  closed `conversion.encoding` enum widens with the contract and the Worker in the same
+  change, with no consent bump (`contracts/telemetry/upload-v1/README.md`);
+  `every_projection_satisfies_the_schema` already fails until it does.
+- ~~**The asset manifest infers encoding from bit depth alone.**~~ Resolved by #246
+  (2026-10-07): a 16-bit file's gamut comes from its embedded ICC primaries
+  (`manifest.py`'s `icc_gamut`), so a Display P3 output is no longer recorded as sRGB.
+  Left, deliberately: a coded PQ/HLG TIFF (a LUT profile) records plain `u16`, and an
+  nc float output `f32-linear` with no gamut. Nothing reads the field; fix it when
+  something does.
 - ~~**`nctool compare` does not cover the default preset.**~~ Resolved 2026-10-01 by
   `nf-verification/benchmark-set`: the `fixtures` set has a `default` case with no
   output flag, plus one case per ready destination. A gain-map JPEG's `mean` is still

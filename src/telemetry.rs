@@ -58,6 +58,11 @@ pub mod upload;
 /// `StageKind`) whose serde representation lives elsewhere — a change to *their* wire form is also a schema change and must
 /// bump this too.
 ///
+/// **Adding or removing an enum member is not a shape change.** The cost is accepted:
+/// a queued same-version line naming a member this build does not know is quarantined
+/// as malformed ([`spool`]), not uploaded. The upload's closed `conversion.encoding`
+/// enum widens with the contract instead (`contracts/telemetry/upload-v1/README.md`).
+///
 /// v2: `conversion.algorithm` (`simple|density|sigmoid`) became
 /// `conversion.reconstruction` (`simple|density`) + optional `conversion.curve`
 /// (`exponential|sigmoid`), following the tagged-reconstruction recipe schema
@@ -74,17 +79,8 @@ pub mod upload;
 /// `output.depth`. It reports the **primary image's** depth
 /// (`OutputParams::primary_depth_label`), which for the JPEG and AVIF presets is
 /// the container's fixed 8/10-bit — *not* `OutputParams::depth()`, whose value for
-/// those presets is only the optional IR TIFF's. A **renamed field is a wire-shape change** under any reading of
-/// the rule above, unlike *adding* an enum member — which `conversion.preset` has
-/// now done eight times without a bump, and which
-/// `output/sdr-preset-followups` still owns settling. `conversion.preset` carried
-/// whichever output preset names the build of the time had (`OutputPreset::ALL`, gone
-/// since v8); the list was never restated here, since that is exactly the rustdoc that
-/// went stale at v3.
-///
-/// **Removing** members is not a bump either: `legacy` and `custom` left
-/// `conversion.preset` with `nf-retire/legacy-custom` (2026-09-23). Records written
-/// before carry them and stay readable; no new record can.
+/// those presets is only the optional IR TIFF's. `conversion.preset` carried whichever
+/// preset names the build of the time had, members added and removed without a bump.
 ///
 /// v5: `conversion.reconstruction` is gone and `conversion.curve` is always present,
 /// because `simple` reconstruction retired (`nf-retire/sigmoid-and-simple`) and left
@@ -116,7 +112,7 @@ pub mod upload;
 /// `timing_ms` stage field (all optional now) until that stage completes.
 ///
 /// Still v10 after `film-base/holder-masked-measurement`: `conversion.film_base_source`
-/// lost the `"auto"` member (removal, as with `legacy`/`custom` above) and its type
+/// lost the `"auto"` member and its type
 /// became `FilmBaseProvenance`, whose `region`/`explicit` wire form is unchanged and
 /// whose `"effective_area"` no conversion emits.
 ///
@@ -124,8 +120,8 @@ pub mod upload;
 /// `clipped` / `non_finite` — a gain map counts both renditions, so the image's
 /// dimensions are not it. Present exactly when `clipped` is.
 ///
-/// Still v11 after `telemetry/panic-hook`: `event` gained `panic`, a member added
-/// as above, for [`panic::PanicEvent`] — its own record in its own file, with the
+/// Still v11 after `telemetry/panic-hook`: `event` gained `panic`, for
+/// [`panic::PanicEvent`] — its own record in its own file, with the
 /// same version. This event's shape is unchanged, and a queue line naming `panic`
 /// has no upload form.
 pub const SCHEMA_VERSION: u32 = 11;

@@ -27,8 +27,9 @@ On 2026-09-13 the user set the product shape: **SDR lossless is the default**
   spelling (`cli::derived_extension`, `jpg`), and must add and calibrate its own
   `memory::RunProfile` on two frame sizes before activation. The JPEG-only profile is
   smaller than `UltraHdrV1`'s four display buffers; measure, do not inherit.
-- The telemetry `conversion.preset` enum grows by one more member; the wire-shape
-  question is parked in `output/sdr-preset-followups`.
+- A plain JPEG is a new `destination::Encoding`, so an upload `conversion.encoding` member: widen the
+  contract and the Worker in the same change, with no schema or consent bump (settled
+  2026-10-11 in `output/sdr-preset-followups`; the contract README states the rule).
 
 ## Open questions
 

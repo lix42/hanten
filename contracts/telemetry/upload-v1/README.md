@@ -82,7 +82,11 @@ Never uploaded: `params_hash`, exact dimensions, byte sizes and timestamps, the
 target triple, film-base coordinates or values, the destination's axes,
 `output_depth`, and any text. New fields are denied until this directory, the
 projection, the Worker and the privacy tests change together, and a manifest change
-needs a consent-version bump (`telemetry/upload`).
+needs a consent-version bump (`telemetry/upload`). A new member of
+`conversion.encoding` (a new `destination::Encoding` variant; most new rows reuse
+one) is not a manifest change: the schema's
+enum and the Worker widen in the same change, deployed before a release sends it,
+with neither a consent nor a schema-version bump.
 
 ## The local panic event
 

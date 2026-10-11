@@ -20,6 +20,10 @@ entries — don't rewrite earlier ones.
 
 What other epics need to know about `output`:
 
+- **Telemetry enum members are not a schema bump (2026-10-11,
+  `output/sdr-preset-followups`).** A new `destination::Encoding` widens the upload
+  contract's `conversion.encoding` and redeploys the Worker in the same change, with no
+  consent bump; the rule is in `telemetry::SCHEMA_VERSION`'s doc and the contract README.
 - **Adobe RGB (1998) is a destination gamut of the new chain (2026-09-24,
   `output/adobe-rgb-gamut`), but nothing selects it yet.** `DestinationGamut::AdobeRgb`
   maps and encodes it (`563/256` curve, v4 profile named
@@ -1852,3 +1856,30 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 - 2026-10-07: Filed from `analysis/viewer-interoperability`'s rubric (evidence in
   `progress/analysis.md`, 2026-10-07): the HDR linear TIFF does not display as HDR in
   Apple's readers, and Preview's sidebar has no thumbnail for it or the film master.
+
+## sdr-preset-followups (closed)
+
+**Status:** done
+**Updated:** 2026-10-11
+
+- **Telemetry enum members (user decision).** Adding or removing a member of an enum
+  the local event carries is **not** a `SCHEMA_VERSION` bump. **Gotcha, accepted:** the
+  uploader (`spool::project_record`) deserializes strictly, so a queued same-version line
+  naming a member this build does not know is quarantined as malformed, not uploaded.
+  This writes down the practice (`legacy`/`custom`,
+  `"auto"`, `panic`) rather than changing it; stated once in `SCHEMA_VERSION`'s doc
+  and in the `perf-telemetry` skill.
+- **Upload enum.** `conversion.encoding` is a closed enum in the upload contract, so a
+  new `destination::Encoding` variant (not every new row — most reuse one) widens the
+  schema and the Worker in the same change, deployed before a release sends it, with
+  **no consent bump**: the field manifest already says "the destination's row", and a
+  new kind of output reveals no new kind of information. The Worker imports the schema
+  file, so widening it there is a redeploy, not a code edit. `upload::encoding`'s
+  exhaustive match and `every_projection_satisfies_the_schema` are the gates.
+  `output/sdr-jpeg-preset` is the first task this applies to.
+- **Asset manifest.** Resolved by #246, which reads a 16-bit file's gamut from its ICC
+  primaries. Left, since nothing reads `encoding`: coded PQ/HLG TIFFs record `u16`
+  (a LUT profile has no matrix column) and nc float outputs `f32-linear` with no gamut.
+- **Verified:** every CI gate locally (fmt, machete, clippy, build, `cargo doc -D warnings`,
+  `cargo test --all-features`, the nctool suite); the change is prose only, so no pixel,
+  fingerprint or wire shape moved.
