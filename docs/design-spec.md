@@ -414,7 +414,7 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   (`nf-calibration/envelope-hybrid-placement`). With it off, a frame too washed out
   to approach black warns (`pipeline::black_endpoint`): a look slope under any
   placement's, or a frame placed too bright — its measured middle and dark end, or
-  without them and a roll exposure, its film base.
+  without them its film base (a roll's exposure alone exempt).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
   Under reinhard it was near-inert where it matters on the removed chain's SDR renderer

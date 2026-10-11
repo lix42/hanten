@@ -59,9 +59,9 @@ base-referenced, and the roll's white acts through `look.contrast`.
 `pipeline::black_endpoint`). With display black off (the default), the report warns when
 the look's slope is under 1.237 (a `--contrast` under 1, or a stated thin slope), when a
 measured frame's middle lands above +1.5 display stops *and* its dark end above −1.5, or,
-with neither tones nor a roll exposure, when the graded base lands under 2 stops below
-mid-grey. Silent on every archive frame at its default; with display black on, its own
-warning stands instead.
+without tones, when the graded base lands under 2 stops below mid-grey (a roll's exposure
+alone is exempt, a stated exposure on top of it is not). Silent on every archive frame at
+its default; with display black on, its own warning stands instead.
 
 ## fixed-decode
 
@@ -714,6 +714,11 @@ warning stands instead.
   chain test does not exercise. Moving a placement's slope floor (`span_slope`) moves the
   squeezed threshold with it. `nf-calibration/hybrid-slope-bounds` inherits the thin
   rolls' pale default dark end (L\* 19–22), which this check is silent on by design.
+- 2026-10-10: **PR #264 review** (Codex on GitHub, P1): the roll-exposure exemption also
+  hid a stated exposure added on top (`--roll-exposure 0 --exposure 2.8`, base 1.25 stops
+  under, silent). Without tones the base rule now fires unless a roll's exposure applies
+  *and* the stated `scene_correction.exposure` is not positive; lowering `--exposure`
+  still clears it.
 
 ## mono-decode
 

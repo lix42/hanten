@@ -1946,8 +1946,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — with display black
   off, a washed-out frame warns (`pipeline::black_endpoint`): a look slope under 1.237,
   a measured frame whose middle lands above +1.5 stops and dark end above −1.5, or
-  (no tones, no roll exposure) a base under 2 stops below mid-grey. Silent on every
-  archive frame at its default
+  (no tones, and not a roll's exposure alone) a base under 2 stops below mid-grey.
+  Silent on every archive frame at its default
 - [ ] [Where black-and-white fits the new
   chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
   written for three dye layers and says nothing about where mono pools

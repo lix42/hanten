@@ -7919,9 +7919,19 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
     );
     let w = warnings(&["--contrast", "1.1111112", "--exposure", "1.8"]);
     assert!(!w.iter().any(base), "lowering --exposure clears it: {w:?}");
-    // The same base placed by a roll's exposure is the roll's measurement, not a fault.
+    // The same base placed by a roll's exposure is the roll's measurement, not a fault;
+    // an exposure stated on top of one is.
     let w = warnings(&["--contrast", "1.1111112", "--roll-exposure", "2.8"]);
     assert!(!w.iter().any(base), "{w:?}");
+    let w = warnings(&[
+        "--contrast",
+        "1.1111112",
+        "--roll-exposure",
+        "0",
+        "--exposure",
+        "2.8",
+    ]);
+    assert!(w.iter().any(base), "{w:?}");
 
     // With tones (09-18 Gold200 1774's, placed by the hybrid) the frame's middle and dark
     // end decide, and the base is not read.

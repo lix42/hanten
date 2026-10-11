@@ -4513,6 +4513,7 @@ fn render_frame(
             white_balance: r.scene_correction.white_balance,
             tones: recipe.applied_frame_tones(),
             roll_exposure: recipe.applies_roll_exposure(),
+            stated_exposure: recipe.scene_correction.exposure,
             film_base_stops: r.fit_range.display_black.film_base_stops,
             headroom_stops: r.fit_range.headroom_stops,
             contrast: slope.contrast,

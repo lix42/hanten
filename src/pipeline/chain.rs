@@ -1393,6 +1393,7 @@ mod tests {
                 white_balance: out.scene_correction.white_balance,
                 tones: None,
                 roll_exposure: false,
+                stated_exposure: exposure,
                 film_base_stops: out.fit_range.display_black.film_base_stops,
                 headroom_stops: out.fit_range.headroom_stops,
                 contrast: 1.0,

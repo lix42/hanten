@@ -11,10 +11,9 @@
 //! - **Pushed up**: the frame's middle lands above [`MAX_MIDDLE_STOPS`] *and* its dark
 //!   end above [`MAX_DARK_STOPS`] — too much exposure. Read from the frame's measured
 //!   tones (`roll.frame_tones`), so a centred flat frame never trips it. Without tones
-//!   and without a roll exposure, only the fallback slope and a stated exposure move the
-//!   base, so the base itself is the measure: closer than [`MIN_FILM_BASE_STOPS`] under
-//!   mid-grey. A roll's exposure without tones is left alone: a thin roll's puts the base
-//!   at that threshold by measurement, not by fault.
+//!   the base itself is the measure: closer than [`MIN_FILM_BASE_STOPS`] under mid-grey.
+//!   A roll's exposure alone is left alone there — a thin roll's puts the base at that
+//!   threshold by measurement, not by fault — but a stated exposure added on top is not.
 //! - **Squeezed flat**: the look's slope is under [`MIN_SLOPE`], the flattest any
 //!   placement sets — a `look.contrast` under 1, or a stated thin slope, gets there.
 //!
@@ -50,8 +49,10 @@ pub struct Inputs {
     pub white_balance: [f32; 3],
     /// The frame's measured tones, where the roll applies.
     pub tones: Option<FrameStops>,
-    /// Whether a roll's exposure applies (`recipe::Recipe::applies_roll_exposure`).
+    /// Whether a roll's exposure applies (`recipe::Recipe::applies_roll_exposure`), and
+    /// the stated `scene_correction.exposure` on top of it.
     pub roll_exposure: bool,
+    pub stated_exposure: f32,
     /// Where the graded film base lands, in stops under mid-grey.
     pub film_base_stops: f32,
     pub headroom_stops: f32,
@@ -107,7 +108,9 @@ pub fn check(i: &Inputs) -> Vec<Fault> {
                 faults.push(Fault::Pushed { middle, dark });
             }
         }
-        None if !i.roll_exposure && i.film_base_stops < MIN_FILM_BASE_STOPS => {
+        None if (!i.roll_exposure || i.stated_exposure > 0.0)
+            && i.film_base_stops < MIN_FILM_BASE_STOPS =>
+        {
             faults.push(Fault::Base {
                 stops: i.film_base_stops,
             })
@@ -178,6 +181,7 @@ mod tests {
                 dark_stops: -3.5,
             }),
             roll_exposure: true,
+            stated_exposure: 0.0,
             film_base_stops: 3.5,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             contrast: 1.0,
@@ -307,6 +311,9 @@ mod tests {
         i.tones = None;
         i.film_base_stops = 1.8;
         assert_eq!(check(&i), vec![]);
+        // An exposure stated on top is the user's push, and is checked.
+        i.stated_exposure = 0.3;
+        assert_eq!(check(&i), vec![Fault::Base { stops: 1.8 }]);
     }
 
     #[test]

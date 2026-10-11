@@ -2219,13 +2219,13 @@ measured default:
   than 1.5 stops above mid-grey *and* its dark end (luma p1) less than 1.5 under it. A
   flat frame centred at mid-grey never trips this, and a one-stop `--exposure` lift
   warns on about a quarter of real frames. Lower `--exposure`.
-- **The film base near mid-grey**, on a frame with neither tones nor a roll exposure (a
-  bare `convert`): the base renders less than 2 stops under mid-grey. Lower
+- **The film base near mid-grey**, on a frame without tones: the base renders less than
+  2 stops under mid-grey. Lower
   `--exposure` — on `tests/fixtures/hdr-48bit.tif` (`--film-base 0.9,0.55,0.42`),
   `--exposure 2.8` puts the base 1.12 stops under and warns; `--exposure 1.8` puts it
-  2.46 under, silent. A roll's exposure
-  is a measurement, so the same base reached by `--roll-exposure 2.8` does not warn: a
-  thin roll's puts the base about 2 stops under by design.
+  2.46 under, silent. A roll's exposure alone is a measurement, so the same base
+  reached by `--roll-exposure 2.8` does not warn — a thin roll's puts the base about 2
+  stops under by design — but a positive `--exposure` stated on top of one does.
 
 All three read where the frame's grade places it, never the image; a stated white
 balance counts as the exposure it is on luminance. With display black
