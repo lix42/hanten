@@ -43,7 +43,7 @@ impl FilmRgbImage {
     /// the fixed decode ([`fixed::decode`]) is the only producer outside tests (see
     /// `FilmRgbImage::fixture` (test-only)). Takes an
     /// already-validated [`LinearImage`] so the buffer length invariants hold
-    /// by construction. An IR plane on `image` is dropped.
+    /// by construction.
     pub(in crate::algo) fn from_linear(image: LinearImage) -> Self {
         Self {
             width: image.width,
@@ -89,7 +89,7 @@ impl FilmRgbImage {
         // The fields came from a validated LinearImage and are never resized,
         // so the invariants hold; route through the validated constructor
         // anyway (its checks are O(1)) so a future regression fails loudly.
-        LinearImage::new(self.width, self.height, self.rgb, None)
+        LinearImage::new(self.width, self.height, self.rgb)
             .expect("FilmRgbImage preserves the validated buffer-length invariants")
     }
 }
@@ -106,16 +106,15 @@ impl std::fmt::Debug for FilmRgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::FilmBase;
+    use crate::types::{FilmBase, IrPlane, Scan};
 
-    fn image() -> LinearImage {
-        LinearImage::new(
-            2,
-            1,
-            vec![0.5, 0.3, 0.2, 0.05, 0.03, 0.02],
-            Some(vec![0.25, 0.75]),
-        )
-        .unwrap()
+    fn scan() -> Scan {
+        let image = LinearImage::new(2, 1, vec![0.5, 0.3, 0.2, 0.05, 0.03, 0.02]).unwrap();
+        let ir = IrPlane {
+            samples: vec![0.25, 0.75],
+            verified: true,
+        };
+        Scan::new(image, Some(ir)).unwrap()
     }
 
     fn base() -> FilmBase {
@@ -126,7 +125,7 @@ mod tests {
     fn reconstruction_returns_a_film_rgb_image() {
         // The type-level boundary: the decode produces a `FilmRgbImage` (enforced by
         // its signature) with the dimensions intact. It has no IR field.
-        let (film, _) = fixed::decode(image(), &base(), &fixed::DecodeParams::default()).unwrap();
+        let (film, _) = fixed::decode(scan(), &base(), &fixed::DecodeParams::default()).unwrap();
         assert_eq!((film.width(), film.height()), (2, 1));
         assert_eq!(film.rgb().len(), 6);
         let linear = film.into_linear();

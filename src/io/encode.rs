@@ -77,7 +77,7 @@ pub fn encode_f32(
 /// Encode the fixed decode's [`FilmRgbImage`] — the values *before* the NC film RGB v1
 /// 3×3 — as an unclamped 32-bit float TIFF (`--export-film-rgb`). **No ICC profile**:
 /// the channels are the dye layers' exposures, which have no primaries, so any tag
-/// would name a space the samples are not in. The IR plane is not written.
+/// would name a space the samples are not in.
 ///
 /// Returns only the staged file: a non-finite sample reaches the primary too, whose
 /// encode counts it (film master) or whose chain refuses it (every rendered destination).
@@ -836,8 +836,8 @@ mod tests {
     use std::io::Cursor;
     use tiff::decoder::{Decoder, DecodingResult};
 
-    fn img(width: u32, height: u32, rgb: Vec<f32>, ir: Option<Vec<f32>>) -> LinearImage {
-        LinearImage::new(width, height, rgb, ir).unwrap()
+    fn img(width: u32, height: u32, rgb: Vec<f32>) -> LinearImage {
+        LinearImage::new(width, height, rgb).unwrap()
     }
 
     /// The two writer inputs these tests vary, stated directly: the depth is no
@@ -882,7 +882,7 @@ mod tests {
     fn u16_round_trips_within_quantization() {
         // Values chosen so the expected u16 is exact, plus an out-of-range value
         // that must clamp rather than wrap.
-        let image = img(2, 1, vec![0.0, 1.0, 0.5, 0.25, 2.0, -1.0], None);
+        let image = img(2, 1, vec![0.0, 1.0, 0.5, 0.25, 2.0, -1.0]);
         let bytes = encode_bytes(&image, &out(OutDepth::U16, BigTiff::Off), None);
 
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
@@ -900,7 +900,7 @@ mod tests {
         // Two samples below 0 and one above 1; the rest in range. The encoder
         // must count each clamp so the caller can warn (color-management does
         // not clamp — that job is delegated here).
-        let image = img(2, 1, vec![-0.5, -2.0, 0.5, 0.25, 1.0, 3.0], None);
+        let image = img(2, 1, vec![-0.5, -2.0, 0.5, 0.25, 1.0, 3.0]);
         let report = encode_report(&image, &out(OutDepth::U16, BigTiff::Off));
         assert_eq!(report.total_samples, 6);
         assert_eq!(report.clipped_low, 2);
@@ -920,7 +920,6 @@ mod tests {
             2,
             1,
             vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5, 0.5, 0.5],
-            None,
         );
         let report = encode_report(&image, &out(OutDepth::U16, BigTiff::Off));
         assert_eq!(report.non_finite, 3); // NaN, +inf, -inf
@@ -933,7 +932,7 @@ mod tests {
     fn f32_writes_verbatim_but_counts_non_finite() {
         // HDR values > 1.0 are written verbatim with no clip, so finite
         // out-of-[0,1] samples produce no loss...
-        let clean = img(2, 1, vec![-0.5, 0.5, 1.0, 1.5, 7.25, 42.0], None);
+        let clean = img(2, 1, vec![-0.5, 0.5, 1.0, 1.5, 7.25, 42.0]);
         let report = encode_report(&clean, &out(OutDepth::F32, BigTiff::Off));
         assert_eq!(report.total_samples, 6);
         assert_eq!(report.clipped_total(), 0);
@@ -942,12 +941,7 @@ mod tests {
 
         // ...but a NaN/inf is still a numerical fault and must surface even
         // though f32 writes it verbatim.
-        let faulty = img(
-            2,
-            1,
-            vec![f32::NAN, 0.5, f32::INFINITY, 0.5, 0.5, 0.5],
-            None,
-        );
+        let faulty = img(2, 1, vec![f32::NAN, 0.5, f32::INFINITY, 0.5, 0.5, 0.5]);
         let report = encode_report(&faulty, &out(OutDepth::F32, BigTiff::Off));
         assert_eq!(report.non_finite, 2);
         assert!(report.any_loss());
@@ -967,7 +961,7 @@ mod tests {
 
         // The NC film RGB v1 matrix is all-positive with rows summing to 1, so a neutral
         // negative stays negative across it.
-        let film = FilmRgbImage::fixture(img(2, 1, vec![-0.25, -0.25, -0.25, 0.5, 0.5, 0.5], None));
+        let film = FilmRgbImage::fixture(img(2, 1, vec![-0.25, -0.25, -0.25, 0.5, 0.5, 0.5]));
         let master = map_nc_film_rgb_v1(film).into_linear();
         let bytes = encode_bytes(&master, &out(OutDepth::F32, BigTiff::Off), None);
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
@@ -986,7 +980,7 @@ mod tests {
         // The mean is of what the *file* holds: the clamped, quantized values
         // (2.0 → 65535 → 1.0; -1.0 → 0), not the incoming floats — that is what
         // makes two builds' means directly comparable.
-        let image = img(2, 1, vec![0.0, 1.0, 0.5, 2.0, -1.0, 0.25], None);
+        let image = img(2, 1, vec![0.0, 1.0, 0.5, 2.0, -1.0, 0.25]);
         let stats = encode_outcome(&image, &out(OutDepth::U16, BigTiff::Off)).stats;
         assert_eq!(stats.mean[0], (0.0 + 1.0) / 2.0);
         assert_eq!(stats.mean[1], (1.0 + 0.0) / 2.0);
@@ -997,13 +991,13 @@ mod tests {
     #[test]
     fn f32_stats_keep_hdr_values_and_skip_non_finite() {
         // f32 is written verbatim, so the mean may exceed 1.0...
-        let clean = img(2, 1, vec![0.5, 0.0, 0.0, 1.5, 0.0, 0.0], None);
+        let clean = img(2, 1, vec![0.5, 0.0, 0.0, 1.5, 0.0, 0.0]);
         let stats = encode_outcome(&clean, &out(OutDepth::F32, BigTiff::Off)).stats;
         assert_eq!(stats.mean[0], 1.0); // (0.5 + 1.5) / 2
 
         // ...and a NaN is excluded rather than poisoning the whole channel mean
         // (the fault is reported by `EncodeReport::non_finite`).
-        let faulty = img(2, 1, vec![f32::NAN, 0.0, 0.0, 0.75, 0.0, 0.0], None);
+        let faulty = img(2, 1, vec![f32::NAN, 0.0, 0.0, 0.75, 0.0, 0.0]);
         let outcome = encode_outcome(&faulty, &out(OutDepth::F32, BigTiff::Off));
         assert_eq!(outcome.loss.non_finite, 1);
         assert_eq!(outcome.stats.mean[0], 0.75);
@@ -1087,7 +1081,7 @@ mod tests {
     fn f32_round_trips_exactly_including_hdr() {
         // f32 must preserve values > 1.0 (HDR) with no clamp and no precision loss.
         let rgb = vec![0.0, 0.5, 1.0, 1.5, 7.25, 42.0];
-        let image = img(2, 1, rgb.clone(), None);
+        let image = img(2, 1, rgb.clone());
         let bytes = encode_bytes(&image, &out(OutDepth::F32, BigTiff::Off), None);
 
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
@@ -1099,7 +1093,7 @@ mod tests {
 
     #[test]
     fn bigtiff_policy_controls_header() {
-        let image = img(2, 1, vec![0.0; 6], None);
+        let image = img(2, 1, vec![0.0; 6]);
         // Off → classic, On → big, regardless of (tiny) size.
         assert!(!is_bigtiff(&encode_bytes(
             &image,
@@ -1147,7 +1141,7 @@ mod tests {
     #[test]
     fn embedded_icc_is_present_and_readable() {
         let icc = b"fake-icc-profile-bytes".to_vec();
-        let image = img(2, 1, vec![0.0; 6], None);
+        let image = img(2, 1, vec![0.0; 6]);
         let bytes = encode_bytes(&image, &out(OutDepth::U16, BigTiff::Off), Some(&icc));
 
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
@@ -1180,7 +1174,7 @@ mod tests {
     fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, exposure: f32) -> LinearHdr {
         let gain = exposure.exp2();
         let scaled = rgb.iter().map(|v| v * gain).collect();
-        let image = LinearImage::new(w, h, scaled, None).unwrap();
+        let image = LinearImage::new(w, h, scaled).unwrap();
         let (hdr, clamp) = crate::pipeline::hdr::from_new_chain(
             image,
             DestinationGamut::Bt2020,
@@ -1334,12 +1328,7 @@ mod tests {
         // than through the opaque type. It is a tripwire for a future path that
         // reaches the encoder with a numerical fault: the count must surface, and the
         // value must still be written verbatim rather than quietly turned into 0.
-        let image = img(
-            2,
-            1,
-            vec![f32::NAN, 0.5, f32::INFINITY, 0.5, 0.5, 0.5],
-            None,
-        );
+        let image = img(2, 1, vec![f32::NAN, 0.5, f32::INFINITY, 0.5, 0.5, 0.5]);
         let mut buf = Cursor::new(Vec::new());
         let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
         let outcome = encode_hdr_linear_to_writer(&mut buf, &image, false, &icc).unwrap();

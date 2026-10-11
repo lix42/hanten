@@ -249,7 +249,7 @@ mod tests {
     /// Film RGB through the stages above at their identities — fit range at zero
     /// headroom — against `peak`, and the ACEScg values that reach this stage.
     fn fitted(film_rgb: &[f32], peak: DisplayPeak) -> (RangeFittedImage, Vec<f32>) {
-        let image = LinearImage::new((film_rgb.len() / 3) as u32, 1, film_rgb.to_vec(), None);
+        let image = LinearImage::new((film_rgb.len() / 3) as u32, 1, film_rgb.to_vec());
         let aces = map_nc_film_rgb_v1(FilmRgbImage::fixture(image.unwrap()));
         let input = aces.rgb().to_vec();
         let (corrected, _) =

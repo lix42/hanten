@@ -384,15 +384,14 @@ fn propose_patches() {
 
         for frame in &frames {
             let name = frame.file_name().unwrap().to_string_lossy().to_string();
-            let (image, _info) = match crate::io::decode::decode_within(frame, DECODE_BUDGET_BYTES)
-            {
+            let (scan, _info) = match crate::io::decode::decode_within(frame, DECODE_BUDGET_BYTES) {
                 Ok(v) => v,
                 Err(e) => {
                     println!("  {name}: DECODE FAILED: {e}");
                     continue;
                 }
             };
-            let d = to_density(&image, &base, &params);
+            let d = to_density(&scan.image, &base, &params);
             let (w, h) = (d.width, d.height);
 
             // Frame-wide exposure indicators over the same interior the tiles use, so
@@ -482,12 +481,12 @@ fn characterise_reference_frames() {
         for (kind, list) in [("leader", &r.leader), ("unexposed", &r.unexposed)] {
             for frame in list.iter() {
                 let name = frame.file_name().unwrap().to_string_lossy().to_string();
-                let Ok((image, _)) = crate::io::decode::decode_within(frame, DECODE_BUDGET_BYTES)
+                let Ok((scan, _)) = crate::io::decode::decode_within(frame, DECODE_BUDGET_BYTES)
                 else {
                     println!("  {kind:10} {name}: DECODE FAILED");
                     continue;
                 };
-                let d = to_density(&image, &base, &params);
+                let d = to_density(&scan.image, &base, &params);
 
                 // Per channel, not on the scalar mean: channels that fog in opposite
                 // directions cancel in a mean and a non-uniform leader would print as

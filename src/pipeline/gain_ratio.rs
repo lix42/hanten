@@ -185,7 +185,7 @@ mod tests {
     const OFFSET: f32 = 1.0 / 64.0;
 
     fn image(rgb: &[f32]) -> LinearImage {
-        LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap()
+        LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec()).unwrap()
     }
 
     #[test]

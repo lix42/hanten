@@ -75,7 +75,7 @@ impl WorkingBuffer {
     pub(in crate::pipeline) fn into_linear(self) -> LinearImage {
         // Same reasoning as `AcesCgImage::into_linear`: the invariants hold, but
         // route through the validated constructor anyway so a regression is loud.
-        LinearImage::new(self.width, self.height, self.rgb, None)
+        LinearImage::new(self.width, self.height, self.rgb)
             .expect("a WorkingBuffer preserves the validated buffer-length invariants")
     }
 

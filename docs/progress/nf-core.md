@@ -20,7 +20,8 @@ settled the report (`chain`, the `recipe` echo and its hash, no sidecar) and tel
 schema 9. **`subcommands`** settled `roll`'s per-frame overrides: a frame resolves as
 `convert` would, and an override that changes a roll-wide value (`cli::ROLL_WIDE`)
 warns naming both values. **`buffer-strategy`** settled the buffer rule and dropped
-the IR plane at the decode. Open: `scan-type`, `three-step-pipeline`.
+the IR plane at the decode, and **`scan-type`** made that a type: only a `Scan` can
+carry one. Open: `three-step-pipeline`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -59,7 +60,9 @@ encoder. Every stage takes it by value, transforms it in place and hands it on; 
 gain map's split is the one copy. A stage that cannot work in place owes the memory
 model a buffer (`pipeline::chain`'s module docs). **The IR plane stops at the decode**:
 `film_base`'s holder detection reads it, `fixed::decode` drops it, and IR dust removal
-would have to carry it on.
+would have to carry it on. The types enforce it (`scan-type`): `io::decode` returns a
+`Scan` (a `LinearImage` plus an optional `IrPlane { samples, verified }`), and
+`LinearImage`, which every type from the decode on is built from, is RGB only.
 
 - **The destination decides the output path** (`cli::OutputTarget`): `-o out`
   completes to the container's suffix, and a stated suffix the destination does not
@@ -76,8 +79,9 @@ would have to carry it on.
 - **Memory profiles are per buffer shape** (`RunProfile::{U16Tiff, F32Tiff, Avif,
   GainMapJpeg}`); a buffer added to a stage must move its arm.
 - **`fixed::decode` consumes the scan** (`release-decoded-image`): it takes the
-  `LinearImage` by value and rewrites it in place, dropping the IR plane. A caller
-  that needs the scan again clones it first. The memory
+  `Scan` by value and rewrites its RGB in place, dropping the IR plane. A caller
+  that needs the scan again clones it first; an RGB-only test scan is
+  `LinearImage::new(…)?.into()`. The memory
   allowance is 15% + 128 MiB, measured on Linux and macOS.
 
 ## new-flow-flag
@@ -1437,8 +1441,44 @@ would have to carry it on.
 
 ## scan-type
 
-**Status:** not started
-**Updated:** 2026-10-09
+**Status:** done
+**Updated:** 2026-10-11
 
 - 2026-10-09: filed from `buffer-strategy`'s review round. Goal: a scan type that ends at
   the decode, so the types enforce that the IR plane stops there.
+
+### 2026-10-11 — `Scan` wraps an RGB-only `LinearImage`
+
+- **The post-decode image kept the name** (user's call): `LinearImage` is RGB only,
+  `LinearImage::new(w, h, rgb)`, and the decoder's output is the new
+  `Scan { image: LinearImage, ir: Option<IrPlane { samples, verified }> }`. Most
+  `LinearImage` uses were already post-decode (encoders, `color`, `hdr`, `gain_ratio`,
+  every stage boundary), so this way round renamed least. Wrapping rather than
+  copying the fields means the decode moves `scan.image` through untouched, and
+  `verified` inside the plane makes "verified with no plane" unrepresentable.
+- **Only the IR readers take `&Scan`**: `film_base::{ir_separability, holder_depths,
+  effective_area}`. `estimate`, `measure_area` and `polarity_warning` read RGB only
+  and stay on `&LinearImage` (callers pass `&scan.image`). `Scan::verified_ir()` is
+  the holder march's gate. The CLI's IR warnings in `inspect` and `measure-base` read
+  `scan.ir` rather than `DecodeInfo::ir_present` (the same fact, one source).
+- **Gone with it**: the `None` the three `into_linear`s passed (the argument no
+  longer exists) and `hdr::EncodedHdrImage::from_linear_storage`'s IR guard, which is
+  now infallible. The memory model did not move: it reads `DecodeInfo`'s shape, and no
+  buffer changed.
+- **Not done, deliberately**: `Scan`/`IrPlane` keep `pub` fields like `LinearImage`,
+  so a hand-built `Scan { … }` skips `Scan::new`'s length check (as the old `pub ir`
+  field could). `From<LinearImage> for Scan` is not test-only: the recipe's corner
+  probe and `fixed::decode_film_base` use it. Nothing in the types tells a raw scan's
+  RGB from a positive's; the positives' own boundary types (`FilmRgbImage`,
+  `AcesCgImage`, the chain's) are what guard that.
+- **Verified**: byte-identical against `origin/main` (release, `cmp`, explicit base)
+  on `2026-07-24-Gold200/1137` (HDRi, holder measured) and `tests/fixtures/hdr-48bit.tif`
+  (RGB only): SDR P3 / sRGB / Adobe RGB with `--export-film-rgb`, HDR linear, PQ, HLG,
+  gain map and film master — 18 files — plus `inspect`, `measure-base` and
+  `measure-roll` JSON. All gates and the `nctool` suite green. `/code-review`, the
+  `ship` diff reviewer and Codex: no correctness findings; fixed a stale
+  design-spec §4 sentence ("carried but not consumed"), the `io` module doc, the
+  `inspect` warning's mixed sources, and two test cleanups.
+- **Done 2026-10-11.** For dependents: decode a scan with `decode_within` → `Scan`;
+  anything that needs the IR plane after `fixed::decode` (IR dust removal) must take
+  it from the `Scan` before the decode consumes it.

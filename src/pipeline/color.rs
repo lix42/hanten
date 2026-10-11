@@ -876,7 +876,7 @@ mod tests {
     use super::*;
 
     fn gray_image(v: f32) -> LinearImage {
-        LinearImage::new(1, 1, vec![v, v, v], None).unwrap()
+        LinearImage::new(1, 1, vec![v, v, v]).unwrap()
     }
 
     /// Linear Rec.709 / D65 — a source with a known relation to Little CMS's built-in
@@ -954,7 +954,7 @@ mod tests {
         // malformed buffer is reachable): `as_chunks_mut` would otherwise silently
         // drop the tail and leave those pixels un-transformed.
         //
-        let mut img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], None).unwrap();
+        let mut img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5]).unwrap();
         img.rgb.push(0.25); // len 4 — not a multiple of 3
         let err = transform_to(img, &Profile::new_srgb()).unwrap_err();
         assert_eq!(err.exit_code(), 1);
@@ -976,7 +976,7 @@ mod tests {
         for &c in &gray.rgb {
             assert!((0.3..0.7).contains(&c), "AcesCg gray {c} far from 0.5");
         }
-        let img = LinearImage::new(1, 1, vec![1.0, 0.0, 0.0], None).unwrap();
+        let img = LinearImage::new(1, 1, vec![1.0, 0.0, 0.0]).unwrap();
         let out = transform_to(img, &build_profile(&OutputSpace::AcesCg).unwrap()).unwrap();
         let [r, g, b] = [out.rgb[0], out.rgb[1], out.rgb[2]];
         assert!(r < 1.0, "expected R pulled below 1.0, got {r}");
@@ -1119,7 +1119,7 @@ mod tests {
         let rgb: Vec<f32> = (0..(w * h * 3) as usize)
             .map(|i| ((i * 7919) % 1000) as f32 / 1000.0 * 1.2 - 0.05)
             .collect();
-        let mut image = LinearImage::new(w, h, rgb.clone(), None).unwrap();
+        let mut image = LinearImage::new(w, h, rgb.clone()).unwrap();
         transform_in_place(&mut image, &working, &output).unwrap();
 
         let mut expect = rgb;
@@ -1542,7 +1542,7 @@ mod tests {
         // the sRGB curve and nothing else — no second gamut transform — and embed the
         // Display P3 profile.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::DisplayP3).unwrap();
         assert_eq!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
         for (got, inp) in encoded.rgb.iter().zip(linear) {
@@ -1560,7 +1560,7 @@ mod tests {
 
     /// The Adobe RGB profile's bytes, as [`encode_display_linear`] embeds them.
     fn adobe_rgb_icc() -> Vec<u8> {
-        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
         encode_display_linear(image, DestinationGamut::AdobeRgb)
             .unwrap()
             .1
@@ -1617,7 +1617,7 @@ mod tests {
         // tell `563/256` from the `2.2` it is often rounded to, and the near-black
         // sample tells a pure power law from a curve with a linear toe.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::AdobeRgb).unwrap();
         assert_eq!(icc, adobe_rgb_icc());
         // Little CMS evaluates the parametric curve in float, measured within 4e-9.
@@ -1661,7 +1661,7 @@ mod tests {
 
     /// The sRGB profile's bytes, as [`encode_display_linear`] embeds them.
     fn srgb_icc() -> Vec<u8> {
-        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
         encode_display_linear(image, DestinationGamut::Srgb)
             .unwrap()
             .1
@@ -1701,7 +1701,7 @@ mod tests {
     #[test]
     fn srgb_encode_applies_only_the_srgb_curve_and_is_named() {
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
-        let image = LinearImage::new(3, 1, linear.to_vec(), None).unwrap();
+        let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
         let (encoded, icc) = encode_display_linear(image, DestinationGamut::Srgb).unwrap();
         assert_eq!(icc, srgb_icc(), "must serialize to identical bytes");
         assert!(icc[24..36].iter().all(|&b| b == 0), "dateTime not zeroed");

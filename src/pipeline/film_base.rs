@@ -30,7 +30,9 @@
 
 use serde::Serialize;
 
-use crate::types::{FilmBase, FilmBaseSource, LinearImage, NcError, Result, check_measure_inset};
+use crate::types::{
+    FilmBase, FilmBaseSource, LinearImage, NcError, Result, Scan, check_measure_inset,
+};
 
 /// The percentile a stated region is read at. High, because a region may be a
 /// mixture whose most transparent sub-population is the base; below the maximum, so a
@@ -458,8 +460,9 @@ pub struct IrSeparability {
 /// Fails safe by construction: an all-dark plane yields a low median and reports
 /// unusable, so the holder goes unmeasured rather than the frame's own film being
 /// classified as holder.
-pub fn ir_separability(image: &LinearImage) -> Option<IrSeparability> {
-    let ir = image.ir.as_deref()?;
+pub fn ir_separability(scan: &Scan) -> Option<IrSeparability> {
+    let ir = scan.ir.as_ref()?.samples.as_slice();
+    let image = &scan.image;
     let (w, h) = (image.width as usize, image.height as usize);
     let margin = (w.min(h) as f32 * IR_USABLE_INTERIOR_MARGIN).round() as usize;
     // A frame too small to trim reads whole rather than empty: the verdict still
@@ -734,11 +737,12 @@ pub struct HolderDepths {
 /// a user-stated region does not call this at all and a future per-usage
 /// distinction must be able to extend the arguments instead of rewriting every
 /// call site.
-pub fn effective_area(image: &LinearImage, inset_frac: f32) -> Result<EffectiveArea> {
+pub fn effective_area(scan: &Scan, inset_frac: f32) -> Result<EffectiveArea> {
     // The same check `cli::validate_shared` runs, so a programmatic caller cannot bypass
     // the bound and the two gates cannot disagree about it.
     check_measure_inset(inset_frac)?;
-    let holder = holder_depths(image);
+    let holder = holder_depths(scan);
+    let image = &scan.image;
     let requested = (image.width.min(image.height) as f32 * inset_frac).round() as u32;
     // **The inset carries the holder cut's own resolution.** A march reports the
     // *start* of the first band whose median read film, and a film median only
@@ -883,17 +887,15 @@ pub fn effective_area_warnings(area: &EffectiveArea) -> Vec<String> {
 /// depth is the **deepest** segment, since the result is a rectangle. A segment
 /// with no holder stops at the first band, so an uncropped-but-clear frame costs
 /// one shallow pass.
-pub fn holder_depths(image: &LinearImage) -> Option<HolderDepths> {
-    let ir = image.ir.as_deref()?;
+pub fn holder_depths(scan: &Scan) -> Option<HolderDepths> {
     // Trust the plane only when its provenance is marker-verified: a stray grayscale
     // page thresholded as IR could silently move every measurement that starts from
     // this region.
-    if !image.ir_verified {
+    let ir = scan.verified_ir()?;
+    if !ir_separability(scan).is_some_and(|s| s.usable) {
         return None;
     }
-    if !ir_separability(image).is_some_and(|s| s.usable) {
-        return None;
-    }
+    let image = &scan.image;
     let step = holder_probe_depth(image);
     // A frame too small to fit one probe band within half an edge cannot be
     // measured at all: [`march_edge_depth`]'s `while depth + step <= limit` would
@@ -1205,7 +1207,7 @@ pub(crate) mod golden {
                 buf.extend_from_slice(&[0.05 + 0.35 * t, 0.03 + 0.20 * t, 0.02 + 0.10 * t]);
             }
         }
-        let mut img = LinearImage::new(w, h, buf, None).unwrap();
+        let mut img = LinearImage::new(w, h, buf).unwrap();
         for rect in [
             [0, 0, w, 3],
             [0, h - 3, w, 3],
@@ -1258,6 +1260,7 @@ pub(crate) mod golden {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::IrPlane;
 
     #[test]
     fn share_above_base_counts_per_channel_over_the_region_only() {
@@ -1294,7 +1297,7 @@ mod tests {
         for _ in 0..w * h {
             buf.extend_from_slice(&rgb);
         }
-        LinearImage::new(w, h, buf, None).unwrap()
+        LinearImage::new(w, h, buf).unwrap()
     }
 
     /// Set one pixel's RGB in place.
@@ -1475,7 +1478,7 @@ mod tests {
                 buf.push(decoded(b * (0.96 + 0.08 * lcg(&mut seed))));
             }
         }
-        LinearImage::new(w, h, buf, None).unwrap()
+        LinearImage::new(w, h, buf).unwrap()
     }
 
     /// The per-channel `p`-quantile over `rect`, by sorting — the reference the
@@ -1506,14 +1509,15 @@ mod tests {
     fn the_area_is_read_at_its_median_not_its_bright_tail() {
         // One population: an extreme percentile lands in the grain's bright tail,
         // an understated density. The measurement takes the median.
-        let img = grainy_film(200, 150, [0.53, 0.26, 0.16]);
-        let area = effective_area(&img, 0.05).unwrap();
-        let est = measure_area(&img, &area).unwrap();
+        let scan = Scan::from(grainy_film(200, 150, [0.53, 0.26, 0.16]));
+        let img = &scan.image;
+        let area = effective_area(&scan, 0.05).unwrap();
+        let est = measure_area(img, &area).unwrap();
         assert_eq!(est.percentile, Some(AREA_PERCENTILE));
         assert!(est.warnings.is_empty(), "{:?}", est.warnings);
-        let median = sorted_percentile(&img, area.region, 0.5);
+        let median = sorted_percentile(img, area.region, 0.5);
         assert_eq!(<[f32; 3]>::from(est.base), median);
-        let p97 = sorted_percentile(&img, area.region, SAMPLE_PERCENTILE);
+        let p97 = sorted_percentile(img, area.region, SAMPLE_PERCENTILE);
         assert!(
             median.iter().zip(p97).all(|(m, p)| *m < p),
             "{median:?} vs {p97:?}"
@@ -1527,16 +1531,17 @@ mod tests {
         // the region alone — the frame as if its holder had been cropped away.
         let film = grainy_film(200, 160, [0.53, 0.26, 0.16]);
         let with_holder = |rgb: [f32; 3]| {
-            let mut img = film.clone();
-            img.ir = ir_holder_edges(200, 160, [12, 8, 20, 6]).ir;
-            img.ir_verified = true;
+            let mut img = Scan {
+                image: film.clone(),
+                ir: ir_holder_edges(200, 160, [12, 8, 20, 6]).ir,
+            };
             for rect in [
                 [0, 0, 200, 12],
                 [0, 152, 200, 8],
                 [0, 0, 20, 160],
                 [194, 0, 6, 160],
             ] {
-                fill_rect(&mut img, rect, rgb);
+                fill_rect(&mut img.image, rect, rgb);
             }
             img
         };
@@ -1547,17 +1552,21 @@ mod tests {
         assert_eq!(area, effective_area(&bright, 0.0).unwrap());
 
         let base = |img| <[f32; 3]>::from(measure_area(img, &area).unwrap().base);
-        assert_eq!(base(&dark), base(&bright));
-        assert_eq!(base(&dark), sorted_percentile(&film, area.region, 0.5));
+        assert_eq!(base(&dark.image), base(&bright.image));
+        assert_eq!(
+            base(&dark.image),
+            sorted_percentile(&film, area.region, 0.5)
+        );
     }
 
     #[test]
     fn a_holder_deeper_on_one_edge_is_cut_on_that_edge_only() {
         // Per edge, not the worst edge everywhere: the left holder is five times
         // the right one, and only the left cut is deep.
-        let mut img = grainy_film(300, 200, [0.53, 0.26, 0.16]);
-        img.ir = ir_holder_edges(300, 200, [6, 6, 30, 6]).ir;
-        img.ir_verified = true;
+        let img = Scan {
+            image: grainy_film(300, 200, [0.53, 0.26, 0.16]),
+            ir: ir_holder_edges(300, 200, [6, 6, 30, 6]).ir,
+        };
         let area = effective_area(&img, 0.0).unwrap();
         let holder = area.holder.expect("the holder was measured");
         let [x, _, w, _] = area.region;
@@ -1566,10 +1575,10 @@ mod tests {
         assert!(x > right_margin, "left cut {x} vs right cut {right_margin}");
 
         // And the base is read over exactly that per-edge rectangle.
-        let est = measure_area(&img, &area).unwrap();
+        let est = measure_area(&img.image, &area).unwrap();
         assert_eq!(
             <[f32; 3]>::from(est.base),
-            sorted_percentile(&img, area.region, 0.5)
+            sorted_percentile(&img.image, area.region, 0.5)
         );
     }
 
@@ -1585,8 +1594,8 @@ mod tests {
                 buf.extend_from_slice(&[0.05 + 0.35 * t, 0.03 + 0.20 * t, 0.02 + 0.10 * t]);
             }
         }
-        let img = LinearImage::new(w, h, buf, None).unwrap();
-        let est = measure_area(&img, &effective_area(&img, 0.05).unwrap()).unwrap();
+        let scan = Scan::from(LinearImage::new(w, h, buf).unwrap());
+        let est = measure_area(&scan.image, &effective_area(&scan, 0.05).unwrap()).unwrap();
         assert!(
             est.warnings.iter().any(|w| w.contains("not uniform")),
             "{:?}",
@@ -1596,8 +1605,8 @@ mod tests {
 
     #[test]
     fn a_dark_area_errors_loudly_naming_a_remedy() {
-        let img = solid(50, 50, [0.4, 0.0, 0.2]);
-        let err = measure_area(&img, &effective_area(&img, 0.05).unwrap()).unwrap_err();
+        let scan = Scan::from(solid(50, 50, [0.4, 0.0, 0.2]));
+        let err = measure_area(&scan.image, &effective_area(&scan, 0.05).unwrap()).unwrap_err();
         assert!(matches!(err, NcError::Other(_)), "{err:?}");
         assert!(err.to_string().contains("--base-region"), "{err}");
     }
@@ -1606,20 +1615,23 @@ mod tests {
 
     /// Attach a flat, **marker-verified** IR plane of value `v` (the march consumes
     /// only a verified plane).
-    fn with_uniform_ir(mut img: LinearImage, v: f32) -> LinearImage {
-        img.ir = Some(vec![v; (img.width * img.height) as usize]);
-        img.ir_verified = true;
-        img
+    fn with_uniform_ir(img: LinearImage, v: f32) -> Scan {
+        let samples = vec![v; (img.width * img.height) as usize];
+        let ir = IrPlane {
+            samples,
+            verified: true,
+        };
+        Scan::new(img, Some(ir)).unwrap()
     }
 
-    /// Set one IR pixel in place (the image must already carry an IR plane).
-    fn set_ir(img: &mut LinearImage, x: u32, y: u32, v: f32) {
-        let i = (y * img.width + x) as usize;
-        img.ir.as_mut().expect("image has an IR plane")[i] = v;
+    /// Set one IR pixel in place (the scan must already carry an IR plane).
+    fn set_ir(scan: &mut Scan, x: u32, y: u32, v: f32) {
+        let i = (y * scan.image.width + x) as usize;
+        scan.ir.as_mut().expect("scan has an IR plane").samples[i] = v;
     }
 
     /// Fill a rectangle of the IR plane with `v`.
-    fn fill_ir_rect(img: &mut LinearImage, [x, y, w, h]: [u32; 4], v: f32) {
+    fn fill_ir_rect(img: &mut Scan, [x, y, w, h]: [u32; 4], v: f32) {
         for yy in y..y + h {
             for xx in x..x + w {
                 set_ir(img, xx, yy, v);
@@ -1642,7 +1654,7 @@ mod tests {
     /// A frame whose film is IR-transparent, wrapped by an IR-dark holder of the
     /// given per-edge depths. Corners overlap, as a real holder ring's do — which
     /// is the case the depth march has to survive.
-    fn ir_holder_edges(w: u32, h: u32, [top, bottom, left, right]: [u32; 4]) -> LinearImage {
+    fn ir_holder_edges(w: u32, h: u32, [top, bottom, left, right]: [u32; 4]) -> Scan {
         let mut img = with_uniform_ir(solid(w, h, [0.2, 0.2, 0.2]), IR_FILM);
         for (depth, rect) in [
             (top, [0, 0, w, top]),
@@ -1691,21 +1703,21 @@ mod tests {
     #[test]
     fn holder_depths_declines_when_it_cannot_measure_rather_than_guessing() {
         // No IR plane at all.
-        let no_ir = solid(200, 200, [0.2, 0.2, 0.2]);
+        let no_ir: Scan = solid(200, 200, [0.2, 0.2, 0.2]).into();
         assert!(no_ir.ir.is_none());
         assert!(holder_depths(&no_ir).is_none());
 
         // A plane identified by shape alone: carried, but not trusted for a
         // threshold that moves every measurement downstream.
         let mut shape_only = ir_holder_edges(200, 200, [6, 6, 6, 6]);
-        shape_only.ir_verified = false;
+        shape_only.ir.as_mut().unwrap().verified = false;
         assert!(holder_depths(&shape_only).is_none());
 
         // This frame's own film is as IR-opaque as the holder (an exposed silver
         // frame). Nothing here can separate the two, so it declines — the normal
         // path for B&W, not an error.
         let opaque = with_uniform_ir(solid(200, 200, [0.2, 0.2, 0.2]), IR_OPAQUE_FILM);
-        assert!(opaque.ir_verified);
+        assert!(opaque.verified_ir().is_some());
         assert!(holder_depths(&opaque).is_none());
     }
 
@@ -1741,11 +1753,13 @@ mod tests {
         // all-zero start, so the run ends `!converged` and the merge runs against
         // the previous pass.
         let img = ir_holder_edges(200, 200, [4, 8, 12, 2]);
-        let ir = img.ir.as_deref().expect("the fixture carries an IR plane");
-        let step = holder_probe_depth(&img);
+        let ir = img
+            .verified_ir()
+            .expect("the fixture carries a verified IR plane");
+        let step = holder_probe_depth(&img.image);
 
         let (settled, settled_capped, converged) =
-            march_to_fixed_point(&img, ir, step, HOLDER_MARCH_PASSES);
+            march_to_fixed_point(&img.image, ir, step, HOLDER_MARCH_PASSES);
         assert!(
             converged,
             "falsifiability: this frame settles when given passes"
@@ -1757,7 +1771,7 @@ mod tests {
              this into `_` let the settled pass cap unnoticed"
         );
 
-        let (one, capped_one, converged_one) = march_to_fixed_point(&img, ir, step, 1);
+        let (one, capped_one, converged_one) = march_to_fixed_point(&img.image, ir, step, 1);
         assert!(!converged_one, "one pass cannot repeat the all-zero start");
         // Untrimmed, the ring's corners make every edge read holder for the frame's
         // whole extent, so pass 1 runs to the cap on all four edges. That is the
@@ -1785,7 +1799,7 @@ mod tests {
         //
         // so the merge must report P1's depths and P1's `capped`, neither of which
         // pass 2 carries. Don't collapse this back into the single-pass arm.
-        let (two, capped_two, converged_two) = march_to_fixed_point(&img, ir, step, 2);
+        let (two, capped_two, converged_two) = march_to_fixed_point(&img.image, ir, step, 2);
         assert!(
             !converged_two,
             "P2 differs from P1, so two passes do not settle"
@@ -1810,7 +1824,7 @@ mod tests {
         // the cap would be a verdict on no evidence. "Not measured" is the honest
         // answer and every caller already handles it.
         let tiny = with_uniform_ir(solid(3, 3, [0.2, 0.2, 0.2]), IR_FILM);
-        assert!(holder_probe_depth(&tiny) > tiny.width.min(tiny.height) / 2);
+        assert!(holder_probe_depth(&tiny.image) > tiny.image.width.min(tiny.image.height) / 2);
         assert!(holder_depths(&tiny).is_none());
 
         // Only the inset is left, and the area still reports honestly.
@@ -1838,7 +1852,7 @@ mod tests {
             "measured, no holder — the plane was read and moved nothing"
         );
 
-        let not_measured = effective_area(&solid(200, 200, [0.2; 3]), 0.05).unwrap();
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05).unwrap();
         assert!(not_measured.holder.is_none() && !not_measured.holder_applied);
     }
 
@@ -1853,7 +1867,7 @@ mod tests {
 
         let measured = effective_area(&cropped, 0.05).unwrap();
         assert!(measured.holder.is_some(), "measured, no holder");
-        let not_measured = effective_area(&solid(200, 200, [0.2; 3]), 0.05).unwrap();
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05).unwrap();
         assert!(not_measured.holder.is_none(), "not measured at all");
         assert_eq!(
             measured.region, not_measured.region,
@@ -2019,7 +2033,7 @@ mod tests {
     fn the_inset_runs_even_when_the_holder_was_not_measured() {
         // The inset is not a fallback for a missing holder cut — it is the second
         // cut, and where the first did not run it is simply the only one.
-        let no_ir = solid(200, 200, [0.2, 0.2, 0.2]);
+        let no_ir: Scan = solid(200, 200, [0.2, 0.2, 0.2]).into();
         let area = effective_area(&no_ir, 0.05).unwrap();
         assert!(area.holder.is_none());
         assert_eq!(area.region, [10, 10, 180, 180]);
@@ -2042,7 +2056,9 @@ mod tests {
 
         let area = effective_area(&img, 0.0).unwrap();
         assert_eq!(area.inset, 2, "a stated 0 is floored at the probe step");
-        let ir = img.ir.as_deref().expect("the fixture carries an IR plane");
+        let ir = img
+            .verified_ir()
+            .expect("the fixture carries a verified IR plane");
         let [x, y, w, h] = area.region;
         let holder_px = (y..y + h)
             .flat_map(|row| (x..x + w).map(move |col| (row, col)))
@@ -2070,7 +2086,7 @@ mod tests {
         // Where the holder was *not* measured there is no measurement resolution to
         // respect, and a stated 0 is exact.
         assert_eq!(
-            effective_area(&solid(200, 200, [0.2; 3]), 0.0)
+            effective_area(&solid(200, 200, [0.2; 3]).into(), 0.0)
                 .unwrap()
                 .inset,
             0
@@ -2166,7 +2182,7 @@ mod tests {
         assert!((sep.interior_median - IR_FILM).abs() < 1e-6);
 
         // No IR plane → no verdict (distinct from "measured and unusable").
-        assert!(ir_separability(&solid(100, 100, [0.2, 0.1, 0.05])).is_none());
+        assert!(ir_separability(&solid(100, 100, [0.2, 0.1, 0.05]).into()).is_none());
     }
 
     #[test]
@@ -2227,10 +2243,10 @@ mod polarity_probe {
             };
             let base = match of("unexposed").first() {
                 Some(p) => {
-                    let (img, _) = crate::io::decode::decode_within(p, u64::MAX).unwrap();
+                    let (scan, _) = crate::io::decode::decode_within(p, u64::MAX).unwrap();
                     measure_area(
-                        &img,
-                        &effective_area(&img, crate::types::DEFAULT_MEASURE_INSET).unwrap(),
+                        &scan.image,
+                        &effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET).unwrap(),
                     )
                     .unwrap()
                     .base
@@ -2245,14 +2261,14 @@ mod polarity_probe {
                 base.r, base.g, base.b
             );
             for p in of("real") {
-                let (img, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
-                let region = effective_area(&img, crate::types::DEFAULT_MEASURE_INSET)
+                let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
+                let region = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET)
                     .unwrap()
                     .region;
                 let s: Vec<String> = [1.0f32, 1.1, 1.25, 1.5]
                     .iter()
                     .map(|&r| {
-                        let v = share_above_base(&img, region, &base, r).unwrap();
+                        let v = share_above_base(&scan.image, region, &base, r).unwrap();
                         format!("x{r}: {:.4}/{:.4}/{:.4}", v[0], v[1], v[2])
                     })
                     .collect();

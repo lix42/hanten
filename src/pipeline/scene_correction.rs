@@ -296,8 +296,7 @@ mod tests {
 
     /// An `AcesCgImage` whose *film RGB* was exactly `rgb`.
     fn aces_from(width: u32, height: u32, rgb: &[f32]) -> AcesCgImage {
-        let film =
-            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), None).unwrap());
+        let film = FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec()).unwrap());
         map_nc_film_rgb_v1(film)
     }
 

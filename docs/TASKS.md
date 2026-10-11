@@ -58,7 +58,7 @@ not the master branch.
 One bullet per epic below — the name is the epic id the task list is grouped
 under, and the parenthesized paths are the modules it owns.
 
-- **io** (`io/decode.rs`, `io/encode.rs`, `pipeline/input_semantics.rs`) — SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → linear `f32` scanner measurements (IR read only by `film-base/ir-holder-detection`, dropped at the fixed decode); input semantics remain explicit rather than silently assigning Rec.709. On the way out, `LinearImage` → 16-bit or 32-bit float TIFF with ICC, retaining linear ACEScg film masters; the planned display-output encoders are the `output` epic's. Buffer strategy (preflight, streaming) lives here too.
+- **io** (`io/decode.rs`, `io/encode.rs`, `pipeline/input_semantics.rs`) — SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → linear `f32` scanner measurements (IR read only by `film-base/ir-holder-detection`, dropped at the fixed decode); input semantics remain explicit rather than silently assigning Rec.709. On the way in, a `Scan` (RGB + IR plane); on the way out, an RGB-only `LinearImage` → 16-bit or 32-bit float TIFF with ICC, retaining linear ACEScg film masters; the planned display-output encoders are the `output` epic's. Buffer strategy (preflight, streaming) lives here too.
 - **film-base** (`pipeline/film_base.rs`) — estimate `Dmin` from unexposed border,
   with CLI override, and measure the roll-fixed `Dmax` anchor from a reference
   frame. The two are *different quantities* (see design-spec §4) that share this
@@ -1901,9 +1901,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   ≈0.9 GB each at 74.6 MP. **Done 2026-10-09**: one buffer, in place, the gain map's
   split the one copy; the IR plane is dropped at `fixed::decode`. SDR TIFF peak
   1.654 → 1.355 GB at 74.65 MP, outputs byte-identical
-- [ ] [A scan type that ends at the decode](tasks/nf-core/scan-type.md) — split the
+- [x] [A scan type that ends at the decode](tasks/nf-core/scan-type.md) — split the
   scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce
-  that the IR plane stops at `fixed::decode`
+  that the IR plane stops at `fixed::decode`. **Done 2026-10-11**: `Scan` (a
+  `LinearImage` plus an optional `IrPlane`) is what the decoder returns and
+  `fixed::decode` consumes; `LinearImage` is RGB only. Outputs byte-identical
 - [x] [Release the decoded image after the
   decode](tasks/nf-core/release-decoded-image.md) — free it once `fixed::decode` has
   read it, lowering each frame's peak by 12–16 B/px; the memory model moves with it.

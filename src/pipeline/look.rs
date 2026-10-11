@@ -811,12 +811,12 @@ mod tests {
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
         use crate::types::{FilmBase, LinearImage};
         let n = (scan.len() / 3) as u32;
-        let image = LinearImage::new(n, 1, scan.to_vec(), None).unwrap();
+        let image = LinearImage::new(n, 1, scan.to_vec()).unwrap();
         let params = DecodeParams {
             linearization,
             ..DecodeParams::default()
         };
-        let (film, _) = fixed::decode(image, &FilmBase::from(BASE), &params).unwrap();
+        let (film, _) = fixed::decode(image.into(), &FilmBase::from(BASE), &params).unwrap();
         let (corrected, _) = scene_correction::apply(
             map_nc_film_rgb_v1(film),
             &SceneCorrectionParams::default(),
@@ -1131,9 +1131,13 @@ mod tests {
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
         use crate::types::{FilmBase, LinearImage};
         let scan = scan_at(&DENSITIES, |t| [t + 0.1, t, t - 0.1]);
-        let image = LinearImage::new(DENSITIES.len() as u32, 1, scan.clone(), None).unwrap();
-        let (film, _) =
-            fixed::decode(image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
+        let image = LinearImage::new(DENSITIES.len() as u32, 1, scan.clone()).unwrap();
+        let (film, _) = fixed::decode(
+            image.into(),
+            &FilmBase::from(BASE),
+            &DecodeParams::default(),
+        )
+        .unwrap();
         let unlooked = map_nc_film_rgb_v1(film).rgb().to_vec();
         let identity = graded(
             &scan,
@@ -1253,9 +1257,13 @@ mod tests {
                 },
             )
         };
-        let image = LinearImage::new(4, 1, scan.clone(), None).unwrap();
-        let (film, _) =
-            fixed::decode(image, &FilmBase::from(BASE), &DecodeParams::default()).unwrap();
+        let image = LinearImage::new(4, 1, scan.clone()).unwrap();
+        let (film, _) = fixed::decode(
+            image.into(),
+            &FilmBase::from(BASE),
+            &DecodeParams::default(),
+        )
+        .unwrap();
         let mut by_hand = map_nc_film_rgb_v1(film).rgb().to_vec();
         let section = LookSection::default();
         let pull = Pull::new(
@@ -1545,7 +1553,7 @@ mod tests {
             let mut params = LookParams::off();
             params.section = section;
             let film = crate::algo::FilmRgbImage::fixture(
-                crate::types::LinearImage::new(1, 1, vec![0.2, 0.2, 0.2], None).unwrap(),
+                crate::types::LinearImage::new(1, 1, vec![0.2, 0.2, 0.2]).unwrap(),
             );
             let (image, _) = crate::pipeline::scene_correction::apply(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),

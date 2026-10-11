@@ -158,11 +158,12 @@ or docs.** A pixel passes through several value *spaces* between scan and output
 and one runs **backwards** relative to the others, so an unqualified "high value"
 is ambiguous. Everything below is **per channel** (RGB) — each pixel carries three
 values in every space; the lone exception is the anchor `A` (a scalar, below). The IR
-plane is a separate single channel, carried but not consumed (§6.1).
+plane is a separate single channel, read only by holder detection and dropped at the
+fixed decode (§6.1).
 
 | Space | Meaning | "Higher" means | Range (`f32`) | Where in code |
 |---|---|---|---|---|
-| **transmission** (raw scan value) | fraction of light the film passes | more transparent film, thinner negative, brighter pixel *in the raw scan* — a **darker** scene | `[0, 1]` (= `u16`/65535) | `io::decode`, `LinearImage.rgb` |
+| **transmission** (raw scan value) | fraction of light the film passes | more transparent film, thinner negative, brighter pixel *in the raw scan* — a **darker** scene | `[0, 1]` (= `u16`/65535) | `io::decode`, `Scan.image.rgb` |
 | **film base / `Dmin`** | the unexposed film's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate`, `film_base::measure_area` |
 | **density `D` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `D′ = scale·D + offset` (per-channel corrected density, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `D′` shifted by the offset | inside `algo::fixed::decode`, fused per sample (never a buffer) |
 | **NC film RGB v1** (`FilmRgbImage`) | the fixed decode's positive: how much light each dye layer received, declared linear Rec.709/D65 (§7.5) | **brighter** positive — a **brighter** scene | unclamped `f32`; mid-grey `0.18` at the anchor rule's placement | `algo::FilmRgbImage`, `algo::fixed::decode` |
@@ -796,8 +797,9 @@ with the move into a working space becoming scene correction's — is open (§13
 
 ```rust
 // Only algo::fixed mints a FilmRgbImage, so no raw scan or density buffer can
-// impersonate film RGB downstream.
-pub fn decode(image: &LinearImage, base: &FilmBase, params: &DecodeParams)
+// impersonate film RGB downstream. It consumes the scan, whose IR plane stops here:
+// nothing after it has a type that can carry one.
+pub fn decode(scan: Scan, base: &FilmBase, params: &DecodeParams)
     -> Result<(FilmRgbImage, DecodeReport)>;
 
 // The working-space boundary: total (non-finite samples pass through, counted at
@@ -2149,7 +2151,7 @@ src/
 ├── rendering.rs         # --rendering default|direct, and direct's pinned base
 ├── destination.rs       # the destination set: four axes, one table
 ├── stage.rs             # stage names and per-stage timing
-├── types.rs             # LinearImage, FilmBase, shared params and errors
+├── types.rs             # Scan, LinearImage, FilmBase, shared params and errors
 ├── version.rs           # build identity, pipeline_version, the drift gate, params hash
 ├── telemetry.rs         # opt-in JSONL record (never perturbs output)
 │   ├── upload.rs        #   the privacy-minimized upload projection
@@ -2165,7 +2167,7 @@ src/
 │   └── fixed.rs         # the fixed decode
 ├── film_stock/          # test-only: digitized stock curves, evidence for the decode's constants
 ├── io/
-│   ├── decode.rs        # SilverFast HDR/HDRi (TIFF) → LinearImage (+IR)
+│   ├── decode.rs        # SilverFast HDR/HDRi (TIFF) → Scan (RGB + IR)
 │   ├── encode.rs        # 16-bit / f32 TIFF with ICC
 │   ├── jpeg.rs          # baseline JPEG for the gain-map container
 │   ├── iso_gain_map.rs  # the gain-map JPEG: MPF container + ISO 21496-1 metadata

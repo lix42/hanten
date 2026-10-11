@@ -1,4 +1,4 @@
-//! SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → [`LinearImage`].
+//! SilverFast HDR (48-bit RGB) / HDRi (64-bit RGB+IR) → [`Scan`].
 //!
 //! On-disk layout, reverse-engineered from real sample scans (no published spec —
 //! see `docs/tasks/io/silverfast-decode.md`):
@@ -12,8 +12,8 @@
 //!
 //! HDR vs HDRi is detected **structurally** (the presence of an IR plane),
 //! never from metadata — the `Silverfast:HDRScan` XMP flag is `"Yes"` on both.
-//! The IR plane is preserved into [`LinearImage::ir`], never consumed in Step 1
-//! (design-spec §6.1).
+//! The IR plane goes onto the [`Scan`] for `film_base`'s holder detection; the
+//! fixed decode drops it (design-spec §6.1).
 
 use std::fs::File;
 use std::io::BufReader;
@@ -24,7 +24,7 @@ use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
 
-use crate::types::{GammaFact, LinearImage, NcError, Result};
+use crate::types::{GammaFact, IrPlane, LinearImage, NcError, Result, Scan};
 
 /// Which SilverFast variant a file turned out to be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,7 +324,7 @@ fn color_shape(color: ColorType) -> Option<(u16, u8)> {
 /// budget, so a header whose advertised strip sizes lied to the memory preflight's
 /// [`probe`] still cannot allocate past what the run was admitted under. See
 /// [`decode_limits`].
-pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, DecodeInfo)> {
+pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(Scan, DecodeInfo)> {
     let file = File::open(path)
         .map_err(|e| NcError::Decode(format!("cannot open {}: {e}", path.display())))?;
     let mut dec = Decoder::new(BufReader::new(file))
@@ -467,10 +467,6 @@ pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, Dec
     // second IFD. Scan every remaining page: skip previews, validate the first
     // non-preview page as the IR plane (strictly, as before), and note extras.
     let mut ir = None;
-    // Whether the accepted IR plane carried the `NewSubfileType=4` marker. A
-    // shape-only plane (marker absent) is still decoded, but consumers must not
-    // trust it — threaded onto the image as `ir_verified` (see the holder mask).
-    let mut ir_verified = false;
     let mut warned_extra = false;
     while dec.more_images() {
         dec.next_image()
@@ -542,15 +538,18 @@ pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, Dec
         // reverse-engineered, and only the holder measurement reads the plane,
         // which then refuses to trust it), but record a warning so an incidental page isn't reported as IR
         // provenance with no trace.
-        ir_verified = subfile == Some(4);
-        if !ir_verified {
+        let verified = subfile == Some(4);
+        if !verified {
             warnings.push(format!(
                 "IR plane has NewSubfileType={subfile:?} (expected 4); \
                  identified as IR by its full-res 16-bit grayscale shape alone \
                  (not trusted for holder detection)"
             ));
         }
-        ir = Some(read_plane_u16(&mut dec, path, "IR plane")?);
+        ir = Some(IrPlane {
+            samples: read_plane_u16(&mut dec, path, "IR plane")?,
+            verified,
+        });
     }
 
     let format = if ir.is_some() {
@@ -573,12 +572,8 @@ pub fn decode_within(path: &Path, budget_bytes: u64) -> Result<(LinearImage, Dec
         warnings,
     };
 
-    // Validated constructor enforces the buffer-length invariants at the boundary;
-    // stamp the IR provenance the constructor can't know (marker-verified vs
-    // shape-only) so downstream consumers (the holder mask) can gate on it.
-    let mut image = LinearImage::new(width, height, rgb, ir)?;
-    image.ir_verified = ir_verified;
-    Ok((image, info))
+    let scan = Scan::new(LinearImage::new(width, height, rgb)?, ir)?;
+    Ok((scan, info))
 }
 
 /// Read the current IFD's image as 16-bit unsigned samples and normalize to
@@ -674,7 +669,7 @@ mod tests {
     /// The structural-cap form of [`decode_within`]: these tests exercise decoding
     /// itself, not the memory budget, so they read with the classic-TIFF ceiling
     /// the decoder used before `io/memory-preflight` threaded a budget through.
-    fn decode(path: &Path) -> Result<(LinearImage, DecodeInfo)> {
+    fn decode(path: &Path) -> Result<(Scan, DecodeInfo)> {
         decode_within(path, CLASSIC_TIFF_CEILING)
     }
 
@@ -727,14 +722,14 @@ mod tests {
         enc.write_image::<RGB16>(2, 1, &rgb).unwrap();
 
         let (img, info) = decode(&tmp.0).unwrap();
-        assert_eq!((img.width, img.height), (2, 1));
+        assert_eq!((img.image.width, img.image.height), (2, 1));
         assert_eq!(info.format, SilverFastFormat::Hdr);
         assert!(img.ir.is_none());
         assert!(!info.ir_present);
-        assert_eq!(img.rgb.len(), 6);
-        assert_eq!(img.rgb[0], 1.0);
-        assert_eq!(img.rgb[4], 0.0);
-        assert_unit_range(&img.rgb);
+        assert_eq!(img.image.rgb.len(), 6);
+        assert_eq!(img.image.rgb[0], 1.0);
+        assert_eq!(img.image.rgb[4], 0.0);
+        assert_unit_range(&img.image.rgb);
     }
 
     #[test]
@@ -751,10 +746,8 @@ mod tests {
         assert_eq!(info.format, SilverFastFormat::Hdri);
         assert!(info.ir_present);
         let ir_plane = img.ir.expect("IR plane present");
-        assert_eq!(ir_plane.len(), 2);
-        assert_eq!(ir_plane[0], 0.0);
-        assert_eq!(ir_plane[1], 1.0);
-        assert_unit_range(&img.rgb);
+        assert_eq!(ir_plane.samples, [0.0, 1.0]);
+        assert_unit_range(&img.image.rgb);
         // The `tiff` encoder writes no NewSubfileType, so the page is accepted as
         // IR by shape alone — that must be surfaced as a warning, not silent, and
         // the plane flagged unverified so consumers (the holder mask) don't trust it.
@@ -764,7 +757,7 @@ mod tests {
             info.warnings
         );
         assert!(
-            !img.ir_verified,
+            !ir_plane.verified,
             "a shape-only IR plane must not be marker-verified"
         );
     }
@@ -904,12 +897,10 @@ mod tests {
         assert_eq!(info.format, SilverFastFormat::Hdri);
         assert!(info.ir_present);
         let ir_plane = img.ir.expect("IR plane present");
-        assert_eq!(ir_plane.len(), 2);
-        assert_eq!(ir_plane[0], 0.0);
-        assert_eq!(ir_plane[1], 1.0);
+        assert_eq!(ir_plane.samples, [0.0, 1.0]);
         // NewSubfileType=4 marks the plane as genuine IR: verified provenance.
         assert!(
-            img.ir_verified,
+            ir_plane.verified,
             "a NewSubfileType=4 IR plane must be marker-verified"
         );
         // The preview is expected, not an anomaly — no warnings for this layout.
@@ -1173,21 +1164,21 @@ mod tests {
     fn decodes_real_hdr_fixture() {
         let (img, info) = decode(&fixture("hdr-48bit.tif")).unwrap();
         assert_eq!(info.format, SilverFastFormat::Hdr);
-        assert_eq!((img.width, img.height), (502, 462));
+        assert_eq!((img.image.width, img.image.height), (502, 462));
         assert!(img.ir.is_none());
-        assert_eq!(img.rgb.len(), 502 * 462 * 3);
-        assert_unit_range(&img.rgb);
+        assert_eq!(img.image.rgb.len(), 502 * 462 * 3);
+        assert_unit_range(&img.image.rgb);
     }
 
     #[test]
     fn decodes_real_hdri_fixture() {
         let (img, info) = decode(&fixture("hdri-64bit.tif")).unwrap();
         assert_eq!(info.format, SilverFastFormat::Hdri);
-        assert_eq!((img.width, img.height), (502, 462));
+        assert_eq!((img.image.width, img.image.height), (502, 462));
         let ir = img.ir.expect("HDRi fixture must carry an IR plane");
-        assert_eq!(ir.len(), 502 * 462);
-        assert_unit_range(&img.rgb);
-        assert_unit_range(&ir);
+        assert_eq!(ir.samples.len(), 502 * 462);
+        assert_unit_range(&img.image.rgb);
+        assert_unit_range(&ir.samples);
     }
 
     // --- probe / decode agreement (the memory preflight's foundation) ---------

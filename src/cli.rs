@@ -54,7 +54,8 @@ use crate::telemetry;
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseProvenance,
     FilmBaseSource, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams, NcError,
-    OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion, check_measure_inset,
+    OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, Scan, TransferAssertion,
+    check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -3718,7 +3719,7 @@ fn convert_frame(
     // decode, input semantics, effective area and its warnings, the polarity check —
     // up to the chain; a gate added here belongs there too.
     let clock = &mut facts.clock;
-    let (image, info) = clock.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
+    let (scan, info) = clock.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
     let info: &DecodeInfo = facts.info.insert(info);
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
@@ -3756,7 +3757,7 @@ fn convert_frame(
     // and exit code like every other error path and emits no report; the stderr
     // warnings still stand.)
     let base = clock.time(StageKind::FilmBase, || {
-        film_base::estimate(&image, &base_source)
+        film_base::estimate(&scan.image, &base_source)
     })?;
     report.film_base = Some(base.base);
     report.film_base_percentile = base.percentile;
@@ -3777,7 +3778,7 @@ fn convert_frame(
     // Timed as a success whatever it returns: an empty region is a warning, not the
     // run's failure.
     let area = clock.time(StageKind::FilmBase, || {
-        Ok(film_base::effective_area(&image, recipe.measure.inset))
+        Ok(film_base::effective_area(&scan, recipe.measure.inset))
     })?;
     match area {
         Ok(area) => {
@@ -3786,7 +3787,7 @@ fn convert_frame(
                 push_warning_buf(warnings, log, w);
             }
             let polarity = clock.time(StageKind::FilmBase, || {
-                film_base::polarity_warning(&image, area.region, &base.base)
+                film_base::polarity_warning(&scan.image, area.region, &base.base)
             })?;
             if let Some(w) = polarity {
                 push_warning_buf(warnings, log, w);
@@ -3812,7 +3813,7 @@ fn convert_frame(
         DecodedFrame {
             recipe,
             destination,
-            image,
+            scan,
             base: base.base,
             exports,
             output,
@@ -4418,7 +4419,7 @@ struct DecodedFrame<'a> {
     recipe: &'a Recipe,
     /// The recipe's `output`, resolved once and checked before anything was decoded.
     destination: recipe::Destination,
-    image: LinearImage,
+    scan: Scan,
     base: FilmBase,
     exports: Exports<'a>,
     output: &'a Path,
@@ -4442,7 +4443,7 @@ fn render_frame(
     let DecodedFrame {
         recipe,
         destination,
-        image,
+        scan,
         base,
         exports,
         output,
@@ -4456,7 +4457,7 @@ fn render_frame(
     // writes the decode's buffer before the in-place 3×3, so it adds no image buffer,
     // and it is timed as `encode`.
     let (film, decoded) = clock.time(StageKind::Reconstruction, || {
-        fixed::decode(image, &base, &decode_params)
+        fixed::decode(scan, &base, &decode_params)
     })?;
     let mut pending: Vec<staged::Staged> = Vec::new();
     if let Some(path) = exports.film_rgb {
@@ -6935,7 +6936,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
         &mut report.warnings,
     )?);
 
-    let (image, info) = decode_within(&args.input, budget.bytes())?;
+    let (scan, info) = decode_within(&args.input, budget.bytes())?;
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
         info.format, info.width, info.height, info.ir_present
@@ -6967,12 +6968,12 @@ fn run_inspect(args: IoArgs) -> Result<()> {
     // holder march plus the static inset. The verdict is measured
     // (`ir-usability-detection`) — `--film-type` takes no part in it. Best-effort like
     // every other `inspect` diagnostic.
-    let ir_separability = film_base::ir_separability(&image);
+    let ir_separability = film_base::ir_separability(&scan);
     let ir_usable = ir_separability.is_some_and(|s| s.usable);
     report.ir_separability = ir_separability;
     report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
     match film_base::effective_area(
-        &image,
+        &scan,
         args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
     ) {
         Ok(area) => {
@@ -6993,7 +6994,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
 
     // Each note says why the plane did not measure the holder, from what the march
     // returned (`effective_area.holder`), never predicted from the inputs.
-    if info.ir_present && !image.ir_verified {
+    if scan.ir.as_ref().is_some_and(|p| !p.verified) {
         push_warning(
             &mut report,
             &log,
@@ -7002,7 +7003,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
              effective area is the inset alone"
                 .into(),
         );
-    } else if info.ir_present && !ir_usable {
+    } else if scan.ir.is_some() && !ir_usable {
         push_warning(
             &mut report,
             &log,
@@ -7012,7 +7013,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
                 ir_separability.map_or(0.0, |s| s.interior_median)
             ),
         );
-    } else if info.ir_present
+    } else if scan.ir.is_some()
         && report
             .effective_area
             .is_some_and(|a: film_base::EffectiveArea| a.holder.is_none())
@@ -7144,7 +7145,7 @@ fn measure_base_into(
     )?;
     log_memory_preflight(&memory, log);
 
-    let (image, info) = decode_within(input, budget.bytes())?;
+    let (scan, info) = decode_within(input, budget.bytes())?;
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
         info.format, info.width, info.height, info.ir_present
@@ -7153,8 +7154,8 @@ fn measure_base_into(
 
     // The calibration command reports the IR verdict itself, not just a warning
     // about it: it decides whether the holder was measured.
-    let ir_separability = film_base::ir_separability(&image);
-    let area = film_base::effective_area(&image, inset);
+    let ir_separability = film_base::ir_separability(&scan);
+    let area = film_base::effective_area(&scan, inset);
     let (effective_area, film_base_source, est) = match source {
         // A stated source does not read the area, so a failure to resolve it is a
         // diagnostic, not a refusal.
@@ -7173,7 +7174,7 @@ fn measure_base_into(
             (
                 area,
                 FilmBaseProvenance::from(source),
-                film_base::estimate(&image, source)?,
+                film_base::estimate(&scan.image, source)?,
             )
         }
         // The base *is* the area's median, so an empty area refuses.
@@ -7182,12 +7183,12 @@ fn measure_base_into(
             // The measurement then rests on the inset alone, which the user sizes —
             // true of a scan with no IR plane as much as of one whose plane declined.
             if area.holder.is_none() {
-                warnings.push(holder_not_measured_note(&image, ir_separability));
+                warnings.push(holder_not_measured_note(&scan, ir_separability));
             }
             (
                 Some(area),
                 FilmBaseProvenance::EffectiveArea,
-                film_base::measure_area(&image, &area)?,
+                film_base::measure_area(&scan.image, &area)?,
             )
         }
     };
@@ -7230,10 +7231,10 @@ fn measure_base_into(
 
 /// Why the film holder went unmeasured, for a measurement that then rests on the
 /// inset alone.
-fn holder_not_measured_note(image: &LinearImage, sep: Option<film_base::IrSeparability>) -> String {
-    let why = if image.ir.is_none() {
+fn holder_not_measured_note(scan: &Scan, sep: Option<film_base::IrSeparability>) -> String {
+    let why = if scan.ir.is_none() {
         "the scan has no IR plane".to_string()
-    } else if !image.ir_verified {
+    } else if scan.verified_ir().is_none() {
         "its IR plane is identified by shape alone (no NewSubfileType=4 marker) and not \
          trusted"
             .to_string()
@@ -7934,7 +7935,7 @@ fn decode_for_roll_white<T>(
         log,
         warnings,
     )?;
-    let (image, info) = decode_within(input, budget.bytes())?;
+    let (scanned, info) = decode_within(input, budget.bytes())?;
     log.info(format_args!(
         "decoded {} {}x{}",
         input.display(),
@@ -7959,14 +7960,14 @@ fn decode_for_roll_white<T>(
         );
     }
     input_semantics::require_convertible(&input_meta)?;
-    let area = film_base::effective_area(&image, recipe.measure.inset);
+    let area = film_base::effective_area(&scanned, recipe.measure.inset);
     if scan == RollScan::Frame
         && let Ok(a) = &area
-        && let Some(w) = film_base::polarity_warning(&image, a.region, base)?
+        && let Some(w) = film_base::polarity_warning(&scanned.image, a.region, base)?
     {
         push_warning_buf(warnings, log, format!("{}: {w}", input.display()));
     }
-    let (film, decoded) = fixed::decode(image, base, &recipe.reconstruction)?;
+    let (film, decoded) = fixed::decode(scanned, base, &recipe.reconstruction)?;
     let measured = on_film(&film, &area)?;
     Ok((
         working_space::map_nc_film_rgb_v1(film),
@@ -12088,8 +12089,7 @@ mod tests {
         assert!(master_tagged);
 
         // Through the shipped mapper, so the matrix is the pinned one, not a copy.
-        let fixture =
-            FilmRgbImage::fixture(LinearImage::new(w, h, film_rgb.clone(), None).unwrap());
+        let fixture = FilmRgbImage::fixture(LinearImage::new(w, h, film_rgb.clone()).unwrap());
         let mapped = working_space::map_nc_film_rgb_v1(fixture).into_linear().rgb;
         assert_eq!(mapped.len(), master_rgb.len());
         let differ = mapped
@@ -12258,8 +12258,7 @@ mod tests {
         convert(&sdr, Some(&export), &["--gamut", "adobe-rgb"]);
         let pages = read_pre_encode(&export);
         assert_eq!(summary(&pages), [pair("sdr-linear", "adobe-rgb")]);
-        let linear =
-            LinearImage::new(pages[0].width, pages[0].height, f32s(&pages[0]), None).unwrap();
+        let linear = LinearImage::new(pages[0].width, pages[0].height, f32s(&pages[0])).unwrap();
         let (encoded, icc) =
             color::encode_display_linear(linear, DestinationGamut::AdobeRgb).unwrap();
         let again = dir.join("sdr-again.tiff");

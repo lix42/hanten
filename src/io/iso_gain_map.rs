@@ -257,7 +257,7 @@ mod tests {
                 hdr.extend(base);
             }
         }
-        let image = |rgb| LinearImage::new(width, height, rgb, None).unwrap();
+        let image = |rgb| LinearImage::new(width, height, rgb).unwrap();
         let ratios = between(&image(sdr.clone()), &image(hdr), OFFSET).unwrap();
         let map = gain_encode::encode(&ratios).unwrap();
         let fields = fields(&map, LINEAR_HEADROOM).unwrap();
