@@ -43,7 +43,12 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > the roll's envelope, display black off by default) §4's `roll.json` and §7's
 > `measure-roll` report (on their real rolls), §5's default recipe and §7's stage list,
 > look report, roll report, lift examples and fit-range report, and §8's PQ report were
-> re-run, and the placement example and refusal added from the binary. The staleness
+> re-run, and the placement example and refusal added from the binary. At
+> `pipeline_version` 13 (`nf-calibration/per-frame-placement`, `--placement frame` and a
+> frame's exposure within ±1 EV of the roll's) §7's roll table, lift refusal, roll report,
+> placement examples and `measure-roll` report (on its real roll) were re-run, and the
+> `frame` example and refusal added from the binary; §4's and §5's recipe `meta` carry the
+> new version (`--save-recipe` writes 13). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -225,7 +230,7 @@ abridged):
 
 ```json
 {
-  "meta": { "nc_version": "0.1.0", "pipeline_version": 12, … },
+  "meta": { "nc_version": "0.1.0", "pipeline_version": 13, … },
   "params": {
     "recipe_version": 3,
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
@@ -539,7 +544,7 @@ and the measuring commands write parts of it):
 ```json
 {
   "meta": { "nc_version": "0.1.0", "git_commit": "…", "git_dirty": false,
-            "pipeline_version": 12, "target": "aarch64-apple-darwin" },
+            "pipeline_version": 13, "target": "aarch64-apple-darwin" },
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
@@ -1213,10 +1218,10 @@ grade is off.
   {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","saturation":1.0,"saturation_base_slope":1.6257261,"saturation_base_from":"fallback","slope":1.413675,"saturation_slope":1.6257261,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+saturation+highlight-desaturation"}}
   ```
 
-  `base_from` is `roll`, `hybrid`, `thin`, `fallback` or `direct`; `slope` is
-  `base_slope` × `contrast`; `saturation_base_slope` is the colour's base (× 1.15 under
-  `default`), `saturation_base_from` where its slope came from (a hybrid or thin frame's
-  colour is the roll's, `roll`, or `fallback`), and `saturation_slope` is it ×
+  `base_from` is `roll`, `placement` (the hybrid's or `frame`'s slope), `thin`, `fallback`
+  or `direct`; `slope` is `base_slope` × `contrast`; `saturation_base_slope` is the
+  colour's base (× 1.15 under `default`), `saturation_base_from` where its slope came from
+  (a placed or thin frame's colour is the roll's, `roll`, or `fallback`), and `saturation_slope` is it ×
   `saturation`.
 
 - An out-of-range value is refused naming the flag and the key:
@@ -1350,6 +1355,8 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                 "dark_stops": -3.5714598, "base_share": 0.38004303, "lift_ev": 0.0,
                 "hybrid": { "slope": 1.7957463, "exposure": 0.28257036,
                             "slope_bound": "roll", "exposure_bound": "none" },
+                "frame": { "slope": 2.1450827, "exposure": 0.37770128,
+                           "slope_bound": "span", "exposure_bound": "none" },
                 "flag": "… --roll-frame-tones 0.64702564,-1.7618053,-3.5714598", … }, … ],
   "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
   "midtone_neutral": { "kind": "correction", "mode": "auto",
@@ -1377,8 +1384,8 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
                  "slope_bound": 2.4 },
   "placement": { "kind": "taste", "envelope_stops": [-3.5862844, 2.2856762], "placed": 35,
-                 "span_stops": 7.0, "level_keep": 0.6, "exposure_below_ev": 1.5,
-                 "exposure_above_ev": 0.5, "max_slope": 3.5 },
+                 "span_stops": 7.0, "level_keep": 0.6, "exposure_below_ev": 1.0,
+                 "exposure_above_ev": 1.0, "max_slope": 3.5, "frame_white_look_stops": 4.462 },
   "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-dark -3.5391304 --roll-exposure 1.0553794 --roll-midtone-line -0.023591928,-0.024393905,-0.044650972,-0.06559556,-2.75,2.25,1.114628" },
   "warnings": [ "frames/1815.tif: near film saturation — its white sits 0.34 stop under the leader (margin 0.5 stop); …", … ]
 }
@@ -1408,8 +1415,8 @@ measured value is never mistaken for a chosen one:
 | `--roll-thin-exposure EV` | `roll.thin_exposure` | the exposure solved with the thin slope, added to the roll's in place of the small lift; refused without `roll.thin_slope` (exit 2) |
 | `--thin-lift on\|off` | `roll.thin_lift` | whether the thin lift applies; off, the frame renders its small lift |
 | `--roll-envelope DARKEST,BRIGHTEST` | `roll.envelope_stops` | the roll's envelope: its frames' lowest dark end and highest white, in scene stops |
-| `--roll-frame-tones WHITE,LEVEL,DARK` | `roll.frame_tones` = `{"white_stops", "level_stops", "dark_stops"}` | this frame's white, level and dark end, in scene stops, which the hybrid places it from |
-| `--placement roll\|hybrid` | `roll.placement` | how the frame is placed (below): `hybrid` (unset, the default) or the roll's slope and exposure with the lifts |
+| `--roll-frame-tones WHITE,LEVEL,DARK` | `roll.frame_tones` = `{"white_stops", "level_stops", "dark_stops"}` | this frame's white, level and dark end, in scene stops, which the hybrid and `frame` place it from |
+| `--placement roll\|hybrid\|frame` | `roll.placement` | how the frame is placed (below): `hybrid` (unset, the default), `frame` (each frame on its own), or the roll's slope and exposure with the lifts |
 | `--hybrid-span STOPS` | `roll.hybrid_span_stops` | the fewest look stops a hybrid frame's span renders over (default 7) |
 | `--hybrid-level-keep SHARE` | `roll.hybrid_level_keep` | the share, 0 to 1, of its level's offset from the roll's a hybrid frame keeps (default 0.6) |
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
@@ -1426,18 +1433,19 @@ thin value, as in a frame's `flag`, it is the `--thin-lift off` fallback. Likewi
 `--roll-thin-slope` (or a manifest's `roll.thin_slope`) with no thin exposure, over a
 small lift, is refused (exit 2): it would drop that lift's exposure, so the message names
 it — add `--roll-thin-exposure <that value>` to keep it, or `--small-lift off` to drop
-it. Any lift typed (or in a manifest's `params`) where the hybrid places the frame is
-refused (exit 2), since the hybrid replaces the lifts:
+it. Any lift typed (or in a manifest's `params`) where the hybrid or `frame` places the
+frame is refused (exit 2), since the placement replaces the lifts:
 
 ```console
 $ hanten convert frame.tif -o out --params roll.json --roll-frame-exposure 0.2
-usage: --roll-frame-exposure is a lift, which applies at the roll's placement, but the hybrid places this frame at its own slope and exposure in place of the lifts, so it would be ignored. To render the lift, use --placement roll; to move this frame's exposure under the hybrid, use --exposure
+usage: --roll-frame-exposure is a lift, which applies at the roll's placement, but the hybrid placement places this frame at its own slope and exposure in place of the lifts, so it would be ignored. To render the lift, use --placement roll; to move this frame's exposure under its placement, use --exposure
 ```
 
 Stated with the frame's tones, as in its `frames[].flag`, it is spared: it is the
 `--placement roll` fallback. Refused the same way: `--hybrid-span` or
-`--hybrid-level-keep` where the frame renders at the roll's placement, `--small-lift on`
-or `--thin-lift on` where the hybrid places it (typed on `roll`, only when no frame
+`--hybrid-level-keep` where the hybrid does not place the frame (`--placement roll` or
+`frame`, or its tones missing), `--small-lift on` or `--thin-lift on` where the hybrid or
+`frame` places it (typed on `roll`, only when no frame
 would use it; a frame without its tones warns), and on `roll`, `--roll-frame-tones` (or a
 shared recipe's `roll.frame_tones`), since one frame's tones would place every frame.
 `reuse.flag` carries no envelope: without tones it would place nothing. Each switch is
@@ -1463,7 +1471,7 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","hybrid":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"taste_applied":[]}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","frame_placement":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"taste_applied":[]}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
@@ -1610,24 +1618,48 @@ envelope, `placement.envelope_stops`); each frame then gets its own slope, steep
 spread its own span over at least 7 look stops (`--hybrid-span`) but no steeper than keeps
 it inside that envelope, within the cap's slope and 3.5, and its own exposure, keeping
 60 % of its level's offset from the roll's (`--hybrid-level-keep`), held inside the
-envelope, then within 1.5 EV under and 0.5 EV over the roll's. So a flat frame gains
+envelope, then within 1 EV of the roll's either way. So a flat frame gains
 contrast and a dark frame comes up part of the way, while the roll's ends stay where the
 roll's slope puts them — except a frame the exposure limit holds, whose dark end can fall
 below the roll's. The frame's slope moves tone only; its
 colour stays at the roll's. It replaces both lifts, and is solved at render time from the
 frame's `tones`, so its settings need no re-measure. `measure-roll` reports each frame's
-at the defaults as `frames[].hybrid`, and `convert` as `chain.roll.hybrid` (each with what
-bound the slope and the exposure). `--placement roll` renders every frame at the roll's
-slope and exposure, with the lifts below. A frame with no `tones` while the recipe has an
-envelope — one `measure-roll` did not measure — renders at the roll's placement and warns;
-a roll section with neither (written by hand) renders at the roll's silently.
+at the defaults as `frames[].hybrid`, and `convert` as `chain.roll.frame_placement` (each
+with what bound the slope and the exposure). `--placement roll` renders every frame at the
+roll's slope and exposure, with the lifts below. A frame with no `tones` while the recipe
+has an envelope — one `measure-roll` did not measure — renders at the roll's placement and
+warns; a roll section with neither (written by hand) renders at the roll's silently.
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white-balance 1.1,1,0.9 \
-    --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 --roll-envelope -4.5,2.2 \
-    --roll-frame-tones 0.9,-1.4,-3.2 \
-    | jq -c '[(.chain.roll | {placement, hybrid, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from, .chain.look.saturation_base_from]'
-[{"placement":"hybrid","hybrid":{"slope":1.7073171,"exposure":0.39999995,"slope_bound":"span","exposure_bound":"none"},"taste_applied":["placement"]},0.79999995,"hybrid","roll"]
+    --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 --roll-envelope=-4.5,2.2 \
+    --roll-frame-tones=0.9,-1.4,-3.2 \
+    | jq -c '[(.chain.roll | {placement, frame_placement, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from, .chain.look.saturation_base_from]'
+[{"placement":"hybrid","frame_placement":{"slope":1.7073171,"exposure":0.39999995,"slope_bound":"span","exposure_bound":"none"},"taste_applied":["placement"]},0.79999995,"placement","roll"]
+```
+
+**`--placement frame` places each frame on its own** instead, opt-in: its slope spreads
+its own span over 9.049 look stops (within the cap's slope and 3.5) and its exposure puts
+its white at about L\* 93, within the same 1 EV of the roll's. The roll's envelope plays no
+part, so every frame uses the display's whole range: more dramatic than the hybrid, and
+frames keep their differences. It needs the frame's `tones` and the roll's white and dark
+end, not the envelope (`measure-roll` reports it as `frames[].frame`); without them the
+frame renders at the roll's placement and warns, naming what is missing. It replaces both
+lifts; colour stays at the roll's slope. On the same frame:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white-balance 1.1,1,0.9 \
+    --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 \
+    --roll-frame-tones=0.9,-1.4,-3.2 --placement frame \
+    | jq -c '[(.chain.roll | {placement, frame_placement, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from, .chain.look.saturation_base_from]'
+[{"placement":"frame","frame_placement":{"slope":2.2070732,"exposure":0.72168183,"slope_bound":"span","exposure_bound":"none"},"taste_applied":["placement"]},1.1216818,"placement","roll"]
+```
+
+The hybrid's knobs are refused under it, naming it:
+
+```console
+$ hanten convert frame.tif -o out --params roll.json --placement frame --hybrid-span 9
+usage: --hybrid-span tunes the hybrid placement, but --placement frame places this frame from its own span, outside the hybrid, so it would be ignored. Drop --hybrid-span, or drop --placement frame to place the frame with the hybrid
 ```
 
 **A low-key frame gets a small lift** on top of the roll's exposure (`lift_ev`), keyed on

@@ -23,11 +23,14 @@ Open:
 - The hybrid's own bounds, from `envelope-hybrid-placement`'s review (2026-10-10; its
   progress entries hold the archive numbers). With display black now off, the hybrid
   alone places each frame's ends:
-  - The ±EV limit (−1.5 / +0.5) applies after the envelope clamp, so it can push a frame
-    out of the envelope: on the archive, the dark ends of 17 limit-held frames fall below
-    the roll's (09-29 −5.68 against −4.42 look stops); a high-key short-span frame could
-    push its white above the top. Lower the slope when the limit binds, or clamp to the
-    envelope last?
+  - The ±EV limit (±1 since `per-frame-placement`, was −1.5 / +0.5) applies after the
+    envelope clamp, so it can push a frame out of the envelope: at −1.5 / +0.5 the dark
+    ends of 17 limit-held archive frames fell below the roll's (09-29 −5.68 against −4.42
+    look stops); a high-key short-span frame could push its white above the top. Lower the
+    slope when the limit binds, or clamp to the envelope last? The −1 end is unreviewed.
+- `--placement frame`'s white (L\* 93): in its review, L\* 91 won on 7 high-key frames
+  (`per-frame-placement`'s progress entry names them), though a brightness rule lost
+  overall. Revisit if high-key frames keep looking too bright there.
   - The kept exposure, `e0 − (1−α)(L + e0)`, measures a frame's offset from a level target
     of 0, not from the roll's level; they differ when the roll's exposure was clamped
     (`EXPOSURE_BOUND_EV`), or typed, and it silently depends on `LEVEL_TARGET_STOPS` = 0.

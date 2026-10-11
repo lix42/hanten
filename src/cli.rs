@@ -987,7 +987,7 @@ pub struct RollOverrides {
     pub roll_envelope: Option<[f32; 2]>,
     /// This frame's white, level and dark end `WHITE,LEVEL,DARK` in scene stops, as `hanten
     /// measure-roll` measured them (recipe key `roll.frame_tones`; a `roll.frames` entry's
-    /// `tones`): what the hybrid places the frame from.
+    /// `tones`): what the hybrid and `frame` place the frame from.
     #[arg(
         long,
         value_name = "WHITE,LEVEL,DARK",
@@ -997,9 +997,10 @@ pub struct RollOverrides {
     pub roll_frame_tones: Option<FrameStops>,
     /// How the frame is placed (recipe key `roll.placement`): `hybrid` (the default) gives
     /// it its own slope and exposure inside the roll's envelope, in place of the small and
-    /// thin lifts; `roll` renders it at the roll's slope and exposure, with the lifts. A
-    /// taste adjustment.
-    #[arg(long, value_enum, ignore_case = true, value_name = "ROLL|HYBRID")]
+    /// thin lifts; `frame` gives it its own from its span alone, its white at a fixed
+    /// target; `roll` renders it at the roll's slope and exposure, with the lifts. A taste
+    /// adjustment.
+    #[arg(long, value_enum, ignore_case = true, value_name = "ROLL|HYBRID|FRAME")]
     pub placement: Option<recipe::Placement>,
     /// The fewest look stops a hybrid frame's span renders over (recipe key
     /// `roll.hybrid_span_stops`; default 7): larger gives a short-span frame more contrast,
@@ -1058,6 +1059,10 @@ impl RollOverrides {
             (
                 "--placement hybrid",
                 self.placement == Some(recipe::Placement::Hybrid),
+            ),
+            (
+                "--placement frame",
+                self.placement == Some(recipe::Placement::Frame),
             ),
             ("--hybrid-span", self.hybrid_span.is_some()),
             ("--hybrid-level-keep", self.hybrid_level_keep.is_some()),
@@ -1122,7 +1127,7 @@ pub struct SceneCorrectionOverrides {
 pub struct LookOverrides {
     /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
     /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
-    /// the frame's own slope (the hybrid placement's, `--placement`, or a thin frame's,
+    /// the frame's own slope (its placement's, `--placement`, or a thin frame's,
     /// `--roll-thin-slope`), else the roll's (`--roll-white` and
     /// `--roll-dark`), else the fallback ≈ 1.41, as if the roll's white were 1.75 stops up
     /// (`direct`: its pinned ≈ 1.41). Luminance only: each pixel's
@@ -1135,7 +1140,7 @@ pub struct LookOverrides {
     /// Saturation, as a multiplier on the default colour (recipe key `look.saturation`; 1
     /// keeps it): each pixel's colour ratios are raised to the power
     /// `base × 1.15 × SATURATION` with its luminance kept (`direct`: × 1 in place of 1.15).
-    /// The base is `--contrast`'s, except a frame's own slope (the hybrid's, or
+    /// The base is `--contrast`'s, except a frame's own slope (its placement's, or
     /// `--roll-thin-slope`), which never reaches colour; so colour does not move with
     /// `--contrast`.
     #[arg(long, value_name = "SATURATION", allow_hyphen_values = true)]
@@ -3697,17 +3702,18 @@ fn convert_frame(
     // passed the gate and then failed is exactly where a reader wants the estimate).
     facts.memory = Some(mem);
     report.memory = Some(mem);
-    if let Some(missing) = recipe.roll.hybrid_missing()
+    if let Some(missing) = recipe.roll.placement_missing()
         && recipe.applies_roll_to_scene_correction()
     {
         push_warning_buf(
             warnings,
             log,
             format!(
-                "rendered at the roll's placement, not the hybrid: the recipe lacks \
-                 {missing}, which `hanten measure-roll` writes for each frame it measures. \
-                 Measure the roll with this frame among its inputs and use that recipe, or \
-                 choose this placement with --placement roll (recipe `roll.placement`)"
+                "rendered at the roll's placement, not the {}: the recipe lacks {missing}, \
+                 which `hanten measure-roll` writes for each frame it measures. Measure the \
+                 roll with this frame among its inputs and use that recipe, or choose this \
+                 placement with --placement roll (recipe `roll.placement`)",
+                recipe.roll.placement().name()
             ),
         );
     }
@@ -4785,7 +4791,7 @@ fn convert_attempt(
         .into_iter()
         .find_map(|(flag, typed)| typed.then_some(flag))
     {
-        reject_a_lift_under_the_hybrid(&recipe, lift, ["--placement roll", "--exposure"])?;
+        reject_a_lift_under_a_frame_placement(&recipe, lift, ["--placement roll", "--exposure"])?;
     }
     let on = Some(recipe::Switch::On);
     reject_a_knob_the_placement_ignores(
@@ -4795,7 +4801,7 @@ fn convert_attempt(
             keep: typed.hybrid_level_keep.is_some(),
             small_on: typed.small_lift == on,
             thin_on: typed.thin_lift == on,
-            roll_placement: typed.placement == Some(recipe::Placement::Roll),
+            placement: typed.placement,
         },
         PlacementNames::FLAGS,
         "",
@@ -5705,7 +5711,7 @@ fn resolve_frames(
                                 .into_iter()
                                 .find(|k| states(k))
                         {
-                            reject_a_lift_under_the_hybrid(
+                            reject_a_lift_under_a_frame_placement(
                                 &r,
                                 &format!("{context}: `roll.{key}`"),
                                 ["`roll.placement` \"roll\"", "`scene_correction.exposure`"],
@@ -5722,7 +5728,9 @@ fn resolve_frames(
                                 keep: states("hybrid_level_keep"),
                                 small_on: says("small_lift", "on"),
                                 thin_on: says("thin_lift", "on"),
-                                roll_placement: says("placement", "roll"),
+                                placement: ov.pointer("/roll/placement").and_then(|v| {
+                                    serde_json::from_value::<recipe::Placement>(v.clone()).ok()
+                                }),
                             },
                             PlacementNames::KEYS,
                             &format!("{context}: "),
@@ -6001,23 +6009,24 @@ impl ThinLiftNames {
     };
 }
 
-/// A lift typed (or stated in a manifest's `params`) would be ignored where the hybrid
-/// places the frame: a presence rule. Stated with the frame's tones it is the measured
+/// A lift typed (or stated in a manifest's `params`) would be ignored where the frame's own
+/// placement applies: a presence rule. Stated with the frame's tones it is the measured
 /// shape (`frames[].flag`), the fallback for `roll`, so the caller spares it, as it does a
 /// recipe file's.
-fn reject_a_lift_under_the_hybrid(
+fn reject_a_lift_under_a_frame_placement(
     r: &Recipe,
     stated: &str,
     [roll_placement, exposure]: [&str; 2],
 ) -> Result<()> {
-    if !r.applies_roll_to_scene_correction() || r.roll.hybrid().is_none() {
+    if !r.applies_roll_to_scene_correction() || r.roll.frame_placement().is_none() {
         return Ok(());
     }
     Err(NcError::Usage(format!(
-        "{stated} is a lift, which applies at the roll's placement, but the hybrid places this \
-         frame at its own slope and exposure in place of the lifts, so it would be ignored. \
-         To render the lift, use {roll_placement}; to move this frame's exposure under the \
-         hybrid, use {exposure}"
+        "{stated} is a lift, which applies at the roll's placement, but the {} placement \
+         places this frame at its own slope and exposure in place of the lifts, so it would \
+         be ignored. To render the lift, use {roll_placement}; to move this frame's exposure \
+         under its placement, use {exposure}",
+        r.roll.placement().name()
     )))
 }
 
@@ -6029,7 +6038,8 @@ struct PlacementNames {
     keep: &'static str,
     small_on: &'static str,
     thin_on: &'static str,
-    roll_placement: &'static str,
+    /// `--placement <value>`, or `roll.placement` stating it.
+    placement: fn(recipe::Placement) -> String,
 }
 
 impl PlacementNames {
@@ -6038,14 +6048,14 @@ impl PlacementNames {
         keep: "--hybrid-level-keep",
         small_on: "--small-lift on",
         thin_on: "--thin-lift on",
-        roll_placement: "--placement roll",
+        placement: |p| format!("--placement {}", p.name()),
     };
     const KEYS: Self = Self {
         span: "`roll.hybrid_span_stops`",
         keep: "`roll.hybrid_level_keep`",
         small_on: "`roll.small_lift` \"on\"",
         thin_on: "`roll.thin_lift` \"on\"",
-        roll_placement: "`roll.placement` \"roll\"",
+        placement: |p| format!("`roll.placement` \"{}\"", p.name()),
     };
 }
 
@@ -6056,12 +6066,12 @@ struct PlacementStated {
     keep: bool,
     small_on: bool,
     thin_on: bool,
-    roll_placement: bool,
+    placement: Option<recipe::Placement>,
 }
 
-/// A presence rule: a hybrid knob stated where the frame renders at the roll's placement,
-/// or a lift switched on where the hybrid places it, would be ignored. `prefix` leads
-/// each name (a manifest entry's context).
+/// A presence rule: a hybrid knob stated where the hybrid does not place the frame, or a
+/// lift switched on where the frame's own placement applies, would be ignored. `prefix`
+/// leads each name (a manifest entry's context).
 fn reject_a_knob_the_placement_ignores(
     r: &Recipe,
     stated: PlacementStated,
@@ -6072,42 +6082,66 @@ fn reject_a_knob_the_placement_ignores(
         return Ok(());
     }
     let roll = &r.roll;
+    let placement = roll.placement();
     let knob = [(stated.span, names.span), (stated.keep, names.keep)]
         .into_iter()
         .find_map(|(s, n)| s.then_some(n));
-    // What the frame lacks to be placed by the hybrid; `None` when both halves are stated
-    // (and the hybrid applies, or a value is invalid, which `validate` names).
-    let missing = match (roll.envelope_stops, roll.frame_tones, roll.span_slope()) {
-        (None, None, _) => Some("the roll's envelope and this frame's tones"),
-        (_, _, None) => {
-            Some("the roll's white and dark end (`roll.white_stops`, `roll.dark_stops`)")
-        }
-        _ => roll.hybrid_missing(),
-    };
     // A white without its dark end (or the reverse) is `validate`'s more specific fault.
     let half_span = roll.white_stops.is_some() != roll.dark_stops.is_some();
     if let Some(knob) = knob
-        && roll.hybrid().is_none()
+        && (placement != recipe::Placement::Hybrid || roll.frame_placement().is_none())
         && !half_span
     {
-        let message = if roll.placement() == recipe::Placement::Roll {
-            let by = if stated.roll_placement {
-                names.roll_placement.to_owned()
-            } else {
-                "the recipe's `roll.placement` \"roll\"".to_owned()
+        let message = if placement == recipe::Placement::Hybrid {
+            // What the frame lacks to be placed by the hybrid; `None` when both halves are
+            // stated (and the hybrid applies, or a value is invalid, which `validate` names).
+            let missing = match (roll.envelope_stops, roll.frame_tones, roll.span_slope()) {
+                (None, None, _) => Some("the roll's envelope and this frame's tones"),
+                (_, _, None) => {
+                    Some("the roll's white and dark end (`roll.white_stops`, `roll.dark_stops`)")
+                }
+                _ => roll.placement_missing(),
             };
-            Some(format!(
-                "{prefix}{knob} tunes the hybrid placement, but {by} renders this frame at the \
-                 roll's placement, so it would be ignored. Drop {knob}, or drop {by} to place \
-                 the frame with the hybrid"
-            ))
-        } else {
             missing.map(|missing| {
                 format!(
                     "{prefix}{knob} tunes the hybrid placement, but the recipe lacks {missing}, \
                      so this frame renders at the roll's placement and {knob} would be ignored. \
                      Drop {knob}, or use the recipe `hanten measure-roll` writes for the roll"
                 )
+            })
+        } else {
+            let by = if stated.placement == Some(placement) {
+                (names.placement)(placement)
+            } else {
+                format!("the recipe's `roll.placement` \"{}\"", placement.name())
+            };
+            Some(match (placement, roll.placement_missing()) {
+                // `frame` lacks what the hybrid needs too, so only dropping the knob helps.
+                (recipe::Placement::Frame, Some(missing)) => format!(
+                    "{prefix}{knob} tunes the hybrid placement, but {by} asks for the frame \
+                     placement, and the recipe lacks {missing}, so this frame renders at the \
+                     roll's placement and {knob} would be ignored. Drop {knob}"
+                ),
+                _ => {
+                    let does = if placement == recipe::Placement::Roll {
+                        "renders this frame at the roll's placement"
+                    } else {
+                        "places this frame from its own span, outside the hybrid"
+                    };
+                    // Dropping the placement helps only where the hybrid could place the frame.
+                    let hybrid_could = roll.envelope_stops.is_some()
+                        && roll.frame_tones.is_some()
+                        && roll.span_slope().is_some();
+                    let or_drop = if hybrid_could {
+                        format!(", or drop {by} to place the frame with the hybrid")
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{prefix}{knob} tunes the hybrid placement, but {by} {does}, so it would \
+                         be ignored. Drop {knob}{or_drop}"
+                    )
+                }
             })
         };
         if let Some(message) = message {
@@ -6121,13 +6155,14 @@ fn reject_a_knob_the_placement_ignores(
     .into_iter()
     .find_map(|(s, n)| s.then_some(n));
     if let Some(lift) = lift
-        && roll.hybrid().is_some()
+        && roll.frame_placement().is_some()
     {
         return Err(NcError::Usage(format!(
             "{prefix}{lift} turns on a lift, which applies at the roll's placement, but the \
-             hybrid places this frame at its own slope and exposure in place of the lifts, so \
-             it would be ignored. To render the lifts, use {}",
-            names.roll_placement
+             {} placement places this frame at its own slope and exposure in place of the \
+             lifts, so it would be ignored. To render the lifts, use {}",
+            placement.name(),
+            (names.placement)(recipe::Placement::Roll)
         )));
     }
     Ok(())
@@ -6733,19 +6768,20 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // only when no frame would use it; a frame without its tones warns (`convert_frame`).
     let typed = &args.knobs.roll;
     let on = Some(recipe::Switch::On);
-    let placed_by = |hybrid: bool| {
-        planned.iter().any(|pf| {
-            pf.recipe.applies_roll_to_scene_correction()
-                && pf.recipe.roll.hybrid().is_some() == hybrid
-        })
+    let some = |placed: fn(&recipe::RollSection) -> bool| {
+        planned
+            .iter()
+            .any(|pf| pf.recipe.applies_roll_to_scene_correction() && placed(&pf.recipe.roll))
     };
-    let (some_hybrid, some_roll) = (placed_by(true), placed_by(false));
+    let some_hybrid =
+        some(|r| r.placement() == recipe::Placement::Hybrid && r.frame_placement().is_some());
+    let some_roll = some(|r| r.frame_placement().is_none());
     let placement_flags = PlacementStated {
         span: typed.hybrid_span.is_some() && !some_hybrid,
         keep: typed.hybrid_level_keep.is_some() && !some_hybrid,
         small_on: typed.small_lift == on && !some_roll,
         thin_on: typed.thin_lift == on && !some_roll,
-        roll_placement: typed.placement == Some(recipe::Placement::Roll),
+        placement: typed.placement,
     };
     for pf in &planned {
         reject_a_knob_the_placement_ignores(
@@ -7475,8 +7511,8 @@ struct MeasureRollReport {
     small_lift: MeasuredSmallLift,
     /// The thin-frame lift (`nf-calibration/thin-frame-lift`).
     thin_lift: MeasuredThinLift,
-    /// The envelope hybrid (`nf-calibration/envelope-hybrid-placement`): each frame's is
-    /// its `hybrid`.
+    /// The placements (`nf-calibration/envelope-hybrid-placement`,
+    /// `nf-calibration/per-frame-placement`): each frame's are its `hybrid` and `frame`.
     placement: MeasuredPlacement,
     /// The gains, the white and the exposure in the forms a user freezes them in.
     reuse: RollReuse,
@@ -7614,10 +7650,14 @@ struct MeasuredFrame {
     /// under `--no-thin-lift` too, which only keeps it out of the recipe.
     #[serde(skip_serializing_if = "Option::is_none")]
     thin_lift: Option<roll_white::ThinLift>,
-    /// The frame's hybrid placement (`roll_white::hybrid_placement`) at the defaults, what
-    /// `convert` renders unless `--placement roll`; absent without its tones.
+    /// The frame's hybrid placement (`roll_white::hybrid_placement`) at the defaults: what
+    /// `convert` renders unless `--placement roll` or `frame`; absent without its tones.
     #[serde(skip_serializing_if = "Option::is_none")]
-    hybrid: Option<roll_white::HybridPlacement>,
+    hybrid: Option<roll_white::FramePlacement>,
+    /// The frame placed on its own (`roll_white::per_frame_placement`), what
+    /// `--placement frame` renders; absent without its tones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame: Option<roll_white::FramePlacement>,
     /// This frame's own `convert` flags, when they differ from `reuse.flag`: its tones, a
     /// clamped white or a lift written to the recipe.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7646,7 +7686,7 @@ struct Written {
 }
 
 impl MeasuredFrame {
-    /// What the hybrid places a picture frame from: its white, level and dark end, each
+    /// What the placements read of a picture frame: its white, level and dark end, each
     /// measured.
     fn stops(&self) -> Option<FrameStops> {
         Some(FrameStops {
@@ -7790,9 +7830,9 @@ fn reuse_flag(
     flag
 }
 
-/// The envelope hybrid's envelope and rule. `convert` places each frame at render time
-/// from its tones, so `--placement roll`, `--hybrid-span` and `--hybrid-level-keep` need
-/// no re-measure.
+/// The placements' inputs and rules: the hybrid's envelope (the default) and the
+/// per-frame placement's white. `convert` places each frame at render time from its
+/// tones, so `--placement`, `--hybrid-span` and `--hybrid-level-keep` need no re-measure.
 #[derive(Debug, Serialize)]
 struct MeasuredPlacement {
     /// `taste` (design-spec §6); `convert --placement roll` turns it off.
@@ -7811,6 +7851,8 @@ struct MeasuredPlacement {
     exposure_above_ev: f32,
     /// The steepest slope any placement sets.
     max_slope: f32,
+    /// Where `--placement frame` puts each frame's white, in look stops.
+    frame_white_look_stops: f32,
 }
 
 /// The thin-frame lift's rule and whether the recipe carries it.
@@ -8966,6 +9008,7 @@ fn measure_roll(
             lift_ev: None,
             thin_lift: None,
             hybrid: None,
+            frame: None,
             flag: None,
             memory,
         });
@@ -9107,6 +9150,9 @@ fn measure_roll(
                 roll_white::HYBRID_LEVEL_KEEP,
             )
         });
+        f.frame = f
+            .stops()
+            .map(|s| roll_white::per_frame_placement(s, exposure.ev));
     }
     frame_flags(
         &mut frames,
@@ -9122,9 +9168,10 @@ fn measure_roll(
         placed: frames.iter().filter(|f| f.hybrid.is_some()).count(),
         span_stops: roll_white::HYBRID_SPAN_STOPS,
         level_keep: roll_white::HYBRID_LEVEL_KEEP,
-        exposure_below_ev: roll_white::HYBRID_EXPOSURE_BELOW_EV,
-        exposure_above_ev: roll_white::HYBRID_EXPOSURE_ABOVE_EV,
+        exposure_below_ev: roll_white::FRAME_EXPOSURE_BELOW_EV,
+        exposure_above_ev: roll_white::FRAME_EXPOSURE_ABOVE_EV,
         max_slope: roll_white::MAX_SLOPE,
+        frame_white_look_stops: roll_white::FRAME_WHITE_LOOK_STOPS,
     };
     let small_lift = MeasuredSmallLift {
         kind: "taste",

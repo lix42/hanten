@@ -115,6 +115,15 @@ as 6 stops, before this. Open in `hybrid-slope-bounds`: the EV limit can push a 
 end below the roll's (17 archive frames), and the kept exposure's and envelope top's
 references.
 
+**`per-frame-placement` is done (2026-10-10, `pipeline_version` 13): `--placement frame`
+places each frame on its own**, opt-in: the span slope from the frame's own ends, its white
+at L\* 93 (4.462 look stops), no envelope; colour at the roll's slope. Review kept this
+white-pinned variant over a midtone-pinned one (43 / 12 / 7) and L\* 93 over 91 (47 / 6 /
+11); a brightness-keyed white was not adopted. **Every placement's exposure limits moved to
+±1 EV** around the roll's (were −1.5 / +0.5 above), which moves a measured roll's hybrid
+frames — the reason for v13. Report: `chain.roll.frame_placement` (was `hybrid`), `base_from`
+`"placement"` (was `"hybrid"`), `measure-roll`'s `frames[].frame`.
+
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
 slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
@@ -1731,10 +1740,117 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## per-frame-placement
 
-**Status:** not started
-**Updated:** 2026-10-09
+**Status:** done
+**Updated:** 2026-10-10
 
 - 2026-10-09: filed (user), split from `envelope-hybrid-placement`: the white-pinned and
   midtone-pinned per-frame placements the spike's review kept as choices. White target:
   start from `span-roll-slope`'s; the review adds one lower-target arm on low-key frames,
   since white-pinned brings every frame's white to the target.
+- 2026-10-10: **started; decided (user)**: both variants are built and the review decides;
+  they are `--placement white` and `--placement midtone` for now. **Open (user): whether two
+  per-frame placements earn their place** — if one is kept it becomes `--placement frame` —
+  and, if white-pinned stays, what its white is. The white is a constant,
+  `FRAME_WHITE_LOOK_STOPS` 4.049 (the spike's L\* 91): `span-roll-slope` put no white target
+  in code, so the task file's "its target" had none to reuse.
+- 2026-10-10: **implemented** (no `pipeline_version` bump: the default stays `hybrid`, and the
+  drift gate is unchanged).
+  - `roll_white::pinned_placement`, the spike's `a4b_probe.py` arms: slope
+    `SPAN_LOOK_STOPS / span` within the cap's 1.237 and 3.5 (`span_slope` from the frame's own
+    ends); exposure `4.049 / k − w` (white) or `LEVEL_TARGET_STOPS − level` (midtone, the
+    hybrid at α 0), then the hybrid's −1.5 / +0.5 EV limits. No envelope.
+  - Shared with the hybrid, renamed: `FramePlacement`, `SlopeBound`, `ExposureBound`,
+    `FRAME_EXPOSURE_BELOW_EV` / `ABOVE_EV`; `RollSection::frame_placement` (was `hybrid`) and
+    `placement_missing` (a per-frame placement needs only the frame's tones and the roll's
+    span); `SlopeBase::Placement`, so the report's `chain.look.base_from` is `"placement"`
+    and `chain.roll.hybrid` is `chain.roll.frame_placement` (`placement` says which).
+  - Colour stays at the roll's span slope, as under the hybrid (the spike held saturation).
+  - Presence rules name the placement: a lift under any frame placement; a hybrid knob under
+    `white` / `midtone` ("places this frame from its own span, outside the hybrid"); the
+    missing-tones warning names the placement it missed. `measure-roll` reports
+    `frames[].white_placement` / `midtone_placement` and `placement.white_look_stops`.
+- 2026-10-10: **archive re-measure** (`../temp/per-frame-placement/`, `table.txt`; eleven
+  rolls). Per-frame slopes 1.24–3.5 (hybrid 1.55–3.5); the maximum binds on 6 frames on
+  09-29, 3 on 09-18. Display black off, 09-29's darkest per-frame dark end is −7.3 look stops
+  (hybrid −5.7).
+  - **The +0.5 EV limit, not the white target, decides the low-key frames.** 15 of 209 frames
+    sit a stop or more under mid-grey after the roll's exposure. On the 7 darkest (09-29 2052,
+    2017, 2053, 2045; 09-13 1698; 09-09 1627; 09-20 1867) all three placements hit the limit,
+    whites +1.7…+3.9 look stops, short of 4.05, and white- and midtone-pinned render alike.
+    On the other 8, white-pinned is **darker** than the hybrid (−0.06 to −0.55 EV), their
+    whites being bright already. So the planned lower-target arm tested nothing here; the
+    review's fourth arm is white-pinned at L\* 93 (4.462) instead (user), the value
+    suggested after the spike's A3b round.
+- 2026-10-10: review set built (`../temp/per-frame-placement/review/`, `scripts/build.py`,
+  binary `../scripts/hanten-step1`): 09-29 and 09-18, the 66 measured frames, display black
+  off — hybrid / white at L\* 91 / midtone / white at L\* 93 (arm 2's slope, the white
+  re-pinned within the same limits, passed as `--exposure`); colour and black-and-white.
+  Medians over frames (`summary.txt`), L\* p1 / p50 / p97, and the spread of frames'
+  midtones (p90 − p10): 09-29 hybrid 11.4 / 51.7 / 80.3, spread 38.8; white 7.0 / 52.2 /
+  89.3, 55.0; midtone 5.4 / 51.2 / 85.2, 34.8; white 93 9.2 / 52.2 / 91.6, 55.7. 09-18
+  hybrid 12.3 / 51.0 / 81.8, 22.5; white 6.3 / 50.7 / 88.6, 41.6; midtone 6.6 / 51.6 / 89.1,
+  15.5; white 93 8.4 / 55.9 / 90.6, 40.3. Verdict pending.
+- 2026-10-10: **the exposure limits at ±1 EV** (user: −1.5 / +0.5 may date from the L\* 79
+  white; the spike's A5 chose −1.5 for overexposed frames wanting −1.6 to −2.8 EV and +0.5
+  against lifting night frames). Experiment binary `hanten-limits1` (`FRAME_EXPOSURE_BELOW_EV`
+  / `ABOVE_EV` 1.0 / 1.0, every placement), second set `../temp/per-frame-placement/review-limits/`,
+  same arms and frames. Nothing on these two rolls darkened, so −1 is untested here (white-
+  pinned met −1.5 on 07-23, 09-11, 09-20, 09-28). The +1 lifts 16 frames on 09-29 (up to
+  +0.5 EV; hybrid +0.40…+0.47 on 2045, 2052, 2053) and 15 slightly on 09-18 (≤ 0.22); frames
+  held at the limit, 09-29: hybrid 7 → 0, white 10 → 6, midtone 10 → 6; 09-18: midtone 5 → 0,
+  white 2 → 2. 09-29 median p50 rises 51.7 → 53.9 (hybrid), 52.2 → 58.8 (white), 51.2 → 57.6
+  (midtone), 52.2 → 62.4 (white 93); 09-18 barely moves. The drift gate does not fingerprint
+  the limits: adopting them needs a `pipeline_version` row by hand (the default's measured
+  renders move). Verdict pending.
+- 2026-10-10: **review verdict (user, `review-limits`, 64 of 66 frames noted; arms 2–4
+  ranked, the hybrid not)**: "seldom one arm is bad", but keep one per-frame placement.
+  Pairwise (`../temp/per-frame-placement/review-limits/notes/`, `verdicts.txt`, `tally.py`):
+  white at L\* 93 over white at 91 **47** / 6 tie / 11, over midtone **43** / 12 / 7; white
+  91 over midtone 31 / 16 / 15; 93 sole first on 35 frames, on both rolls. **Decided
+  (user): one placement, white-pinned, `--placement frame`, white at L\* 93**
+  (`FRAME_WHITE_LOOK_STOPS` 4.462; the dark end then lands at −4.59 look stops); midtone
+  and `Pin` removed.
+  - Where 93 lost (`losers.py`, `key.py`): to 91 on 8 frames, 7 of them high-key (L\* p50
+    65–83 under arm 4: 09-29 2026, 2033, 2035, 2036; 09-18 1797, 1798, 1824); to midtone on
+    5 darker ones (p50 37–46: 09-18 1790, 1791, 1800, 1812; 09-29 2027). **A
+    brightness-keyed target (user's idea, 91–93 by frame brightness) was not adopted**: over
+    the brightest 23 frames 93 still won 15 to 8 (brightest 10: 6 to 3), and on 09-18 frames
+    at the same brightness and slope split both ways (1797/1798/1824 chose 91, 1793/1795/1796
+    chose 93) — content, not brightness. Left as a lead for `hybrid-slope-bounds`.
+  - **The ±1 EV limits are kept** (user) for every placement, the hybrid included:
+    `pipeline_version` **13**, a row with v12's fingerprints (the limits act after the gate,
+    so it cannot ask for the bump), v12's behaviour frozen as a literal. The −1 end is
+    untested on the two reviewed rolls.
+  - Report: `measure-roll` gives `frames[].frame` beside `frames[].hybrid` and
+    `placement.frame_white_look_stops`. `design-spec` §6 (the preference table gains the
+    per-frame placement), §8, §9 and `using-nc.md` updated; the guide's examples re-run on
+    fixtures and its `measure-roll` report on 09-18 (the stated film base).
+- 2026-10-10: **`/code-review high`**, 10 findings. Fixed: `--placement frame` without the
+  roll's white and dark end rendered the fallback with no word of the placement — `frame`,
+  always stated, now warns naming what it lacks (span, tones or both); a hybrid knob under
+  `frame` on a frame without tones claimed `frame` placed it and offered dropping `frame`,
+  which the hybrid's same missing tones defeat — it now names the missing tones and offers
+  only dropping the knob (binary test follows the remedy); `per_frame_placement` reuses
+  `span_slope` rather than repeating it; the roll's span joins `frame`'s finiteness check;
+  "the frame's frame slope" wording; `base_from`'s value lists in the guide and the spec;
+  two stale comments. Declined: compatibility for the renamed report fields (pre-release),
+  and refusing `--roll-envelope` under `frame` (a measurement, ignored under `roll` alike).
+- 2026-10-10: **ship review** (`ship:diff-reviewer` + Codex). Both found that a hybrid knob's
+  refusal offered dropping the placement (`frame` or `roll`) where the hybrid could not
+  place the frame either (no envelope): the remedy is now offered only when the envelope,
+  the tones and the roll's span are all stated (binary test follows the other one).
+  Fixed too: the `PIPELINE_VERSION` history table's v13 row; §4's and §5's recipe `meta`
+  in the guide (13).
+- 2026-10-10: **done.** Landed: `--placement frame` / `roll.placement` `"frame"`
+  (`roll_white::per_frame_placement`: the span slope from the frame's own ends, its white at
+  `FRAME_WHITE_LOOK_STOPS` 4.462 ≈ L\* 93, colour at the roll's slope), chosen by review
+  over a midtone-pinned variant and L\* 91; every placement's exposure limits at ±1 EV
+  (`pipeline_version` 13). Verified: unit and binary tests (every refusal's remedy
+  followed), the archive re-measure, two whole-roll review sets, the guide's examples on
+  fixtures and 09-18, all CI gates and the asset probes; reviewed by `/code-review`,
+  `ship:diff-reviewer` and Codex. **For dependents:** `hybrid-slope-bounds` now tunes the
+  maximum across `hybrid` and `frame` and owns the ±1 limits (the −1 end unreviewed) and
+  the high-key lead (L\* 91 won on 7 of them). The shared types are `FramePlacement`,
+  `SlopeBound`, `ExposureBound`, `RollSection::frame_placement` / `placement_missing`;
+  the report's `chain.roll.frame_placement` and `base_from` `"placement"` replace the
+  hybrid-only names.
