@@ -57,8 +57,8 @@ The deterministic core owns the image science. Any future ML assistance (see
 ### Out of scope — see §12 Roadmap
 
 - IR-based dust/scratch removal.
-- Black & white film, incl. single-channel gray scans (`io/gray-primary-decode`,
-  `algo/bw-support`).
+- Black & white film, incl. single-channel gray scans. Where mono enters the chain
+  is decided ([`design/mono.md`](design/mono.md)); the implementation is not.
 - Camera RAW (Bayer/X-Trans) input, DNG processing.
 - ML/AI assistance of any kind (auto-crop, neutral-patch detection, inpainting).
 - GUI, scanner ICC profiling workflow.
@@ -792,6 +792,10 @@ not a measurement:
   would be explicitly selected, recorded with their identity and provenance, and
   block nothing; absence is a bit-identical no-op.
 
+**A monochrome negative** passes the 3×3 as R = G = B, which the row sums keep
+neutral to within a couple of f32 ULP between channels; what "Rec.709 primaries" declares is moot for one
+signal ([`design/mono.md`](design/mono.md)).
+
 Where the 3×3 should ultimately live — reconstruction output in film-layer space,
 with the move into a working space becoming scene correction's — is open (§13).
 
@@ -1258,7 +1262,8 @@ and keys are listed at the end of this section.
   `"unknown"`) — the declared film chemistry. **Provenance only: it gates nothing.**
   IR-assisted film-holder detection (§6.1) is enabled by *measuring* the IR plane,
   not by this declaration. Kept as a shared input-medium axis for the deferred IR
-  dust-removal stage (§12 item 1) and `bw-support`; accepted on `convert`,
+  dust-removal stage (§12 item 1) and for B&W, where `silver` is to select the mono
+  decode on a three-channel scan ([`design/mono.md`](design/mono.md)); accepted on `convert`, `roll`,
   `measure-base`, and `inspect`, and echoed back as the report's `film_type` (per frame
   on `roll`; omitted for `unknown`) so a declaration is never parsed and dropped.
   `hanten inspect` and `hanten measure-base` report `ir_separability` (the measured
@@ -2308,9 +2313,11 @@ shipped or retired item keeps its number and shrinks to one line.
    What remains is in rendering — per-stock normalization and print emulation as look
    controls — plus, possibly, a model for camera-scanned negatives (item 4).
 3. **Black & white film.** Input: a single-channel gray primary
-   (`io/gray-primary-decode`) and plain 16-bit RAW scans. Rendering:
-   `algo/bw-support`, with where mono pools in the chain `nf-reconstruction/mono-decode`.
-   B&W negatives have no orange mask and no IR defect channel (silver blocks IR), so
+   (`io/gray-primary-decode`) and plain 16-bit RAW scans. Where mono enters is
+   decided by the film's signal count ([`design/mono.md`](design/mono.md)): a gray
+   scan or a declared-silver RGB scan becomes mono in the decode, a dye negative
+   rendered mono in the look.
+   Silver negatives have no orange mask and no IR defect channel (silver blocks IR), so
    item 1 must be disabled for them.
 4. **Camera RAW input.** Bayer/X-Trans and DNG ingestion (e.g. `rawler`/LibRaw)
    to support camera-scanning workflows.

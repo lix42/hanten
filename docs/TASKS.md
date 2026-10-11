@@ -160,6 +160,7 @@ graph TD
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
+  io --> nf-reconstruction
   nf-scene-correction --> io
   nf-look --> nf-calibration
   nf-reconstruction --> nf-calibration
@@ -354,6 +355,7 @@ graph TD
     nf-reconstruction/gamma-split
     nf-reconstruction/curve-endpoint-warning
     nf-reconstruction/mono-decode
+    nf-reconstruction/mono-input
   end
   subgraph nf-scene-correction
     nf-scene-correction/stage
@@ -377,6 +379,7 @@ graph TD
     nf-look/desaturation-band-fit
     nf-look/contrast-definition
     nf-look/contrast-on-luminance
+    nf-look/mono-mix
   end
   subgraph nf-display-stages
     nf-display-stages/fit-range
@@ -705,6 +708,9 @@ graph TD
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-calibration/envelope-hybrid-placement --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
+  nf-reconstruction/mono-decode --> nf-reconstruction/mono-input
+  io/gray-primary-decode --> nf-reconstruction/mono-input
+  nf-reconstruction/mono-decode --> nf-look/mono-mix
   nf-core/stage-skeleton --> nf-scene-correction/stage
   nf-reconstruction/fixed-decode --> nf-scene-correction/stage
   nf-scene-correction/stage --> nf-scene-correction/flare-removal
@@ -818,7 +824,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `io/gray-primary-decode` (post-MVP, **low priority**): `io/silverfast-decode`
   — accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it:
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
-  `algo/bw-support` explicitly excludes input-format work. Blocks `algo/bw-support`
+  `algo/bw-support` explicitly excludes input-format work. Blocks the one-channel half of
+  `nf-reconstruction/mono-input`
 - `io/positive-input-mode` (post-MVP): `io/input-data-semantics`, `color/film-master-render-pipeline`
 - `io/slide-film-input` (post-MVP, **low priority**): `io/positive-input-mode`, `nf-scene-correction/stage`
 - `io/scanner-density-calibration` (post-MVP): `io/input-data-semantics`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
@@ -954,7 +961,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `algo/near-black-collapse-warning` (post-MVP; split from `algo/density-safety-bounds` 2026-10-01, **needs real scans**): `algo/density-safety-bounds`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/regional-color-balance` (post-MVP): `algo/density`
-- `algo/bw-support` (post-MVP): `algo/density`, `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `io/gray-primary-decode`
+- `algo/bw-support` (post-MVP, **closed—superseded** by `nf-reconstruction/mono-input` and `nf-look/mono-mix`; the deps below are decision history): `algo/density`, `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `io/gray-primary-decode`
 - `color/management`: `core/project-foundation`
 - `color/film-rgb-working-space` (post-MVP): `algo/negative-reconstruction-density-curves`, `color/management`
 - `color/film-master-render-pipeline` (post-MVP): `color/film-rgb-working-space`, `film-base/dmax-reference`
@@ -1132,8 +1139,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   — supersedes `algo/curve-endpoint-validation`: read the endpoint off the
   renderer's own curve, at warning tier
 - `nf-reconstruction/mono-decode` (new flow): `nf-reconstruction/fixed-decode`
-  — a gap — the design is written for three dye layers and says nothing about
-  where mono pools
+  — decided in `docs/design/mono.md`; pending the HP5 measurements
+- `nf-reconstruction/mono-input` (new flow): `nf-reconstruction/mono-decode`, `io/gray-primary-decode`
+  — supersedes `algo/bw-support`'s input half: a gray scan, or a three-channel scan
+  declared `--film-type silver`, becomes one signal in the decode; the gray reader is
+  needed only for the one-channel half
 - `nf-scene-correction/stage` (new flow): `nf-core/stage-skeleton`, `nf-reconstruction/fixed-decode`
   — white balance and exposure resolved once and reported, instead of a fused
   expression
@@ -1354,6 +1364,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
+- `nf-look/mono-mix` (new flow): `nf-reconstruction/mono-decode`
+  — supersedes `algo/bw-support`'s rendering half: a dye negative rendered mono, pooled
+  with weights first in the look
 - `nf-calibration/span-roll-slope` (new flow): `nf-calibration/level-target-zero`, `nf-scene-correction/midtone-neutral`, `nf-look/contrast-on-luminance`
   — filed 2026-10-09 (split from `envelope-hybrid-placement`, absorbing `display-white`):
   the per-roll slope from the roll's span, and the display white it maps to
@@ -1467,7 +1480,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   exit code 6; peak on the 74.65 MP `largest.tif` 3.808 → 3.146 GB and 975 → 681 MB
   at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement
   feeds `io/streaming-tiled-io` STEP 0 (still a conditional GO).
-- [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work — so `algo/bw-support` is blocked behind this
+- [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work. Blocks the one-channel half of `nf-reconstruction/mono-input`; it becomes three equal channels inside ([`design/mono.md`](design/mono.md))
 - [x] [Negatives scanned in positive mode](tasks/io/positive-input-mode.md) — convert a negative scanned in SilverFast's positive mode (same raw transmission, IT8 profile recorded, not applied), warning when a frame does not look like a negative under its base
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — **low priority** (user, 2026-10-08): no slide scans to verify against. Convert positive (E-6) film: no film base or decode, enters at the working space; the embedded SilverFast IT8 profile is the likely scanner characterization
 - [ ] [Scanner density calibration](tasks/io/scanner-density-calibration.md) — turn the
@@ -1601,7 +1614,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   mid-grey lands identically on every stock (decided 2026-09-16).
   **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
-- [ ] [Black & white negative support (mono color model)](tasks/algo/bw-support.md)
+- [x] [Black & white negative support (mono color model)](tasks/algo/bw-support.md) — **closed—superseded** (2026-10-09) by `nf-reconstruction/mono-input` and `nf-look/mono-mix`: its placement predates the new chain ([`design/mono.md`](design/mono.md)); retained as decision history
 - [x] [Density safety bounds](tasks/algo/density-safety-bounds.md) — **done 2026-10-01**:
   a value no longer reaches fit range's internal errors — `recipe::validate_render` probes
   the film base and the reachable scan range through the real decode and grade, and
@@ -1950,9 +1963,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   a measured frame whose middle lands above +1.5 stops and dark end above −1.5, or
   (no tones, and not a roll's exposure alone) a base under 2 stops below mid-grey.
   Silent on every archive frame at its default
-- [ ] [Where black-and-white fits the new
-  chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
-  written for three dye layers and says nothing about where mono pools
+- [~] [Where black-and-white fits the new
+  chain](tasks/nf-reconstruction/mono-decode.md) — decided in
+  [`design/mono.md`](design/mono.md); pending the HP5 measurements
+- [ ] [Mono input in the decode](tasks/nf-reconstruction/mono-input.md) — a gray scan,
+  or a three-channel scan declared `--film-type silver`, decoded as one signal and
+  carried as R = G = B; the per-channel knobs that could only tint are refused
 
 ### nf-scene-correction — [progress](progress/nf-scene-correction.md)
 > Photographic corrections as a named stage: white balance, exposure and the midtone neutral.
@@ -2049,6 +2065,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   setting](tasks/nf-look/contrast-on-luminance.md) — **done 2026-10-09:** contrast moves
   luminance only; `look.saturation` multiplies the colour's base slope × 1.15 (`default`,
   by review) or × 1 (`direct`); `pipeline_version` 10
+- [ ] [Mono as a rendering](tasks/nf-look/mono-mix.md) — a dye negative (colour or
+  chromogenic B&W) rendered mono: a weighted pool first in the look, after white balance
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the

@@ -726,7 +726,51 @@ its default; with display black on, its own warning stands instead.
 
 ## mono-decode
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** in progress
+**Updated:** 2026-10-09
 
 - 2026-09-19: created with the new-flow plan. Goal: where black-and-white fits the new chain.
+- 2026-10-09: **decided with the user, written up in
+  [`docs/design/mono.md`](../design/mono.md); no code.** The film's signal count
+  decides where mono enters, not the file's channel count. The user confirmed that
+  B&W scans arrive both ways (one gray channel, or three RGB channels) and that both
+  must render alike.
+
+  **A silver negative becomes mono in the decode.** A one-channel scan is decoded with
+  one curve. A three-channel scan declared `--film-type silver` is divided by each
+  channel's base and pooled into one signal first. Either way the signal is copied into
+  R = G = B before the 3×3, and white balance, the midtone neutral and `channel_grade`
+  are refused. **A dye negative rendered mono** (colour or chromogenic B&W) is pooled
+  with weights first in the look, after white balance.
+
+  Facts that settled it, all from the code:
+  - The NC film RGB v1 rows sum to 1 within about 5e-8, so R = G = B leaves the 3×3
+    with channels within a couple of f32 ULP of each other.
+  - Every stage after scene correction except `channel_grade` keeps a neutral pixel
+    neutral.
+  - The decode's `scale [1, 0.84, 0.73]` would give one silver signal a tint that
+    changes with brightness, which white balance cannot remove. So the mono decode reads
+    red's entries only.
+  - `input.film_type` already existed as "provenance, gates nothing", reserved for
+    this. It becomes the switch for the three-channel case. The IR holder detection
+    stays measured.
+
+  **Carried tasks:** `algo/bw-support` is closed as superseded by
+  `nf-reconstruction/mono-input` and `nf-look/mono-mix`. `io/gray-primary-decode`'s
+  first open question is closed (copy the channel into three), and its memory question
+  now asks for its own figures.
+
+  **Still pending: the scans.** The HP5 roll the gray task cites is in neither
+  `../nc-assets` nor the archive. The user will provide one recording of each kind.
+  Those settle the pooling domain and weights, whether the one-channel file is one
+  scanner channel or a mix of them, silver's per-channel base, and IR on silver.
+  `mono.md` marks each of these as pending.
+
+## mono-input
+
+**Status:** not started
+**Updated:** 2026-10-09
+
+- 2026-10-09: created by `mono-decode`, superseding `algo/bw-support`'s input half.
+  Goal: a silver negative decoded as one signal, whether recorded as one channel or
+  three.

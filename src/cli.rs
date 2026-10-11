@@ -761,7 +761,7 @@ pub struct InputOverrides {
     /// separability tracks the frame's accumulated density rather than the stock's
     /// chemistry (an unexposed silver frame separates; its own leader does not).
     /// Recipe key `input.film_type`. Kept as a shared input-medium declaration the
-    /// black & white `bw-support` task and the separate IR dust-removal task still
+    /// `nf-reconstruction/mono-input` task and the separate IR dust-removal task still
     /// need.
     #[arg(long = "film-type", value_enum, value_name = "TYPE")]
     pub film_type: Option<FilmType>,

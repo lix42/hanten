@@ -29,26 +29,32 @@ is not one case. The candidate stages, each with a consequence to weigh:
 Those two cases may want different answers. Saying so explicitly is part of the
 deliverable.
 
+## Decision
+
+Recorded in [`docs/design/mono.md`](../../design/mono.md). This task stays `[~]` until
+the HP5 measurements land: one frame recorded as one gray channel and as three RGB
+channels. They settle the pooling domain and weights, silver's per-channel base, and
+IR on silver.
+
 ## What depends on this
 
-Two existing tasks are carried and blocked on the answer:
-
-- [`algo/bw-support`](../algo/bw-support.md) places pooling "post-algorithm,
-  pre-output-transform" — a seam the new chain does not have. Its knob shape (one
-  enum, weights, validation against the resolved model) is still sound; its placement
-  is not.
-- [`io/gray-primary-decode`](../io/gray-primary-decode.md) cannot be finished without
-  it: its first open question — replicate the single channel into three, or add a
-  one-channel variant — is this decision seen from the input end, and it also changes
-  `pipeline::memory`'s per-pixel figures.
+[`algo/bw-support`](../algo/bw-support.md) is superseded by
+[`mono-input`](mono-input.md) (silver, in the decode) and
+[`nf-look/mono-mix`](../nf-look/mono-mix.md) (a dye negative rendered mono, in the
+look). [`io/gray-primary-decode`](../io/gray-primary-decode.md)'s first open question
+is answered: copy the one channel into three.
 
 ## Open questions
 
-- Does `density.scale` apply to a silver negative at all, and is the answer the same
-  for chromogenic B&W?
-- Is mono a **mode** (the chain differs throughout) or a **stage** (one pooling step in
-  an unchanged chain)? The first is honest about how much differs; the second is far
-  less code. And: grayscale encode, or 3-channel R == G == B as `bw-support` assumed?
+- *Answered:* does `density.scale` apply to silver? No, the mono decode reads only the
+  red entries. Chromogenic B&W takes the colour route and keeps the colour `scale`
+  until measured.
+- *Answered:* mode or stage? Neither: mono enters in the decode (silver) or in the
+  look (a dye negative); after the decode no stage needs a mono branch.
+- *Answered:* grayscale encode or R = G = B? Three channels with R = G = B; a
+  grayscale encode is a follow-up.
+- *Pending the HP5 scans:* whether silver gets its own `scale` default, and whether
+  the one-channel and pooled three-channel decodes agree.
 
 ## How to Verify
 

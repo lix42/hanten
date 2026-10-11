@@ -70,7 +70,7 @@ second copy that looks equally authoritative.
 
 ## Collected, not yet consumed
 
-Black-and-white sheets, for `algo/bw-support`: Kodak T-Max 100 / 400, Tri-X 320/400 and the
+Black-and-white sheets, for `nf-reconstruction/mono-input`: Kodak T-Max 100 / 400, Tri-X 320/400 and the
 `ED-BWF` processing sheet; Ilford Delta 100 / 400 / 3200, FP4+, HP5+, Pan F+, SFX 200, Ortho
 Plus, XP2 Super; Kentmere Pan 100 / 200 / 400.
 
