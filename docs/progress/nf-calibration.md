@@ -1854,3 +1854,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
   `SlopeBound`, `ExposureBound`, `RollSection::frame_placement` / `placement_missing`;
   the report's `chain.roll.frame_placement` and `base_from` `"placement"` replace the
   hybrid-only names.
+- 2026-10-10: **rebased onto `nf-reconstruction/curve-endpoint-warning`** (#264). Its
+  `SlopeBase::phrase` named the removed `Hybrid`; it is `Placement` now ("the frame
+  placement's slope"). Its "pushed up" warning under `--placement frame`, estimated on the
+  archive from the tones (`../temp/per-frame-placement/scripts/pushed_up.py`, look stops,
+  an upper bound): 0 of 209 frames, the nearest 09-14 1719 (middle 1.41, dark −0.31).

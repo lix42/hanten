@@ -636,7 +636,7 @@ impl SlopeBase {
             SlopeBase::Fallback => "the fallback slope",
             SlopeBase::Direct => "`direct`'s pinned slope",
             SlopeBase::Thin => "the thin slope (`roll.thin_slope`)",
-            SlopeBase::Hybrid => "the hybrid placement's slope",
+            SlopeBase::Placement => "the frame placement's slope (`roll.placement`)",
         }
     }
 }
