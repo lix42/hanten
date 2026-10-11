@@ -90,12 +90,11 @@ warm updates, but a same-size edit would go undetected).
   frame `real`; stock from a `<date>-<Stock><speed>` roll name, else `unknown`.
   Correct a role by editing `manifest.json`; the edit is preserved thereafter.
 - **A frame's `role` is the only way to keep a non-picture frame out of a
-  measurement.** Consumers filter on `role == "real"`; no density or span threshold
+  measurement.** Consumers keep only `real` frames; no density or span threshold
   can do it, because a half-leader/half-base frame has the *largest* density span on
   its roll — what it lacks is scene content. Give such a frame a non-`real` role.
-  Not every consumer honours that yet:
-  `manifest roles` and `shadow_metrics` count `calibration` as `real`, and `nctool
-  roll` refuses its roll (`analysis/calibration-role-consumers`).
+  Use a role from `nctool.manifest.ROLES`: `validate` flags any other spelling, and
+  most consumers count it as `real`.
 - `converted/nc/*` buckets default `regenerable: true` (sha256 skipped, since the
   harness reproduces them) except `V0`; `nlp/*` and everything else are hashed.
 - `source_frame` for a converted output is resolved by matching its filename stem

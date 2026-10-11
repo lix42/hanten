@@ -106,6 +106,7 @@ Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode
 - **What "role" a calibration frame gets in the manifest.** The existing roles
   describe a roll's frames (leader, unexposed, picture); a bracketed target frame is
   a fourth kind and needs its exposure offset and lighting recorded alongside it.
+  A new role goes in `nctool.manifest.ROLES` and `shadow_metrics.rs`'s match.
 - **Whether one measurement command serves every consumer**, or each wants its
   own read of the same frames. Worth resolving before writing any of them.
 - **How much scatter survives the protocol.** The bracket removes exposure ambiguity

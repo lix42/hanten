@@ -1847,7 +1847,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   2026-10-01. A frame or roll new to the manifest is seeded from its name: `base` /
   `leader` / `calibration` stems give those roles, and stock is parsed from a
   `<date>-<Stock><speed>` roll name. A from-scratch generation reproduces the live manifest.
-- [ ] [Teach the role consumers the `calibration` role](tasks/analysis/calibration-role-consumers.md) — `manifest roles` and `shadow_metrics` count it as `real`; `nctool roll` refuses the roll
+- [x] [Teach the role consumers the `calibration` role](tasks/analysis/calibration-role-consumers.md) — **done 2026-10-10**: `manifest roles`, `nctool roll`, `viewer` and `shadow_metrics` leave a `calibration` frame out of `real`; the known roles are `nctool.manifest.ROLES`, and `validate` flags any other spelling
 - [x] [`nctool`'s default-binary test depends on the
   checkout](tasks/analysis/review-test-local-binary.md) — fails whenever
   `target/release/hanten` exists; CI never builds one, so only local gates see it

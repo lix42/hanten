@@ -182,6 +182,27 @@ class TestRoles(Base):
         # folded into real, not dropped:
         self.assertEqual(out.strip(), "RollA|u.tif|l.tif|r1.tif x.tif")
 
+    def test_an_unhashable_role_warns_instead_of_crashing(self):
+        self.write_manifest({"schema_version": 1, "rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/u.tif", "role": "unexposed"},
+            {"file": "rolls/RollA/r1.tif", "role": ["real"]},
+        ]}}})
+        rc, out, err = self.roles()
+        self.assertEqual(rc, 0)
+        self.assertIn("unrecognized role ['real']", err)
+        self.assertEqual(out.strip(), "RollA|u.tif||r1.tif")
+
+    def test_calibration_frame_is_not_real(self):
+        self.write_manifest({"schema_version": 1, "rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/u.tif", "role": "unexposed"},
+            {"file": "rolls/RollA/c.tif", "role": "calibration"},
+            {"file": "rolls/RollA/r1.tif", "role": "real"},
+        ]}}})
+        rc, out, err = self.roles()
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertEqual(out.strip(), "RollA|u.tif||r1.tif")
+
     def test_no_manifest_is_operational_error(self):
         rc, _, err = self.roles()
         self.assertEqual(rc, 2)
@@ -725,6 +746,22 @@ class TestValidate(Base):
         rc, out, _ = self.validate()
         self.assertEqual(rc, 1, out)
         self.assertIn("rolls/RollA/r1.tif patches is not a list (NoneType)", out)
+
+    def test_an_unknown_role_is_a_problem(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["frames"][1]["role"] = "leadr"
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("UNKNOWN ROLES", out)
+        self.assertIn("rolls/RollA/r1.tif 'leadr'", out)
+
+    def test_a_calibration_role_validates_clean(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["frames"][1]["role"] = "calibration"
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 0, out)
 
     def test_well_formed_patches_validate_clean(self):
         m = self._clean_manifest()

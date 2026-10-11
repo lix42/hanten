@@ -153,9 +153,9 @@ def roll_recipe(nc: str, assets: dict, asset_root: str, roll: str, out_dir: str)
     run, so a set never renders under another build's measurement."""
     path = os.path.join(out_dir, "recipes", f"{roll}.json")
     frames = _roll_frames(assets, roll)
-    by_role = lambda role: [os.path.join(asset_root, f["file"]) for f in frames
-                            if f.get("role") == role]
-    real, unexposed, leader = by_role("real"), by_role("unexposed"), by_role("leader")
+    by_role = {role: [os.path.join(asset_root, f["file"]) for f in group]
+               for role, group in _manifest.group_by_role(roll, frames).items()}
+    real, unexposed, leader = by_role["real"], by_role["unexposed"], by_role["leader"]
     if not real or len(unexposed) != 1 or len(leader) != 1:
         raise ViewerError(f"roll {roll!r} needs real frames, one unexposed frame and one "
                           "leader in the asset manifest")

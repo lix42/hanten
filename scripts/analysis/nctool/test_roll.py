@@ -574,6 +574,30 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(run_mock.call_count, 5)
 
 
+class TestRollFrames(unittest.TestCase):
+    @staticmethod
+    def frames(*roles: str) -> dict:
+        return {"rolls": {"R": {"frames": [_frame(f"rolls/R/{i}.tif", role)
+                                           for i, role in enumerate(roles)]}}}
+
+    def test_a_calibration_frame_is_kept_out_of_the_real_frames(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            by_role, error = roll._roll_frames(
+                self.frames("unexposed", "calibration", "real"), "R")
+        self.assertIsNone(error)
+        self.assertEqual([f["file"] for f in by_role["real"]], ["rolls/R/2.tif"])
+        self.assertEqual(err.getvalue(), "")
+
+    def test_an_unknown_role_warns_and_counts_as_real(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            by_role, error = roll._roll_frames(self.frames("unexposed", "leadr"), "R")
+        self.assertIsNone(error)
+        self.assertEqual([f["file"] for f in by_role["real"]], ["rolls/R/1.tif"])
+        self.assertIn("unrecognized role 'leadr'", err.getvalue())
+
+
 class TestStripJsonc(unittest.TestCase):
     def test_comments_go_and_strings_and_lines_stay(self):
         text = '{"a": "x // y", /* two\nlines */ "b": 1} // end'

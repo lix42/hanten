@@ -207,9 +207,11 @@ fn roles(assets: &Path, roll: &str) -> Roles {
     for f in frames {
         let rel = f["file"].as_str().unwrap();
         let p = assets.join(rel);
+        // Mirrors `nctool`'s `manifest.ROLES`: an unknown role counts as `real`.
         match f["role"].as_str().unwrap_or("real") {
             "leader" => out.leader.push(p),
             "unexposed" => out.unexposed.push(p),
+            "calibration" => {}
             _ => out.real.push(p),
         }
     }
@@ -538,6 +540,25 @@ fn characterise_reference_frames() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roles_keep_a_calibration_frame_out_of_real_and_count_an_unknown_role_as_real() {
+        let dir = std::env::temp_dir().join(format!("nc-shadow-roles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let frame = |file: &str, role: &str| serde_json::json!({"file": file, "role": role});
+        let manifest = serde_json::json!({"rolls": {"R": {"frames": [
+            frame("u.tif", "unexposed"),
+            frame("c.tif", "calibration"),
+            frame("r.tif", "real"),
+            frame("x.tif", "leadr"),
+        ]}}});
+        std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+        let r = roles(&dir, "R");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(r.real, [dir.join("r.tif"), dir.join("x.tif")]);
+        assert_eq!(r.unexposed, [dir.join("u.tif")]);
+        assert!(r.leader.is_empty());
+    }
 
     #[test]
     fn percentile_is_nearest_rank_and_handles_edges() {

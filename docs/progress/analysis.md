@@ -129,8 +129,9 @@ What other epics need to know about `analysis`:
   operational. The harness's roll list comes from `manifest roles`, not a
   hard-coded array. A frame or roll new to the manifest is seeded from its name
   (`base` → `unexposed`, `leader`, `calibration`; stock from `<date>-<Stock><speed>`),
-  so a lost manifest regenerates its roles (2026-10-01). Not every consumer honours
-  `calibration` yet — `analysis/calibration-role-consumers`.
+  so a lost manifest regenerates its roles (2026-10-01). The known roles are
+  `manifest.ROLES`; every consumer keeps a non-`real` role out of picture measurements,
+  and most count an unknown spelling as `real` with a warning (2026-10-10).
 - **`python -m nctool compare {run,diff}`** was added by
   `core/conversion-versioning` (logged in `docs/progress/core.md`): it converts the
   fixed benchmark set in `scripts/analysis/benchmark.json` under one `nc` build and
@@ -1139,12 +1140,32 @@ What other epics need to know about `analysis`:
 
 ## calibration-role-consumers
 
-**Status:** not started
-**Updated:** 2026-10-01
+**Status:** done (2026-10-10)
+**Updated:** 2026-10-10
 
 - 2026-10-01: filed from `manifest-seed-roles`. `2026-09-11-Portra400`'s `calibration.tif`
   is counted as `real` by `manifest roles` (with a warning) and by `shadow_metrics`
   (silently), and `nctool roll` refuses the roll; only `branch_probe` filters it out.
+- 2026-10-10: done. `nctool.manifest.ROLES` (`unexposed`, `leader`, `calibration`, `real`)
+  is the one list of known roles, and `manifest.group_by_role` the one grouping:
+  `manifest roles`, `nctool roll` and `viewer`'s `measure-roll` recipe use it, so a
+  `calibration` frame stays out of `real` with no warning. **An unknown role warns and
+  counts as `real`** (user's choice, over refusing): `nctool roll` no longer refuses it,
+  so a typo'd reference frame is measured as a picture in measure mode — the warning on
+  stderr is the only sign. `manifest validate` reports it under `UNKNOWN ROLES` (exit 1).
+  `shadow_metrics.rs` skips `calibration` and counts any other unknown role as `real`,
+  so it keeps its own copy of the non-picture roles; `branch_probe` and `film_base`
+  still keep only `real` and drop an unknown role. The harness's `classify` stage shows
+  role `-` for a frame outside the roll's `roles` row and does not check it, so
+  `calibration.tif` no longer counts as an expected picture.
+  Verified: on the live manifest, `manifest roles` gives `2026-09-11-Portra400` six
+  picture frames without `calibration.tif` and no warning, and `nctool roll`'s frame
+  selection matches; the manifest has no unknown role. `shadow_metrics`' `FIXTURES` do
+  not include that roll, so a unit test over a temporary manifest covers its `roles()`.
+  Gates green (`cargo test` 794 + 1 + 273 + 32, `nctool` 588). Codex and the diff
+  reviewer found nothing.
+  For `calibration-frame-capture`: a new role goes in `ROLES` **and** in
+  `shadow_metrics.rs`'s match.
 
 
 ## display-acceptance-harness
