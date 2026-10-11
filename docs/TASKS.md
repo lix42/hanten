@@ -999,7 +999,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 - `output/sdr-preset-followups` (post-MVP; no downstream blockers): `output/presets`
 - `output/adobe-rgb-gamut` (post-MVP): `output/presets`
-- `output/sdr-report-block` (post-MVP): `output/presets`
+- `output/sdr-report-block` (post-MVP, **closed—no block** 2026-10-11; the dep below is decision history): `output/presets`
 - `output/sdr-jpeg-preset` (post-MVP): `output/presets`, `output/sdr-display-rendering`
 - `output/float-tiff-in-readers` (post-MVP; from the viewer rubric 2026-10-07): `analysis/viewer-interoperability`
 - `output/linear-render` (**done** 2026-09-01; no downstream blockers):
@@ -1657,10 +1657,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is `analysis/android-gain-map-check`'s (split 2026-10-04)
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
 - [x] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
-- [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — *re-scoped
-  2026-09-30*: the render is in `chain` now; open is whether the SDR TIFF (and the gain-map base)
-  needs an encoder block like `hdr_linear_tiff` / `hdr_coded_tiff`, or whether its ICC profile
-  already says everything
+- [x] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — **closed—no
+  block** (2026-10-11): the SDR TIFF and the gain-map base need no encoder block. An SDR encoding
+  states no absolute luminance, so its ICC profile and `chain.destination` define it, and the gain
+  map's values are in `chain.gain_map`; recorded in design-spec §5 and `docs/using-nc.md`
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
 - [ ] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. Find a signal Apple acts on, or declare it an editor format
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /

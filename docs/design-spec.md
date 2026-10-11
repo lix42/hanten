@@ -294,7 +294,10 @@ resolved `recipe`, which reloads through `--params`, and its `identity`. A sidec
 earlier build left beside the output is removed, and the report says so
 (`chain.removed_sidecar`). The HDR TIFF reports' `hdr_linear_tiff` /
 `hdr_coded_tiff` blocks are **authoritative** for reference white, peak and
-headroom, which no ICC profile can express. The recipe is deliberately not embedded
+headroom, which no ICC profile can express. The SDR TIFF and the gain-map JPEG
+need no such block: an SDR encoding states no absolute luminance, so its profile and
+`chain.destination` define it, and the gain map's headroom is in the file's own
+ISO 21496-1 metadata and `chain`. The recipe is deliberately not embedded
 in the image container; the report carries it. Per-destination encoding details are in §9
 "Output / encode".
 

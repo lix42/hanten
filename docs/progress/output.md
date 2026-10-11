@@ -1511,8 +1511,8 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## sdr-report-block
 
-**Status:** not started (re-scoped)
-**Updated:** 2026-09-30
+**Status:** closed—no block
+**Updated:** 2026-10-11
 
 - Goal: a machine-readable SDR contract block in the report, the `hdr_coded_tiff`
   shape. Split out of `sdr-preset-followups`; `RenderedSdr::metadata()`'s
@@ -1522,6 +1522,13 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   states the render. But review found the encoder half still open: the HDR TIFFs and AVIF
   report what their encoder wrote, the SDR TIFF and gain-map base do not. The task file's
   header states the question.
+- 2026-10-11: **closed—no block** (user). Compared the reports of the default SDR TIFF,
+  the linear HDR TIFF and the gain-map JPEG on `tests/fixtures/hdr-48bit.tif`. The SDR
+  encoder chooses nothing at runtime: bit depth, sample format, curve and primaries
+  all follow from `chain.destination`, and `loss` and the BigTIFF warning already cover
+  what it can report. For the gain-map JPEG, the headroom it writes equals
+  `chain.fit_range.display_peak`, and its gamma and offsets are fixed. The reason is
+  stated in design-spec §5 and `docs/using-nc.md`. No code changed.
 
 ## sdr-jpeg-preset
 
