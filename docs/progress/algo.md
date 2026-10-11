@@ -543,10 +543,15 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
 
 ## bw-support
 
-**Status:** not started
-**Updated:** —
+**Status:** closed—superseded
+**Updated:** 2026-10-09
 
 - Goal: Convert B&W negatives to clean mono positives through the existing `density` algorithm.
+- 2026-10-09: **closed—superseded** by `nf-reconstruction/mono-input` and
+  `nf-look/mono-mix`. Its placement ("post-algorithm, pre-output-transform") has no seam
+  in the new chain. `nf-reconstruction/mono-decode` placed mono by the film's signal
+  count instead ([`docs/design/mono.md`](../design/mono.md)). The knob shape and the
+  weight rules carry over into `mono-mix`.
 
 
 ## density-safety-bounds

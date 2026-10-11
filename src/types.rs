@@ -409,7 +409,8 @@ pub enum GammaFact {
 /// takes no part in the decision.
 ///
 /// It is kept as a **shared input-medium declaration** the roadmap still needs:
-/// the black & white `bw-support` task (roadmap item 3) for its B&W handling, and
+/// `nf-reconstruction/mono-input` (roadmap item 3), where `silver` is to select the
+/// mono decode on a three-channel scan (`docs/design/mono.md`), and
 /// the separate IR dust-removal task (roadmap item 1), which gates its defect map
 /// on chemistry (silver blocks IR like dust). Whether *that* gate should also be a
 /// measurement is an open question for those tasks — dust separability is not the
@@ -537,7 +538,7 @@ pub struct InputParams {
     /// Declared film chemistry (default `unknown`). Provenance only — it no longer
     /// gates IR-assisted film-holder detection, which measures the IR plane instead
     /// (`ir-usability-detection`). Reserved for the roadmap tasks that still need a
-    /// chemistry axis (`bw-support`; IR dust removal). See [`FilmType`].
+    /// chemistry axis (`nf-reconstruction/mono-input`; IR dust removal). See [`FilmType`].
     pub film_type: FilmType,
 }
 

@@ -1045,3 +1045,12 @@ preset row; do not reuse the name.
     thin frames, so it is that task's (it reworks the lifts), not a review fix. Also
     unverified on real frames: a strongly out-of-gamut pixel whose luminance is just above
     zero is scaled hard while one at or below zero passes through.
+
+## mono-mix
+
+**Status:** not started
+**Updated:** 2026-10-09
+
+- 2026-10-09: created by `nf-reconstruction/mono-decode`, superseding `algo/bw-support`'s
+  rendering half. Goal: a dye negative rendered mono, pooled with weights first in the
+  look ([`docs/design/mono.md`](../design/mono.md)).

@@ -1,5 +1,13 @@
 # Black & White Negative Support (Mono Color Model)
 
+> **Closed—superseded (2026-10-09)** by
+> [`nf-reconstruction/mono-input`](../nf-reconstruction/mono-input.md) and
+> [`nf-look/mono-mix`](../nf-look/mono-mix.md), placed by
+> [`docs/design/mono.md`](../../design/mono.md). Its placement
+> ("post-algorithm, pre-output-transform") has no seam in the new chain. The knob shape,
+> the weight rules and the "white balance is not a no-op" point carry over into
+> `mono-mix`. Kept as decision history.
+
 > **Needs re-evaluation before pickup (2026-09-13).** This file predates the tagged
 > `reconstruction` schema, the display presets and measured IR usability. Stale in it:
 > `convert_reported` / `color::to_output` placement (presets route through

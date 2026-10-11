@@ -12,7 +12,8 @@ so B&W scans cannot enter the pipeline at all.
 `IFD0`; a gray *primary* was never in scope. And `algo/bw-support` — the mono
 colour model — explicitly rules this out: *"16-bit RAW scan input is a separate
 concern … do not pull input-format work into this task."* So neither existing task
-owns it, and `bw-support` is blocked behind it.
+owns it. (`bw-support` is now superseded; the consumer is
+`nf-reconstruction/mono-input`.)
 
 Measured on real assets (`../nc-assets/rolls/ILFORT-HP5-2026-08-10/`, seven Ilford
 HP5 frames, 2026-08-11):
@@ -29,14 +30,12 @@ present and marker-verified; only the primary's channel count differs.
 
 ## Open questions
 
-1. **What does a gray primary become internally?** `LinearImage` is interleaved
-   RGB. Replicating the single channel into three is the cheap answer and keeps
-   every downstream stage untouched, but it triples the buffer and invites the
-   later mono colour model to un-replicate it. A one-channel variant avoids that
-   and touches every stage. Decide with `algo/bw-support`, which is the consumer.
-2. **Does the memory model change?** The current bytes-per-pixel figures assume
-   3-channel input; whichever representation is chosen, `pipeline::memory` needs
-   its own numbers rather than inheriting these.
+1. ~~What does a gray primary become internally?~~ **Decided**
+   ([`docs/design/mono.md`](../../design/mono.md)): one signal, carried as three equal
+   channels by the 3×3. Whether this reader widens it or yields a one-channel `Scan` is
+   `nf-reconstruction/mono-input`'s open question.
+2. **The memory model.** `pipeline::memory` needs its own figures for a one-channel
+   u16 scan widened to three f32 channels, measured rather than inherited.
 3. **What identifies the file as a supported gray scan** rather than an arbitrary
    grayscale TIFF? The existing decoder leans on SilverFast XMP and the IFD
    layout; state which of those is load-bearing here.
@@ -56,6 +55,7 @@ present and marker-verified; only the primary's channel count differs.
 
 - [SilverFast HDR/HDRi decode](silverfast-decode.md)
 
-Blocks [Black & white negative support](../algo/bw-support.md), which owns the
-mono colour model once these files can be read, and gates the B&W half of
+Blocks the one-channel half of
+[Mono input in the decode](../nf-reconstruction/mono-input.md) (the three-channel
+silver half does not need this reader), and gates the B&W half of
 [IR usability by measurement](../film-base/ir-usability-detection.md).
