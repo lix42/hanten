@@ -47,7 +47,7 @@ is answered: copy the one channel into three.
 ## Open questions
 
 - *Answered:* does `density.scale` apply to silver? No, the mono decode reads only the
-  red entries. Chromogenic B&W takes the colour route and keeps the colour `scale`
+  red entries. Chromogenic B&W takes the colour route for now (pending a scan) and keeps the colour `scale`
   until measured.
 - *Answered:* mode or stage? Neither: mono enters in the decode (silver) or in the
   look (a dye negative); after the decode no stage needs a mono branch.

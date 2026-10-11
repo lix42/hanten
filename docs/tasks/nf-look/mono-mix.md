@@ -21,13 +21,13 @@ What is decided (`mono.md`):
 - **The grey value is computed once per pixel** and copied into all three channels,
   so R = G = B holds exactly when this stage writes it.
 - **The rest of the look is neutral-preserving** on the result, except
-  `channel_grade`, which would tint it. Whether to refuse `channel_grade` beside mono
-  or keep it as toning is open; toning itself is out of scope.
+  `channel_grade`, which would tint it, so a non-identity `channel_grade` is refused
+  beside mono, as on mono input. Toning is out of scope.
 
 Open:
 
-- The default weights (luminance or equal thirds), and whether the chromogenic B&W
-  case wants a different default. No chromogenic scan exists to judge by.
+- The default weights (luminance or equal thirds). Chromogenic B&W may move to the mono
+  decode instead (`mono.md`); no chromogenic scan exists to judge by.
 - The recipe key and flag spelling.
 - The report echoes the resolved model and the normalised weights (`bw-support`
   required it); where, and in what shape.

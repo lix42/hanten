@@ -9,14 +9,15 @@ in the asset set when this was written.
 
 A silver negative carries **one** image signal. The scanner may record it as one gray
 channel or as three near-equal RGB channels, and both recordings must render alike. A
-colour or chromogenic negative carries three dye signals, even when the photograph is
-meant to be mono.
+colour negative carries three dye signals, even when the photograph is meant to be mono.
+A chromogenic B&W negative carries one signal recorded in dye; where it belongs is
+pending (below).
 
 | Scan | Film | Where it becomes mono |
 |---|---|---|
 | one gray channel | any | **the decode** (mono input) |
 | three channels | silver, declared (`--film-type silver`) | **the decode** (mono input), pooled |
-| three channels | chromogenic B&W, or colour rendered mono | **the look** (a rendering choice) |
+| three channels | colour rendered mono; chromogenic B&W for now | **the look** (a rendering choice) |
 | three channels | silver, not declared | the colour route (see "Traps") |
 
 So mono is **neither a whole-chain mode nor one stage**. It enters at one of two
@@ -79,8 +80,10 @@ after scene correction, with weights the user can set (a channel mixer, NLP's
 - **White balance still matters.** It acts before pooling, so it changes the grey
   tones even though it can no longer tint. It is not the same thing as the weights,
   which act after scene correction.
-- **Chromogenic B&W belongs here.** It is a dye image on a coloured base, the colour
-  decode applies, and its IR plane is usable for dust removal.
+- **Chromogenic B&W takes this route for now.** By the rule it is one signal, so the
+  mono decode may suit it better, but `--film-type chromogenic` cannot tell it from
+  colour film and no scan exists to measure its dye. Its IR plane is usable for dust
+  removal either way.
 
 A zero `look.saturation` (`--saturation`) would already render each pixel as its
 luminance, but the value rule refuses 0, and a fixed luminance has no weights. The weighted pool is
@@ -116,3 +119,7 @@ the encode, is a follow-up.
   green or blue entry that differs from red is refused, and whether the copied
   one-channel decode reproduces the pooled three-channel one.
 - IR on silver: the measured `ir_separability` on an exposed frame.
+
+## Pending, with a chromogenic B&W scan
+
+- Whether chromogenic B&W takes the mono decode, and how it would be declared.
