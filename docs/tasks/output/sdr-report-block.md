@@ -1,5 +1,15 @@
 # Machine-readable SDR contract in the report
 
+> **Closed — no block (2026-10-11).** The HDR blocks exist for what an ICC profile cannot
+> carry: reference white, peak, headroom and content light in cd/m². An SDR encoding
+> states none of those. Its bit depth, sample format, curve and primaries are fixed by
+> `chain.destination`, and the embedded profile states them. Clipping is in `loss`,
+> BigTIFF promotion is a warning, and the render is in `chain`. For the gain-map JPEG,
+> `chain.gain_map` carries the gain range and the base's fit range, and the file's
+> headroom equals `chain.fit_range.display_peak`. A block would only repeat fixed
+> values. Recorded in design-spec §5 and `docs/using-nc.md`'s HDR destinations
+> section.
+
 > **Re-scoped (2026-09-30).** The presets and the `SdrRenderMetadata` below went with
 > `nf-core/default-flip`, and the render half is done: every destination's `chain`
 > states its operator, headroom, peak, gamut map and destination

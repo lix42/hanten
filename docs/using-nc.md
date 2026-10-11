@@ -1875,11 +1875,13 @@ JPEG as the compact HDR file.
 ### HDR destinations
 
 An HDR destination clamps its rendition to the 1000 cd/m² peak and counts what that
-clamped in `chain.peak_clamp` and in `loss`, where `--strict` sees it. Each also
-fills a block stating what the encoder wrote and the luminance anchors no container
-can carry — `hdr_coded_tiff` for the PQ/HLG TIFFs, `hdr_linear_tiff` for the float
-TIFF, whose `pixel_contract`, `linear_domain` and embedded profile name its gamut (in
-a `roll` report, on each frame):
+clamped in `chain.peak_clamp` and in `loss`, where `--strict` sees it. Each HDR TIFF
+also fills a block stating what the encoder wrote and the luminance anchors no
+container can carry — `hdr_coded_tiff` for the PQ/HLG TIFFs, `hdr_linear_tiff` for the
+float TIFF, whose `pixel_contract`, `linear_domain` and embedded profile name its gamut
+(in a `roll` report, on each frame). The gain-map JPEG, like the SDR TIFF, has no such
+block: its base is SDR, which its embedded profile and `chain.destination` define;
+`chain.gain_map` states the map, and its headroom is `chain.fit_range.display_peak`.
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --transfer pq | jq -c '.hdr_coded_tiff | {reference_white_nits,target_peak_nits,tone_curve,cicp,max_cll_nits,max_fall_nits}'
