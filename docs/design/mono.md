@@ -43,14 +43,14 @@ step a three-channel silver scan is indistinguishable from a one-channel one.
   and with which weights, should match what the scanner does when it writes a
   one-channel file. Measure that by comparing the two recordings of the same frame.
 
-**One curve, so the per-channel calibration has nothing to act on.**
-`scale [1, 0.84, 0.73]` corrects the different slopes of three *dye* layers. Applied
-to one silver signal copied into three, it would give each channel its own curve: a
-tint that changes with brightness, which white balance cannot remove. The mono decode
-reads only the red entries (`scale_r = 1` is the convention). Whether a *stated* green
-or blue entry that differs from red is refused, and whether silver gets its own
-default, is pending (below). Whether the shipped `scale` is right for **chromogenic**
-B&W is pending. It runs the colour route, so it gets the colour `scale` until
+**One curve.** `scale [1, 0.84, 0.73]` is a fit of the colour chain, dye layers and
+scanner channels together (`algo/fixed.rs`). Applied to one silver signal copied into
+three, it would give each channel its own curve: a tint that changes with brightness,
+which white balance cannot remove. The mono decode reads only the red entries
+(`scale_r = 1` is the convention). Whether the scanner's share of `scale` matters
+before pooling a three-channel silver scan, whether a *stated* green or blue entry that
+differs from red is refused, and whether silver gets its own default are pending
+(below). Chromogenic B&W runs the colour route, so it gets the colour `scale` until
 measured.
 
 **The 3×3 is identity on the neutral axis**, up to rounding. Each NC film RGB v1 row
@@ -103,8 +103,9 @@ the encode, is a follow-up.
   film type (the project uses no automatic classification), so the user guide must
   say so. A report warning keyed on measured channel spread is possible later.
 - **Silver blocks IR in proportion to density**, so on silver the IR plane is no use
-  for dust removal. The holder detection still works, because it is measured
-  (design-spec §6.1). The future dust-removal stage must be disabled for silver, and
+  for dust removal. The holder detection is gated on the measured
+  separability (design-spec §6.1), so a dense silver frame falls back to the static
+  inset rather than masking wrongly. The future dust-removal stage must be disabled for silver, and
   `input.film_type` is the declaration that can do it.
 - **Memory.** A one-channel scan copied into three f32 channels has its own
   bytes-per-pixel figures, which `pipeline::memory` must model rather than inherit.

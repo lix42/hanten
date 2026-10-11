@@ -740,7 +740,7 @@ its default; with display black on, its own warning stands instead.
   one curve. A three-channel scan declared `--film-type silver` is divided by each
   channel's base and pooled into one signal first. Either way the signal is copied into
   R = G = B before the 3×3, and white balance, the midtone neutral and `channel_grade`
-  are refused. **A dye negative rendered mono** (colour or chromogenic B&W) is pooled
+  are refused. **A dye negative rendered mono** (colour; chromogenic B&W for now, pending a scan) is pooled
   with weights first in the look, after white balance.
 
   Facts that settled it, all from the code:
