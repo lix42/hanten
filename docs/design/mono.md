@@ -60,7 +60,7 @@ within a couple of f32 ULP of each other. The declaration that film channels are
 Rec.709 primaries is meaningless for one signal, and harmless.
 
 **Knobs that can only tint are refused** on mono input, with a message saying why:
-a stated white balance, the midtone neutral and the look's `channel_grade`. Identity
+a white balance that would apply, the midtone neutral and the look's `channel_grade`. Identity
 values a recipe can carry (white balance `[1, 1, 1]`, `channel_grade` `[1, 1]`) are
 spared, and the midtone neutral, on by default, is refused only when active; the exact
 rule is `mono-input`'s. A roll measurement over mono input writes no white-balance

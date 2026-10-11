@@ -21,8 +21,9 @@ What is decided (`mono.md`):
 - **One curve.** Read only the red entries of `scale` and `offset`. The signal is
   copied into R, G and B before the 3×3, which keeps the channels within a couple of
   f32 ULP of each other.
-- **Refused on mono input:** a stated white balance (`scene_correction` or `roll`), an active midtone neutral and
-  `channel_grade`; identity values a recipe can carry are spared. A roll measurement
+- **Refused on mono input:** a white balance or midtone neutral that would apply, and a
+  non-identity `channel_grade`. The rule reads the resolved correction, so gains a
+  recipe keeps behind `roll.neutral_balance off` are not refused. A roll measurement
   over mono input writes no white-balance gains and no midtone line.
 - **Output** stays three channels. A grayscale encode is a follow-up.
 
@@ -50,7 +51,8 @@ What is not known yet (wait on the HP5 scans, one recording of each kind):
   measures colour gains on a silver roll.
 - Where a one-channel scan becomes three: at the reader, so `Scan.image` stays RGB and
   film base measures three equal channels, or as a one-channel `Scan` that film base
-  and `measure-base` handle before the decode.
+  and `measure-base` handle before the decode. Either way the route must still know
+  the scan had one channel.
 
 ## How to Verify
 
