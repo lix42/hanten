@@ -284,7 +284,7 @@ pub struct FitRangeParams {
     pub display_black: DisplayBlack,
     /// The film base's **graded** ACEScg luminance — the decoded base run through the
     /// frame's own scene correction and look, which `chain::render` does. Display
-    /// black's reference; read only when it is on.
+    /// black's reference, and with it off `pipeline::black_endpoint`'s.
     pub film_base: f32,
 }
 
@@ -342,7 +342,7 @@ impl FitRangeParams {
             } else {
                 IDENTITY
             },
-            film_base_stops: (MID_GREY / base).log2() as f32,
+            film_base_stops: -display_stops(self.headroom_stops, self.film_base),
             shift_stops: shift.map_or(0.0, |s| s.stops as f32),
         };
         (resolved, shift)
@@ -401,6 +401,18 @@ impl ResolvedBlack {
              the grade puts it"
         ))
     }
+}
+
+/// Where reinhard puts a graded luminance with display black off, in stops from mid-grey
+/// (negative below): every peak agrees below diffuse white, so no peak is taken.
+pub fn display_stops(headroom_stops: f32, luminance: f32) -> f32 {
+    let white_point = headroom_white_point(headroom_stops);
+    let y = reinhard(
+        luminance,
+        white_point,
+        mid_grey_preserving_gain(white_point),
+    );
+    -(MID_GREY / f64::from(y)).log2() as f32
 }
 
 /// What fit range applied to a frame.

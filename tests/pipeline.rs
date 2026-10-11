@@ -7837,6 +7837,123 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
 }
 
 #[test]
+fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
+    // `nf-reconstruction/curve-endpoint-warning` through the binary, display black off
+    // (the default): squeezed flat, pushed up (with the frame's tones) and the base near
+    // mid-grey (without them), each with the remedy it names.
+    let tmp = TempDir::new("black-endpoint");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |extra: &[&str]| {
+        let out = tmp.path("out.tiff");
+        let _ = std::fs::remove_file(&out);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--roll-white-balance",
+            "1,1,1",
+            "--saturation",
+            "1.05",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        (code, stdout, err)
+    };
+    let warnings = |extra: &[&str]| {
+        let (code, stdout, err) = convert(extra);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        json(&stdout)["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|w| w.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let squeezed = |w: &String| w.contains("flatter than the 1.237 any placement sets");
+    let pushed = |w: &String| w.contains("is placed so bright its black cannot approach black");
+    let base = |w: &String| w.contains("the film base renders");
+
+    // The control: a stated roll and contrast, nothing to warn about, `--strict` passes.
+    let (code, _, err) = convert(&[
+        "--roll-exposure",
+        "0",
+        "--contrast",
+        "1.1111112",
+        "--strict",
+    ]);
+    assert_eq!(code, 0, "{err}");
+
+    // Squeezed flat: a contrast under 1 takes the slope below any placement's.
+    let w = warnings(&["--roll-exposure", "0", "--contrast", "0.7"]);
+    let [message] = &w[..] else { panic!("{w:?}") };
+    assert!(
+        squeezed(message) && message.contains("raise `--contrast`"),
+        "{w:?}"
+    );
+    assert!(!message.contains("--exposure"), "{w:?}");
+    let (code, _, err) = convert(&["--roll-exposure", "0", "--contrast", "0.7", "--strict"]);
+    assert_eq!(code, 1, "{err}");
+    let (code, _, err) = convert(&["--roll-exposure", "0", "--contrast", "0.9", "--strict"]);
+    assert_eq!(code, 0, "raising --contrast clears it: {err}");
+    // Display black on places the base itself; this check stands aside.
+    let w = warnings(&[
+        "--roll-exposure",
+        "0",
+        "--contrast",
+        "0.7",
+        "--display-black",
+        "6",
+    ]);
+    assert!(!w.iter().any(squeezed), "{w:?}");
+
+    // Without tones or a roll exposure the base decides: a stated exposure pushed it.
+    let lifted = ["--contrast", "1.1111112", "--exposure", "2.8"];
+    let w = warnings(&lifted);
+    assert!(
+        w.iter()
+            .any(|m| base(m) && m.contains("lower `--exposure`")),
+        "{w:?}"
+    );
+    let w = warnings(&["--contrast", "1.1111112", "--exposure", "1.8"]);
+    assert!(!w.iter().any(base), "lowering --exposure clears it: {w:?}");
+    // The same base placed by a roll's exposure is the roll's measurement, not a fault.
+    let w = warnings(&["--contrast", "1.1111112", "--roll-exposure", "2.8"]);
+    assert!(!w.iter().any(base), "{w:?}");
+
+    // With tones (09-18 Gold200 1774's, placed by the hybrid) the frame's middle and dark
+    // end decide, and the base is not read.
+    let hybrid = [
+        "--roll-white",
+        "1.5",
+        "--roll-dark=-3.73",
+        "--roll-exposure",
+        "1.25",
+        "--roll-envelope=-3.78,2.09",
+        "--roll-frame-tones=0.46,-1.96,-3.76",
+    ];
+    let w = warnings(&hybrid);
+    assert!(
+        !w.iter().any(|m| pushed(m) || base(m) || squeezed(m)),
+        "{w:?}"
+    );
+    let w = warnings(&[&hybrid[..], &["--exposure", "2.5"]].concat());
+    assert!(
+        w.iter()
+            .any(|m| pushed(m) && m.contains("lower `--exposure`")),
+        "{w:?}"
+    );
+    assert!(
+        !w.iter().any(base),
+        "the base is not read beside tones: {w:?}"
+    );
+    let w = warnings(&[&hybrid[..], &["--exposure", "1"]].concat());
+    assert!(!w.iter().any(pushed), "a one-stop lift is fine: {w:?}");
+}
+
+#[test]
 fn the_default_destination_renders_a_display_p3_tiff() {
     // The fixed decode → the chain → the default destination. Both fixtures, so a scan
     // with an IR plane is covered too. The pass bar
@@ -9700,11 +9817,16 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     let converted = recipe(3, k, "[1, 1, 1]");
     let (code, stdout, err) = convert_48bit(
         &tmp.path("c2.tiff"),
-        &["--params", converted.to_str().unwrap(), "--strict"],
+        &["--params", converted.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{err}");
+    let replayed = json(&stdout);
+    assert!((slope(&replayed) - 1.111_111_2).abs() < 1e-6, "{stdout}");
+    // That old slope is flatter than any placement sets, and with display black off now
+    // it warns (`pipeline::black_endpoint`) — the only warning.
+    let warnings = replayed["warnings"].as_array().unwrap();
     assert!(
-        (slope(&json(&stdout)) - 1.111_111_2).abs() < 1e-6,
+        matches!(&warnings[..], [w] if w.as_str().unwrap().contains("flatter than the 1.237")),
         "{stdout}"
     );
 

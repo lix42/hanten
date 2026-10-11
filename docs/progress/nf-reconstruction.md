@@ -55,9 +55,13 @@ reachable as `--anchor-mid-offset`. What the anchor is *referenced to* was
 `nf-calibration/anchor-comparison`'s, and it ruled (2026-09-25): the anchor stays
 base-referenced, and the roll's white acts through `look.contrast`.
 
-**No curve-endpoint check yet** (`curve-endpoint-warning`, closed 2026-10-09, reopened
-2026-10-10): display black's warning was the check, but display black is off by default
-since `nf-calibration/envelope-hybrid-placement`, so the default render has none.
+**A washed-out black warns** (`curve-endpoint-warning`, 2026-10-10;
+`pipeline::black_endpoint`). With display black off (the default), the report warns when
+the look's slope is under 1.237 (a `--contrast` under 1, or a stated thin slope), when a
+measured frame's middle lands above +1.5 display stops *and* its dark end above −1.5, or,
+with neither tones nor a roll exposure, when the graded base lands under 2 stops below
+mid-grey. Silent on every archive frame at its default; with display black on, its own
+warning stands instead.
 
 ## fixed-decode
 
@@ -581,7 +585,7 @@ since `nf-calibration/envelope-hybrid-placement`, so the default render has none
 
 ## curve-endpoint-warning
 
-**Status:** not started (reopened)
+**Status:** done
 **Updated:** 2026-10-10
 
 - 2026-09-19: created with the new-flow plan. Goal: warn when the curve's endpoint is unreachable.
@@ -626,6 +630,90 @@ since `nf-calibration/envelope-hybrid-placement`, so the default render has none
   `fit_range::ResolvedBlack::warning`'s measure (the graded base's stops under mid-grey,
   off the frame's own grade), which `ResolvedBlack` already reports as `film_base_stops`
   with black off.
+- 2026-10-10: **measured, then decided (user)** — a base-only rule cannot work, and the
+  check is two rules plus a fallback. Positions of the film base, the dark end (luma
+  p1), the middle and the white on the display were computed for the full archive's 209
+  picture frames from envelope-hybrid-placement's 2026-10-09 measurements
+  (`../temp/envelope-hybrid-placement/`), at the default render with display black off,
+  and checked on the 61 trimmed frames rendered with those recipes: base against the
+  report's `film_base_stops` median |Δ| 0.06 stop (worst 0.28), dark end against the
+  output's luma p1 0.06 (0.26), over default, `--exposure 2` and `--contrast 0.5`. None of
+  those 183 renders warned. The page (numbers only) was a private claude.ai Artifact.
+  - **Thin rolls already sit at the edge**: 09-11 and 09-28 (roll exposure ≈ +2 EV) put
+    the base 2.02 stops under mid-grey at their default, so a 2-stop base rule has no
+    margin; a typed `--exposure 0.5` trips it on 41 frames. Those frames' dark ends render
+    at L\* 19–22 with no override — a question for `nf-calibration/hybrid-slope-bounds`,
+    not this check, which must stay silent on it.
+  - **Flat frames keep their dark end high on purpose** (user's point): 09-14/1719 and
+    09-09/1612 sit at the 3.5 maximum slope with the dark end at L\* 43 and 34 while the
+    base is 10 stops down. A dark-end rule fires on 6 default frames.
+  - **Two faults, two numbers.** Pushed up (exposure) lifts the middle; squeezed flat
+    (contrast) lowers the slope below anything a placement sets. Neither fires on a
+    default frame and neither sees the other's fault (rule hit counts over exposure +0.5
+    … +2 and contrast 0.8 … 0.5 are in the page).
+  - **Thresholds (user)**: pushed = middle above +1.5 and dark end above −1.5 (a typed
+    `--exposure 1` warns on 25 % of frames — a one-stop lift should pass); squeezed =
+    slope under `slope_for(WHITE_CAP_STOPS)` = 1.237, `span_slope`'s floor (fires on
+    half the archive at `--contrast 0.7`); without tones, the base under
+    `MIN_FILM_BASE_STOPS` (2) — only the fallback slope and an exposure move it there.
+- 2026-10-10: **implemented** — `pipeline::black_endpoint` (pure), called from
+  `cli::convert_frame` after the render with display black off, so `roll` warns per frame
+  too; `--strict` promotes it. No pixel, fingerprint, report field or flag changed.
+  - **Not read off the stages, and pinned to them instead.** A tone lands at
+    `fit_range::display_stops(slope · (tone + exposure))` with the resolved slope and
+    exposure — the placement model `roll_white` solves in. Grading probe pixels through
+    the real stages would need an `AcesCgImage` constructor, which the boundary keeps
+    closed; `chain`'s `the_black_endpoint_model_is_the_chain_s_render_of_a_neutral` holds
+    the model to the render within 1e-3 stop across slopes 0.8–3.5. The base is the real
+    grade's (`ResolvedBlack::film_base_stops`). White balance and the midtone line are
+    outside the model; on real frames that cost ≤ 0.28 stop (above).
+  - **Display black on skips it**: black places the base and has its own warning, and it
+    is the flat slope's old compensation, so the squeezed rule would mis-read it.
+  - **Each fault is reported with its own remedy**, slope first; both can fire. Remedies
+    verified on `tests/fixtures/hdr-48bit.tif`: `--contrast 0.7` → raise to 0.9 clears;
+    `--roll-exposure 2.8` (base 1.25 stops under) → `--exposure=-1` clears (2.75);
+    1774's tones at `--exposure 2.5` → `--exposure 1` clears. The squeezed message once
+    claimed black "cannot reach far below mid-grey", false at `--contrast 0.87` (base 4.3
+    stops under), so it states the fact: the shadows lift paler than a placed frame's.
+  - **No overlap with `algo/density-safety-bounds`**: its warning is a channel written
+    black everywhere, the other end.
+  - A bare `convert` always carries the "no roll measurement" warning, so `--strict`
+    tests state a roll (`tests/pipeline.rs`, `a_frame_whose_black_cannot_approach_black_…`).
+  - **An old recipe's slope warns.** A `recipe_version` 2 recipe converted to the slope
+    it rendered at (1.111, the bundled 2.0 over the 1.8 linearization, the default before
+    `nf-calibration/no-roll-defaults`) is squeezed by this rule: it was judged with
+    display black on, which is now off. `a_recipe_style_value_beside_the_roll_…` now
+    expects that warning instead of passing `--strict`.
+- 2026-10-10: **code review** (`/code-review`, 10 findings).
+  - Fixed: the check reads what the render applied (`chain::Rendered`'s look slope,
+    exposure and white balance) instead of re-resolving the recipe; a stated white
+    balance counts as its luminance gain in exposure (the chain test now runs gains too);
+    the squeezed message names the base slope's source (`SlopeBase::phrase`) — a stated
+    `--roll-thin-slope` under 1.237 also trips it, and raising `--contrast` still clears
+    it — and prints the contrast to three places; the base message reads right above
+    mid-grey; `film_base_stops` and the tone model share `fit_range::display_stops`
+    (bit-identical to the old expression: the negation is exact); the module doc lost
+    its archive counts.
+  - **Decided (user): the base rule needs no roll exposure too.** Without tones, a frame
+    placed by a roll's exposure (one `measure-roll` did not measure, or a hand-stated
+    roll) has its base where the measurement put it: per-roll on a thin roll that is
+    2.0–2.3 stops under mid-grey, 1.8 with a small lift, so it would warn at default. The
+    rule now covers only the fallback, where a stated exposure is the one thing that moves
+    the base. Such a frame beside an envelope already warns that it lacks tones.
+  - **Kept (user)**: the v2 replay's squeezed warning (above).
+  - Checked, not changed: tones under `--placement roll`. Per-roll with the small lift
+    over the 209 archive frames, the highest middle is +1.35 and no frame trips the
+    pushed rule, so tones are read whatever the placement.
+- 2026-10-10: **done.** Ship review (`ship:diff-reviewer`; the Codex CLI failed to load
+  its configuration and was skipped) fixed a guide example quoting numbers from flags it
+  did not show, `FitRangeParams::film_base`'s "read only when it is on", and the pushed
+  message blaming only slope and exposure. All CI gates green.
+  **For a dependent task:** the check reads `chain::Rendered` (look slope, scene
+  correction's exposure and gains, fit range) plus the recipe's applied tones and roll
+  exposure; its model leaves out the midtone line and the per-channel grade, which the
+  chain test does not exercise. Moving a placement's slope floor (`span_slope`) moves the
+  squeezed threshold with it. `nf-calibration/hybrid-slope-bounds` inherits the thin
+  rolls' pale default dark end (L\* 19–22), which this check is silent on by design.
 
 ## mono-decode
 
