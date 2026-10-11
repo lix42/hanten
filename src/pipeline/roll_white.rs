@@ -219,11 +219,17 @@ pub const HYBRID_SPAN_STOPS: f32 = 7.0;
 /// spike. 1 keeps every frame's level, 0 brings each to the roll's median.
 pub const HYBRID_LEVEL_KEEP: f32 = 0.6;
 
-/// How far under the roll's exposure a hybrid frame's may sit, in EV.
-pub const HYBRID_EXPOSURE_BELOW_EV: f32 = 1.5;
+/// How far under the roll's exposure a frame's own placement may sit, in EV. With
+/// [`FRAME_EXPOSURE_ABOVE_EV`], reviewed at ±1 over the spike's −1.5 / +0.5
+/// (`nf-calibration/per-frame-placement`).
+pub const FRAME_EXPOSURE_BELOW_EV: f32 = 1.0;
 
-/// How far over the roll's exposure a hybrid frame's may sit, in EV.
-pub const HYBRID_EXPOSURE_ABOVE_EV: f32 = 0.5;
+/// How far over the roll's exposure a frame's own placement may sit, in EV.
+pub const FRAME_EXPOSURE_ABOVE_EV: f32 = 1.0;
+
+/// Where the per-frame placement puts each frame's white, in look stops: about L\* 93 on
+/// SDR, chosen by review over the span's L\* 91 (4.049). Provisional.
+pub const FRAME_WHITE_LOOK_STOPS: f32 = 4.462;
 
 /// The leader measurement the guard reads, **written fresh** — the retiring
 /// leader-`Dmax` anchor is not reused (`nf-retire/dmax-machinery`).
@@ -494,7 +500,7 @@ pub fn span_slope(white_stops: f32, dark_stops: f32) -> f32 {
     k.clamp(slope_for(WHITE_CAP_STOPS), MAX_SLOPE)
 }
 
-/// A frame's own ends and level, in scene stops: what the hybrid places it from
+/// A frame's own ends and level, in scene stops: what the hybrid and `frame` place it from
 /// (`roll.frame_tones`, a `roll.frames` entry's `tones`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -518,13 +524,13 @@ pub fn roll_envelope(frames: &[FrameStops]) -> Option<[f32; 2]> {
     Some([darkest, brightest])
 }
 
-/// What set a hybrid frame's slope ([`hybrid_placement`]).
+/// What set a frame's own slope ([`hybrid_placement`], [`per_frame_placement`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HybridSlopeBound {
+pub enum SlopeBound {
     /// The roll's slope: the frame's span already renders over the minimum.
     Roll,
-    /// The minimum span: the frame spreads over it.
+    /// The frame's span, spread over the placement's look stops (the hybrid's minimum).
     Span,
     /// The envelope: steeper would carry the frame past the roll's ends.
     Envelope,
@@ -534,29 +540,29 @@ pub enum HybridSlopeBound {
     Floor,
 }
 
-/// What set a hybrid frame's exposure.
+/// What set a frame's own exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HybridExposureBound {
-    /// The share of its level offset it keeps.
+pub enum ExposureBound {
+    /// The placement's own rule: the share of its level offset it keeps, or its white.
     None,
     /// The envelope: the frame's white or dark end would cross the roll's.
     Envelope,
     /// The frame's span is wider than the envelope: centred in it.
     Centred,
-    /// [`HYBRID_EXPOSURE_BELOW_EV`] or [`HYBRID_EXPOSURE_ABOVE_EV`].
+    /// [`FRAME_EXPOSURE_BELOW_EV`] or [`FRAME_EXPOSURE_ABOVE_EV`].
     Limit,
 }
 
-/// A frame's hybrid placement: its slope and exposure.
+/// A frame's own placement: its slope and exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct HybridPlacement {
+pub struct FramePlacement {
     /// The look's base slope, in place of the roll's.
     pub slope: f32,
     /// In EV, a delta on the roll's exposure, in place of the lifts.
     pub exposure: f32,
-    pub slope_bound: HybridSlopeBound,
-    pub exposure_bound: HybridExposureBound,
+    pub slope_bound: SlopeBound,
+    pub exposure_bound: ExposureBound,
 }
 
 /// Place one frame inside the roll's envelope (`nf-calibration/envelope-hybrid-placement`;
@@ -575,7 +581,7 @@ pub fn hybrid_placement(
     [darkest, brightest]: [f32; 2],
     span_stops: f32,
     level_keep: f32,
-) -> HybridPlacement {
+) -> FramePlacement {
     let FrameStops {
         white_stops: w,
         level_stops: level,
@@ -590,47 +596,84 @@ pub fn hybrid_placement(
     let wanted = per_span(span_stops);
     let fit = per_span(top - bottom);
     let floor = roll_slope.min(slope_for(WHITE_CAP_STOPS));
-    let candidates = [
-        (roll_slope, HybridSlopeBound::Roll),
-        (wanted, HybridSlopeBound::Span),
-    ];
+    let candidates = [(roll_slope, SlopeBound::Roll), (wanted, SlopeBound::Span)];
     let (mut slope, mut slope_bound) = candidates
         .into_iter()
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .expect("two candidates");
-    for (limit, bound) in [
-        (fit, HybridSlopeBound::Envelope),
-        (MAX_SLOPE, HybridSlopeBound::Max),
-    ] {
+    for (limit, bound) in [(fit, SlopeBound::Envelope), (MAX_SLOPE, SlopeBound::Max)] {
         if limit < slope {
             (slope, slope_bound) = (limit, bound);
         }
     }
     if slope < floor {
-        (slope, slope_bound) = (floor, HybridSlopeBound::Floor);
+        (slope, slope_bound) = (floor, SlopeBound::Floor);
     }
     // Exposure in total EV, as the roll's is.
     let kept = roll_ev - (1.0 - level_keep) * (level + roll_ev);
     let (lo, hi) = (bottom / slope - d, top / slope - w);
     let (mut e, mut exposure_bound) = if lo > hi {
-        ((lo + hi) / 2.0, HybridExposureBound::Centred)
+        ((lo + hi) / 2.0, ExposureBound::Centred)
     } else if kept < lo || kept > hi {
-        (kept.clamp(lo, hi), HybridExposureBound::Envelope)
+        (kept.clamp(lo, hi), ExposureBound::Envelope)
     } else {
-        (kept, HybridExposureBound::None)
+        (kept, ExposureBound::None)
     };
-    let (below, above) = (
-        roll_ev - HYBRID_EXPOSURE_BELOW_EV,
-        roll_ev + HYBRID_EXPOSURE_ABOVE_EV,
-    );
-    if e < below || e > above {
-        (e, exposure_bound) = (e.clamp(below, above), HybridExposureBound::Limit);
-    }
-    HybridPlacement {
+    (e, exposure_bound) = within_frame_limits(e, roll_ev, exposure_bound);
+    FramePlacement {
         slope,
         exposure: e - roll_ev,
         slope_bound,
         exposure_bound,
+    }
+}
+
+/// Place one frame on its own (`nf-calibration/per-frame-placement`), the roll's envelope
+/// playing no part: its slope spreads its span over [`SPAN_LOOK_STOPS`], between the cap's
+/// slope and [`MAX_SLOPE`] (the roll's span slope, from the frame's own ends); its exposure
+/// puts its white at [`FRAME_WHITE_LOOK_STOPS`], within the limits around the roll's. A
+/// per-frame slope needs a per-frame anchor: pivoted at the roll's mid-grey it pushed
+/// low-key frames' highlights past white (`docs/spike/poor-development.md`). The review
+/// preferred the white as anchor over the frame's own midtone.
+pub fn per_frame_placement(frame: FrameStops, roll_ev: f32) -> FramePlacement {
+    let FrameStops {
+        white_stops: w,
+        dark_stops: d,
+        ..
+    } = frame;
+    let slope = span_slope(w, d);
+    let slope_bound = if slope == MAX_SLOPE {
+        SlopeBound::Max
+    } else if slope == slope_for(WHITE_CAP_STOPS) {
+        SlopeBound::Floor
+    } else {
+        SlopeBound::Span
+    };
+    // Exposure in total EV, as the roll's is.
+    let (e, exposure_bound) = within_frame_limits(
+        FRAME_WHITE_LOOK_STOPS / slope - w,
+        roll_ev,
+        ExposureBound::None,
+    );
+    FramePlacement {
+        slope,
+        exposure: e - roll_ev,
+        slope_bound,
+        exposure_bound,
+    }
+}
+
+/// A frame's own exposure `e` (total EV) held within [`FRAME_EXPOSURE_BELOW_EV`] under and
+/// [`FRAME_EXPOSURE_ABOVE_EV`] over the roll's; `bound` stands unless the limit moves it.
+fn within_frame_limits(e: f32, roll_ev: f32, bound: ExposureBound) -> (f32, ExposureBound) {
+    let (below, above) = (
+        roll_ev - FRAME_EXPOSURE_BELOW_EV,
+        roll_ev + FRAME_EXPOSURE_ABOVE_EV,
+    );
+    if e < below || e > above {
+        (e.clamp(below, above), ExposureBound::Limit)
+    } else {
+        (e, bound)
     }
 }
 
@@ -1144,7 +1187,7 @@ mod tests {
     }
 
     /// The default hybrid at the roll slope `k`, exposure `e0` and envelope `env`.
-    fn hybrid(frame: FrameStops, k: f32, e0: f32, env: [f32; 2]) -> HybridPlacement {
+    fn hybrid(frame: FrameStops, k: f32, e0: f32, env: [f32; 2]) -> FramePlacement {
         hybrid_placement(frame, k, e0, env, HYBRID_SPAN_STOPS, HYBRID_LEVEL_KEEP)
     }
 
@@ -1165,7 +1208,7 @@ mod tests {
                 for level in [-2.0f32, -1.0, 0.0] {
                     let p = hybrid(stops(white, level, dark), k, e0, env);
                     let e = e0 + p.exposure;
-                    if p.exposure_bound == HybridExposureBound::Limit {
+                    if p.exposure_bound == ExposureBound::Limit {
                         continue;
                     }
                     assert!(p.slope * (white + e) <= top + 1e-4, "{white} {dark}: {p:?}");
@@ -1174,7 +1217,7 @@ mod tests {
                         "{white} {dark}: {p:?}"
                     );
                     assert!((slope_for(WHITE_CAP_STOPS)..=MAX_SLOPE).contains(&p.slope));
-                    assert!(p.slope >= k || p.slope_bound == HybridSlopeBound::Envelope);
+                    assert!(p.slope >= k || p.slope_bound == SlopeBound::Envelope);
                 }
             }
         }
@@ -1185,23 +1228,23 @@ mod tests {
         let (k, e0, env) = (1.65, 1.0, [-6.0, 2.0]);
         // 4 stops: 7 / 4 = 1.75, inside the envelope's 1.65 · 8 / 4 = 3.3.
         let p = hybrid(stops(1.0, -1.0, -3.0), k, e0, env);
-        assert_eq!(p.slope_bound, HybridSlopeBound::Span);
+        assert_eq!(p.slope_bound, SlopeBound::Span);
         assert!((p.slope - 1.75).abs() < 1e-6, "{p:?}");
         // 7 stops already render over 7 · 1.65.
         let p = hybrid(stops(1.5, -1.0, -5.5), k, e0, env);
-        assert_eq!((p.slope, p.slope_bound), (k, HybridSlopeBound::Roll));
+        assert_eq!((p.slope, p.slope_bound), (k, SlopeBound::Roll));
         // 1.5 stops would want 4.67: the envelope allows 8.8, the maximum 3.5.
         let p = hybrid(stops(0.5, 0.0, -1.0), k, e0, env);
-        assert_eq!((p.slope, p.slope_bound), (MAX_SLOPE, HybridSlopeBound::Max));
+        assert_eq!((p.slope, p.slope_bound), (MAX_SLOPE, SlopeBound::Max));
         // A narrow envelope: 1.65 · 2 / 2 = 1.65 at most, from a wanted 3.5.
         let p = hybrid(stops(1.0, 0.0, -1.0), k, e0, [-1.0, 1.0]);
-        assert_eq!(p.slope_bound, HybridSlopeBound::Envelope);
+        assert_eq!(p.slope_bound, SlopeBound::Envelope);
         assert!((p.slope - 1.65).abs() < 1e-5, "{p:?}");
         // A frame wider than its envelope flattens no further than the cap's slope.
         let p = hybrid(stops(2.0, 0.0, -8.0), k, e0, [-4.0, 1.0]);
         assert_eq!(
             (p.slope, p.slope_bound),
-            (slope_for(WHITE_CAP_STOPS), HybridSlopeBound::Floor)
+            (slope_for(WHITE_CAP_STOPS), SlopeBound::Floor)
         );
         // No span: the steepest the envelope allows.
         let p = hybrid(stops(0.5, 0.5, 0.5), k, e0, env);
@@ -1213,18 +1256,15 @@ mod tests {
         let (k, e0, env) = (1.65, 1.0, [-8.0, 3.0]);
         // At the roll's target already: the roll's exposure.
         let p = hybrid(stops(1.0, -e0, -3.0), k, e0, env);
-        assert_eq!(p.exposure_bound, HybridExposureBound::None);
+        assert_eq!(p.exposure_bound, ExposureBound::None);
         assert!(p.exposure.abs() < 1e-6, "{p:?}");
         // A stop under it after the roll's exposure keeps 0.6 of that stop: lifted 0.4.
         let p = hybrid(stops(1.0, -e0 - 1.0, -3.0), k, e0, env);
         assert!((p.exposure - 0.4).abs() < 1e-6, "{p:?}");
-        // Five stops over: darkened 2, held at the limit 1.5.
+        // Five stops over: darkened 2, held at the limit.
         let p = hybrid(stops(1.0, -e0 + 5.0, -3.0), k, e0, env);
-        assert_eq!(p.exposure_bound, HybridExposureBound::Limit);
-        assert!(
-            (p.exposure + HYBRID_EXPOSURE_BELOW_EV).abs() < 1e-6,
-            "{p:?}"
-        );
+        assert_eq!(p.exposure_bound, ExposureBound::Limit);
+        assert!((p.exposure + FRAME_EXPOSURE_BELOW_EV).abs() < 1e-6, "{p:?}");
         // Level 1 keeps every frame where the roll's exposure puts it.
         let p = hybrid_placement(stops(1.0, 2.0, -3.0), k, e0, env, 7.0, 1.0);
         assert!(p.exposure.abs() < 1e-6, "{p:?}");
@@ -1236,7 +1276,7 @@ mod tests {
         // The brightest frame lifted would carry its white past the roll's: held at it.
         let env = [-5.0, 1.5];
         let p = hybrid(stops(1.5, -3.0, -1.5), k, e0, env);
-        assert_eq!(p.exposure_bound, HybridExposureBound::Envelope);
+        assert_eq!(p.exposure_bound, ExposureBound::Envelope);
         assert!(
             (p.slope * (1.5 + e0 + p.exposure) - k * (env[1] + e0)).abs() < 1e-4,
             "{p:?}"
@@ -1248,7 +1288,47 @@ mod tests {
             e0,
             [-4.0, 1.0],
         );
-        assert_eq!(p.exposure_bound, HybridExposureBound::Centred);
+        assert_eq!(p.exposure_bound, ExposureBound::Centred);
+    }
+
+    #[test]
+    fn a_frame_placed_on_its_own_spreads_its_own_span_whatever_the_roll() {
+        let e0 = 1.0;
+        // 9.049 / 4 stops, the roll's span slope from the frame's own ends.
+        let p = per_frame_placement(stops(1.0, -1.0, -3.0), e0);
+        assert_eq!(
+            (p.slope, p.slope_bound),
+            (span_slope(1.0, -3.0), SlopeBound::Span)
+        );
+        // Short: the maximum. Wide: the cap's slope. None: the maximum.
+        let p = per_frame_placement(stops(1.0, 0.0, -1.0), e0);
+        assert_eq!((p.slope, p.slope_bound), (MAX_SLOPE, SlopeBound::Max));
+        let p = per_frame_placement(stops(2.0, 0.0, -8.0), e0);
+        assert_eq!(
+            (p.slope, p.slope_bound),
+            (slope_for(WHITE_CAP_STOPS), SlopeBound::Floor)
+        );
+        let p = per_frame_placement(stops(0.5, 0.5, 0.5), e0);
+        assert_eq!((p.slope, p.slope_bound), (MAX_SLOPE, SlopeBound::Max));
+    }
+
+    #[test]
+    fn a_frame_placed_on_its_own_holds_its_white_within_the_limits() {
+        let e0 = 1.0;
+        // The frame's white renders at the target, whatever its level.
+        let frame = stops(0.5, -1.0, -3.0);
+        let p = per_frame_placement(frame, e0);
+        assert_eq!(p.exposure_bound, ExposureBound::None);
+        let rendered = p.slope * (frame.white_stops + e0 + p.exposure);
+        assert!((rendered - FRAME_WHITE_LOOK_STOPS).abs() < 1e-5, "{p:?}");
+        // A night frame's white wants 3.5 EV of lift: held at the limit over the roll's.
+        let p = per_frame_placement(stops(-3.0, -4.0, -6.0), e0);
+        assert_eq!(p.exposure_bound, ExposureBound::Limit);
+        assert_eq!(p.exposure, FRAME_EXPOSURE_ABOVE_EV);
+        // A white far over the target is darkened at most the limit under the roll's.
+        let p = per_frame_placement(stops(4.0, 0.0, -1.0), e0);
+        assert_eq!(p.exposure_bound, ExposureBound::Limit);
+        assert_eq!(p.exposure, -FRAME_EXPOSURE_BELOW_EV);
     }
 
     #[test]

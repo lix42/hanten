@@ -2211,8 +2211,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   exposure inside the roll's envelope (R 7, α 0.6), solved at render time from its stored
   tones, in place of the lifts; `--placement roll` keeps per-roll. **Display black is off
   by default** (`--display-black 6` turns it on; `direct` keeps 6)
-- [ ] [Per-frame placements](tasks/nf-calibration/per-frame-placement.md) — white-pinned
-  and midtone-pinned, each frame's contrast from its own span, as a user's choice
+- [x] [Per-frame placement](tasks/nf-calibration/per-frame-placement.md) — `--placement
+  frame`: each frame its own contrast from its span, its white at L\* 93; exposure limits ±1 EV (v13). **Done 2026-10-10**
 - [ ] [The maximum slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the limit every
   slope-setting placement shares, provisional at 3.5
 - [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —

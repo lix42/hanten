@@ -1,4 +1,4 @@
-# Per-frame placements
+# Per-frame placement
 
 ## Goal
 
@@ -20,21 +20,16 @@ Known (`docs/spike/poor-development.md`, 2026-10-04/05):
 - The global maximum slope applies wherever a slope is set, and binds most here: steep
   white-pinned slopes on flat frames (`hybrid-slope-bounds` sweeps it on these too).
 
-Open:
-
-- Whether both variants ship, and what midtone-pinned anchors on.
-- **The white target.** Per-roll and the hybrid bring only the roll's brightest frame to
-  it; white-pinned brings every frame there, low-key and night frames included. Default to
-  `span-roll-slope`'s target; the review adds one lower-target arm on low-key frames, and
-  only if that wins does per-frame get its own white.
-- How the choice reaches the recipe and `measure-roll`: new values of the hybrid's
-  placement enum, not a second field.
+Settled (review, 2026-10-10; progress log): **one placement, white-pinned, `--placement
+frame`, white at L\* 93**; midtone-pinned dropped. Every placement's exposure limits moved
+to ±1 EV around the roll's (`pipeline_version` 13). A brightness-keyed white target was
+considered and not adopted.
 
 ## How to Verify
 
 - `measure-roll` on the archive rolls: every frame's slope and anchor, within the maximum.
-- A review on a good and a poor roll, including the low-key white-target arm.
-- `docs/using-nc.md` describes the placements.
+- A review on a good and a poor roll.
+- `docs/using-nc.md` describes the placement.
 
 ## Dependencies
 

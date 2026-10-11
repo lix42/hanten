@@ -9601,10 +9601,39 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(code, 0, "{err}");
     let converted = json(&stdout);
     let hybrid = &report["frames"][0]["hybrid"];
-    assert_eq!(converted["chain"]["roll"]["hybrid"], *hybrid, "{converted}");
-    assert_eq!(converted["chain"]["look"]["base_from"], "hybrid");
+    assert_eq!(
+        converted["chain"]["roll"]["frame_placement"], *hybrid,
+        "{converted}"
+    );
+    assert_eq!(converted["chain"]["look"]["base_from"], "placement");
     assert_eq!(converted["chain"]["look"]["base_slope"], hybrid["slope"]);
     assert_eq!(converted["chain"]["roll"]["frame_exposure_applied"], false);
+    // The per-frame placement the report states is the one `convert` renders.
+    let out = tmp.path("frame.tiff");
+    let (code, stdout, err) = run(&[
+        "convert",
+        &frame,
+        "--params",
+        recipe.to_str().unwrap(),
+        "--placement",
+        "frame",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let converted = json(&stdout);
+    let stated = &report["frames"][0]["frame"];
+    assert!(stated.is_object(), "{report}");
+    assert_eq!(converted["chain"]["roll"]["frame_placement"], *stated);
+    assert_eq!(converted["chain"]["roll"]["placement"], "frame");
+    assert_eq!(converted["chain"]["look"]["base_slope"], stated["slope"]);
+    // Colour stays at the roll's slope, as under the hybrid.
+    assert_eq!(converted["chain"]["look"]["saturation_base_from"], "roll");
+    assert_eq!(converted["chain"]["roll"]["frame_exposure_applied"], false);
+    assert_eq!(
+        converted["chain"]["roll"]["taste_applied"],
+        serde_json::json!(["placement"])
+    );
     let (code, _, err) = run(&[
         "convert",
         &frame,
@@ -17603,4 +17632,201 @@ fn the_hybrid_refuses_a_lift_it_would_ignore_and_warns_on_an_unmeasured_frame() 
         err.contains("--roll-envelope (recipe `roll.envelope_stops`) must be finite"),
         "{err}"
     );
+}
+
+#[test]
+fn a_per_frame_placement_refuses_what_it_ignores_and_warns_without_tones() {
+    // `nf-calibration/per-frame-placement`: `frame` places a measured frame
+    // from its own span, in place of the lifts and outside the hybrid, so a lift or a
+    // hybrid knob would be ignored — refused, naming the placement, with remedies that
+    // render. A frame without its tones renders at the roll's placement and says which
+    // placement it missed.
+    let tmp = TempDir::new("per-frame-rules");
+    let base = [0.9f32, 0.55, 0.42];
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let (night, mid, other) = (
+        tmp.path("night.tif"),
+        tmp.path("mid.tif"),
+        tmp.path("other.tif"),
+    );
+    write_picture_density(&night, base, 0.45);
+    write_picture_density(&mid, base, 0.62);
+    write_picture_density(&other, base, 0.62);
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let measured = tmp.path("measured.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        &s(&recipe),
+        &s(&night),
+        &s(&mid),
+        "--out",
+        &s(&measured),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let convert = |input: &Path, extra: &[&str]| {
+        let out = tmp.path("out.tiff");
+        let mut argv = vec![
+            "convert".to_owned(),
+            s(input),
+            "--params".to_owned(),
+            s(&measured),
+            "-o".to_owned(),
+            s(&out),
+        ];
+        argv.extend(extra.iter().map(|a| a.to_string()));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run(&argv)
+    };
+
+    let placement = "frame";
+    let flag = format!("--placement {placement}");
+    let (code, _, err) = convert(&night, &["--placement", placement, "--hybrid-span", "9"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "--hybrid-span tunes the hybrid placement, but {flag} places this frame from \
+                 its own span, outside the hybrid"
+        )) && err.contains(&format!("drop {flag} to place the frame with the hybrid")),
+        "{err}"
+    );
+    let (code, _, err) = convert(&night, &["--placement", placement, "--thin-lift", "on"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "--thin-lift on turns on a lift, which applies at the roll's placement, but \
+                 the {placement} placement places this frame"
+        )) && err.contains("use --placement roll"),
+        "{err}"
+    );
+    let (code, _, err) = convert(
+        &night,
+        &["--placement", placement, "--roll-frame-exposure", "0.2"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!("but the {placement} placement places this frame"))
+            && err.contains("use --placement roll;")
+            && err.contains("use --exposure"),
+        "{err}"
+    );
+    for fine in [
+        &["--placement", placement][..],
+        &["--placement", placement, "--exposure", "0.2"],
+        &["--placement", "roll", "--thin-lift", "on"],
+        &["--hybrid-span", "9"],
+    ] {
+        let (code, _, err) = convert(&night, fine);
+        assert_eq!(code, 0, "{fine:?}: {err}");
+    }
+    // Stated in a manifest's `params`, named as keys.
+    let manifest = write_file(
+        &tmp.path(&format!("frames-{placement}.json")),
+        &serde_json::json!({"frames": [
+            {"input": night, "params": {"roll": {
+                "placement": placement, "hybrid_level_keep": 0.5,
+            }}},
+        ]})
+        .to_string(),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&measured),
+        "--frames",
+        &s(&manifest),
+        "-o",
+        &s(&tmp.path(&format!("rolled-{placement}"))),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "`roll.hybrid_level_keep` tunes the hybrid placement, but `roll.placement` \
+                 \"{placement}\" places this frame"
+        )) && !err.contains("--placement"),
+        "{err}"
+    );
+    // A frame without its tones warns, naming the placement it missed.
+    let (code, _, err) = convert(&other, &["--placement", placement]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(&format!(
+            "rendered at the roll's placement, not the {placement}: the recipe lacks this \
+                 frame's tones"
+        )),
+        "{err}"
+    );
+    // A hybrid knob there is refused for the missing tones, not for `frame` placing it, and
+    // its remedy is only to drop the knob: the hybrid lacks the same tones.
+    let (code, _, err) = convert(&other, &["--placement", placement, "--hybrid-span", "9"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "--hybrid-span tunes the hybrid placement, but --placement frame asks for the \
+             frame placement, and the recipe lacks this frame's tones"
+        ) && !err.contains("from its own span")
+            && !err.contains("drop --placement frame"),
+        "{err}"
+    );
+    let (code, _, err) = convert(&other, &["--placement", placement]);
+    assert_eq!(code, 0, "the remedy, dropping the knob: {err}");
+    // Without the roll's white and dark end, `frame` says so rather than rendering the
+    // fallback silently.
+    let (code, _, err) = run(&[
+        "convert",
+        &s(&night),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--roll-frame-tones=0.9,-1.4,-3.2",
+        "--placement",
+        placement,
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
+        "-o",
+        &s(&tmp.path("no-span.tiff")),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(
+            "rendered at the roll's placement, not the frame: the recipe lacks the roll's \
+             white and dark end"
+        ),
+        "{err}"
+    );
+    // Placed by `frame` but with no envelope, the hybrid could not place it either: the
+    // knob's refusal does not offer dropping `frame`.
+    let no_envelope = |extra: &[&str]| {
+        let out = tmp.path("no-envelope.tiff");
+        let mut argv = vec![
+            "convert",
+            night.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--roll-white",
+            "1.7",
+            "--roll-dark=-3.75",
+            "--roll-frame-tones=0.9,-1.4,-3.2",
+            "--placement",
+            "frame",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "-o",
+            out.to_str().unwrap(),
+        ];
+        argv.extend_from_slice(extra);
+        run(&argv)
+    };
+    let (code, _, err) = no_envelope(&["--hybrid-span", "9"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--hybrid-span tunes the hybrid placement, but --placement frame places")
+            && !err.contains("drop --placement frame"),
+        "{err}"
+    );
+    let (code, _, err) = no_envelope(&[]);
+    assert_eq!(code, 0, "the remedy, dropping the knob: {err}");
 }
