@@ -7932,6 +7932,18 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
         "2.8",
     ]);
     assert!(w.iter().any(base), "{w:?}");
+    let w = warnings(&[
+        "--contrast",
+        "1.1111112",
+        "--roll-exposure",
+        "0",
+        "--white-balance",
+        "8,8,8",
+    ]);
+    assert!(
+        w.iter().any(base),
+        "a stated white balance is a stated gain: {w:?}"
+    );
 
     // With tones (09-18 Gold200 1774's, placed by the hybrid) the frame's middle and dark
     // end decide, and the base is not read.

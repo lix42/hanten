@@ -1394,6 +1394,7 @@ mod tests {
                 tones: None,
                 roll_exposure: false,
                 stated_exposure: exposure,
+                stated_white_balance: [gain; 3],
                 film_base_stops: out.fit_range.display_black.film_base_stops,
                 headroom_stops: out.fit_range.headroom_stops,
                 contrast: 1.0,

@@ -2225,7 +2225,8 @@ measured default:
   `--exposure 2.8` puts the base 1.12 stops under and warns; `--exposure 1.8` puts it
   2.46 under, silent. A roll's exposure alone is a measurement, so the same base
   reached by `--roll-exposure 2.8` does not warn — a thin roll's puts the base about 2
-  stops under by design — but a positive `--exposure` stated on top of one does.
+  stops under by design — but a gain stated on top of one does (a positive `--exposure`,
+  or a `--white-balance` that brightens).
 
 All three read where the frame's grade places it, never the image; a stated white
 balance counts as the exposure it is on luminance. With display black

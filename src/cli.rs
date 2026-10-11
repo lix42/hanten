@@ -4514,6 +4514,11 @@ fn render_frame(
             tones: recipe.applied_frame_tones(),
             roll_exposure: recipe.applies_roll_exposure(),
             stated_exposure: recipe.scene_correction.exposure,
+            stated_white_balance: {
+                let crate::pipeline::scene_correction::WhiteBalance::Explicit(gains) =
+                    recipe.scene_correction.white_balance;
+                gains
+            },
             film_base_stops: r.fit_range.display_black.film_base_stops,
             headroom_stops: r.fit_range.headroom_stops,
             contrast: slope.contrast,

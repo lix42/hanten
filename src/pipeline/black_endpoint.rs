@@ -50,9 +50,11 @@ pub struct Inputs {
     /// The frame's measured tones, where the roll applies.
     pub tones: Option<FrameStops>,
     /// Whether a roll's exposure applies (`recipe::Recipe::applies_roll_exposure`), and
-    /// the stated `scene_correction.exposure` on top of it.
+    /// the stated scene correction on top of it: `scene_correction.exposure` and
+    /// `.white_balance`.
     pub roll_exposure: bool,
     pub stated_exposure: f32,
+    pub stated_white_balance: [f32; 3],
     /// Where the graded film base lands, in stops under mid-grey.
     pub film_base_stops: f32,
     pub headroom_stops: f32,
@@ -64,6 +66,11 @@ pub struct Inputs {
 }
 
 impl Inputs {
+    /// The stated scene correction's gain on luminance, in EV.
+    fn stated_gain(&self) -> f32 {
+        self.stated_exposure + dot(self.stated_white_balance, ACESCG_LUMA).log2()
+    }
+
     /// Where a tone (scene stops from mid-grey, before exposure) lands on the display, in
     /// stops from mid-grey.
     pub fn land(&self, stops: f32) -> f32 {
@@ -108,7 +115,7 @@ pub fn check(i: &Inputs) -> Vec<Fault> {
                 faults.push(Fault::Pushed { middle, dark });
             }
         }
-        None if (!i.roll_exposure || i.stated_exposure > 0.0)
+        None if (!i.roll_exposure || i.stated_gain() > 0.0)
             && i.film_base_stops < MIN_FILM_BASE_STOPS =>
         {
             faults.push(Fault::Base {
@@ -182,6 +189,7 @@ mod tests {
             }),
             roll_exposure: true,
             stated_exposure: 0.0,
+            stated_white_balance: [1.0; 3],
             film_base_stops: 3.5,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             contrast: 1.0,
@@ -314,6 +322,12 @@ mod tests {
         // An exposure stated on top is the user's push, and is checked.
         i.stated_exposure = 0.3;
         assert_eq!(check(&i), vec![Fault::Base { stops: 1.8 }]);
+        // So is a stated white balance, by its gain on luminance; one that nets out is not.
+        i.stated_exposure = 0.0;
+        i.stated_white_balance = [8.0; 3];
+        assert_eq!(check(&i), vec![Fault::Base { stops: 1.8 }]);
+        i.stated_exposure = -3.0;
+        assert_eq!(check(&i), vec![]);
     }
 
     #[test]

@@ -719,6 +719,10 @@ its default; with display black on, its own warning stands instead.
   under, silent). Without tones the base rule now fires unless a roll's exposure applies
   *and* the stated `scene_correction.exposure` is not positive; lowering `--exposure`
   still clears it.
+- 2026-10-10: **PR #264 review, second round** (Codex, P1): a stated white balance is a
+  stated gain too (`--roll-exposure 0 --white-balance 8,8,8` passed the exemption). The
+  exemption now reads the stated scene correction's net gain on luminance, exposure plus
+  `log2` of the white balance's luma gain, as the tone model does.
 
 ## mono-decode
 
