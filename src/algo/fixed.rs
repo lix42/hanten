@@ -85,7 +85,7 @@
 
 use crate::algo::FilmRgbImage;
 use crate::pipeline::pixels;
-use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Result};
+use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Result, Scan};
 
 /// Mid-grey's density above the film base — the decode's one anchor constant.
 ///
@@ -305,7 +305,7 @@ pub struct DecodeReport {
 /// here: its one reader, `film_base`'s holder detection, has already run, and nothing
 /// after the decode reads it (IR dust removal would bring it back).
 pub fn decode(
-    image: LinearImage,
+    scan: Scan,
     base: &FilmBase,
     params: &DecodeParams,
 ) -> Result<(FilmRgbImage, DecodeReport)> {
@@ -327,15 +327,9 @@ pub fn decode(
 
     // Free the IR plane before the pass, and re-check the RGB length the positive
     // inherits (the fields are public).
-    let LinearImage {
-        width,
-        height,
-        rgb,
-        ir,
-        ..
-    } = image;
+    let Scan { image, ir } = scan;
     drop(ir);
-    let mut image = LinearImage::new(width, height, rgb, None)?;
+    let mut image = LinearImage::new(image.width, image.height, image.rgb)?;
     // Fused measurement + calibration + curve, one pass. Each output sample reads
     // only its own input sample, so rewriting in place is the same arithmetic.
     pixels::map_in_place(&mut image.rgb, |px| {
@@ -387,8 +381,8 @@ fn check_base(base: &FilmBase) -> Result<()> {
 /// Through [`decode`] rather than a formula beside it, so the base follows every
 /// parameter the decode reads — scale, offset, linearization, anchor — by construction.
 pub fn decode_film_base(base: &FilmBase, params: &DecodeParams) -> Result<FilmRgbImage> {
-    let pixel = LinearImage::new(1, 1, vec![base.r, base.g, base.b], None)?;
-    Ok(decode(pixel, base, params)?.0)
+    let pixel = LinearImage::new(1, 1, vec![base.r, base.g, base.b])?;
+    Ok(decode(pixel.into(), base, params)?.0)
 }
 
 /// What makes a [`DecodeParams`] unusable.
@@ -485,7 +479,7 @@ fn check_params(params: &DecodeParams) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::REFERENCE_MID_TO_WHITE_DELTA;
+    use crate::types::{IrPlane, REFERENCE_MID_TO_WHITE_DELTA};
 
     fn base() -> FilmBase {
         FilmBase::from([0.9, 0.55, 0.42])
@@ -499,8 +493,8 @@ mod tests {
     /// before the `log10`** — computing the whole measurement in f64 moves that one
     /// sample and no other. Removing or rounding it silently retires a bit-identity
     /// rule the module documents.
-    fn scan() -> LinearImage {
-        LinearImage::new(
+    fn scan() -> Scan {
+        let image = LinearImage::new(
             4,
             1,
             vec![
@@ -517,9 +511,13 @@ mod tests {
                 f32::INFINITY,
                 f32::NEG_INFINITY,
             ],
-            Some(vec![0.1, 0.2, 0.3, 0.4]),
         )
-        .unwrap()
+        .unwrap();
+        let ir = IrPlane {
+            samples: vec![0.1, 0.2, 0.3, 0.4],
+            verified: true,
+        };
+        Scan::new(image, Some(ir)).unwrap()
     }
 
     /// A non-zero offset, distinct per channel. `DENSITY_OFFSET` is `[0, 0, 0]` today,
@@ -555,8 +553,8 @@ mod tests {
             samples.extend_from_slice(&[s; 3]);
             s = f32::from_bits(s.to_bits() - 1);
         }
-        let img = LinearImage::new(N as u32, 1, samples.clone(), None).unwrap();
-        let (film, report) = decode(img, &b, &params).unwrap();
+        let img = LinearImage::new(N as u32, 1, samples.clone()).unwrap();
+        let (film, report) = decode(img.into(), &b, &params).unwrap();
 
         let mut witnesses = 0usize;
         for (i, out) in film.rgb().iter().enumerate() {
@@ -643,7 +641,7 @@ mod tests {
         // The memory model counts one image from the decode on (`pipeline::memory`);
         // a copy would put the scan back beside its positive.
         let image = scan();
-        let rgb = image.rgb.as_ptr();
+        let rgb = image.image.rgb.as_ptr();
         let (film, _) = decode(image, &base(), &DecodeParams::default()).unwrap();
         assert_eq!(film.rgb().as_ptr(), rgb);
     }
@@ -777,8 +775,8 @@ mod tests {
         // dead pixel is floored to a high-but-finite density, while a non-finite
         // sample propagates as `NaN` so `io::encode`'s counter still surfaces it.
         // Laundering the second would hide corrupt input behind a plausible pixel.
-        let img = LinearImage::new(2, 1, vec![0.0, -1.0, 0.5, f32::NAN, 0.5, 0.5], None).unwrap();
-        let (film, _) = decode(img, &base(), &DecodeParams::default()).unwrap();
+        let img = LinearImage::new(2, 1, vec![0.0, -1.0, 0.5, f32::NAN, 0.5, 0.5]).unwrap();
+        let (film, _) = decode(img.into(), &base(), &DecodeParams::default()).unwrap();
         let out = film.rgb();
         assert!(out[0].is_finite() && out[0] >= 0.0, "{}", out[0]);
         assert!(out[1].is_finite() && out[1] >= 0.0, "{}", out[1]);

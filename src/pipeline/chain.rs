@@ -408,7 +408,7 @@ mod tests {
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::stage::Untimed;
-    use crate::types::{FilmBase, LinearImage};
+    use crate::types::{FilmBase, IrPlane, LinearImage, Scan};
 
     /// Every stage at its identity — fit range at zero headroom — so a test sees the
     /// wiring and the destination matrix rather than the operator.
@@ -458,8 +458,7 @@ mod tests {
     /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
     /// non-finite value — through the real working-space mapper.
     fn aces_from(width: u32, height: u32, rgb: &[f32]) -> AcesCgImage {
-        let film =
-            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), None).unwrap());
+        let film = FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec()).unwrap());
         map_nc_film_rgb_v1(film)
     }
 
@@ -750,19 +749,23 @@ mod tests {
     /// A scan with an IR plane, as `io::decode` hands it to the decode. Its RGB has
     /// spare capacity, which a copy (`clone`, `collect`) never keeps: a freed block can
     /// come back at the same address, its capacity cannot.
-    fn scan_with_ir() -> LinearImage {
+    fn scan_with_ir() -> Scan {
         let mut rgb = Vec::with_capacity(SCAN_CAPACITY);
         rgb.extend([
             0.6, 0.4, 0.3, 0.2, 0.15, 0.1, 0.05, 0.04, 0.03, 0.9, 0.7, 0.5,
         ]);
-        LinearImage::new(2, 2, rgb, Some(vec![0.8; 4])).unwrap()
+        let ir = IrPlane {
+            samples: vec![0.8; 4],
+            verified: true,
+        };
+        Scan::new(LinearImage::new(2, 2, rgb).unwrap(), Some(ir)).unwrap()
     }
 
     const SCAN_CAPACITY: usize = 64;
 
     /// `scan` through the real decode and working-space mapping: the chain's input as a
     /// run builds it.
-    fn decoded(scan: LinearImage) -> AcesCgImage {
+    fn decoded(scan: Scan) -> AcesCgImage {
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         map_nc_film_rgb_v1(
             crate::algo::fixed::decode(scan, &base, &Default::default())
@@ -776,7 +779,7 @@ mod tests {
         // The buffer rule (module docs), measured rather than read off the code: from
         // the scan to the chain's exit, with every stage acting, no stage reallocates.
         let scan = scan_with_ir();
-        let rgb = scan.rgb.as_ptr();
+        let rgb = scan.image.rgb.as_ptr();
         let p = ChainParams {
             shared: shared_acting(),
             target: DisplayTarget {
@@ -803,7 +806,7 @@ mod tests {
         // The gain map's one extra full-frame buffer is the split: the SDR rendition
         // keeps the scan's buffer and the HDR one is the copy.
         let scan = scan_with_ir();
-        let rgb = scan.rgb.as_ptr();
+        let rgb = scan.image.rgb.as_ptr();
         let pair = render_pair(
             decoded(scan),
             film_base(),
@@ -830,14 +833,14 @@ mod tests {
                 crate::algo::FilmRgbImage::fixture(img.clone())
             }),
             ("fixed::decode", |img, base| {
-                crate::algo::fixed::decode(img.clone(), base, &Default::default())
+                crate::algo::fixed::decode(img.clone().into(), base, &Default::default())
                     .unwrap()
                     .0
             }),
         ];
         for (name, produce) in producers {
             let base = FilmBase::from([0.5, 0.5, 0.5]);
-            let img = LinearImage::new(2, 1, vec![0.1, 0.2, 0.3, 0.4, 0.2, 0.1], None).unwrap();
+            let img = LinearImage::new(2, 1, vec![0.1, 0.2, 0.3, 0.4, 0.2, 0.1]).unwrap();
             let aces = map_nc_film_rgb_v1(produce(&img, &base));
             let expected = bits(&to_p3(aces.rgb()));
 

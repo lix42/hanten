@@ -8,79 +8,107 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Linear scanner image in `f32`, interleaved RGB plus optional IR plane.
+/// Linear `f32` image, interleaved RGB.
 ///
-/// Values are in a linear working space, range ~`[0, 1]`. `rgb` is interleaved
-/// (`r,g,b, r,g,b, …`) with `len == width * height * 3`. The IR plane, when
-/// present (HDRi input), is `len == width * height`. Since `ir-holder-detection` it
-/// is consumed by the film-base
-/// holder mask — but **only when [`ir_verified`](Self::ir_verified) is true**, and
-/// only when the plane measures able to separate holder from film on that frame
-/// (`pipeline::film_base::ir_separability`; design-spec §6.1).
+/// Values are in a linear working space; `rgb` is interleaved (`r,g,b, r,g,b, …`)
+/// with `len == width * height * 3`. It is a [`Scan`]'s RGB and every image after
+/// the fixed decode, and has no IR plane: that stops at the decode.
 #[derive(Clone, Debug)]
 pub struct LinearImage {
     pub width: u32,
     pub height: u32,
     pub rgb: Vec<f32>,
-    pub ir: Option<Vec<f32>>,
-    /// Whether the IR plane's provenance is **marker-verified** — the decoder
-    /// found the SilverFast IR IFD's `NewSubfileType=4` marker, not merely a
-    /// same-dimension 16-bit grayscale page identified by shape alone. A
-    /// shape-only IR plane is still decoded, but it must **not** be
-    /// trusted by a conversion consumer (a stray grayscale page could otherwise be
-    /// thresholded as IR and corrupt the film base), so the holder mask is skipped
-    /// for it. Meaningful only when `ir.is_some()`; [`new`](Self::new) defaults it
-    /// `false` and `io::decode` sets it from the marker.
-    pub ir_verified: bool,
 }
 
 impl LinearImage {
-    /// Validated constructor — the single entry point `io::decode` should use to
-    /// build an image, so the buffer-length invariants (`rgb.len() == w*h*3`,
-    /// `ir.len() == w*h`) are checked once at the boundary instead of surfacing
-    /// as a panic deep in the pipeline. Fields stay `pub` for stage ergonomics.
-    pub fn new(width: u32, height: u32, rgb: Vec<f32>, ir: Option<Vec<f32>>) -> Result<Self> {
-        if width == 0 || height == 0 {
-            return Err(NcError::Other(format!(
-                "image dimensions must be non-zero (got {width}x{height})"
-            )));
-        }
-        // Checked arithmetic: a hostile/corrupt header advertising huge
-        // dimensions must surface as an error, not a debug panic / release wrap.
-        let overflow = || {
-            NcError::Other(format!(
-                "image dimensions {width}x{height} overflow address space"
-            ))
-        };
-        let pixels = (width as usize)
-            .checked_mul(height as usize)
-            .ok_or_else(overflow)?;
-        let rgb_len = pixels.checked_mul(3).ok_or_else(overflow)?;
+    /// Validated constructor, so `rgb.len() == w*h*3` is checked once at the
+    /// boundary instead of surfacing as a panic deep in the pipeline. Fields stay
+    /// `pub` for stage ergonomics.
+    pub fn new(width: u32, height: u32, rgb: Vec<f32>) -> Result<Self> {
+        let pixels = pixel_count(width, height)?;
+        let rgb_len = pixels
+            .checked_mul(3)
+            .ok_or_else(|| overflow(width, height))?;
         if rgb.len() != rgb_len {
             return Err(NcError::Other(format!(
                 "rgb buffer length {} != width*height*3 ({rgb_len})",
                 rgb.len()
             )));
         }
-        if let Some(ir_plane) = &ir {
-            let ir_len = ir_plane.len();
-            if ir_len != pixels {
+        Ok(Self { width, height, rgb })
+    }
+}
+
+/// A decoded scan: the scanner's RGB transmissions and, on HDRi input, its IR plane.
+///
+/// `io::decode` produces it and `algo::fixed::decode` consumes it. The IR plane's
+/// one reader is `film_base`'s holder detection, before the decode; the decode
+/// drops it, so nothing after can carry one (design-spec §6.1).
+#[derive(Clone, Debug)]
+pub struct Scan {
+    pub image: LinearImage,
+    pub ir: Option<IrPlane>,
+}
+
+/// A scan's infrared plane, `len == width * height`.
+#[derive(Clone, Debug)]
+pub struct IrPlane {
+    pub samples: Vec<f32>,
+    /// The decoder found the SilverFast IR IFD's `NewSubfileType=4` marker, not
+    /// merely a same-sized 16-bit grayscale page. Only a verified plane may drive
+    /// the holder mask: a stray grayscale page thresholded as IR would corrupt the
+    /// film base.
+    pub verified: bool,
+}
+
+impl Scan {
+    /// Validated constructor: an IR plane must match the image's pixel count.
+    pub fn new(image: LinearImage, ir: Option<IrPlane>) -> Result<Self> {
+        if let Some(plane) = &ir {
+            let pixels = pixel_count(image.width, image.height)?;
+            if plane.samples.len() != pixels {
                 return Err(NcError::Other(format!(
-                    "ir buffer length {ir_len} != width*height ({pixels})"
+                    "ir buffer length {} != width*height ({pixels})",
+                    plane.samples.len()
                 )));
             }
         }
-        Ok(Self {
-            width,
-            height,
-            rgb,
-            ir,
-            // Provenance is not known at this boundary; `io::decode` sets it from
-            // the IR IFD's `NewSubfileType=4` marker. A shape-only IR plane stays
-            // `false` (not trusted by consumers).
-            ir_verified: false,
-        })
+        Ok(Self { image, ir })
     }
+
+    /// The IR samples, only if the plane is marker-verified.
+    pub fn verified_ir(&self) -> Option<&[f32]> {
+        self.ir
+            .as_ref()
+            .filter(|p| p.verified)
+            .map(|p| p.samples.as_slice())
+    }
+}
+
+/// A scan without an IR plane.
+impl From<LinearImage> for Scan {
+    fn from(image: LinearImage) -> Self {
+        Self { image, ir: None }
+    }
+}
+
+/// `width * height`, refusing zero dimensions and overflow: a corrupt header must
+/// surface as an error, not a debug panic or a release wrap.
+fn pixel_count(width: u32, height: u32) -> Result<usize> {
+    if width == 0 || height == 0 {
+        return Err(NcError::Other(format!(
+            "image dimensions must be non-zero (got {width}x{height})"
+        )));
+    }
+    (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| overflow(width, height))
+}
+
+fn overflow(width: u32, height: u32) -> NcError {
+    NcError::Other(format!(
+        "image dimensions {width}x{height} overflow address space"
+    ))
 }
 
 /// Per-channel unexposed-film base transmission — the `Dmin` anchor.
@@ -784,17 +812,30 @@ mod tests {
 
     #[test]
     fn linear_image_new_checks_buffer_lengths() {
-        // 2x1 RGB needs 6 floats; IR needs 2.
-        assert!(LinearImage::new(2, 1, vec![0.0; 6], Some(vec![0.0; 2])).is_ok());
-        assert!(LinearImage::new(2, 1, vec![0.0; 6], None).is_ok());
-        // Wrong rgb length and wrong ir length both fail loudly.
-        assert!(LinearImage::new(2, 1, vec![0.0; 5], None).is_err());
-        assert!(LinearImage::new(2, 1, vec![0.0; 6], Some(vec![0.0; 3])).is_err());
+        // 2x1 RGB needs 6 floats.
+        assert!(LinearImage::new(2, 1, vec![0.0; 6]).is_ok());
+        assert!(LinearImage::new(2, 1, vec![0.0; 5]).is_err());
         // Zero dimensions are rejected, not silently accepted as an empty image.
-        assert!(LinearImage::new(0, 1, vec![], None).is_err());
-        assert!(LinearImage::new(2, 0, vec![], None).is_err());
+        assert!(LinearImage::new(0, 1, vec![]).is_err());
+        assert!(LinearImage::new(2, 0, vec![]).is_err());
         // A pathological size that overflows is an error, not a panic.
-        assert!(LinearImage::new(u32::MAX, u32::MAX, vec![0.0; 1], None).is_err());
+        assert!(LinearImage::new(u32::MAX, u32::MAX, vec![0.0; 1]).is_err());
+    }
+
+    #[test]
+    fn scan_new_checks_the_ir_length_and_only_a_verified_plane_is_trusted() {
+        let image = || LinearImage::new(2, 1, vec![0.0; 6]).unwrap();
+        let plane = |n, verified| IrPlane {
+            samples: vec![0.5; n],
+            verified,
+        };
+        // 2x1 IR needs 2 floats.
+        assert!(Scan::new(image(), Some(plane(3, true))).is_err());
+        let verified = Scan::new(image(), Some(plane(2, true))).unwrap();
+        assert_eq!(verified.verified_ir(), Some(&[0.5, 0.5][..]));
+        let shape_only = Scan::new(image(), Some(plane(2, false))).unwrap();
+        assert!(shape_only.ir.is_some() && shape_only.verified_ir().is_none());
+        assert!(Scan::from(image()).verified_ir().is_none());
     }
 
     #[test]

@@ -179,17 +179,12 @@ pub struct EncodedHdrImage {
 }
 
 impl EncodedHdrImage {
-    fn from_linear_storage(image: LinearImage) -> Result<Self> {
-        if image.ir.is_some() {
-            return Err(NcError::Other(
-                "encoded HDR image unexpectedly retained an IR plane".to_string(),
-            ));
-        }
-        Ok(Self {
+    fn from_linear_storage(image: LinearImage) -> Self {
+        Self {
             width: image.width,
             height: image.height,
             rgb: image.rgb,
-        })
+        }
     }
 
     /// Encoded image width in pixels.
@@ -439,7 +434,7 @@ pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<R
         hlg_reference_display_peak_nits: (transfer == HdrTransfer::Hlg).then_some(TARGET_PEAK_NITS),
         hlg_reference_display_black_nits: (transfer == HdrTransfer::Hlg).then_some(0.0),
     };
-    let image = EncodedHdrImage::from_linear_storage(linear.image)?;
+    let image = EncodedHdrImage::from_linear_storage(linear.image);
     Ok(RenderedHdr { image, metadata })
 }
 
@@ -565,7 +560,7 @@ mod tests {
 
     #[test]
     fn a_rec2100_signal_refuses_primaries_other_than_bt2020() {
-        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
         let (p3, _) = from_new_chain(image, DestinationGamut::DisplayP3, "tone", "gamut").unwrap();
         let err = encode_transfer(p3, HdrTransfer::Pq).unwrap_err();
         assert!(
@@ -615,7 +610,7 @@ mod tests {
     /// A row of display-linear pixels as the chain hands them over — within
     /// the peak, so nothing is clamped and the values reach the encoder as given.
     fn linear(rgb: &[f32]) -> LinearHdr {
-        let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap();
+        let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec()).unwrap();
         let (hdr, clamp) =
             from_new_chain(image, DestinationGamut::Bt2020, "tone", "gamut").unwrap();
         assert_eq!(clamp, PeakClamp::default(), "a fixture must not clamp");
@@ -929,7 +924,6 @@ mod tests {
         assert_eq!(rendered.image().width, 3);
         assert_eq!(rendered.image().height, 1);
         assert_eq!(rendered.image().rgb.len(), 9);
-        assert!(rendered.image().ir.is_none());
         assert!(
             rendered
                 .image()
@@ -984,7 +978,7 @@ mod tests {
             0.0,
             0.0, // exactly at the peak: not counted
         ];
-        let image = LinearImage::new(3, 1, rgb.clone(), None).unwrap();
+        let image = LinearImage::new(3, 1, rgb.clone()).unwrap();
         let (hdr, clamp) =
             from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap();
         assert_eq!(
@@ -1021,7 +1015,7 @@ mod tests {
         assert_eq!(m.linear_headroom, LINEAR_HEADROOM);
 
         // Nothing out of range: nothing counted.
-        let image = LinearImage::new(1, 1, vec![0.2, 0.3, 0.4], None).unwrap();
+        let image = LinearImage::new(1, 1, vec![0.2, 0.3, 0.4]).unwrap();
         assert_eq!(
             from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial")
                 .unwrap()
@@ -1031,7 +1025,7 @@ mod tests {
 
         // A non-finite sample is refused, naming the pixel — never clamped into range.
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let image = LinearImage::new(2, 1, vec![0.1, 0.1, 0.1, 0.2, bad, 0.2], None).unwrap();
+            let image = LinearImage::new(2, 1, vec![0.1, 0.1, 0.1, 0.2, bad, 0.2]).unwrap();
             let err =
                 from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap_err();
             assert!(err.to_string().contains("pixel 1"), "{bad}: {err}");

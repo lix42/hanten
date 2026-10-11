@@ -149,7 +149,7 @@ mod tests {
     use crate::types::LinearImage;
 
     fn image(width: u32, height: u32, rgb: Vec<f32>) -> LinearImage {
-        LinearImage::new(width, height, rgb, None).unwrap()
+        LinearImage::new(width, height, rgb).unwrap()
     }
 
     /// Gains for a `width × height` frame whose pixel `i` has the base `sdr(i)` and

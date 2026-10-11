@@ -122,7 +122,7 @@ impl AcesCgImage {
         // The fields came from a validated LinearImage and are never resized, so
         // the invariants hold; route through the validated constructor anyway
         // (O(1) checks) so a future regression fails loudly.
-        LinearImage::new(self.width, self.height, self.rgb, None)
+        LinearImage::new(self.width, self.height, self.rgb)
             .expect("AcesCgImage preserves the validated buffer-length invariants")
     }
 }
@@ -268,7 +268,7 @@ mod tests {
 
     /// A `FilmRgbImage` whose film-RGB values are *exactly* `rgb`.
     fn film_from(width: u32, height: u32, rgb: Vec<f32>) -> FilmRgbImage {
-        FilmRgbImage::fixture(LinearImage::new(width, height, rgb, None).unwrap())
+        FilmRgbImage::fixture(LinearImage::new(width, height, rgb).unwrap())
     }
 
     /// A film-RGB producer under test, at its defaults.
@@ -283,7 +283,7 @@ mod tests {
                 crate::algo::FilmRgbImage::fixture(img.clone())
             }),
             ("fixed::decode", |img, base| {
-                crate::algo::fixed::decode(img.clone(), base, &Default::default())
+                crate::algo::fixed::decode(img.clone().into(), base, &Default::default())
                     .unwrap()
                     .0
             }),
@@ -423,7 +423,7 @@ mod tests {
         let scan = vec![0.5, 0.3, 0.2, 0.05, 0.03, 0.02];
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for (name, produce) in producers() {
-            let img = LinearImage::new(2, 1, scan.clone(), None).unwrap();
+            let img = LinearImage::new(2, 1, scan.clone()).unwrap();
             let film = produce(&img, &base);
             let aces = map_nc_film_rgb_v1(film);
             assert_eq!((aces.width(), aces.height()), (2, 1), "{name}");
@@ -443,7 +443,7 @@ mod tests {
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for (name, produce) in producers() {
             let run = || {
-                let img = LinearImage::new(3, 1, scan.clone(), None).unwrap();
+                let img = LinearImage::new(3, 1, scan.clone()).unwrap();
                 let film = produce(&img, &base);
                 map_nc_film_rgb_v1(film)
                     .rgb()

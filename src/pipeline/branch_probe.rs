@@ -95,7 +95,7 @@ fn real_frames(assets: &Path, roll: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Every `stride`-th pixel on both axes, without the IR plane.
+/// Every `stride`-th pixel on both axes.
 fn subsample(image: &LinearImage, stride: u32) -> LinearImage {
     let (w, h) = (image.width.div_ceil(stride), image.height.div_ceil(stride));
     let mut rgb = Vec::with_capacity((w * h * 3) as usize);
@@ -105,7 +105,7 @@ fn subsample(image: &LinearImage, stride: u32) -> LinearImage {
             rgb.extend_from_slice(&image.rgb[i..i + 3]);
         }
     }
-    LinearImage::new(w, h, rgb, None).unwrap()
+    LinearImage::new(w, h, rgb).unwrap()
 }
 
 /// Totals over a set of frames.
@@ -170,7 +170,7 @@ impl Tally {
 fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayPeak) -> Tally {
     let aces = || -> AcesCgImage {
         map_nc_film_rgb_v1(
-            fixed::decode(image.clone(), base, &recipe.reconstruction)
+            fixed::decode(image.clone().into(), base, &recipe.reconstruction)
                 .unwrap()
                 .0,
         )
@@ -255,9 +255,9 @@ fn branch_probe() {
         let base = FilmBase::from(base);
         let mut roll_tally = Tally::default();
         for frame in real_frames(&assets, roll) {
-            let (image, _) = crate::io::decode::decode_within(&frame, DECODE_BUDGET_BYTES)
+            let (scan, _) = crate::io::decode::decode_within(&frame, DECODE_BUDGET_BYTES)
                 .unwrap_or_else(|e| panic!("{}: {e}", frame.display()));
-            let tally = measure(&subsample(&image, stride), &base, &recipe, peak);
+            let tally = measure(&subsample(&scan.image, stride), &base, &recipe, peak);
             tally.print(&format!(
                 "{roll}/{}",
                 frame.file_stem().unwrap().to_string_lossy()

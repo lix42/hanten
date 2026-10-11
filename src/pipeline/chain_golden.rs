@@ -70,7 +70,7 @@ use crate::pipeline::scene_correction::{
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
 use crate::stage::{StageKind, Untimed};
-use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, LinearImage};
+use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, IrPlane, LinearImage, Scan};
 use crate::version::drift_gate;
 
 // --- shared harness ----------------------------------------------------------
@@ -161,8 +161,8 @@ fn base() -> FilmBase {
 /// Near-base shadow, mid, dense, the base itself (`D = 0`), above the base (`D < 0`),
 /// `0.5 / 0.9`, the three floored cases (zero, negative, subnormal), and the three
 /// non-finite ones.
-fn decode_scan() -> LinearImage {
-    LinearImage::new(
+fn decode_scan() -> Scan {
+    let image = LinearImage::new(
         8,
         1,
         vec![
@@ -191,9 +191,13 @@ fn decode_scan() -> LinearImage {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ],
-        Some(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
     )
-    .unwrap()
+    .unwrap();
+    let ir = IrPlane {
+        samples: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        verified: true,
+    };
+    Scan::new(image, Some(ir)).unwrap()
 }
 
 /// A non-zero offset, distinct per channel. The shipped `DENSITY_OFFSET` is
@@ -231,6 +235,7 @@ fn decode_params(offset: [f32; 3]) -> DecodeParams {
 fn correctly_rounded_densities() -> Vec<Option<f32>> {
     let base = <[f32; 3]>::from(base());
     decode_scan()
+        .image
         .rgb
         .iter()
         .enumerate()
@@ -313,7 +318,7 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
                 continue;
             };
             // Conformance, never correct rounding: that is exactly what varies.
-            let host = -(scan.rgb[i].max(SCAN_FLOOR) / base[i % 3]).log10();
+            let host = -(scan.image.rgb[i].max(SCAN_FLOOR) / base[i % 3]).log10();
             let off = ulps_between(host, d);
             assert!(
                 off <= LIBM_MAX_ERROR_ULPS,
@@ -354,7 +359,7 @@ fn the_fingerprint_vector_sits_at_the_minimum_decode_window() {
     let scan = drift_gate::pixels();
     let base = <[f32; 3]>::from(drift_gate::base());
     let params = DecodeParams::default();
-    let (film, _) = fixed::decode(scan.clone(), &drift_gate::base(), &params).unwrap();
+    let (film, _) = fixed::decode(scan.clone().into(), &drift_gate::base(), &params).unwrap();
     for (i, (&s, &got)) in scan.rgb.iter().zip(film.rgb()).enumerate() {
         let d = -(f64::from(s.max(SCAN_FLOOR) / base[i % 3]).log10()) as f32;
         let window = reachable_window(
@@ -412,7 +417,7 @@ const FILM_RGB: [f32; 24] = [
 /// The first `pixels` of [`FILM_RGB`].
 fn film_of(pixels: usize) -> FilmRgbImage {
     FilmRgbImage::fixture(
-        LinearImage::new(pixels as u32, 1, FILM_RGB[..pixels * 3].to_vec(), None).unwrap(),
+        LinearImage::new(pixels as u32, 1, FILM_RGB[..pixels * 3].to_vec()).unwrap(),
     )
 }
 
@@ -663,7 +668,7 @@ const FILM_BASE: f32 = 0.013_77;
 /// The decoded film base as the chain takes it: one neutral pixel at [`FILM_BASE`].
 fn film_base() -> AcesCgImage {
     map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(1, 1, vec![FILM_BASE; 3], None).unwrap(),
+        LinearImage::new(1, 1, vec![FILM_BASE; 3]).unwrap(),
     ))
 }
 
@@ -925,7 +930,7 @@ fn look_params() -> LookParams {
 /// The look's input: [`LOOK_FILM`] through the mapper and an identity scene correction.
 fn look_input() -> AcesCgImage {
     map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(4, 1, LOOK_FILM.to_vec(), None).unwrap(),
+        LinearImage::new(4, 1, LOOK_FILM.to_vec()).unwrap(),
     ))
 }
 
@@ -1082,7 +1087,7 @@ fn look_contrast_pixel(px: [f32; 3], powered: f32) -> [f32; 3] {
 #[test]
 fn golden_look_contrast_is_correct_within_its_libm_window() {
     let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(4, 1, LOOK_CONTRAST_FILM.to_vec(), None).unwrap(),
+        LinearImage::new(4, 1, LOOK_CONTRAST_FILM.to_vec()).unwrap(),
     ));
     let before = input.rgb().to_vec();
     let (corrected, _) =
@@ -1151,7 +1156,7 @@ fn look_saturation_pixel(px: [f32; 3], stretched: [f32; 3]) -> [f32; 3] {
 #[test]
 fn golden_look_saturation_is_correct_within_its_libm_window() {
     let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(3, 1, LOOK_SATURATION_FILM.to_vec(), None).unwrap(),
+        LinearImage::new(3, 1, LOOK_SATURATION_FILM.to_vec()).unwrap(),
     ));
     let before = input.rgb().to_vec();
     let (corrected, _) =
@@ -1241,7 +1246,7 @@ fn look_grade_pixel(px: [f32; 3], red: f32, blue: f32) -> [f32; 3] {
 #[test]
 fn golden_look_channel_grade_is_correct_within_its_libm_window() {
     let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(3, 1, LOOK_GRADE_FILM.to_vec(), None).unwrap(),
+        LinearImage::new(3, 1, LOOK_GRADE_FILM.to_vec()).unwrap(),
     ));
     let before = input.rgb().to_vec();
     let (corrected, _) =
@@ -1476,7 +1481,7 @@ const THREADED_LOOK: [u32; 6] = [
 fn golden_the_look_threaded_runs_after_scene_correction() {
     let input = || {
         map_nc_film_rgb_v1(FilmRgbImage::fixture(
-            LinearImage::new(2, 1, LOOK_THREADED_FILM.to_vec(), None).unwrap(),
+            LinearImage::new(2, 1, LOOK_THREADED_FILM.to_vec()).unwrap(),
         ))
     };
     let scene_correction = SceneCorrectionParams {

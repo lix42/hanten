@@ -2097,7 +2097,7 @@ fn render_fault(r: &Recipe) -> Result<Option<RenderFault>> {
         b: base[2],
     };
     let (film, _) = fixed::decode(
-        LinearImage::new(9, 1, probe, None)?,
+        LinearImage::new(9, 1, probe)?.into(),
         &film_base,
         &r.reconstruction,
     )?;
@@ -3571,11 +3571,11 @@ mod tests {
         // linearization, stated beside it, does move it.
         use crate::algo::fixed;
         use crate::types::{FilmBase, LinearImage};
-        let scan = LinearImage::new(2, 1, vec![0.5, 0.3, 0.2, 0.05, 0.04, 0.03], None).unwrap();
+        let scan = LinearImage::new(2, 1, vec![0.5, 0.3, 0.2, 0.05, 0.04, 0.03]).unwrap();
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         let decoded = |json: &str| {
             let r = parse(json).unwrap();
-            let (film, _) = fixed::decode(scan.clone(), &base, &r.reconstruction).unwrap();
+            let (film, _) = fixed::decode(scan.clone().into(), &base, &r.reconstruction).unwrap();
             film.rgb().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
         };
         let plain = decoded(r#"{"recipe_version": 3}"#);
