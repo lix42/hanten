@@ -78,6 +78,10 @@ Who opens what (`viewer.json`'s `expect.*.readers`):
 | Chrome on macOS | gain-map JPEGs | HDR on; HDR off |
 | an SDR-only reader | gain-map JPEGs | as installed |
 
+Known, not findings (`docs/spike/float-tiff-in-readers.md`): Apple's readers never
+show the HDR linear TIFF as HDR, and Preview's sidebar has no thumbnail for either
+32-bit float TIFF, Apple's own included.
+
 Record the app, OS and display, and how HDR was turned off. To get files onto the
 iPhone, AirDrop them; note whether a file landed in Photos or Files, since that is
 itself part of item 1.

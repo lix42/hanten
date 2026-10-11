@@ -1775,6 +1775,12 @@ default rendering, and the HDR float TIFF under `--rendering direct` (§7). An S
 (`--container jpeg` alone, or with `--gamut srgb`) is planned (`output/sdr-jpeg-preset`),
 and refused as not written yet; ProPhoto has no destination.
 
+**The linear float TIFF is for editors, not for viewing.** No TIFF field tells a viewer
+that `1.0` is 203 cd/m², so Apple's Preview and Photos show it as SDR on an HDR display;
+the mapping is in the report's `hdr_linear_tiff` block. To *see* HDR on Apple devices,
+use the gain-map JPEG or the PQ/HLG TIFF. Preview's sidebar shows no thumbnail for
+either 32-bit float TIFF (this one and the film master), as for any float TIFF.
+
 **`--film-master`** writes the fixed decode's linear ACEScg as an unclamped 32-bit
 float TIFF with **no** rendering stage, so it refuses any stage you ask for, naming the
 stage:

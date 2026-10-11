@@ -294,12 +294,12 @@ resolved `recipe`, which reloads through `--params`, and its `identity`. A sidec
 earlier build left beside the output is removed, and the report says so
 (`chain.removed_sidecar`). The HDR TIFF reports' `hdr_linear_tiff` /
 `hdr_coded_tiff` blocks are **authoritative** for reference white, peak and
-headroom, which no ICC profile can express. The SDR TIFF and the gain-map JPEG
-need no such block: an SDR encoding states no absolute luminance, so its profile and
-`chain.destination` define it, and the gain map's headroom is in the file's own
-ISO 21496-1 metadata and `chain`. The recipe is deliberately not embedded
-in the image container; the report carries it. Per-destination encoding details are in §9
-"Output / encode".
+headroom, which no ICC profile can express, nor any TIFF field Apple's readers act
+on. The SDR TIFF and the gain-map JPEG need no such block: an SDR encoding states no
+absolute luminance, so its profile and `chain.destination` define it, and the gain
+map's headroom is in the file's own ISO 21496-1 metadata and `chain`. The recipe is
+deliberately not embedded in the image container; the report carries it.
+Per-destination encoding details are in §9 "Output / encode".
 
 ## 6. Pipeline architecture
 
@@ -1931,7 +1931,9 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   content-light levels — CTA-861.3's MaxCLL and MaxFALL, the peak and frame mean of
   each pixel's largest linear component in the stored primaries (so they differ by
   gamut), never luminance. The profile carries **no** `cicpTag`: H.273's full-range flag
-  describes a bounded code range, and these samples exceed 1.0 by design. It is not the
+  describes a bounded code range, and these samples exceed 1.0 by design. So it is an
+  **editor and interchange format**: no TIFF field carries a headroom Apple's readers
+  act on, and they show it as SDR (`docs/spike/float-tiff-in-readers.md`). It is not the
   film master (linear ACEScg *before* any rendering).
 - **PQ / HLG TIFF** — the Rec.2100 signal as **full-range 16-bit TIFF code
   values**. Lossless *relative to the quantized signal*: quantized once with one pinned

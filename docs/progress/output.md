@@ -130,6 +130,11 @@ What other epics need to know about `output`:
   **parsing the encoded sequence-header OBU**, never from the encoder config.
   Windows static builds were deferred → `output/hdr-avif-windows-packaging`, closed
   as superseded by the removal.
+- **Apple's readers never show the linear float TIFF as HDR (2026-10-11,
+  `float-tiff-in-readers`)**: no TIFF field carries a headroom they act on (ImageIO's own
+  encoder drops one), so it is an editor/interchange format and `viewer.json` expects SDR
+  there; Preview's sidebar shows no thumbnail for any float TIFF. HDR on Apple devices is
+  the gain-map JPEG or the PQ/HLG TIFF. Re-check with `scripts/float-tiff-probe/`.
 - **`hdr-linear-tiff` is the display-linear HDR interchange master**: it is not
   `film-master` (linear ACEScg *before* display rendering), not `hdr-pq`/`hdr-hlg`
   (no transfer applied), and not `--out-depth f32` on `legacy` (print-rendered
@@ -1850,12 +1855,35 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## float-tiff-in-readers
 
-**Status:** not started
-**Updated:** 2026-10-07
+**Status:** done
+**Updated:** 2026-10-11
 
 - 2026-10-07: Filed from `analysis/viewer-interoperability`'s rubric (evidence in
   `progress/analysis.md`, 2026-10-07): the HDR linear TIFF does not display as HDR in
   Apple's readers, and Preview's sidebar has no thumbnail for it or the film master.
+- 2026-10-11: **Answered: no signal exists; the linear TIFF is an editor format, and no
+  thumbnail fix.** Result in `docs/spike/float-tiff-in-readers.md`; the probe is
+  `scripts/float-tiff-probe/` (macOS 26.6.2, SDK 26.5).
+  - Apple documents headroom only as a `CGImage` property (`0` = unknown, excluded from
+    tone mapping). ImageIO's own TIFF encoder writes a headroom-tagged float image
+    **byte-identical** to an untagged one, reading back `0`; EXR also reads `0`. The PQ
+    TIFF's 4.9261084 is `kCGDefaultHDRImageContentHeadroom`, Apple's default for any
+    PQ/HLG space, not a value nc writes. So Apple shows HDR in a TIFF only through a
+    PQ/HLG transfer. Decided with the user: adopt an Apple-specific field only if
+    documented, so there was nothing to adopt.
+  - Thumbnails: ImageIO's TIFF encoder ignores `EmbedThumbnail`, its thumbnail API
+    ignores a reduced-resolution IFD, and in Preview (user) Apple's own float TIFF has no
+    sidebar thumbnail either; an appended 8-bit IFD did not give nc's one. Preview's
+    limit, no encoder change.
+  - `viewer.json`: `hdr-linear-tiff` is `hdr: false`, rendition "record what the reader
+    shows"; `scripts/viewer-interop/README.md` lists both findings as known.
+    `using-nc.md` §8 and design-spec §5/§9 say where the file is meant to go. No Rust
+    change.
+- 2026-10-11: **done.** Verified: the probe (`scripts/float-tiff-probe/`) re-run from the
+  committed source reproduces every number in the spike; `nctool.test_viewer` passes with
+  `hdr-linear-tiff` at `hdr: false` (the film master's rubric path); all CI gates green.
+  For whoever revisits this: re-run the probe on a new macOS before assuming the verdict
+  still holds, since a TIFF tag changes no pixel and no gate would notice.
 
 ## sdr-preset-followups (closed)
 

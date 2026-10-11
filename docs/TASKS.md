@@ -1666,7 +1666,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   states no absolute luminance, so its ICC profile and `chain.destination` define it, and the gain
   map's values are in `chain.gain_map`; recorded in design-spec §5 and `docs/using-nc.md`
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
-- [ ] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. Find a signal Apple acts on, or declare it an editor format
+- [x] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. **Done 2026-10-11: no signal exists** (ImageIO's own TIFF encoder drops a headroom), so the linear TIFF is an editor/interchange format; the sidebar gap is Preview's, Apple's own float TIFF included. No encoder change ([spike](spike/float-tiff-in-readers.md))
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
   frames against the shipped default reconstruction: `blown%` fell on every one (mean 6.5 →
