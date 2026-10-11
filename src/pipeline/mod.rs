@@ -13,6 +13,7 @@
 //! [`white_balance`] holds the white-balance statistics the roll measurement
 //! ([`roll_white`]) pools.
 
+pub mod black_endpoint;
 /// The SDR/HDR branch contract on real frames (`nf-display-stages/branch-contract`).
 #[cfg(test)]
 mod branch_probe;

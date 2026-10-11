@@ -411,7 +411,10 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   `default`**: it was on (6 stops) while the roll's slope came from its white alone and
   left the base pale; the slope from the roll's span and the hybrid placement now place
   the dark end, and with it on, low-key frames were darkened throughout
-  (`nf-calibration/envelope-hybrid-placement`).
+  (`nf-calibration/envelope-hybrid-placement`). With it off, a frame too washed out
+  to approach black warns (`pipeline::black_endpoint`): a look slope under any
+  placement's, or a frame placed too bright — its measured middle and dark end, or
+  without them its film base (a roll's exposure alone exempt).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
   Under reinhard it was near-inert where it matters on the removed chain's SDR renderer
@@ -2178,6 +2181,7 @@ src/
     ├── correction_confidence.rs  # measure-roll: how far to trust the white balance and line
     ├── look.rs             # contrast, saturation, per-channel grade, highlight desaturation
     ├── fit_range.rs        # reinhard to the display's peak, display black
+    ├── black_endpoint.rs   # the washed-out-black warning, with display black off
     ├── fit_gamut.rs        # into the destination's gamut, radial to its boundary
     ├── hdr.rs              # the HDR hand-off: peak clamp, PQ/HLG transfer
     ├── gain_ratio.rs       # per-channel gain between a gain map's renditions

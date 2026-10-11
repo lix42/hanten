@@ -1,5 +1,8 @@
 # Warn when the curve's endpoint is unreachable
 
+**Done (2026-10-10)** as `pipeline::black_endpoint`; the decisions and measurements are
+in `docs/progress/nf-reconstruction.md`.
+
 **Reopened (2026-10-10).** It closed on 2026-10-09 because display black
 (`nf-display-stages/parametric-operator`) placed the film base and its warning
 (`fit_range::ResolvedBlack::warning`) was this check. Display black is now off by default

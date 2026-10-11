@@ -593,6 +593,19 @@ pub enum SlopeBase {
     Hybrid,
 }
 
+impl SlopeBase {
+    /// The base slope's source, in words, for a message.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            SlopeBase::Roll => "the roll's slope",
+            SlopeBase::Fallback => "the fallback slope",
+            SlopeBase::Direct => "`direct`'s pinned slope",
+            SlopeBase::Thin => "the thin slope (`roll.thin_slope`)",
+            SlopeBase::Hybrid => "the hybrid placement's slope",
+        }
+    }
+}
+
 /// The look's slopes and their parts: `base_slope × contrast` and
 /// `saturation_base_slope × saturation` ([`Recipe::resolved_slope`]).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -2944,6 +2957,16 @@ impl Recipe {
             headroom_stops.unwrap_or(base.headroom_stops),
             display_black.unwrap_or(base.display_black),
         )
+    }
+
+    /// This frame's measured tones, where the rendering applies the roll.
+    pub fn applied_frame_tones(&self) -> Option<FrameStops> {
+        self.roll.frame_tones.filter(|_| self.base().applies_roll)
+    }
+
+    /// Whether a roll's exposure reaches scene correction.
+    pub fn applies_roll_exposure(&self) -> bool {
+        self.roll.exposure.is_some() && self.base().applies_roll
     }
 
     /// The report's `chain.roll`: `None` when the section states nothing. `rendered`

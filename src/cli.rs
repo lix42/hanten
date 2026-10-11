@@ -31,6 +31,7 @@ use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::encode::{PreEncodePage, PreEncodeSamples};
 use crate::io::{encode, iso_gain_map, staged};
 use crate::jsonc;
+use crate::pipeline::black_endpoint;
 use crate::pipeline::chain;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range;
@@ -4501,6 +4502,32 @@ fn render_frame(
     };
     if let Some(message) = rendered.and_then(|r| r.fit_range.display_black.warning()) {
         push_warning_buf(warnings, log, message);
+    }
+    if let Some(r) =
+        rendered.filter(|r| r.fit_range.display_black.setting == fit_range::DisplayBlack::Off)
+    {
+        let slope = recipe.resolved_slope();
+        let inputs = black_endpoint::Inputs {
+            slope: r.look.slope,
+            exposure: r.scene_correction.exposure,
+            white_balance: r.scene_correction.white_balance,
+            tones: recipe.applied_frame_tones(),
+            roll_exposure: recipe.applies_roll_exposure(),
+            stated_exposure: recipe.scene_correction.exposure,
+            stated_white_balance: {
+                let crate::pipeline::scene_correction::WhiteBalance::Explicit(gains) =
+                    recipe.scene_correction.white_balance;
+                gains
+            },
+            film_base_stops: r.fit_range.display_black.film_base_stops,
+            headroom_stops: r.fit_range.headroom_stops,
+            contrast: slope.contrast,
+            base_slope: slope.base_slope,
+            base_from: slope.base_from.phrase(),
+        };
+        for fault in black_endpoint::check(&inputs) {
+            push_warning_buf(warnings, log, fault.message());
+        }
     }
     report.chain = Some(ChainResult {
         decode: decoded,

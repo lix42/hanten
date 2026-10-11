@@ -1361,6 +1361,59 @@ mod tests {
         assert!(range.flat, "{range:?}");
     }
 
+    /// `black_endpoint`'s model of where a tone lands (`black_endpoint::Inputs::land`),
+    /// built from the render's account as `cli` builds it, is the chain's render of a
+    /// neutral at that tone: exposure, white balance, contrast and reinhard acting.
+    /// Display black off, as the check runs.
+    #[test]
+    fn the_black_endpoint_model_is_the_chain_s_render_of_a_neutral() {
+        let tones = [-5.0_f32, -1.5, 0.0, 1.5];
+        let rgb: Vec<f32> = tones.iter().flat_map(|&t| [0.18 * t.exp2(); 3]).collect();
+        for (slope, exposure, gain) in [
+            (1.6_f32, 1.2_f32, 1.0_f32),
+            (0.8, 0.0, 2.0),
+            (3.5, -0.5, 0.7),
+        ] {
+            let mut p = shipped_params();
+            p.shared.look.section.slope = slope;
+            p.shared.scene_correction.exposure = exposure;
+            p.shared.scene_correction.white_balance = WhiteBalance::Explicit([gain; 3]);
+            let image = aces_from(tones.len() as u32, 1, &rgb);
+            let scene: Vec<f32> = image
+                .rgb()
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|px| (dot(*px, ACESCG_LUMA) / 0.18).log2())
+                .collect();
+            let out = render(image, film_base(), &p, &mut Untimed).unwrap();
+            let inputs = crate::pipeline::black_endpoint::Inputs {
+                slope: out.look.slope,
+                exposure: out.scene_correction.exposure,
+                white_balance: out.scene_correction.white_balance,
+                tones: None,
+                roll_exposure: false,
+                stated_exposure: exposure,
+                stated_white_balance: [gain; 3],
+                film_base_stops: out.fit_range.display_black.film_base_stops,
+                headroom_stops: out.fit_range.headroom_stops,
+                contrast: 1.0,
+                base_slope: slope,
+                base_from: "",
+            };
+            let rendered = out.image.into_parts().0.rgb;
+            for (px, tone) in rendered.as_chunks::<3>().0.iter().zip(scene) {
+                let got = (dot(*px, DISPLAY_P3_LUMA) / 0.18).log2();
+                let model = inputs.land(tone);
+                assert!(
+                    (got - model).abs() < 1e-3,
+                    "slope {slope}, exposure {exposure}, gain {gain}, tone {tone}: \
+                     {got} vs {model}"
+                );
+            }
+        }
+    }
+
     /// **Contrast, not fit range, decides shadow separation** — the measurement the
     /// look's contrast exists for (`nf-look/contrast`). A neutral ramp from 5.2 to 1.9
     /// stops below mid-grey, through the whole chain, at matched lightness: mid-grey

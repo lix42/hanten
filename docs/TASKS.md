@@ -1942,11 +1942,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   the single 2.0 did, saturated colour moves slightly. The pre-split
   `reconstruction.contrast` is refused by name. The current chain keeps the bundled 2.0,
   so no pixel or fingerprint moved there
-- [ ] [Warn when the curve's endpoint is
-  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — **reopened
-  2026-10-10**: closed 2026-10-09 because display black's warning covered it, but display
-  black is now off by default (`nf-calibration/envelope-hybrid-placement`), so a default
-  render whose base grades near mid-grey warns about nothing
+- [x] [Warn when the curve's endpoint is
+  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — with display black
+  off, a washed-out frame warns (`pipeline::black_endpoint`): a look slope under 1.237,
+  a measured frame whose middle lands above +1.5 stops and dark end above −1.5, or
+  (no tones, and not a roll's exposure alone) a base under 2 stops below mid-grey.
+  Silent on every archive frame at its default
 - [ ] [Where black-and-white fits the new
   chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
   written for three dye layers and says nothing about where mono pools

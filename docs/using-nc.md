@@ -1278,7 +1278,8 @@ at the fallback slope the base renders 4.96 stops under mid-grey (`film_base_sto
 above). It was on (`6`) while the roll's slope came from its white alone, which left the
 base pale; the slope from the roll's span and each frame's hybrid placement now place
 the dark end, and with it on a low-key frame was darkened throughout. `--display-black 6`
-(about L\* 2.5) moves that base down by 1.04 stops, which `shift_stops` reports.
+(about L\* 2.5) moves that base down by 1.04 stops, which `shift_stops` reports. With it
+off, a frame too washed out to approach black is warned about instead (§10).
 
 - **Nothing is measured from the image.** Where the base renders is computed from the
   film base you gave and the frame's own decode, white balance, exposure and contrast,
@@ -2197,6 +2198,39 @@ its own (`--exposure=-100` on a fixture, with the roll stated):
 ```json
 ["no written sample is above 0 in the red, green and blue channels: the frame renders black there"]
 ```
+
+A black that cannot approach black is out of the loss counters' sight too, so with
+display black off (the default) the report warns when a frame is washed out. Three
+cases, each with its own remedy; none fires on any frame of the full archive at its
+measured default:
+
+- **Squeezed flat**: the look's slope is under 1.237, the flattest any placement sets.
+  A `--contrast` under 1 gets there, or a stated `--roll-thin-slope` under 1.237; raise
+  `--contrast` (`--contrast 0.9` clears the case below):
+
+  ```
+  the look's slope is 0.990 (`--contrast` 0.700 times the fallback slope 1.414), flatter
+  than the 1.237 any placement sets, so the frame's shadows are lifted toward mid-grey
+  and its black lands paler than a placed frame's: raise `--contrast` (recipe
+  `look.contrast`)
+  ```
+
+- **Pushed up**, on a frame `measure-roll` measured (its `tones`): its middle lands more
+  than 1.5 stops above mid-grey *and* its dark end (luma p1) less than 1.5 under it. A
+  flat frame centred at mid-grey never trips this, and a one-stop `--exposure` lift
+  warns on about a quarter of real frames. Lower `--exposure`.
+- **The film base near mid-grey**, on a frame without tones: the base renders less than
+  2 stops under mid-grey. Lower
+  `--exposure` — on `tests/fixtures/hdr-48bit.tif` (`--film-base 0.9,0.55,0.42`),
+  `--exposure 2.8` puts the base 1.12 stops under and warns; `--exposure 1.8` puts it
+  2.46 under, silent. A roll's exposure alone is a measurement, so the same base
+  reached by `--roll-exposure 2.8` does not warn — a thin roll's puts the base about 2
+  stops under by design — but a gain stated on top of one does (a positive `--exposure`,
+  or a `--white-balance` that brightens).
+
+All three read where the frame's grade places it, never the image; a stated white
+balance counts as the exposure it is on luminance. With display black
+on, black places the base itself and only its own warning applies (§7, "Display black").
 
 Fit range compresses the scene against its headroom, so on both test fixtures **a
 default render does not clip**. A clip warning therefore means something pushed samples
