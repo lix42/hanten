@@ -164,11 +164,13 @@ stage_classify() {
       .references.inputs[]
       | "\(.input | split("/")[-1]) \(.area_spread | f) \(.density_above_base | if . == null then null else min end | f) \(.class)"')
     while read -r name spread dmin cls; do
-      role=real
+      # A frame outside the row (a `calibration` role) has no expected class.
+      role=-
+      case " $reals " in *" $name "*) role=real ;; esac
       [ "$name" = "$(basename "$uf")" ] && role=unexposed
       [ "$name" = "$(basename "$ff")" ] && role=leader
       want=$role; [ "$role" = real ] && want=picture
-      mark=""; [ "$cls" = "$want" ] || { mark="  MISS"; fail=1; }
+      mark=""; [ "$role" = - ] || [ "$cls" = "$want" ] || { mark="  MISS"; fail=1; }
       printf "%-24s %-22s %7s %8s  %-10s %s%s\n" "$name" "$roll" "$spread" "$dmin" "$cls" "$role" "$mark"
     done <<<"$rows"
   done

@@ -62,8 +62,8 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
   human fields such as roles, stock names, notes and patches are preserved. It
   refuses to drop a missing frame's patches without `--drop-patches`, and
   `--carry-from <manifest>` takes a restored frame's fields from another manifest.
-- `validate` reports checksum drift, missing files, misplaced/orphaned TIFFs, and
-  integrity gaps. It never deletes or moves anything.
+- `validate` reports checksum drift, missing files, misplaced/orphaned TIFFs,
+  integrity gaps and roles outside `manifest.ROLES`. It never deletes or moves anything.
 - `roles` emits the unexposed/leader/real-frame grouping consumed by the legacy
   real-scan harness.
 - `patches import` folds the review app's **Copy all** text into frames' `patches`

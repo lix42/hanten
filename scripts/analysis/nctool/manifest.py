@@ -37,6 +37,11 @@ from . import patches as _patches
 
 SCHEMA = 2
 
+# Every frame role the manifest knows. Only `real` frames are pictures; every other role
+# is a reference a consumer keeps out of picture measurements. A new role goes here
+# (and in `shadow_metrics.rs`'s non-picture list).
+ROLES = ("unexposed", "leader", "calibration", "real")
+
 # Seeds applied ONLY when neither the existing manifest nor a prior run supplies
 # the value: a frame or roll new to the manifest, or every one on a first-ever
 # generation (a stored `unknown` stock counts as missing). Human edits in
@@ -846,10 +851,13 @@ def cmd_validate(args) -> int:
     recorded: dict[str, dict] = {}
     regenerable_files: set[str] = set()
     bad_patches: list[str] = []
+    bad_roles: list[str] = []
     for r in data.get("rolls", {}).values():
         for fr in r.get("frames", []):
             recorded[fr["file"]] = fr
             bad_patches += [f"{fr['file']} {e}" for e in _patches.check_frame_patches(fr)]
+            if fr.get("role", "real") not in ROLES:
+                bad_roles.append(f"{fr['file']} {fr['role']!r}")
     for s in data.get("samples", []):
         recorded[s["file"]] = s
     for b in data.get("converted", {}).values():
@@ -918,12 +926,13 @@ def cmd_validate(args) -> int:
            no_checksum)
     report("UNREADABLE (could not hash)", read_errors)
     report("BAD PATCHES (break the patch schema — see nctool.patches)", bad_patches)
+    report(f"UNKNOWN ROLES (expected {'|'.join(ROLES)})", bad_roles)
     if unchecked:
         print(f"\nunchecked: {len(unchecked)} regenerable output(s) without a recorded "
               "sha256 (drift not verifiable — regenerate to confirm)")
 
     problems = (drift or missing or orphans or errored or no_checksum or read_errors
-                or bad_patches)
+                or bad_patches or bad_roles)
     if not problems:
         print("\nOK — no drift, orphans, or missing files.")
         print("(This tool only REPORTS. It never deletes; act on the above yourself.)")
@@ -931,6 +940,23 @@ def cmd_validate(args) -> int:
     print("\nReview the above and act deliberately — validate never deletes anything.")
     print("Re-run `nctool manifest generate` to fold new/renamed files into the manifest.")
     return 1
+
+
+def group_by_role(roll: str, frames: list[dict]) -> dict[str, list[dict]]:
+    """A roll's frames keyed by every role in `ROLES` (a frame with none is `real`).
+
+    An unknown role — most likely a typo — warns and counts as `real`, so the frame is
+    still converted rather than silently dropped."""
+    by_role: dict[str, list[dict]] = {role: [] for role in ROLES}
+    for fr in frames:
+        role = fr.get("role", "real")
+        if role not in ROLES:  # a tuple, so an unhashable role is unknown, not a crash
+            print(f"WARNING: roll {roll!r} frame {os.path.basename(fr['file'])!r} has "
+                  f"unrecognized role {role!r} (expected {'|'.join(ROLES)}); treating it "
+                  "as 'real' — fix the role in manifest.json", file=sys.stderr)
+            role = "real"
+        by_role[role].append(fr)
+    return by_role
 
 
 def cmd_roles(args) -> int:
@@ -958,27 +984,14 @@ def cmd_roles(args) -> int:
     ir_rows: list[str] = []
     non_ir_rows: list[str] = []
     for roll, r in sorted(data.get("rolls", {}).items()):
-        by_role: dict[str, list[dict]] = {"unexposed": [], "leader": [], "real": []}
-        for fr in r.get("frames", []):
-            role = fr.get("role", "real")
-            if role not in by_role:
-                # An unknown/typo'd role must not silently vanish (the old
-                # `setdefault` bucketed it into a phantom key, dropping a possible
-                # calibration frame from every triple). Warn loudly and fold it
-                # into `real` so the frame is still converted, never lost.
-                print(f"WARNING: roll {roll!r} frame {os.path.basename(fr['file'])!r} has "
-                      f"unrecognized role {role!r} (expected unexposed|leader|real); "
-                      "treating it as 'real' so it is not silently dropped — fix the "
-                      "role in manifest.json", file=sys.stderr)
-                role = "real"
-            by_role[role].append(fr)
+        by_role = group_by_role(roll, r.get("frames", []))
         un, ld, reals = by_role["unexposed"], by_role["leader"], by_role["real"]
         if len(un) != 1:
             print(f"note: skipping roll {roll!r} (unexposed={len(un)}; need exactly one "
                   "to freeze a calibration recipe)", file=sys.stderr)
             continue
         if not reals:
-            # A calibration frame with no `real` frames has nothing for the harness
+            # An unexposed frame with no `real` frames has nothing for the harness
             # to convert; emitting `roll|un|ld|` (empty 4th field) would drive the
             # convert / ir / determinism stages over an empty frame list.
             print(f"note: skipping roll {roll!r} (unexposed frame but no real "
@@ -1009,7 +1022,7 @@ def cmd_roles(args) -> int:
     for row in ir_rows + non_ir_rows:
         print(row)
     if not ir_rows and not non_ir_rows:
-        print("error: no roll had an unexposed calibration frame and real frames",
+        print("error: no roll had an unexposed frame and real frames",
               file=sys.stderr)
         return 1
     return 0

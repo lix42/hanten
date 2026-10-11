@@ -78,14 +78,10 @@ def _roll_frames(data: dict, roll: str) -> tuple[dict | None, str | None]:
     frames = spec.get("frames")
     if not isinstance(frames, list):
         return None, f"roll {roll!r} has no frames list"
-    by_role: dict[str, list[dict]] = {"unexposed": [], "leader": [], "real": []}
     for frame in frames:
         if not isinstance(frame, dict) or not isinstance(frame.get("file"), str):
             return None, f"roll {roll!r} contains a malformed frame entry"
-        role = frame.get("role", "real")
-        if role not in by_role:
-            return None, f"roll {roll!r} frame {frame['file']} has unsupported role {role!r}"
-        by_role[role].append(frame)
+    by_role = _manifest.group_by_role(roll, frames)
     if len(by_role["unexposed"]) != 1:
         return None, (f"roll {roll!r} needs exactly one unexposed frame; "
                       f"found {len(by_role['unexposed'])}")

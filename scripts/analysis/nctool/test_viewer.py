@@ -113,6 +113,20 @@ class Config(unittest.TestCase):
             viewer.roll_recipe("/nonexistent/hanten", assets, self.tmp, "r", self.tmp)
         self.assertIn("one leader", str(e.exception))
 
+    def test_measure_roll_takes_real_and_roleless_frames_but_not_calibration(self):
+        assets = {"rolls": {"r": {"frames": [
+            {"file": "rolls/r/1.tif", "role": "real"},
+            {"file": "rolls/r/2.tif"},
+            {"file": "rolls/r/calibration.tif", "role": "calibration"},
+            {"file": "rolls/r/base.tif", "role": "unexposed"},
+            {"file": "rolls/r/leader.tif", "role": "leader"}]}}}
+        with mock.patch.object(viewer.subprocess, "run",
+                               return_value=mock.Mock(returncode=0)) as run:
+            viewer.roll_recipe("hanten", assets, "/A", "r", self.tmp)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[2:4], ["/A/rolls/r/1.tif", "/A/rolls/r/2.tif"])
+        self.assertNotIn("/A/rolls/r/calibration.tif", argv)
+
     def test_a_frame_missing_from_its_roll_is_refused(self):
         cfg = copy.deepcopy(_config())
         cfg["inputs"]["x"] = {"roll": "r", "frame": "9"}
