@@ -424,3 +424,28 @@ read the gains through `RollSection::applied_white_balance`, never the stated fi
   archive frames are confident. For dependents: detecting a one-colour roll and a fallback
   better than neutral gains stay open in the task file (needs one-colour rolls or the
   ColorChecker rolls as evidence; `neutrality-gate` may change the fallback).
+
+## lomo100-cast-vs-ccr
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user) from the first review of `2026-10-10-LomoColor100` (37 frames,
+  RGB scans without IR): NLP vs SilverFast CCR vs Hanten `--placement frame` from one
+  `measure-roll` recipe at `80ef96c` (set `../temp/lomo100-roll-review/`, sRGB JPEGs, and
+  its per-frame `notes.md`; the same recipe's Display P3 TIFFs are in the archive's
+  `converted/nc/2026-10-11/`). The user's notes:
+  - Overall (in chat, not in `notes.md`): Hanten's contrast and exposure are the best of
+    the three. Its blacks are not as deep as CCR's, which keeps more shadow detail (good). It has much more colour cast
+    than CCR, mostly blue, maybe a little green; where the cast is small or does not
+    matter, Hanten looks best.
+  - 2056: CCR best; Hanten has a cast but keeps the blue sky, which is better than CCR;
+    NLP worst. 2057, 2058: Hanten best. 2059, 2060: CCR best, Hanten has a cast. 2061: NLP
+    and CCR differ, both better than Hanten, which has a cast.
+  - Ranked (CCR > Hanten > NLP unless stated): 2068, 2071, 2072, 2073, 2076, 2077, 2082,
+    2083, 2084, 2087, 2088, 2089, 2090, 2091. Hanten > CCR > NLP: 2063, 2065, 2066, 2067,
+    2070, 2079, 2081, 2085, 2086. CCR and Hanten even, NLP last: 2062, 2064, 2069, 2074,
+    2075, 2078, 2092. 2093 (a rescan of 2080; no NLP export) not reviewed.
+  - Patches (white): cloud on 2061 (2), 2063, 2064, 2066 (2), 2071 (3), 2074 (2); white
+    cloth on 2072, 2073, 2075, 2076 (2), 2083; white wall on 2088 — 18 on 12 frames, in
+    the manifest.
