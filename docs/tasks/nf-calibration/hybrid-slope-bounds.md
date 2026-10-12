@@ -1,5 +1,9 @@
 # The maximum slope
 
+**Done:** 2026-10-11 — the limit guard and the measurements; the maximum's value moved to
+[`short-span-protection`](short-span-protection.md), the tails to
+`nf-display-stages/midtone-contrast-toe` (`docs/progress/nf-calibration.md`).
+
 ## Goal
 
 Settle the global maximum slope, which `span-roll-slope` introduces at a provisional

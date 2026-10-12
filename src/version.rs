@@ -61,7 +61,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 10 | the look's contrast moved onto luminance and saturation became its own setting (2026-10-09, `nf-look/contrast-on-luminance`): the slope scales each pixel whole by its ACEScg luminance's pivoted power, so colour no longer moves with contrast, and colour takes a **saturation slope** — the base slope (never a thin frame's) × **1.15** (`look::DEFAULT_SATURATION`) × `look.saturation` — on log channel ratios with luminance kept. Every saturated default pixel moves (about 15% more chroma, and a coloured pixel's luminance now follows the neutral curve); neutrals hold. Highlight desaturation's band divides by the saturation slope. `direct` pins its saturation at 1. `render` and `base` are unmoved; `recipe` moved with the new key and base. Evidence: `docs/progress/nf-look.md` (2026-10-09). |
 /// | 11 | the roll's slope from its span (2026-10-09, `nf-calibration/span-roll-slope`): `roll.white_stops` and `roll.dark_stops` stated together, the slope `9.049 / (white − dark)` within 1.237–3.5. No default pixel moved; the bump is for a stated roll. |
 /// | 12 | the envelope hybrid is a measured roll's default placement (2026-10-10, `nf-calibration/envelope-hybrid-placement`): each frame with its tones (`roll.frames` entry `tones`) and the roll's `roll.envelope_stops` renders at its own slope and exposure inside the envelope, in place of the lifts (`--placement roll` keeps the old placement); and **display black is off by default** (was 6 stops below mid-grey), since the roll's and the hybrid's slopes place the dark end. Every default pixel under mid-grey moves (the shadows lighten); `direct` keeps its pinned 6. `render` and `base` are unmoved; `recipe` moved with the new keys and the `default` rendering's base. |
-/// | 13 | **current** — a frame's own exposure sits within ±1 EV of the roll's, for every placement (2026-10-10, `nf-calibration/per-frame-placement`; was −1.5 / +0.5), so a measured roll's hybrid frames move (on 09-29 its darkest frames lift up to +0.47 EV). Adds the opt-in `--placement frame` (each frame from its own span, its white at L\* 93). `render`, `base` and `recipe` are unmoved — the limits act after the gate — so the row was added by hand. |
+/// | 13 | a frame's own exposure sits within ±1 EV of the roll's, for every placement (2026-10-10, `nf-calibration/per-frame-placement`; was −1.5 / +0.5), so a measured roll's hybrid frames move (on 09-29 its darkest frames lift up to +0.47 EV). Adds the opt-in `--placement frame` (each frame from its own span, its white at L\* 93). `render`, `base` and `recipe` are unmoved — the limits act after the gate — so the row was added by hand. |
+/// | 14 | **current** — a hybrid frame the ±1 EV limit holds flattens until its ends stay inside the roll's envelope (2026-10-11, `nf-calibration/hybrid-slope-bounds`); no archive frame is held, so no measured archive render moves. `render`, `base` and `recipe` are unmoved — the guard acts after the gate — so the row was added by hand. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -136,7 +137,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// commands' own algorithms, which change what a new measurement writes but not how a
 /// written one replays. It cannot tell a document that pins every value it relies on
 /// from one that does not, so a bump warns on both.
-pub const PIPELINE_VERSION: u32 = 13;
+pub const PIPELINE_VERSION: u32 = 14;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -478,6 +479,25 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
         recipe: "c16e937e5ade63dc",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v14 bump took the constant over.
+        behavior: "SDR Display P3 16-bit TIFF default output; the fixed decode (linearization \
+                   1.8, mid-grey 0.62 density above the film base, neutral-patch-calibrated \
+                   per-channel density gain); look slope on luminance spreading a measured \
+                   roll's span, white to dark end, over 9.049 stops, each frame placed inside \
+                   the roll's envelope at its own slope and exposure, within 1 EV of the \
+                   roll's, or placing a white 1.75 stops above mid-grey when none is given, \
+                   saturation 1.15 times the roll's slope's colour, with highlight \
+                   desaturation; extended-Reinhard fit range at 6 stops with display black \
+                   off; radial gamut map into Display P3; no auto white balance",
+    },
+    // v14 — a hybrid frame the exposure limit holds flattens until its ends stay inside the
+    // envelope (2026-10-11, `nf-calibration/hybrid-slope-bounds`; no archive frame). No
+    // fingerprint moved: the guard acts after the gate, so the bump is by hand.
+    PipelineFingerprint {
+        pipeline_version: 14,
+        render: "f51d3397c7364160",
+        base: "01c5acccc36a3388",
+        recipe: "c16e937e5ade63dc",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -624,10 +644,10 @@ pub const PIPELINE_BEHAVIOR: &str = "SDR Display P3 16-bit TIFF default output; 
      decode (linearization 1.8, mid-grey 0.62 density above the film base, \
      neutral-patch-calibrated per-channel density gain); look slope on luminance spreading a \
      measured roll's span, white to dark end, over 9.049 stops, each frame placed inside the \
-     roll's envelope at its own slope and exposure, within 1 EV of the roll's, or placing a \
-     white 1.75 stops above \
-     mid-grey when none is given, saturation 1.15 times the roll's slope's colour, with \
-     highlight desaturation; extended-Reinhard fit range at 6 stops with display black off; \
+     roll's envelope at its own slope and exposure, within 1 EV of the roll's (flatter where \
+     that limit holds it), or placing a white 1.75 stops above mid-grey when none is given, \
+     saturation 1.15 times the roll's slope's colour, with highlight desaturation; \
+     extended-Reinhard fit range at 6 stops with display black off; \
      radial gamut map into Display P3; no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it
