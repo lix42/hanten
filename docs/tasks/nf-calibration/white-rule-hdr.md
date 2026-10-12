@@ -4,49 +4,37 @@
 
 Review the roll's white placement on an HDR rendition, so its values can stop being
 provisional. Every round that chose and checked it was judged on SDR renders. Since
-2026-10-09 that placement is [`span-roll-slope`](span-roll-slope.md)'s span slope and
-display white target, which may replace `roll-white-rule`'s cap, floor and target below.
+2026-10-09 that placement is [`span-roll-slope`](span-roll-slope.md)'s span slope, built
+on `roll-white-rule`'s cap and floor.
+
+**Done 2026-10-12: the values stand.** No HDR rendition looked wrong, so nothing moved.
+The record is in the progress log.
 
 ## Design
 
-What is known:
+The original Design section predated `span-roll-slope` and the hybrid placement. What was
+reviewed, at `pipeline_version` 14:
 
-- **Where the white sits also decides the HDR headroom.** Everything above the roll's
-  white is what the HDR branch lifts toward its peak. `nf-reconstruction/anchor-rule`
-  estimated that a per-frame p97 white leaves about a stop above it on a typical
-  frame. The rule places the roll's white between +1.5 and +2.0 scene stops
-  above mid-grey, so how much headroom is left varies by roll and by frame.
-- **Fit range stays reinhard** (`nf-display-stages/parametric-shoulder`, 2026-09-27).
-  The HDR branch is reinhard plus the peak lift, `Y′ = r(Y)·(1 + (P − 1)·s(Y))`. Fit
-  range's output is identical to SDR's below diffuse white (`chain::render_pair`). The
-  renditions still differ there where the SDR cube binds a saturated colour that HDR
-  keeps (`chain::contract`), and in the destination's gamut and encoding. So the tone
-  differs from the reviewed SDR only above white, but colour can differ below it too.
-- **The rule's knobs**: the cap (+2.0), the floor (+1.5), the saturation margin
-  (`saturation-margin`'s), and a white target 0.15 stop above diffuse white that was
-  "a little better" in some SDR cases. Headroom is `--display-tone-headroom`.
-
-Open:
-
-- **Which HDR rendition to review.** `--range hdr` alone writes the per-channel
-  gain-map JPEG (`nf-destinations/gain-map-destination`), and
-  `--range hdr --transfer pq|hlg` writes a Rec.2100 signal. Viewing HDR needs an HDR display and a viewer that keeps the HDR signal
-  (`analysis/comparison-review-tooling` records that `sips` destroys gain maps).
-- What to measure alongside the review: headroom above the roll's white per frame, the
-  share of pixels the lift reaches, and HDR samples past the peak.
-- **The gamut map's share on the HDR branch.** `docs/reports/gamut-map-share.md`
-  measured SDR only and found the map near-inert there under reinhard. It handed the
-  HDR branch to `fit-range` / `parametric-shoulder`, and neither measured it. Measure
-  it here, with the same probe approach.
-- Whether the clamped frames (rendered at the cap's contrast) need anything different
-  in HDR.
-- What `span-roll-slope`'s display white target means on HDR, and how much headroom is
-  left once the white moves toward L\* 91.
+- **What was under review.** The white target is gone (`span-roll-slope`). The cap (+2.0)
+  and floor (+1.5) now feed the span slope, the hybrid's slope bound and the clamp. The default
+  placement is the hybrid; `--placement frame` is the opt-in alternative. There are eleven
+  rolls, not nine.
+- **The rendition.** The default `--range hdr` gain-map JPEG in Chrome on an HDR
+  display, beside the SDR JPEG of the same grade, under `hybrid` and `frame`. Two or
+  three frames per roll (28): one held at the cap, the one using the most HDR range, and
+  an ordinary one, where one frame can fill two roles.
+- **Measured alongside.** Every frame's HDR luminance and the share of pixels lifted
+  above white, inside the effective area. Also the gamut map's share on both branches,
+  using a throwaway build with the map turned off.
+- **The levers held back for a second round**: the cap, the floor, and the headroom
+  (`--display-tone-headroom`). The headroom decides how much of the HDR range is used
+  far more than the cap or floor does. No round 2 was needed.
 
 ## How to Verify
 
-- A review set on HDR renders across the nine rolls (clamped and ordinary frames) with
-  the rule's contrast, and a recorded verdict: the cap, floor and target stand or move.
+- A review set on HDR renders across the rolls (clamped and ordinary frames) with
+  the rule's contrast, and a recorded verdict: the cap and floor stand or move
+  (the target was removed by `span-roll-slope`).
 - If a value moves, `measure-roll` and its tests follow it, and the SDR verdicts are
   re-checked.
 
@@ -57,5 +45,5 @@ Open:
   — settles the operator the HDR rendition is judged under
 - [A measured roll exposure](roll-exposure.md) — sets the level the rule is reviewed at
   (the white stays measured at exposure 0, and the exposure moves where it renders)
-- [The roll's slope from its span](span-roll-slope.md) — the SDR white target this
-  reviews on HDR
+- [The roll's slope from its span](span-roll-slope.md) — the span slope, built on
+  the cap and floor, that this reviews on HDR

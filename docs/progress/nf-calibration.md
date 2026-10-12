@@ -35,8 +35,8 @@ the film base renders, so judge any white placement with it at its default. Impl
 it, measured over the shared effective area in film RGB before the working-space matrix;
 a white target 0.15–0.31 stop above diffuse white was reviewed and not adopted. The warning's margin is
 `saturation-margin`, which waits on the calibration shoot's +3/+4 frames: a leader can sit
-below the film's shoulder and varies by roll, not stock (2026-09-29). Every round was judged on SDR; the values stay provisional until
-`white-rule-hdr` reviews the HDR rendition. Fit range stays reinhard
+below the film's shoulder and varies by roll, not stock (2026-09-29). The values were chosen on SDR; `white-rule-hdr` (2026-10-12) found nothing wrong on HDR, so
+they stand. Fit range stays reinhard
 (`nf-display-stages/parametric-shoulder`), so the rule's cap and floor stand as chosen. Ranked rule > fixed anchor > content white with solved contrast
 (noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
 are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167
@@ -131,6 +131,16 @@ level (its ends float up on every roll: less contrast than a per-frame slope, by
 `frame`'s overshoot at the limit. The maximum slope stays a constant guard at 3.5; its
 value is `short-span-protection`'s, a noise question; the tails past a frame's ends are
 `nf-display-stages/midtone-contrast-toe`'s.
+
+**`white-rule-hdr` is done (2026-10-12): the cap and floor stand on HDR.** 28 frames
+over the eleven rolls were reviewed as the gain-map JPEG beside the SDR JPEG, under
+`hybrid` and `frame`; none looked wrong. The HDR rendition uses little of its range:
+`hybrid`'s median frame reaches 1.8× reference white at p99.9, against a peak of 4.93.
+Frame whites sit 0.4–2.3 stops above diffuse white, low on the 6-stop ramp that
+`--display-tone-headroom` sets. The placement decides where on that ramp a white sits
+(`frame`'s median frame reaches 2.5×), but the cap and floor shift it little. The gamut map is nearly inert on
+HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 and 09-14
+(`docs/reports/gamut-map-share.md`'s dated note).
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -674,13 +684,71 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## white-rule-hdr
 
-**Status:** not started
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-10-12
 
 - 2026-09-27: filed (user) from `nf-display-stages/parametric-shoulder`, which kept
   reinhard and so did not look at HDR, the hand-off `roll-white-rule` gave it. Goal:
   review the white rule on an HDR rendition so its cap, floor and target stop being
   provisional.
+- 2026-10-11: **started at `pipeline_version` 14** (`a2add14`). The task file was stale:
+  `span-roll-slope` removed the white target, the cap and floor now feed the span slope,
+  the hybrid's slope bound and the clamp (not the envelope, which is unclamped), the hybrid is the default placement, and there are eleven
+  rolls. Agreed scope (user): review under `hybrid` and `frame`. Round 1 is the default
+  HDR beside SDR. A lever round (cap, floor, `--display-tone-headroom`, at most four arms)
+  runs only for frames round 1 flags. Everything is in `../temp/white-rule-hdr/`, built
+  from the full archive.
+- 2026-10-11: **measured every frame** (209 frames × 2 placements, `hdr.jsonl`,
+  `table.txt`). Each one was rendered to the gain-map JPEG with `--export-pre-encode`, and
+  its SDR and HDR linear Display P3 buffers summarised inside the effective area.
+  - **The HDR rendition uses little of its range.** p99.9 HDR luminance over frames, in
+    multiples of reference white (peak 4.93 at the defaults):
+    - `hybrid`: p10/p50/p90 0.75/1.80/3.99; 70 of 209 frames reach half the peak.
+    - `frame`: 1.73/2.50/4.51; 107 of 209 frames reach half the peak.
+    - 09-18 and 09-29 under `hybrid`: the median frame's p99.9 is about 1.0.
+  - **Why.** The lift ramps in look stops from diffuse white (about 2.47 above mid-grey)
+    to `W = 2^headroom`, 6 stops above. Frame whites sit 0.4–2.3 stops above diffuse white:
+    per-roll hybrid medians of 2.8–4.8 look stops, `frame` pinned at 4.46. On the
+    smoothstep that lifts a white 1.04–2.3× above its SDR level (`frame`: 2.0×).
+  - **So the headroom and the placement decide how much HDR range is used, more than
+    the cap or floor.** The headroom sets the ramp. The placement sets where a white sits
+    on it (`hybrid` 1.8× vs `frame` 2.5× at the median). The cap and floor are half a
+    stop apart, and a reviewable step in either moves a white by a fraction of a stop. The headroom is shared
+    with SDR above the split, so moving it changes SDR too.
+  - The extreme case is 07-23 1121, an overexposed frame. Its white lands at 7.8 look
+    stops under `hybrid`, with 10 % of pixels at the peak.
+- 2026-10-11: **the gamut map's share on both branches** (`gamut.jsonl`, `gamut.txt`,
+  `hybrid`). A throwaway build skips `fit_gamut`'s radial map and the HDR peak clamp
+  (`probe/probe.diff`); the map is re-done in float64 and checked against the shipped
+  buffers. Maximum relative error: HDR 2e-5, SDR 1.3e-3 (not traced; likely near-zero
+  channels).
+  - **HDR: nearly inert.** Median 0.001 % of pixels moved, none of the brightest 3 %. One marked
+    white patch changes: 1121's curtain, C\* 66.5 → 49.5.
+  - **SDR: not near-inert any more on four rolls.** Over the archive, the median frame
+    has 0.9 % of its pixels moved, and 13 % of its brightest 3 % (mean ΔC\* 1.0 there).
+    But on 07-15, 07-23, 09-11 and 09-14 the map moves 28–69 % of the brightest 3 %. Ten
+    marked whites lose more than 0.5 C\*: 971's cloud goes 36 → 10, 1121's curtain 42 → 4.
+    So HDR highlights keep chroma that SDR loses on those rolls.
+    `docs/reports/gamut-map-share.md` measured the removed chain, before the span slope
+    and the roll's exposure; it carries a dated note.
+- 2026-10-12: **round 1** (`review-r1/`): 28 frames, two or three per roll (held at the cap,
+  most HDR range, ordinary; one frame can fill two roles) over the eleven rolls. Each frame has four cells: `hybrid` and
+  `frame`, each as the gain-map JPEG and as the SDR JPEG. Viewed in Chrome on an XDR
+  display. **Verdict (user): nothing looks wrong on HDR under either placement.** Some
+  frames could take a small tweak (e.g. 09-11 1667 under `frame` HDR), but all are
+  acceptable. No round 2.
+- 2026-10-12: **done: the cap (+2.0) and floor (+1.5) stand, and nothing moved.** No code,
+  test or drift-gate change, so the SDR verdicts need no re-check. They remain provisional
+  only for the reasons that had nothing to do with HDR: no deliberately bad frames in the
+  sample, and the saturation margin (`saturation-margin`).
+  - Noticed, not filed:
+    - **HDR range use** is the headroom's question, if it is ever wanted, not the white
+      rule's.
+    - **`chain.peak_clamp.above_peak`** counts the holder, which inverts to extreme
+      brightness (millions of samples per real scan), so on a real scan it says little
+      about the picture.
+    - **The Display P3 ICC description** in the JPEGs is lcms's default "RGB built-in",
+      unlike the `(Hanten)` names.
 
 ## roll-exposure
 

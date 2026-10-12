@@ -6,6 +6,8 @@ path (Display P3). Probe, scripts and raw numbers in `../temp/gamut-map-share/`
 
 ## The answer
 
+> On the current chain this no longer holds everywhere on SDR: see the 2026-10-12 section.
+
 **Where it matters, almost none.** Across 92 frames on four rolls and 41 hand-marked
 white patches, the gamut map changes **no marked patch** under `sigmoid-knees`, the
 desaturation spike's control, or `path-to-white`'s hand-set C and D — the `none` and
@@ -109,3 +111,24 @@ across 135 patch-by-arm readings the largest C\* the map moved is 0.001.
   does not transfer to a fit-range operator that plateaus near display white — the
   `shoulder` result shows the map then acts hard — nor to the HDR branch; both are for
   `fit-range` / `parametric-shoulder` to re-check.
+
+## 2026-10-12: re-measured on the current chain
+
+The numbers above are from the removed chain, before the span slope and the roll's
+exposure. `nf-calibration/white-rule-hdr` re-measured the map at `pipeline_version` 14:
+209 frames on eleven rolls, the default `hybrid` placement, the gain-map destination.
+"Off" is still *unmapped*: a throwaway build skips the radial map (and the HDR peak clamp)
+and exports both branches' float buffers with `--export-pre-encode`, and the map is
+re-done in float64 and checked against the shipped buffers. Scripts and numbers are in
+`../temp/white-rule-hdr/` (`gamut_share.py`, `gamut.txt`).
+
+- **HDR: nearly inert.** The median frame has 0.001 % of its pixels moved and none of its
+  brightest 3 %. One marked white changes (07-23 1121's curtain, C\* 66.5 → 49.5).
+- **SDR: no longer near-inert everywhere.** Over the archive, the median frame has 0.9 %
+  of its pixels moved, and 13 % of its brightest 3 % (mean ΔC\* 1.0 there). On 07-15,
+  07-23, 09-11 and 09-14 it moves 28–69 % of the brightest 3 %. Ten marked whites lose
+  more than 0.5 C\*, among them 07-15 971's cloud (36 → 10) and 1121's curtain (42 → 4).
+  Almost every limit is still the cube's top (the floor binds on under 0.4 % of any frame).
+
+So on those rolls an HDR highlight keeps chroma that its SDR base loses. A review on HDR
+and SDR side by side found nothing wrong.
