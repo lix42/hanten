@@ -47,7 +47,9 @@ TelemetryEvent` (`src/telemetry.rs`). To add a field:
    a new/removed/renamed field, or a changed type. Note this also applies to the
    embedded domain types (`OutputSection`, `FilmBaseSource`, `SilverFastFormat`,
    and `StageKind` through `stage` and the timing field names): if *their* serialization changes,
-   bump too. The server keys ingestion off this.
+   bump too. The server keys ingestion off this. Adding or removing an enum member
+   is **not** a bump; the cost, accepted, is that a queued line naming a member the
+   build does not know is quarantined, not uploaded. See step 5 for the upload.
 4. Prefer fixed-width wire types (`u32`/`u64`, not `usize`) and reuse domain enums
    rather than restringifying them.
 5. **The upload side moves with it.** `source_schema_version` is the local version,
@@ -57,6 +59,10 @@ TelemetryEvent` (`src/telemetry.rs`). To add a field:
    dropped, not uploaded (`telemetry::spool::project`). A new
    field is not uploaded unless the contract README's manifest adds it, which needs a
    consent-version bump; a new stage or timing field needs its `timing_ms` key there.
+   A new `destination::Encoding` variant (a new kind of output, not every new row)
+   widens `conversion.encoding` in the contract and the Worker in the same change,
+   with no consent bump; `upload::encoding`'s match and
+   `every_projection_satisfies_the_schema` refuse it until then.
 
 ### Two invariants every addition MUST preserve
 

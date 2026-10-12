@@ -169,5 +169,5 @@ HDR framing. Runs alongside the others rather than at the end.
 ## What carries over untouched
 
 Colorimetry (Adobe RGB's two artifacts landed with `output/adobe-rgb-gamut`), `io::decode`, input semantics,
-telemetry (a schema bump only when an enum member is removed), the memory model's
+telemetry (no schema bump for an enum member added or removed), the memory model's
 arithmetic, `tools/review-app`, and `nctool` (one row per new preset in two tables).
