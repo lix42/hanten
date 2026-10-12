@@ -69,6 +69,12 @@ display white, and for HDR, which was not measured.
 The map gets no diagnostic off switch. Should one ever be wanted, "off" means an unmapped
 float destination, never a per-channel clip.
 
+**More midtone contrast is an opt-in, not the default** (`midtone-contrast-probe`, done
+2026-10-11; `docs/spike/midtone-contrast-probe.md`). The default slope stays; a steeper one
+(`--contrast 1.3`, reviewed under the hybrid) is documented for those who want it. Pivoted at
+mid-grey, its dark end sinks (darkest 1 % near L\* 6) with nothing to hold it; that toe is
+`midtone-contrast-toe`, which also checks the setting under `--placement roll`.
+
 ## fit-range
 
 **Status:** done
@@ -625,11 +631,45 @@ float destination, never a per-channel clip.
   toe and the tails `hybrid-slope-bounds` handed here, and closes with no code if the
   probe loses. The hybrid's R moved to `nf-calibration/hybrid-span-target`, colour to
   `nf-look/midtone-contrast-colour` (low priority), both after this task.
+- 2026-10-11: **re-scoped** by `midtone-contrast-probe`, which kept the default slope: the
+  toe now holds the dark end under the opt-in `--contrast 1.3` and in the default's tails
+  (the cases `hybrid-slope-bounds` handed here), then that setting is checked under
+  `--placement roll`. Not closed: the probe judged ×1.29 with its shadows sinking.
 
 ## midtone-contrast-probe
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-11
 
 - 2026-10-11: filed (user), split from `midtone-contrast-toe`: probe a steeper slope under
   the default placement with the ends left to clip, before any toe exists.
+- 2026-10-11: **started.** `look.contrast` multiplies the frame's own slope after the
+  placement (`Recipe::resolved_slope`), past the maximum and the envelope, so the probe
+  needs no spike hook; colour stays at the roll's slope. Arms (user): `--contrast` 1, 1.15,
+  1.29 (≈ a 7-stop span over 9), on 09-18 and 09-29 under the default placement, SDR,
+  display black off (the default rendering's).
+- 2026-10-11: **rendered and measured** (`../temp/midtone-contrast-probe/`: `scripts/`,
+  `summary.txt`, `summary.json`, `overshoot.txt`; binary 80ef96c, dirty with this task's doc
+  edits only, v14, rolls re-measured from the full archive). 66 frames (09-18: 35, 09-29: 31) × three arms, the binary's own SDR sRGB JPEG.
+  The multiplier changed the slope only: exposure, placement and colour slope identical per arm.
+  - **Medians, 09-18 / 09-29** (rendered L\*, 5 % inset): p1 12.3 / 11.5 today → 8.7 / 7.9 at
+    ×1.15 → 6.0 / 5.4 at ×1.29; p99 85.7 / 83.0 → 89.1 / 86.5 → 91.6 / 89.2; p50 moves under
+    1.3 L\*; midtone spread (p75 − p25) 1.89 / 2.04 → 2.44 / 2.53 stops at ×1.29.
+  - **Near black:** pixels under L\* 5 stay a median 0 % at ×1.15 and 0.5–0.7 % at ×1.29 (max
+    4.0 %, 1803); frames whose darkest 1 % lands under L\* 5: 0 / 0 / 23 of 66 (×1 / ×1.15 /
+    ×1.29), under L\* 10: 8 / 45 / 51.
+  - **Near white:** lightness ≥ 98 stays a median 0 % (max 10.5 %, 2037); pixels with a channel
+    at 255 rise from 0.2 % to 1.2 % (09-18 median; max 14 %, 1800) — saturated colour, not white.
+  - **The split (estimated from slope and exposure):** pivoted at mid-grey, each end moves by
+    its distance from it; the dark end takes a median 58 % (31–63 %) of the extra stops — at ×1.29 it moves 1.18 look stops
+    (0.63–1.28).
+- 2026-10-11: **verdict (user review, review app and Artifact):** ×1 best; ×1.29 has
+  its value for some, so it becomes an **opt-in high contrast**; ×1.15 too close to ×1.
+  The opt-in is the existing knob, documented (`docs/using-nc.md`, the look): `--contrast
+  1.3`, reviewed under the hybrid only. No preset or switch (`nf-look/look-presets` retired
+  them). Under `--placement roll` a low- or high-key frame is pushed further; the user wants
+  the toe first, then that check, so it moves to `midtone-contrast-toe`. The guide's list of
+  base slopes now names the frame's placed slope, which it had left out.
+- 2026-10-11: **done.** Spike: `docs/spike/midtone-contrast-probe.md`. **For dependents:**
+  the toe holds the dark end of `--contrast 1.3` (darkest 1 % near L\* 6, 23 of 66 frames
+  under L\* 5) and of the default's tails; it is no longer gated on a steeper default.

@@ -3,9 +3,7 @@
 ## Goal
 
 Re-decide the hybrid placement's span target R (`roll.hybrid_span_stops`, 7;
-`--hybrid-span`) once a toe holds the dark end: the same lever
-[`midtone-contrast-toe`](../nf-display-stages/midtone-contrast-toe.md) pulls, applied to
-the default placement.
+`--hybrid-span`) once a toe holds the dark end. Raising it is a steeper default.
 
 ## Design
 
@@ -16,11 +14,13 @@ Known:
 - The hybrid has less contrast than a per-frame slope by design: its darkest 1 % sits at
   L\* 10.6–14.3 (per-roll medians), `frame`'s at 8.2, CCR's at 4.7–7.4
   (`hybrid-slope-bounds`).
+- A steeper slope under the hybrid (`--contrast` 1.15, 1.29) lost to ×1 without a toe
+  (`docs/spike/midtone-contrast-probe.md`).
 
 Open:
 
-- Whether a toe lets R rise, and how far, without losing the restraint the hybrid was
-  chosen for.
+- Whether a toe changes that: whether R can rise, and how far, without losing the
+  restraint the hybrid was chosen for.
 
 ## How to Verify
 
