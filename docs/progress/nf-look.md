@@ -1054,3 +1054,12 @@ preset row; do not reuse the name.
 - 2026-10-09: created by `nf-reconstruction/mono-decode`, superseding `algo/bw-support`'s
   rendering half. Goal: a dye negative rendered mono, pooled with weights first in the
   look ([`docs/design/mono.md`](../design/mono.md)).
+
+## midtone-contrast-colour
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, low
+  priority: the placements hold colour at the roll's slope, so whether saturation follows
+  the toe's steeper midtone is a decision of its own.
