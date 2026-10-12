@@ -53,7 +53,11 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > destination table, derivation and conflict refusals, suffix refusals and `roll`
 > naming were re-run. At `pipeline_version` 14 (`nf-calibration/hybrid-slope-bounds`, a
 > hybrid frame the exposure limit holds flattens to stay inside the envelope) only the
-> recipe `meta` moved, re-checked against the binary (`--save-recipe` writes 14). The staleness
+> recipe `meta` moved, re-checked against the binary (`--save-recipe` writes 14). At
+> `nf-display-stages/midtone-contrast-probe` (`pipeline_version` 14 unchanged, `80ef96c`)
+> §5's base-slope order and §7's `--contrast 1.3` were re-checked against the binary (the
+> report's slope is the placement's × 1.3); §7's lightness figures are from the probe's real
+> rolls (`docs/spike/midtone-contrast-probe.md`). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -600,7 +604,7 @@ fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, headroom
 and display black are 0.8, 6 and off under `default`. The look's `contrast` is a
-multiplier, so its default `1.0` keeps the base slope: a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
+multiplier, so its default `1.0` keeps the base slope: the frame's placed slope (the hybrid's or `frame`'s), else a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
 
@@ -1188,18 +1192,25 @@ grade is off.
 - **Contrast is the slope, pivoted at mid-grey, on luminance**: mid-grey stays put and
   each stop of a pixel's luminance away from it becomes `slope` stops, where slope 1
   reproduces the scene's own contrast. The whole pixel is scaled, so its colour does not
-  change with contrast. The slope is a **base** times `--contrast`: the roll's
-  (`roll.white_stops` and `roll.dark_stops`, below), a thin frame's (`roll.thin_slope`), else the fallback
-  ≈1.414 — the slope a roll whose white sat 1.75 stops above mid-grey would get — and
-  under `direct` its pinned ≈1.414. So `--contrast 1.2` is 20% more than the roll's, on
-  every roll — the way to carry one taste across rolls. It runs after scene correction,
+  change with contrast. The slope is a **base** times `--contrast`: the frame's placed
+  slope (the hybrid's or `frame`'s), else a thin frame's (`roll.thin_slope`), else the
+  roll's (`roll.white_stops` and `roll.dark_stops`, below), else the fallback ≈1.414 —
+  the slope a roll whose white sat 1.75 stops above mid-grey would get — and under
+  `direct` its pinned ≈1.414. So `--contrast 1.2` is 20% more than the base, whatever it
+  is — the way to carry one taste across rolls. It runs after scene correction,
   so `--exposure 1` at slope 1.41 moves the picture 1.41 stops: exposure is in stops of
   the reconstructed scene.
+- **For a contrastier look, `--contrast 1.3`.** Reviewed against the default under the
+  hybrid placement: the midtones get 30 % more contrast, mid-grey stays put, and the ends
+  move apart: a frame's darkest 1 % renders near L\* 6 instead of 12, and its highlights
+  go further into fit range's shoulder. Nothing yet holds the dark end, so deep shadows
+  go to black. Untested under `--placement roll`, where a low- or high-key frame is not
+  centred first and is pushed further, and under `frame`, whose white at L\* 93 it moves.
 - **Saturation is the colour's slope**: each pixel's ratios between channels are raised
   to the power `saturation slope` (a channel twice green's becomes 2^s times it) and its
   luminance is kept, so neutrals and the tone scale do not move. The saturation slope is
-  the same base slope × 1.15 × `--saturation` — except that a thin frame's slope never
-  reaches colour: there the base is the roll's. The 1.15 is the default,
+  the same base slope × 1.15 × `--saturation` — except that a placed or thin frame's slope
+  never reaches colour: there the base is the roll's. The 1.15 is the default,
   chosen by review: 15% more colour than the base slope gave when contrast still acted
   on each channel. `direct` uses 1 there instead. Whatever `--contrast` is, colour stays
   put.

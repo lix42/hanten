@@ -1,5 +1,8 @@
 # Does more midtone contrast win?
 
+**Done:** 2026-10-11 — the default stays at ×1; ×1.29 is an opt-in, `--contrast 1.3`
+(`docs/spike/midtone-contrast-probe.md`).
+
 ## Goal
 
 Find out, before any toe exists, whether spreading a frame's span over more look stops

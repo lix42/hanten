@@ -1063,3 +1063,6 @@ preset row; do not reuse the name.
 - 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, low
   priority: the placements hold colour at the roll's slope, so whether saturation follows
   the toe's steeper midtone is a decision of its own.
+- 2026-10-11: re-scoped by `nf-display-stages/midtone-contrast-probe`: the default stays at
+  ×1, so the steeper midtone is the opt-in `--contrast 1.3`; the question is whether
+  saturation follows it.

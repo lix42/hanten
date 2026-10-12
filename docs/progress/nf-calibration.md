@@ -2002,3 +2002,6 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, which
   `hybrid-slope-bounds` had handed the hybrid's R (7): whether a toe lets it rise. Waits on
   the toe.
+- 2026-10-11: re-scoped by `nf-display-stages/midtone-contrast-probe`: without a toe, a
+  steeper hybrid slope (×1.15, ×1.29) lost to ×1, so the default stays; R is re-asked only
+  with the toe ([`docs/spike/midtone-contrast-probe.md`](../spike/midtone-contrast-probe.md)).

@@ -1217,8 +1217,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   probed with the ends left to clip before any toe exists
 - `nf-display-stages/midtone-contrast-toe` (new flow): `nf-display-stages/midtone-contrast-probe`
   — filed 2026-10-11: steepens the slope `hybrid-slope-bounds` bounds, so its maximum is
-  the baseline and is re-checked after; narrowed to the toe 2026-10-11, closed with no
-  code if the probe loses
+  the baseline and is re-checked after; narrowed to the toe 2026-10-11; the probe kept the
+  default slope, so the toe holds the opt-in `--contrast 1.3` and the default's tails
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
   — the destinations and their suffix rules
 - `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`, `nf-calibration/roll-section`
@@ -1389,10 +1389,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
 - `nf-look/mono-mix` (new flow): `nf-reconstruction/mono-decode`
-- `nf-look/midtone-contrast-colour` (new flow, **low priority**): `nf-display-stages/midtone-contrast-toe`
-  — split from `midtone-contrast-toe` 2026-10-11: whether saturation follows the steeper midtone
   — supersedes `algo/bw-support`'s rendering half: a dye negative rendered mono, pooled
   with weights first in the look
+- `nf-look/midtone-contrast-colour` (new flow, **low priority**): `nf-display-stages/midtone-contrast-toe`
+  — split from `midtone-contrast-toe` 2026-10-11: whether saturation follows `--contrast 1.3`
 - `nf-calibration/span-roll-slope` (new flow): `nf-calibration/level-target-zero`, `nf-scene-correction/midtone-neutral`, `nf-look/contrast-on-luminance`
   — filed 2026-10-09 (split from `envelope-hybrid-placement`, absorbing `display-white`):
   the per-roll slope from the roll's span, and the display white it maps to
@@ -2111,7 +2111,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Mono as a rendering](tasks/nf-look/mono-mix.md) — a dye negative (colour or
   chromogenic B&W) rendered mono: a weighted pool first in the look, after white balance
 - [ ] [Colour under a steeper midtone](tasks/nf-look/midtone-contrast-colour.md) — **low
-  priority**: whether saturation follows the toe's steeper midtone
+  priority**: whether saturation follows the opt-in `--contrast 1.3`
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the
@@ -2156,12 +2156,14 @@ the design now in `docs/design-spec.md` (§6–§7):
   of top-end pixels under knees — so the knee'd whites are the per-channel shoulder's.
   It acts heavily only under the `shoulder` display tone. No off switch on either chain.
   Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
-- [ ] [Does more midtone contrast win?](tasks/nf-display-stages/midtone-contrast-probe.md)
-  — a steeper slope under the default placement, the ends left to clip; the overshoot's
-  size and split between the ends
+- [x] [Does more midtone contrast win?](tasks/nf-display-stages/midtone-contrast-probe.md)
+  — **done 2026-10-11:** not as the default (×1 preferred); ×1.29 is an opt-in, documented
+  as `--contrast 1.3`, its dark end sinking (darkest 1 % near L\* 6). Spike:
+  [`docs/spike/midtone-contrast-probe.md`](spike/midtone-contrast-probe.md)
 - [ ] [More midtone contrast, the ends held by a toe and the
-  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — if the probe wins: spread a
-  frame's span over more look stops than the display's range, a toe holding the dark end
+  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — a toe holding the dark end
+  under `--contrast 1.3` and in the default's deep tails; then that setting under
+  `--placement roll`
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the two renderings (`direct` and
