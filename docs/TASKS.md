@@ -1355,7 +1355,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/taste-vs-quality` (new flow): `nf-calibration/thin-frame-lift`, `nf-calibration/frame-level-trim`
   — filed 2026-10-01: thin-frame-lift's round 2 was a matter of taste; the lifts it and
   frame-level-trim add are preferences, unlike the corrections, and need to read as such
-- `nf-calibration/thin-lift-confirmation` (new flow): `nf-calibration/taste-vs-quality`
+- `nf-calibration/thin-lift-confirmation` (new flow, **closed—superseded** 2026-10-11 by `nf-calibration/envelope-hybrid-placement`; the dep below is decision history): `nf-calibration/taste-vs-quality`
   — filed 2026-10-02: thin-frame-lift's confirmation round and noise measurement,
   compared through the thin lift's own switch
 - `nf-calibration/level-target-zero` (new flow): `nf-calibration/roll-exposure`, `nf-calibration/taste-vs-quality`
@@ -2233,9 +2233,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   automatic adjustment is a correction, a guard or a preference (design-spec §6); the two
   lifts are preferences, each with its own switch (`--small-lift`, `--thin-lift`), the
   thin lift stored as its own pair beside the small one; `--frame-lift` retired
-- [ ] [Confirm the thin lift on an independent
-  roll](tasks/nf-calibration/thin-lift-confirmation.md) — a review round on 09-29's four
-  thin frames, on vs `--thin-lift off`, and the noise the steeper slope adds
+- [x] [Confirm the thin lift on an independent
+  roll](tasks/nf-calibration/thin-lift-confirmation.md) — **closed 2026-10-11,
+  superseded**: the hybrid placement replaced both lifts by default, so the thin lift
+  renders only under `--placement roll`; the hybrid gives 09-29's two thin frames a steeper
+  slope than the lift, and `hybrid-slope-bounds`' sweep measured its noise
 - [x] [Raise the roll's brightness target to
   0](tasks/nf-calibration/level-target-zero.md) — `measure-roll` puts the median frame at
   mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred

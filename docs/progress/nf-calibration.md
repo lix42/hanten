@@ -77,8 +77,9 @@ after the roll's exposure and 30% of its luma sits within a stop of the base, wh
 night scene also meets. Written as `roll.frames."<file>".thin_slope` and `thin_exposure`
 beside the small lift, moved into `roll.thin_slope` / `roll.thin_exposure` (the look's
 `base_from` is then `thin`). A typed `--roll-white` or a manifest's `roll.white_stops` drops
-the thin pair. Not confirmed on an independent roll, and noise unmeasured:
-`thin-lift-confirmation` carries both.
+the thin pair. Never confirmed on an independent roll, nor its noise measured at its own
+slope: `thin-lift-confirmation` closed
+superseded (2026-10-11), since the hybrid (below) replaced both lifts by default.
 
 **`taste-vs-quality` is done (2026-10-02): every automatic adjustment is a correction, a guard or a
 preference** (design-spec §6). Corrections (the roll's white balance, exposure and white)
@@ -1374,8 +1375,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## thin-lift-confirmation
 
-**Status:** not started
-**Updated:** 2026-10-07
+**Status:** closed — superseded
+**Updated:** 2026-10-11
 
 - 2026-10-02: filed (user) from `taste-vs-quality`, carrying `thin-frame-lift`'s
   confirmation round and noise measurement. 2026-09-29 Ektar 100, scanned after the
@@ -1384,6 +1385,16 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-07: from `level-target-zero`: at target 0 (+0.6 EV on every roll) 09-29 thin-lifts
   only 2052 and 2053 (2017 and 2044 now take the small lift alone), and over the archive 6
   frames qualify, not 18. Judge the round at the new target.
+- 2026-10-11: **closed, superseded** (user). Since `envelope-hybrid-placement` (v12) the
+  default placement replaces both lifts, which render only under `--placement roll`, so a
+  round would judge a non-default preference on two frames; the lift's last round
+  (`thin-frame-lift` round 2) was already no call, brighter but a matter of taste. At v13
+  (`../temp/hybrid-slope-bounds/reports/`; v14 moves no archive frame) 09-29
+  thin-lifts 2052 and 2053 at slopes 2.03 / 2.05, where the hybrid places them at 2.48 /
+  2.70; that task's sweep (`sweep.log`) measured noise there at 2.29× / 2.79× the scan's,
+  rising with the slope on every frame, so the lift's ~2.0 adds less. Not done: checking
+  whether the thresholds miss a frame, and a noise figure at the thin slope itself. Grain
+  on thin frames is `short-span-protection`'s.
 
 ## level-target-zero
 
