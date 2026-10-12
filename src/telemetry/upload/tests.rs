@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use super::*;
-use crate::destination::{Container, DisplayAxes, Gamut, ROWS, Range, Status, Transfer};
+use crate::destination::{Container, DisplayAxes, Gamut, ROWS, Range, Transfer};
 use crate::stage::StageKind;
 use crate::telemetry::{ConversionInfo, ImageInfo, OutcomeInfo};
 
@@ -348,16 +348,14 @@ fn every_projection_satisfies_the_schema() {
     let mut events = vec![full(), minimal()];
     // Every writable destination, and the film master.
     for row in ROWS {
-        if matches!(row.status, Status::Ready(_)) {
-            let mut e = full();
-            e.conversion.as_mut().unwrap().destination = OutputSection::Display(DisplayAxes {
-                range: Some(row.range),
-                transfer: Some(row.transfer),
-                gamut: Some(row.gamut),
-                container: Some(row.container),
-            });
-            events.push(e);
-        }
+        let mut e = full();
+        e.conversion.as_mut().unwrap().destination = OutputSection::Display(DisplayAxes {
+            range: Some(row.range),
+            transfer: Some(row.transfer),
+            gamut: Some(row.gamut),
+            container: Some(row.container),
+        });
+        events.push(e);
     }
     let mut film_master = full();
     film_master.conversion.as_mut().unwrap().destination = OutputSection::FilmMaster;

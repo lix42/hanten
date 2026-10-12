@@ -48,7 +48,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > frame's exposure within ±1 EV of the roll's) §7's roll table, lift refusal, roll report,
 > placement examples and `measure-roll` report (on its real roll) were re-run, and the
 > `frame` example and refusal added from the binary; §4's and §5's recipe `meta` carry the
-> new version (`--save-recipe` writes 13). The staleness
+> new version (`--save-recipe` writes 13). At `output/sdr-jpeg-preset` (the SDR JPEG,
+> `pipeline_version` 13 unchanged) §7's `direct` destination examples and §8's
+> destination table, derivation and conflict refusals, suffix refusals and `roll`
+> naming were re-run. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -1043,7 +1046,8 @@ takes a lossy container by default — only when you state one, or when your sta
 leave no lossless row: `--rendering direct --gamut display-p3` is the Display P3 float
 TIFF and `--transfer native` the Adobe RGB 16-bit TIFF. `--container jpeg` or `--range
 hdr --transfer native` names a gain map but is refused, asking for its gamut: `direct`'s
-Adobe RGB has none, so add `--gamut display-p3` or `--gamut srgb`. The report states
+Adobe RGB has none, so add `--gamut display-p3` or `--gamut srgb`. `--range sdr
+--container jpeg` is the Adobe RGB SDR JPEG. The report states
 the rendering in `chain.rendering`.
 
 ```console
@@ -1766,14 +1770,25 @@ spelling is the one `hanten` writes when you leave the suffix off:
 | `--range` | `--transfer` | `--gamut` | `--container` | Suffix | writes |
 |---|---|---|---|---|---|
 | `sdr` *(default)* | `native` | `display-p3` *(default)* / `adobe-rgb` / `srgb` | `tiff` | `.tif` / **`.tiff`** | 16-bit TIFF in the gamut's own curve (sRGB curve / `563/256` / sRGB curve) |
+| `sdr` | `native` | `display-p3` / `adobe-rgb` / `srgb` | `jpeg` | **`.jpg`** / `.jpeg` | the same rendition as an 8-bit JPEG (quality 95, 4:4:4), its ICC profile the only metadata |
 | `hdr` | `linear` | `display-p3` / `adobe-rgb` / `srgb` / `bt2020` | `tiff` | `.tif` / **`.tiff`** | 32-bit float display-linear TIFF (1.0 = 203 cd/m²) |
 | `hdr` | `pq` / `hlg` | `bt2020` | `tiff` | `.tif` / **`.tiff`** | Rec.2100 signal as full-range 16-bit TIFF codes |
 | `hdr` | `native` | `display-p3` / `srgb` | `jpeg` | **`.jpg`** / `.jpeg` | gain-map JPEG: an 8-bit SDR base with a per-channel ISO 21496-1 gain map |
 
 With no destination flag the result is an **SDR Display P3 16-bit TIFF** under the
-default rendering, and the HDR float TIFF under `--rendering direct` (§7). An SDR JPEG
-(`--container jpeg` alone, or with `--gamut srgb`) is planned (`output/sdr-jpeg-preset`),
-and refused as not written yet; ProPhoto has no destination.
+default rendering, and the HDR float TIFF under `--rendering direct` (§7).
+`--container jpeg` alone is the SDR Display P3 JPEG — for sharing, where the TIFF is the
+lossless master; it is the gain-map JPEG's SDR base without the map. ProPhoto has no
+destination.
+
+A JPEG holds at most 65535 pixels a side, so a larger frame bound for either JPEG is
+refused (exit 4) before anything renders, naming the TIFF of the same range:
+
+```
+unsupported: a 65536x2 frame exceeds the 65535-pixel JPEG limit; write a TIFF instead:
+       --container tiff --transfer linear --gamut display-p3 (recipe
+       `output.display.container`, `.transfer`, `.gamut`)
+```
 
 **The linear float TIFF is for editors, not for viewing.** No TIFF field tells a viewer
 that `1.0` is 203 cd/m², so Apple's Preview and Photos show it as SDR on an HDR display;
@@ -1954,13 +1969,14 @@ this predictable:
 usage: the output path out.jpg does not end in .tif or .tiff: the destination is
        --range sdr --transfer native --gamut display-p3 --container tiff, which writes
        .tif or .tiff. Hanten never renames a suffix you state — drop .jpg and the path
-       is completed for you, or state a destination that writes it: --range hdr
+       is completed for you, or state a destination that writes it: --container jpeg;
+       --gamut adobe-rgb --container jpeg; --gamut srgb --container jpeg; --range hdr
        --container jpeg; --range hdr --gamut srgb --container jpeg
 ```
 
-With a recipe stating `"gamut": "adobe-rgb"`, each offer for `-o out.jpg` restates
-the gamut (`--range hdr --gamut display-p3 --container jpeg; --range hdr --gamut srgb
---container jpeg`). With a typed `--film-master` the offer says to drop it first; a
+Only the destinations needing the fewest of your stated axes changed are offered: with a
+recipe stating `"gamut": "adobe-rgb"`, `-o out.jpg` is offered `--container jpeg` alone,
+the Adobe RGB SDR JPEG. With a typed `--film-master` the offer says to drop it first; a
 recipe's `"film-master"` is replaced by the offered flags themselves. A `roll` frame's
 refusal names the recipe keys (`output.display.…`) instead of flags. With `-v`,
 `hanten` says on stderr when it completed a path.

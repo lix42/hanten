@@ -43,6 +43,12 @@
       "bounds": {"max": 1, "rms": 1},
       "determinism": "byte-identical"
     },
+    "sdr-jpeg": {
+      "oracle": "no APP or COM segment beside JFIF and the ICC profile, nothing after EOI; the standard transfer of the canonical linear buffer, quantized to 8 bits, against the decoded codes — the gain-map base's encoding, so its bounds",
+      "bounds": {"max": 26, "rms": 3.5,
+                 "patches": {"neutral_mean": 1, "saturated_mean": 2, "neutral_chroma": 1}},
+      "determinism": "byte-identical"
+    },
     "hdr-linear-tiff": {
       "oracle": "the file's f32 against the canonical buffer; the encoder writes it verbatim",
       "bounds": {"max": 0, "rms": 0, "bit_identical": true},
@@ -78,6 +84,7 @@
                   "muted-dark", "muted-light"],
     "bounds": {"delta_e_2000": 0.5, "neutral_delta_uv": 0.0001},
     "allowances": {
+      "sdr-jpeg": {"delta_e_2000": 2.0, "neutral_delta_uv": 0.004},
       "gain-map-jpeg": {"delta_e_2000": 2.0, "neutral_delta_uv": 0.004}
     }
   }

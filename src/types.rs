@@ -694,9 +694,9 @@ pub const REMOVED_SIMPLE_RECONSTRUCTION: &str = "`simple` reconstruction (the di
 /// algorithm can produce non-finite values from log/division math:
 ///
 /// - **clipping** (`clipped_low`/`clipped_high`): finite samples outside `[0, 1]`
-///   clamped into range. Only the u16 path clamps, so these are u16-only.
+///   clamped into range by an integer encode (u16 or u8); f32 writes them verbatim.
 /// - **non-finite** (`non_finite`): `NaN`/`±inf` samples — a pipeline numerical
-///   fault. Counted for *both* depths (u16 forces them to 0; f32 writes them
+///   fault. Counted at every depth (an integer encode forces them to 0; f32 writes them
 ///   verbatim), so the fault surfaces regardless of output depth.
 ///
 /// This rides back on the value path rather than down `Result` because it is a
@@ -707,9 +707,9 @@ pub struct EncodeReport {
     /// Samples examined (`width * height * channels`). The denominator that makes
     /// the clip / non-finite counts interpretable as a fraction.
     pub total_samples: u64,
-    /// Finite samples below 0.0 clamped up to 0 (u16 output only).
+    /// Finite samples below 0.0 clamped up to 0 (integer output only).
     pub clipped_low: u64,
-    /// Finite samples above 1.0 clamped down to 65535 (u16 output only).
+    /// Finite samples above 1.0 clamped down to the top code (integer output only).
     pub clipped_high: u64,
     /// Non-finite (`NaN`/`±inf`) samples. Counted separately because they signal
     /// a numerical fault rather than mere out-of-gamut clipping.

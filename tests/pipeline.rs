@@ -6444,6 +6444,170 @@ fn the_gain_map_jpeg_rejects_a_non_jpeg_suffix_and_rolls_with_a_jpg_name() {
 }
 
 #[test]
+fn a_frame_too_wide_for_a_jpeg_is_refused_before_it_renders() {
+    // A JPEG header holds 16-bit dimensions. The refusal names the TIFF of the same
+    // range, and following it converts.
+    let tmp = TempDir::new("jpeg-too-wide");
+    let input = tmp.path("wide.tif");
+    write_hdri_with_uniform_ir(&input, 65_536, 2, [20_000; 3], 1_000);
+    let convert = |out: &str, extra: &[&str]| {
+        let out = tmp.path(out);
+        let mut args = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            // A synthesized scan carries no SilverFast provenance.
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+        ];
+        args.extend_from_slice(extra);
+        let (code, _, err) = run(&args);
+        (code, err, out)
+    };
+    for (range, remedy) in [
+        ("sdr", &["--container", "tiff"][..]),
+        (
+            "hdr",
+            &[
+                "--container",
+                "tiff",
+                "--transfer",
+                "linear",
+                "--gamut",
+                "display-p3",
+            ],
+        ),
+    ] {
+        let (code, err, out) = convert(range, &["--range", range, "--container", "jpeg"]);
+        assert_eq!(code, 4, "{range}: {err}");
+        assert!(
+            err.contains("exceeds the 65535-pixel JPEG limit"),
+            "{range}: {err}"
+        );
+        assert!(err.contains(&remedy.join(" ")), "{range}: {err}");
+        assert!(
+            !err.contains("transfer") || range == "hdr",
+            "{range}: {err}"
+        );
+        assert!(!out.with_extension("jpg").exists());
+        let (code, err, _) = convert(
+            &format!("{range}-tiff"),
+            &[&["--range", range][..], remedy].concat(),
+        );
+        assert_eq!(code, 0, "{range}: following the remedy must convert: {err}");
+    }
+}
+
+/// The ICC profile a JPEG embeds: its `ICC_PROFILE` APP2 chunks' payloads, in order.
+fn read_jpeg_icc(jpeg: &[u8]) -> Vec<u8> {
+    let mut icc = Vec::new();
+    let mut at = 2;
+    while jpeg[at + 1] != 0xDA {
+        let length = usize::from(u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]));
+        let content = &jpeg[at + 4..at + 2 + length];
+        if jpeg[at + 1] == 0xE2 && content.starts_with(b"ICC_PROFILE\0") {
+            icc.extend_from_slice(&content[14..]);
+        }
+        at += 2 + length;
+    }
+    icc
+}
+
+#[test]
+fn the_sdr_jpeg_stores_the_sdr_tiffs_rendition_with_only_its_profile() {
+    let tmp = TempDir::new("sdr-jpeg");
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let pre = tmp.path(&format!("{name}.pre-encode.tiff"));
+        let mut args: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdri-64bit.tif").to_str().unwrap().into(),
+            "-o".into(),
+            out.to_str().unwrap().into(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--export-pre-encode".into(),
+            pre.to_str().unwrap().into(),
+        ];
+        args.extend(extra.iter().map(|a| a.to_string()));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (out, std::fs::read(pre).unwrap())
+    };
+    for gamut in ["display-p3", "adobe-rgb", "srgb"] {
+        let (tiff, tiff_pre) = convert(&format!("{gamut}.tiff"), &["--gamut", gamut]);
+        let jpeg_args = ["--gamut", gamut, "--container", "jpeg"];
+        let (jpeg, jpeg_pre) = convert(&format!("{gamut}.jpg"), &jpeg_args);
+        // The encoder receives the SDR TIFF's rendition, byte for byte.
+        assert_eq!(tiff_pre, jpeg_pre, "{gamut}");
+        let bytes = std::fs::read(&jpeg).unwrap();
+        // Its profile, and nothing of a gain map.
+        assert_eq!(read_jpeg_icc(&bytes), read_icc_tag(&tiff), "{gamut}");
+        let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        for needle in [&b"MPF\0"[..], b"urn:iso:std:iso:ts:21496:-1", b"hdrgm"] {
+            assert!(!contains(needle), "{gamut}: {needle:?}");
+        }
+        // Decoded, it is the TIFF through the codec: q95 on this grainy fixture measured
+        // a mean |Δ| of 1.7–1.9 codes, and per-channel means within 0.08 code. The
+        // channel means are what a wrong curve, gamut or channel order would move.
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgb8();
+        let reference: Vec<f64> = read_u16_tiff(&tiff)
+            .iter()
+            .map(|&t| f64::from(t) / 257.0)
+            .collect();
+        let decoded: Vec<f64> = decoded.as_raw().iter().map(|&j| f64::from(j)).collect();
+        assert_eq!(decoded.len(), reference.len(), "{gamut}");
+        let n = decoded.len() as f64;
+        let mean_abs = decoded
+            .iter()
+            .zip(&reference)
+            .map(|(j, t)| (j - t).abs())
+            .sum::<f64>()
+            / n;
+        assert!(mean_abs < 2.5, "{gamut}: mean |Δ| {mean_abs} codes");
+        for c in 0..3 {
+            let channel = |v: &[f64]| v.iter().skip(c).step_by(3).sum::<f64>() / (n / 3.0);
+            let shift = channel(&decoded) - channel(&reference);
+            assert!(
+                shift.abs() < 0.25,
+                "{gamut} channel {c}: mean shift {shift}"
+            );
+        }
+        // Repeated encodes are byte-identical.
+        let (again, _) = convert(&format!("{gamut}-again.jpg"), &jpeg_args);
+        assert_eq!(std::fs::read(again).unwrap(), bytes, "{gamut}");
+    }
+
+    // A TIFF suffix is refused, and roll derives `<stem>_positive.jpg` from the recipe.
+    let (code, _, err) = convert_48bit(&tmp.path("x.tif"), &["--container", "jpeg"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains(".jpg"), "{err}");
+    let out_dir = tmp.path("out");
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version":3,"output":{"display":{"container":"jpeg"}},
+            "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let rolled = std::fs::read(out_dir.join("hdr-48bit_positive.jpg")).unwrap();
+    assert_eq!(&rolled[..2], &[0xff, 0xd8]);
+}
+
+#[test]
 fn roll_checks_explicit_manifest_suffixes_and_derives_per_frame_names() {
     // The manifest path goes through the same suffix rule `convert` uses, so a frame
     // cannot be pointed at a container its destination cannot write.
@@ -14537,27 +14701,44 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
         err.contains("--gamut display-p3|adobe-rgb|srgb|bt2020"),
         "{err}"
     );
-    // A planned row names its task and what is ready now, as the fewest flags to add
-    // to what was stated — and following that remedy converts.
-    let (code, _, err) = convert_48bit(&tmp.path("c"), &["--container", "jpeg"]);
+    // The gain map has no Adobe RGB base, though the SDR JPEG has: each remedy offered
+    // converts.
+    let (code, _, err) = convert_48bit(
+        &tmp.path("c"),
+        &[
+            "--range",
+            "hdr",
+            "--gamut",
+            "adobe-rgb",
+            "--container",
+            "jpeg",
+        ],
+    );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("output/sdr-jpeg-preset"), "{err}");
     assert!(
-        err.contains("adding to what is stated: --range hdr; --range hdr --gamut srgb "),
+        err.contains("Use --range sdr, --gamut display-p3, --gamut srgb, or --container tiff"),
         "{err}"
     );
-    for (i, add) in [
-        &["--range", "hdr"][..],
-        &["--range", "hdr", "--gamut", "srgb"],
+    for (i, change) in [
+        ["--range", "sdr"],
+        ["--gamut", "display-p3"],
+        ["--gamut", "srgb"],
     ]
     .iter()
     .enumerate()
     {
-        let (code, _, err) = convert_48bit(
-            &tmp.path(&format!("c{i}.jpg")),
-            &[&["--container", "jpeg"][..], &add[..]].concat(),
-        );
-        assert_eq!(code, 0, "{add:?}: {err}");
+        let mut args = vec![
+            "--range",
+            "hdr",
+            "--gamut",
+            "adobe-rgb",
+            "--container",
+            "jpeg",
+        ];
+        let at = args.iter().position(|a| *a == change[0]).unwrap();
+        args[at + 1] = change[1];
+        let (code, _, err) = convert_48bit(&tmp.path(&format!("c{i}.jpg")), &args);
+        assert_eq!(code, 0, "{change:?}: {err}");
     }
     // A stated suffix the destination does not write is refused, naming it.
     let (code, _, err) = convert_48bit(&tmp.path("e.tiff"), &["--range", "hdr"]);
@@ -14577,8 +14758,8 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
     // An axis the recipe states cannot be unstated by a flag, only overridden, so the
     // offer restates it — and the printed remedy, followed as written, converts.
     let recipe = write_file(
-        &tmp.path("adobe.json"),
-        r#"{"recipe_version": 3, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
+        &tmp.path("pq.json"),
+        r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq"}}}"#,
     );
     let with_recipe = ["--params", recipe.to_str().unwrap()];
     let (code, _, err) = convert_48bit(&tmp.path("r.jpg"), &with_recipe);
@@ -14587,18 +14768,14 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
         .split_once("state a destination that writes it: ")
         .unwrap_or_else(|| panic!("no offer: {err}"));
     for offer in offers.trim().split("; ") {
-        assert!(
-            offer.contains("--gamut ") && !offer.contains("adobe-rgb"),
-            "{offer}: {err}"
-        );
+        assert!(offer.contains("--transfer native"), "{offer}: {err}");
         let flags: Vec<&str> = offer.split_whitespace().collect();
         let (code, _, err) =
             convert_48bit(&tmp.path("r.jpg"), &[&with_recipe[..], &flags[..]].concat());
         assert_eq!(code, 0, "following `{offer}` must convert: {err}");
     }
-    // The ready JPEGs are the gain maps, offered beside dropping the suffix, and each
-    // offer converts as written. `--gamut srgb` alone would be the SDR JPEG, not written
-    // yet, so the sRGB offer states its range.
+    // Every JPEG is offered beside dropping the suffix, the SDR JPEG first, and each
+    // offer converts as written.
     let (code, _, err) = convert_48bit(&tmp.path("b.jpg"), &[]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("drop .jpg"), "{err}");
@@ -14607,7 +14784,9 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
         .unwrap_or_else(|| panic!("no offer: {err}"));
     assert_eq!(
         offers.trim(),
-        "--range hdr --container jpeg; --range hdr --gamut srgb --container jpeg",
+        "--container jpeg; --gamut adobe-rgb --container jpeg; \
+         --gamut srgb --container jpeg; --range hdr --container jpeg; \
+         --range hdr --gamut srgb --container jpeg",
         "{err}"
     );
     for offer in offers.trim().split("; ") {

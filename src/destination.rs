@@ -12,11 +12,8 @@
 //! axis in a fixed order — range, transfer, gamut, container (the container first under
 //! `direct`, [`Defaults::container_first`]): its default when a row consistent with
 //! everything decided so far has it, else the one value left, else a refusal naming the
-//! choices. So
-//! `--transfer pq` alone is an HDR BT.2020 TIFF, and `--gamut bt2020` alone asks which
-//! transfer. Derivation ignores whether a row is ready yet, so a command names the same
-//! row on every build; a row that is not ready is refused *after* resolution, naming
-//! the task it arrives with. The resolved axes are what the report records, so a replay
+//! choices. So `--transfer pq` alone is an HDR BT.2020 TIFF, and `--gamut bt2020` alone
+//! asks which transfer. The resolved axes are what the report records, so a replay
 //! states every one and derives nothing.
 //!
 //! **Stating a value is not the same as leaving it unset**: `--gamut display-p3` with
@@ -451,12 +448,15 @@ impl Container {
     }
 }
 
-/// What a ready row's encoder writes. The render dispatch matches on this, exhaustively,
+/// What a row's encoder writes. The render dispatch matches on this, exhaustively,
 /// so a new row cannot reach an encoder it was not written for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     /// One SDR rendition, the gamut's own curve, 16-bit integer TIFF.
     SdrTiff,
+    /// One SDR rendition, the gamut's own curve, 8-bit JPEG, encoded as the gain-map
+    /// JPEG's base is.
+    SdrJpeg,
     /// One HDR rendition, display-linear, 32-bit float TIFF.
     HdrLinearTiff,
     /// One HDR rendition, a Rec.2100 signal as full-range 16-bit TIFF codes.
@@ -466,24 +466,14 @@ pub enum Encoding {
     GainMapJpeg,
 }
 
-/// Whether the code can write a row yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Ready(Encoding),
-    /// Planned; `arriving_with` completes "…arrives with {}".
-    NotYet {
-        arriving_with: &'static str,
-    },
-}
-
-/// One destination: a combination of the four axes, and whether it can be written.
+/// One destination: a combination of the four axes, and its encoder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Row {
     pub range: Range,
     pub transfer: Transfer,
     pub gamut: Gamut,
     pub container: Container,
-    pub status: Status,
+    pub encoding: Encoding,
 }
 
 const fn row(
@@ -491,117 +481,121 @@ const fn row(
     transfer: Transfer,
     gamut: Gamut,
     container: Container,
-    status: Status,
+    encoding: Encoding,
 ) -> Row {
     Row {
         range,
         transfer,
         gamut,
         container,
-        status,
+        encoding,
     }
 }
 
 /// **The destination set.** Every combination not listed is refused.
 ///
-/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; a linear float TIFF is the lossless HDR master, in the gamut
-/// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, on a base
-/// verified with a decoder (Display P3, sRGB).
+/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; a linear float TIFF is
+/// the lossless HDR master, in the gamut an editor works in; a JPEG is 8-bit, so it
+/// carries HDR only as a gain map, on a base verified with a decoder (Display P3, sRGB).
+/// The SDR JPEG has no map, so it takes every SDR gamut.
 pub const ROWS: &[Row] = &[
     row(
         Range::Sdr,
         Transfer::Native,
         Gamut::DisplayP3,
         Container::Tiff,
-        Status::Ready(Encoding::SdrTiff),
+        Encoding::SdrTiff,
     ),
     row(
         Range::Sdr,
         Transfer::Native,
         Gamut::AdobeRgb,
         Container::Tiff,
-        Status::Ready(Encoding::SdrTiff),
+        Encoding::SdrTiff,
     ),
     row(
         Range::Sdr,
         Transfer::Native,
         Gamut::Srgb,
         Container::Tiff,
-        Status::Ready(Encoding::SdrTiff),
+        Encoding::SdrTiff,
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::DisplayP3,
+        Container::Jpeg,
+        Encoding::SdrJpeg,
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::AdobeRgb,
+        Container::Jpeg,
+        Encoding::SdrJpeg,
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::Srgb,
+        Container::Jpeg,
+        Encoding::SdrJpeg,
     ),
     row(
         Range::Hdr,
         Transfer::Linear,
         Gamut::DisplayP3,
         Container::Tiff,
-        Status::Ready(Encoding::HdrLinearTiff),
+        Encoding::HdrLinearTiff,
     ),
     row(
         Range::Hdr,
         Transfer::Linear,
         Gamut::AdobeRgb,
         Container::Tiff,
-        Status::Ready(Encoding::HdrLinearTiff),
+        Encoding::HdrLinearTiff,
     ),
     row(
         Range::Hdr,
         Transfer::Linear,
         Gamut::Srgb,
         Container::Tiff,
-        Status::Ready(Encoding::HdrLinearTiff),
+        Encoding::HdrLinearTiff,
     ),
     row(
         Range::Hdr,
         Transfer::Linear,
         Gamut::Bt2020,
         Container::Tiff,
-        Status::Ready(Encoding::HdrLinearTiff),
+        Encoding::HdrLinearTiff,
     ),
     row(
         Range::Hdr,
         Transfer::Pq,
         Gamut::Bt2020,
         Container::Tiff,
-        Status::Ready(Encoding::HdrCodedTiff(HdrTransfer::Pq)),
+        Encoding::HdrCodedTiff(HdrTransfer::Pq),
     ),
     row(
         Range::Hdr,
         Transfer::Hlg,
         Gamut::Bt2020,
         Container::Tiff,
-        Status::Ready(Encoding::HdrCodedTiff(HdrTransfer::Hlg)),
+        Encoding::HdrCodedTiff(HdrTransfer::Hlg),
     ),
     row(
         Range::Hdr,
         Transfer::Native,
         Gamut::DisplayP3,
         Container::Jpeg,
-        Status::Ready(Encoding::GainMapJpeg),
+        Encoding::GainMapJpeg,
     ),
     row(
         Range::Hdr,
         Transfer::Native,
         Gamut::Srgb,
         Container::Jpeg,
-        Status::Ready(Encoding::GainMapJpeg),
-    ),
-    row(
-        Range::Sdr,
-        Transfer::Native,
-        Gamut::DisplayP3,
-        Container::Jpeg,
-        Status::NotYet {
-            arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
-        },
-    ),
-    row(
-        Range::Sdr,
-        Transfer::Native,
-        Gamut::Srgb,
-        Container::Jpeg,
-        Status::NotYet {
-            arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
-        },
+        Encoding::GainMapJpeg,
     ),
 ];
 
@@ -681,7 +675,7 @@ pub struct StatedAxis {
     pub value: &'static str,
 }
 
-/// A destination ready to render: its axes and its encoder.
+/// A resolved destination: its axes and its encoder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolved {
     pub range: Range,
@@ -708,9 +702,9 @@ impl Resolved {
 pub enum Fault {
     /// No row has every stated value. `conflicting` is the smallest set of stated axes
     /// that already has no row (a pair when one exists), and `changes` the single-axis
-    /// edits of those that resolve to a ready row, each with any axis it then leaves to
+    /// edits of those that resolve to a row, each with any axis it then leaves to
     /// choose. When no single edit works (a third stated axis rules out every fix),
-    /// `changes` is empty and `instead` lists the ready destinations sharing the most
+    /// `changes` is empty and `instead` lists the destinations sharing the most
     /// stated values, each as the fewest axes that name it on their own.
     Conflict {
         conflicting: Vec<StatedAxis>,
@@ -718,24 +712,11 @@ pub enum Fault {
         instead: Vec<DisplayAxes>,
     },
     /// An unset axis the table cannot decide: its default is not on any consistent row
-    /// (or it has none there, [`Defaults::linear_gamut`]), and more than one value is. `choices` are the values that lead to a ready row.
+    /// (or it has none there, [`Defaults::linear_gamut`]), and more than one value is. `choices` are the values that lead to a row.
     Ambiguous {
         flag: &'static str,
         key: &'static str,
         choices: Vec<&'static str>,
-    },
-    /// The axes name a row that is planned but not written yet. `adding` lists the ready
-    /// destinations that keep every stated axis, each as the fewest axes to add; when
-    /// none does, `instead` lists those sharing the most stated values, each as the
-    /// fewest axes that name it on their own. Exactly one of the two is non-empty.
-    NotYet {
-        row: Row,
-        arriving_with: &'static str,
-        adding: Vec<DisplayAxes>,
-        instead: Vec<DisplayAxes>,
-        /// The axis (flag, key) the stated axes leave open when every value of it names a
-        /// row not written yet: `row` is then the first of those, not a resolution.
-        open: Option<(&'static str, &'static str)>,
     },
 }
 
@@ -763,85 +744,32 @@ fn complete(row: &Row) -> DisplayAxes {
 ///
 /// Unset axes are derived in the order range, transfer, gamut, container — the container
 /// first under a rendering that says so ([`Defaults::container_first`]) — each from the
-/// rows consistent with everything decided before it (see the module docs). A row that
-/// is not ready is refused only after resolution, so what a command names does not
-/// depend on which rows this build can write.
+/// rows consistent with everything decided before it (see the module docs).
 pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved, Fault> {
     match derive(axes, d) {
-        Derivation::Row(row) => match row.status {
-            Status::Ready(encoding) => Ok(Resolved {
-                range: row.range,
-                transfer: row.transfer,
-                gamut: row.gamut,
-                container: row.container,
-                encoding,
-            }),
-            Status::NotYet { arriving_with } => Err(not_yet(row, arriving_with, None, axes, d)),
-        },
+        Derivation::Row(row) => Ok(Resolved {
+            range: row.range,
+            transfer: row.transfer,
+            gamut: row.gamut,
+            container: row.container,
+            encoding: row.encoding,
+        }),
         Derivation::NoRow => Err(conflict(axes, d)),
         Derivation::Open {
             flag,
             key,
             candidates,
-        } => {
-            let choices = resolving(&candidates, d);
-            // No choice reaches a written row: asking would offer nothing, so name the
-            // first row not written yet instead.
-            match first_row(&candidates, d) {
-                Some(
-                    row @ Row {
-                        status: Status::NotYet { arriving_with },
-                        ..
-                    },
-                ) if choices.is_empty() => {
-                    Err(not_yet(row, arriving_with, Some((flag, key)), axes, d))
-                }
-                _ => Err(Fault::Ambiguous { flag, key, choices }),
-            }
-        }
-    }
-}
-
-/// A [`Fault::NotYet`] for `row`, its remedies computed against what was stated.
-fn not_yet(
-    row: Row,
-    arriving_with: &'static str,
-    open: Option<(&'static str, &'static str)>,
-    axes: &DisplayAxes,
-    d: &Defaults,
-) -> Fault {
-    let adding: Vec<DisplayAxes> = ROWS
-        .iter()
-        .filter(|r| is_ready(r) && axes.admits(r))
-        .map(|r| fewest(axes, r, d))
-        .collect();
-    let instead = if adding.is_empty() {
-        closest(axes, d)
-    } else {
-        Vec::new()
-    };
-    Fault::NotYet {
-        row,
-        arriving_with,
-        adding,
-        instead,
-        open,
-    }
-}
-
-/// The row the first candidate of an open axis leads to, settling any axis it leaves
-/// open the same way.
-fn first_row(candidates: &[(&'static str, DisplayAxes)], d: &Defaults) -> Option<Row> {
-    match derive(&candidates.first()?.1, d) {
-        Derivation::Row(row) => Some(row),
-        Derivation::Open { candidates, .. } => first_row(&candidates, d),
-        Derivation::NoRow => None,
+        } => Err(Fault::Ambiguous {
+            flag,
+            key,
+            choices: resolving(&candidates, d),
+        }),
     }
 }
 
 /// What the table makes of stated axes, before anything is diagnosed.
 enum Derivation {
-    /// The row they name, ready or not.
+    /// The row they name.
     Row(Row),
     /// No row has every stated value.
     NoRow,
@@ -852,10 +780,6 @@ enum Derivation {
         key: &'static str,
         candidates: Vec<(&'static str, DisplayAxes)>,
     },
-}
-
-fn is_ready(row: &Row) -> bool {
-    matches!(row.status, Status::Ready(_))
 }
 
 fn derive(axes: &DisplayAxes, d: &Defaults) -> Derivation {
@@ -922,17 +846,17 @@ fn narrow<A: Axis>(
     Ok(())
 }
 
-/// Whether stated axes reach a ready destination — directly, or after the user settles
-/// each axis the table leaves open. Terminates: every level states one more axis.
+/// Whether stated axes reach a destination — directly, or after the user settles each
+/// axis the table leaves open. Terminates: every level states one more axis.
 fn resolves(axes: &DisplayAxes, d: &Defaults) -> bool {
     match derive(axes, d) {
-        Derivation::Row(row) => is_ready(&row),
+        Derivation::Row(_) => true,
         Derivation::NoRow => false,
         Derivation::Open { candidates, .. } => candidates.iter().any(|(_, a)| resolves(a, d)),
     }
 }
 
-/// The candidates of an open axis that reach a ready destination — the only choices a
+/// The candidates of an open axis that reach a destination — the only choices a
 /// refusal offers, so every remedy works.
 fn resolving(candidates: &[(&'static str, DisplayAxes)], d: &Defaults) -> Vec<&'static str> {
     candidates
@@ -980,7 +904,7 @@ fn conflict(axes: &DisplayAxes, d: &Defaults) -> Fault {
     }
 }
 
-/// The ready destinations that write `container`, as the axes to state **over** `stated`
+/// The destinations that write `container`, as the axes to state **over** `stated`
 /// to reach each — how a message offers a way to write a stated suffix.
 ///
 /// Computed against what the run stated, because a stated axis cannot be unstated by
@@ -988,7 +912,7 @@ fn conflict(axes: &DisplayAxes, d: &Defaults) -> Fault {
 /// offer names `container`, every stated axis whose value the row needs changed, and the
 /// fewest further axes that settle the rest; stated over `stated`, it resolves to that
 /// row (`every_container_offer_resolves_over_what_was_stated`). Only the rows needing the
-/// fewest stated axes changed are offered. Empty when no ready row writes `container`,
+/// fewest stated axes changed are offered. Empty when no row writes `container`,
 /// so a message offers nothing it cannot deliver.
 pub fn writing(container: Container, stated: &DisplayAxes, d: &Defaults) -> Vec<DisplayAxes> {
     // The stated axes (other than the container) each row would change.
@@ -1002,10 +926,7 @@ pub fn writing(container: Container, stated: &DisplayAxes, d: &Defaults) -> Vec<
         .filter(|&b| b)
         .count()
     };
-    let rows: Vec<&Row> = ROWS
-        .iter()
-        .filter(|r| is_ready(r) && r.container == container)
-        .collect();
+    let rows: Vec<&Row> = ROWS.iter().filter(|r| r.container == container).collect();
     let fewest_changed = rows.iter().map(|r| changed(r)).min().unwrap_or(0);
     rows.into_iter()
         .filter(|r| changed(r) == fewest_changed)
@@ -1042,9 +963,8 @@ pub fn over(stated: &DisplayAxes, flags: &DisplayAxes) -> DisplayAxes {
     }
 }
 
-/// The ready destinations sharing the most stated values with `axes`, each as the fewest
-/// axes that name it alone — the fallback remedy when nothing closer works. Never empty
-/// while a row is ready.
+/// The destinations sharing the most stated values with `axes`, each as the fewest
+/// axes that name it alone — the fallback remedy when nothing closer works. Never empty.
 fn closest(axes: &DisplayAxes, d: &Defaults) -> Vec<DisplayAxes> {
     let shared = |r: &Row| {
         [
@@ -1057,9 +977,8 @@ fn closest(axes: &DisplayAxes, d: &Defaults) -> Vec<DisplayAxes> {
         .filter(|&b| b)
         .count()
     };
-    let ready = ROWS.iter().filter(|r| is_ready(r));
-    let most = ready.clone().map(shared).max().unwrap_or(0);
-    ready
+    let most = ROWS.iter().map(shared).max().unwrap_or(0);
+    ROWS.iter()
         .filter(|r| shared(r) == most)
         .map(|r| fewest(&DisplayAxes::default(), r, d))
         .collect()
@@ -1120,7 +1039,7 @@ fn push_changes<A: Axis>(axes: &DisplayAxes, flag: &str, d: &Defaults, out: &mut
         let mut changed = *axes;
         A::set(&mut changed, v);
         let then = match derive(&changed, d) {
-            Derivation::Row(row) if is_ready(&row) => None,
+            Derivation::Row(_) => None,
             Derivation::Open {
                 flag,
                 key,
@@ -1310,38 +1229,31 @@ mod tests {
     }
 
     #[test]
-    fn a_row_not_ready_is_refused_after_resolution_with_what_is_ready() {
-        // `--container jpeg` alone names the SDR JPEG (range's default is on its row):
-        // derivation does not depend on which rows this build can write, so it is not
-        // quietly promoted to the gain map.
-        let Err(Fault::NotYet { row, adding, .. }) =
-            resolve(&axes(None, None, None, Some(Container::Jpeg)), &STD)
-        else {
-            panic!("expected NotYet");
-        };
-        assert_eq!((row.range, row.container), (Range::Sdr, Container::Jpeg));
-        // The ready JPEGs, each as the fewest flags to add: `--range hdr` for the
-        // Display P3 gain map, and the sRGB one's gamut beside it (`--gamut srgb` alone
-        // is the sRGB SDR JPEG, also not written yet).
-        let offered: Vec<Vec<_>> = adding
-            .iter()
-            .map(|a| a.stated_axes().iter().map(|s| s.value).collect())
-            .collect();
-        assert_eq!(offered, [vec!["hdr"], vec!["hdr", "srgb"]]);
-        // Under `direct` the gamut is open between two rows not written yet: that is
-        // what the refusal says, not an empty "choose one".
-        let sdr_jpeg = axes(Some(Range::Sdr), None, None, Some(Container::Jpeg));
-        let err = resolve(&sdr_jpeg, &crate::rendering::DIRECT.axes).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Fault::NotYet {
-                    open: Some(("--gamut", "gamut")),
-                    ..
-                }
-            ),
-            "{err:?}"
+    fn jpeg_alone_is_the_sdr_jpeg_in_every_sdr_gamut() {
+        // Range's default is on the SDR JPEG's row, so `--container jpeg` alone is not
+        // the gain map.
+        for (gamut, want) in [
+            (None, Gamut::DisplayP3),
+            (Some(Gamut::AdobeRgb), Gamut::AdobeRgb),
+            (Some(Gamut::Srgb), Gamut::Srgb),
+        ] {
+            let r = resolve(&axes(None, None, gamut, Some(Container::Jpeg)), &STD).unwrap();
+            assert_eq!(
+                (r.range, r.transfer, r.gamut, r.encoding),
+                (Range::Sdr, Transfer::Native, want, Encoding::SdrJpeg)
+            );
+        }
+        // The gain map has no Adobe RGB base.
+        let hdr_adobe = axes(
+            Some(Range::Hdr),
+            None,
+            Some(Gamut::AdobeRgb),
+            Some(Container::Jpeg),
         );
+        assert!(matches!(
+            resolve(&hdr_adobe, &STD),
+            Err(Fault::Conflict { .. })
+        ));
     }
 
     #[test]
@@ -1380,20 +1292,6 @@ mod tests {
                             assert!(resolves(&s, d), "{stated:?}: {flag} {c} does not resolve");
                         }
                     }
-                    Err(Fault::NotYet {
-                        adding, instead, ..
-                    }) => {
-                        assert!(adding.is_empty() != instead.is_empty(), "{stated:?}");
-                        for add in adding {
-                            assert!(
-                                resolve(&union(&stated, &add), d).is_ok(),
-                                "{stated:?}: {add:?}"
-                            );
-                        }
-                        for alone in instead {
-                            assert!(resolve(&alone, d).is_ok(), "{stated:?}: {alone:?}");
-                        }
-                    }
                     Err(Fault::Conflict {
                         changes,
                         conflicting,
@@ -1426,15 +1324,6 @@ mod tests {
         }
     }
 
-    fn union(a: &DisplayAxes, b: &DisplayAxes) -> DisplayAxes {
-        DisplayAxes {
-            range: a.range.or(b.range),
-            transfer: a.transfer.or(b.transfer),
-            gamut: a.gamut.or(b.gamut),
-            container: a.container.or(b.container),
-        }
-    }
-
     fn set_by_flag(s: &mut DisplayAxes, flag: &str, value: &str) {
         match flag {
             "--range" => Range::set(s, parse(value).unwrap()),
@@ -1453,8 +1342,7 @@ mod tests {
             for stated in every_stated_combination() {
                 for c in Container::ALL.iter().copied() {
                     let offers = writing(c, &stated, d);
-                    let any_ready = ROWS.iter().any(|r| is_ready(r) && r.container == c);
-                    assert_eq!(!offers.is_empty(), any_ready, "{c:?} over {stated:?}");
+                    assert!(!offers.is_empty(), "{c:?} over {stated:?}");
                     for offer in offers {
                         let applied = over(&stated, &offer);
                         let got = resolve(&applied, d)
@@ -1464,19 +1352,13 @@ mod tests {
                 }
             }
         }
-        // A stated Adobe RGB gamut cannot reach a gain-map JPEG unless the offer
-        // restates it.
+        // A stated Adobe RGB gamut reaches the SDR JPEG by the container alone, so no
+        // offer changes it.
         let adobe = axes(None, None, Some(Gamut::AdobeRgb), None);
         let offers = writing(Container::Jpeg, &adobe, &STD);
-        assert!(!offers.is_empty());
-        for offer in offers {
-            assert!(
-                offer.gamut.is_some_and(|g| g != Gamut::AdobeRgb),
-                "{offer:?}"
-            );
-        }
-        // The one ready JPEG is the gain map: the offer restates the transfer it
-        // needs (`native`), since the stated `pq` cannot reach it.
+        assert_eq!(offers, [axes(None, None, None, Some(Container::Jpeg))]);
+        // Every JPEG is `native`: the offer restates it, since the stated `pq` cannot
+        // reach one.
         let pq = axes(None, Some(Transfer::Pq), None, Some(Container::Tiff));
         let offers = writing(Container::Jpeg, &pq, &STD);
         assert!(
@@ -1565,10 +1447,10 @@ mod tests {
         );
     }
 
-    /// `nctool compare`'s `fixtures` set states one case per ready row, all four axes
+    /// `nctool compare`'s `fixtures` set states one case per row, all four axes
     /// stated, so a new destination is benchmarked (`scripts/analysis/benchmark.json`).
     #[test]
-    fn every_ready_row_has_a_benchmark_case() {
+    fn every_row_has_a_benchmark_case() {
         let bench: serde_json::Value =
             serde_json::from_str(include_str!("../scripts/analysis/benchmark.json")).unwrap();
         let flags = [Range::FLAG, Transfer::FLAG, Gamut::FLAG, Container::FLAG];
@@ -1591,9 +1473,8 @@ mod tests {
                 panic!("{name} and {other} benchmark the same row");
             }
         }
-        let ready: BTreeSet<[String; 4]> = ROWS
+        let rows: BTreeSet<[String; 4]> = ROWS
             .iter()
-            .filter(|r| is_ready(r))
             .map(|r| {
                 [
                     r.range.name().to_owned(),
@@ -1603,7 +1484,7 @@ mod tests {
                 ]
             })
             .collect();
-        assert_eq!(cases.into_keys().collect::<BTreeSet<_>>(), ready);
+        assert_eq!(cases.into_keys().collect::<BTreeSet<_>>(), rows);
     }
 
     /// Every fixtures case's `preset` block names the reference preset that writes the

@@ -29,7 +29,7 @@ use crate::destination::{
 
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::encode::{PreEncodePage, PreEncodeSamples};
-use crate::io::{encode, iso_gain_map, staged};
+use crate::io::{encode, iso_gain_map, jpeg, staged};
 use crate::jsonc;
 use crate::pipeline::black_endpoint;
 use crate::pipeline::chain;
@@ -688,11 +688,11 @@ pub struct DestinationOverrides {
     /// or `bt2020` (HDR only). Recipe key `output.display.gamut`.
     #[arg(long, value_name = "GAMUT")]
     pub gamut: Option<Gamut>,
-    /// The file container: `tiff` (the default) or `jpeg` (HDR with a gain map).
-    /// Destinations: SDR `native` TIFF in Display P3, Adobe RGB or sRGB; HDR as a
-    /// `linear` float TIFF in any gamut (stated with `--gamut`), or BT.2020 `pq`/`hlg` in
-    /// a 16-bit TIFF; HDR as a JPEG with an ISO 21496-1 gain map on a Display P3
-    /// (`--range hdr` alone) or sRGB base. An SDR JPEG is not written yet. Recipe key
+    /// The file container: `tiff` (the default) or `jpeg` (8-bit).
+    /// Destinations: SDR `native` 16-bit TIFF or JPEG in Display P3, Adobe RGB or sRGB;
+    /// HDR as a `linear` float TIFF in any gamut (stated with `--gamut`), or BT.2020
+    /// `pq`/`hlg` in a 16-bit TIFF; HDR as a JPEG with an ISO 21496-1 gain map on a
+    /// Display P3 (`--range hdr` alone) or sRGB base. Recipe key
     /// `output.display.container`.
     #[arg(long, value_name = "CONTAINER")]
     pub container: Option<Container>,
@@ -3682,6 +3682,13 @@ fn convert_frame(
         ..Report::default()
     };
 
+    if let recipe::Destination::Display(d) = destination
+        && d.container == Container::Jpeg
+    {
+        let shape = probe(input)?;
+        jpeg::check_fits(shape.width, shape.height, d.range, d.gamut)?;
+    }
+
     // Stage 0 — memory preflight, on a metadata-only header probe. This must run
     // *before* decode allocates: the whole point is to reject an oversized frame
     // while the heap is still empty (a check after decode would OOM on exactly the
@@ -4017,7 +4024,9 @@ fn run_profile(destination: recipe::Destination) -> RunProfile {
     match destination {
         recipe::Destination::FilmMaster => RunProfile::F32Tiff,
         recipe::Destination::Display(d) => match d.encoding {
-            Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => RunProfile::U16Tiff,
+            Encoding::SdrTiff | Encoding::SdrJpeg | Encoding::HdrCodedTiff(_) => {
+                RunProfile::U16Tiff
+            }
             Encoding::HdrLinearTiff => RunProfile::F32Tiff,
             Encoding::GainMapJpeg => RunProfile::GainMapJpeg,
         },
@@ -4048,8 +4057,13 @@ struct ChainAccount {
 /// A rendered destination's pixels, in its encoder's input type. One arm per
 /// `destination::Encoding`, matched exhaustively on both sides.
 enum DestinationPixels {
-    /// The destination's display curve applied, with its ICC profile.
-    Sdr { image: LinearImage, icc: Vec<u8> },
+    /// The destination's display curve applied, with its ICC profile, for the 16-bit
+    /// TIFF or the 8-bit JPEG.
+    Sdr {
+        image: LinearImage,
+        icc: Vec<u8>,
+        container: Container,
+    },
     /// Display-linear in the destination's gamut, clamped to the peak.
     HdrLinear(hdr::LinearHdr, hdr::PeakClamp),
     /// A Rec.2100 signal for the 16-bit TIFF.
@@ -4178,12 +4192,18 @@ fn render_destination(
             staged = gain_map_staged;
             render
         }
-        Encoding::SdrTiff => render_one(aces, film_base, recipe, d, clock, |r| {
-            let page = PreEncodePage::f32("sdr-linear", r.gamut.name(), &r.linear);
-            staged = export_pages(export, &[page])?;
-            let (image, icc) = color::encode_display_linear(r.linear, r.gamut)?;
-            Ok(DestinationPixels::Sdr { image, icc })
-        })?,
+        Encoding::SdrTiff | Encoding::SdrJpeg => {
+            render_one(aces, film_base, recipe, d, clock, |r| {
+                let page = PreEncodePage::f32("sdr-linear", r.gamut.name(), &r.linear);
+                staged = export_pages(export, &[page])?;
+                let (image, icc) = color::encode_display_linear(r.linear, r.gamut)?;
+                Ok(DestinationPixels::Sdr {
+                    image,
+                    icc,
+                    container: d.container,
+                })
+            })?
+        }
         Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.hdr()?;
             staged = export_pages(export, &[hdr_page(&hdr)])?;
@@ -4377,11 +4397,20 @@ fn encode_render(
         DestinationRender::Rendered { pixels, .. } => pixels,
     };
     Ok(match pixels {
-        DestinationPixels::Sdr { image, icc } => {
+        DestinationPixels::Sdr {
+            image,
+            icc,
+            container: Container::Tiff,
+        } => {
             let (staged, outcome, big) = encode::encode_u16(&image, &icc, output)?;
             bigtiff_note(big, warnings);
             (staged, outcome)
         }
+        DestinationPixels::Sdr {
+            image,
+            icc,
+            container: Container::Jpeg,
+        } => jpeg::encode_sdr(&image, &icc, output)?,
         DestinationPixels::HdrLinear(hdr, _) => {
             let icc = color::hdr_linear_icc(hdr.gamut())?;
             let (staged, outcome, summary) = encode::encode_hdr_linear(hdr, &icc, output)?;
@@ -9571,7 +9600,7 @@ fn primary_depth(destination: recipe::Destination) -> &'static str {
         recipe::Destination::Display(d) => match d.encoding {
             Encoding::SdrTiff | Encoding::HdrCodedTiff(_) => "u16",
             Encoding::HdrLinearTiff => "f32",
-            Encoding::GainMapJpeg => "u8",
+            Encoding::SdrJpeg | Encoding::GainMapJpeg => "u8",
         },
     }
 }

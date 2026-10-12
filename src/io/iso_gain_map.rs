@@ -40,7 +40,7 @@ use std::path::Path;
 
 use jpeg_encoder::ColorType;
 
-use crate::io::jpeg::{encode_jpeg, quantize_u8};
+use crate::io::jpeg::{encode_display, encode_jpeg};
 use crate::io::staged::{self, Staged};
 use crate::pipeline::gain_encode::{self, GainMapImage};
 use crate::types::{EncodeOutcome, LinearImage, NcError, Result};
@@ -70,12 +70,18 @@ pub fn encode(
     path: &Path,
 ) -> Result<(Staged, EncodeOutcome)> {
     let fields = fields(map, alternate_headroom)?;
-    let (base_rgb, loss, stats) = quantize_u8(&base.rgb);
-    let bytes = assemble(&base_rgb, base.width, base.height, icc, map, &fields)?;
-    Ok((
-        staged::stage_bytes(path, &bytes)?,
-        EncodeOutcome { loss, stats },
-    ))
+    let (base_jpeg, outcome) = encode_display(base, icc, "SDR base", base_app2(&fields))?;
+    let bytes = assemble(base_jpeg, map, &fields)?;
+    Ok((staged::stage_bytes(path, &bytes)?, outcome))
+}
+
+/// The base's APP2 segments: the ISO version, then an MPF placeholder [`assemble`]
+/// fills in.
+fn base_app2(fields: &metadata::IsoGainMapFields) -> Vec<Vec<u8>> {
+    vec![
+        metadata::segment_content(&metadata::serialize_version(fields)),
+        mpf_content(0, 0, 0),
+    ]
 }
 
 /// The ISO field set `map` states: its per-channel window, gamma and offset, over a
@@ -91,12 +97,10 @@ fn fields(map: &GainMapImage, alternate_headroom: f32) -> Result<metadata::IsoGa
     })
 }
 
-/// The finished file's bytes: the base, its MPF filled in, then the gain map.
+/// The finished file's bytes: the encoded base (with [`base_app2`]), its MPF filled
+/// in, then the gain map.
 fn assemble(
-    base_rgb: &[u8],
-    width: u32,
-    height: u32,
-    icc: &[u8],
+    mut base_jpeg: Vec<u8>,
     map: &GainMapImage,
     fields: &metadata::IsoGainMapFields,
 ) -> Result<Vec<u8>> {
@@ -110,18 +114,6 @@ fn assemble(
         vec![metadata::segment_content(&metadata::serialize_metadata(
             fields,
         )?)],
-    )?;
-    let mut base_jpeg = encode_jpeg(
-        base_rgb,
-        width,
-        height,
-        Some(icc),
-        "SDR base",
-        ColorType::Rgb,
-        vec![
-            metadata::segment_content(&metadata::serialize_version(fields)),
-            mpf_content(0, 0, 0),
-        ],
     )?;
 
     let label = header_app2(&base_jpeg, MPF_LABEL)?;
@@ -261,8 +253,9 @@ mod tests {
         let ratios = between(&image(sdr.clone()), &image(hdr), OFFSET).unwrap();
         let map = gain_encode::encode(&ratios).unwrap();
         let fields = fields(&map, LINEAR_HEADROOM).unwrap();
-        let base_rgb: Vec<u8> = sdr.iter().map(|v| (v * 255.0).round() as u8).collect();
-        let bytes = assemble(&base_rgb, width, height, &[0; 16], &map, &fields).unwrap();
+        let (base, _) =
+            encode_display(&image(sdr), &[0; 16], "SDR base", base_app2(&fields)).unwrap();
+        let bytes = assemble(base, &map, &fields).unwrap();
         (bytes, map, fields, ratios.rgb().to_vec())
     }
 
@@ -406,6 +399,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_sdr_jpeg_is_the_base_without_the_map() {
+        // The same rendition through both encoders: the SDR JPEG carries only the ICC
+        // profile, and from the frame header on it is the gain-map file's base, byte
+        // for byte.
+        let (width, height) = (16_u32, 16_u32);
+        let rgb: Vec<f32> = (0..width * height * 3)
+            .map(|i| (i % 97) as f32 / 96.0)
+            .collect();
+        let image = LinearImage::new(width, height, rgb).unwrap();
+        let icc = [7_u8; 16];
+        let dir = std::env::temp_dir().join(format!("nc-sdr-jpeg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |path: &Path, staged: Staged| {
+            staged.commit().unwrap();
+            std::fs::read(path).unwrap()
+        };
+        let path = dir.join("sdr.jpg");
+        let (staged, sdr_outcome) = crate::io::jpeg::encode_sdr(&image, &icc, &path).unwrap();
+        let sdr = read(&path, staged);
+        let (_, map, ..) = sample();
+        let path = dir.join("gain.jpg");
+        let (staged, base_outcome) = encode(&image, &icc, &map, LINEAR_HEADROOM, &path).unwrap();
+        let gain = read(&path, staged);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let (_, entries) = mp_entries(&gain);
+        let base = &gain[..entries[0].1 as usize];
+
+        let markers = header_markers(&sdr);
+        assert_eq!(
+            markers[..3],
+            ["SOI", "APP0 JFIF", "APP2 ICC"],
+            "{markers:?}"
+        );
+        assert!(
+            markers[3..]
+                .iter()
+                .all(|m| !m.starts_with("APP") && m != "FE"),
+            "{markers:?}"
+        );
+        let frame = |jpeg: &[u8]| {
+            let at = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+            jpeg[at..].to_vec()
+        };
+        assert_eq!(frame(&sdr), frame(base));
+        assert_eq!(sdr_outcome, base_outcome);
     }
 
     #[test]

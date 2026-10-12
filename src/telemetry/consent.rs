@@ -24,7 +24,8 @@ pub const CONSENT_FORMAT: u32 = 1;
 /// The upload field manifest (`contracts/telemetry/upload-v1/README.md`) this build
 /// asks consent for. Bump it when the manifest grows; consent given to an older
 /// version then reads as inactive until the user enables again. A manifest that
-/// sends strictly less may keep it.
+/// sends strictly less may keep it. A new `conversion.encoding` member is not a
+/// manifest change (the contract README).
 pub const MANIFEST_VERSION: u32 = 1;
 
 const RECORD: &str = "telemetry-consent.json";
