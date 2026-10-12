@@ -53,7 +53,11 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > destination table, derivation and conflict refusals, suffix refusals and `roll`
 > naming were re-run. At `pipeline_version` 14 (`nf-calibration/hybrid-slope-bounds`, a
 > hybrid frame the exposure limit holds flattens to stay inside the envelope) only the
-> recipe `meta` moved, re-checked against the binary (`--save-recipe` writes 14). The staleness
+> recipe `meta` moved, re-checked against the binary (`--save-recipe` writes 14). At
+> `nf-display-stages/midtone-contrast-probe` (`pipeline_version` 14 unchanged, `80ef96c`)
+> §5's base-slope order and §7's `--contrast 1.3` were re-checked against the binary (the
+> report's slope is the placement's × 1.3); §7's lightness figures are from the probe's real
+> rolls (`docs/spike/midtone-contrast-probe.md`). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
