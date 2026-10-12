@@ -61,7 +61,7 @@ marked white under the `none` and `reinhard` tones, and every limit it hit was t
 top, never P3's primaries. It acted heavily only under the `shoulder` tone, whose plateau
 leaves no chroma room at the cube's top. **On the current chain** (2026-10-12,
 `nf-calibration/white-rule-hdr`) it is nearly inert on HDR (one marked white changes). On SDR it moves 28–69 % of the
-brightest 3 % on four rolls, still at the cube's top, and a review found nothing wrong.
+brightest 3 % on four rolls, almost all at the cube's top (the floor binds on under 0.4 % of a frame), and a review found nothing wrong.
 
 The map gets no diagnostic off switch. Should one ever be wanted, "off" means an unmapped
 float destination, never a per-channel clip.

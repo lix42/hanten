@@ -2244,7 +2244,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — **done 2026-10-12: the cap and floor
   stand.** Nothing looked wrong on the gain-map JPEG under `hybrid` or `frame` (28 frames,
-  eleven rolls). How much HDR range is used is set by the headroom, not the rule. The
+  eleven rolls). How much HDR range is used is set by the headroom and the placement more than the cap or floor. The
   gamut map is nearly inert on HDR
 - [x] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its

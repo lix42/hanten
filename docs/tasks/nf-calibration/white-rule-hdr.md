@@ -45,5 +45,5 @@ reviewed, at `pipeline_version` 14:
   — settles the operator the HDR rendition is judged under
 - [A measured roll exposure](roll-exposure.md) — sets the level the rule is reviewed at
   (the white stays measured at exposure 0, and the exposure moves where it renders)
-- [The roll's slope from its span](span-roll-slope.md) — the SDR white target this
-  reviews on HDR
+- [The roll's slope from its span](span-roll-slope.md) — the span slope, built on
+  the cap and floor, that this reviews on HDR

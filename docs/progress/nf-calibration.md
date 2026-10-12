@@ -136,8 +136,9 @@ value is `short-span-protection`'s, a noise question; the tails past a frame's e
 over the eleven rolls were reviewed as the gain-map JPEG beside the SDR JPEG, under
 `hybrid` and `frame`; none looked wrong. The HDR rendition uses little of its range:
 `hybrid`'s median frame reaches 1.8× reference white at p99.9, against a peak of 4.93.
-That is set by `--display-tone-headroom` (6), not by the white rule: frame whites sit 0.4–2.3
-stops above diffuse white, low on the lift's 6-stop ramp. The gamut map is nearly inert on
+Frame whites sit 0.4–2.3 stops above diffuse white, low on the 6-stop ramp that
+`--display-tone-headroom` sets. The placement decides where on that ramp a white sits
+(`frame`'s median frame reaches 2.5×), but the cap and floor shift it little. The gamut map is nearly inert on
 HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 and 09-14
 (`docs/reports/gamut-map-share.md`'s dated note).
 
@@ -709,9 +710,10 @@ frames; the look's default contrast is `no-roll-defaults`'.
     to `W = 2^headroom`, 6 stops above. Frame whites sit 0.4–2.3 stops above diffuse white:
     per-roll hybrid medians of 2.8–4.8 look stops, `frame` pinned at 4.46. On the
     smoothstep that lifts a white 1.04–2.3× above its SDR level (`frame`: 2.0×).
-  - **So the headroom, not the cap or floor, decides how much HDR range is used.** The
-    cap and floor are half a stop apart. A reviewable step in either moves a white by a
-    fraction of a stop, but the headroom moves the whole ramp. The headroom is shared
+  - **So the headroom and the placement decide how much HDR range is used, more than
+    the cap or floor.** The headroom sets the ramp. The placement sets where a white sits
+    on it (`hybrid` 1.8× vs `frame` 2.5× at the median). The cap and floor are half a
+    stop apart, and a reviewable step in either moves a white by a fraction of a stop. The headroom is shared
     with SDR above the split, so moving it changes SDR too.
   - The extreme case is 07-23 1121, an overexposed frame. Its white lands at 7.8 look
     stops under `hybrid`, with 10 % of pixels at the peak.
