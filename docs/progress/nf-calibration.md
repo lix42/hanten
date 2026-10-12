@@ -1993,3 +1993,12 @@ frames; the look's default contrast is `no-roll-defaults`'.
   baseline is that task's noise sweep (`../temp/hybrid-slope-bounds/sweep.log`); it waits
   on `nf-display-stages/midtone-contrast-toe`, whose toe changes the shadows where thin
   frames' grain shows.
+
+## hybrid-span-target
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, which
+  `hybrid-slope-bounds` had handed the hybrid's R (7): whether a toe lets it rise. Waits on
+  the toe.

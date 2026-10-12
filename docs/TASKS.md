@@ -380,6 +380,7 @@ graph TD
     nf-look/contrast-definition
     nf-look/contrast-on-luminance
     nf-look/mono-mix
+    nf-look/midtone-contrast-colour
   end
   subgraph nf-display-stages
     nf-display-stages/fit-range
@@ -388,6 +389,7 @@ graph TD
     nf-display-stages/parametric-shoulder
     nf-display-stages/branch-contract
     nf-display-stages/gamut-map-share
+    nf-display-stages/midtone-contrast-probe
     nf-display-stages/midtone-contrast-toe
   end
   subgraph nf-destinations
@@ -417,6 +419,7 @@ graph TD
     nf-calibration/per-frame-placement
     nf-calibration/hybrid-slope-bounds
     nf-calibration/short-span-protection
+    nf-calibration/hybrid-span-target
     nf-calibration/display-white
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
@@ -703,9 +706,12 @@ graph TD
   nf-calibration/envelope-hybrid-placement --> nf-calibration/hybrid-slope-bounds
   nf-calibration/per-frame-placement --> nf-calibration/hybrid-slope-bounds
   nf-scene-correction/midtone-neutral --> nf-calibration/hybrid-slope-bounds
-  nf-calibration/hybrid-slope-bounds --> nf-display-stages/midtone-contrast-toe
+  nf-calibration/hybrid-slope-bounds --> nf-display-stages/midtone-contrast-probe
+  nf-display-stages/midtone-contrast-probe --> nf-display-stages/midtone-contrast-toe
   nf-calibration/hybrid-slope-bounds --> nf-calibration/short-span-protection
   nf-display-stages/midtone-contrast-toe --> nf-calibration/short-span-protection
+  nf-display-stages/midtone-contrast-toe --> nf-calibration/hybrid-span-target
+  nf-display-stages/midtone-contrast-toe --> nf-look/midtone-contrast-colour
   nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
   nf-calibration/level-target-zero --> nf-calibration/display-white
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
@@ -1203,9 +1209,13 @@ the design now in `docs/design-spec.md` (§6–§7):
   and against the white rule it would move (the rule was chosen under reinhard)
 - `nf-display-stages/branch-contract` (new flow): `nf-display-stages/fit-range`, `nf-display-stages/fit-gamut`
   — where the branch happens and what each side may differ in
-- `nf-display-stages/midtone-contrast-toe` (new flow): `nf-calibration/hybrid-slope-bounds`
-  — filed 2026-10-11: steepens the slope that task bounds, so its maximum is the baseline
-  and is re-checked after
+- `nf-display-stages/midtone-contrast-probe` (new flow): `nf-calibration/hybrid-slope-bounds`
+  — split from `midtone-contrast-toe` 2026-10-11: whether more midtone contrast wins,
+  probed with the ends left to clip before any toe exists
+- `nf-display-stages/midtone-contrast-toe` (new flow): `nf-display-stages/midtone-contrast-probe`
+  — filed 2026-10-11: steepens the slope `hybrid-slope-bounds` bounds, so its maximum is
+  the baseline and is re-checked after; narrowed to the toe 2026-10-11, closed with no
+  code if the probe loses
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
   — the destinations and their suffix rules
 - `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`, `nf-calibration/roll-section`
@@ -1373,6 +1383,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
 - `nf-look/mono-mix` (new flow): `nf-reconstruction/mono-decode`
+- `nf-look/midtone-contrast-colour` (new flow, **low priority**): `nf-display-stages/midtone-contrast-toe`
+  — split from `midtone-contrast-toe` 2026-10-11: whether saturation follows the steeper midtone
   — supersedes `algo/bw-support`'s rendering half: a dye negative rendered mono, pooled
   with weights first in the look
 - `nf-calibration/span-roll-slope` (new flow): `nf-calibration/level-target-zero`, `nf-scene-correction/midtone-neutral`, `nf-look/contrast-on-luminance`
@@ -1390,6 +1402,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/short-span-protection` (new flow): `nf-calibration/hybrid-slope-bounds`, `nf-display-stages/midtone-contrast-toe`
   — filed 2026-10-11: the maximum slope's value, split from `hybrid-slope-bounds` as a
   noise guard; a toe changes the shadows where thin frames' grain shows
+- `nf-calibration/hybrid-span-target` (new flow): `nf-display-stages/midtone-contrast-toe`
+  — split from `midtone-contrast-toe` 2026-10-11: the hybrid's R, reviewed with a toe
 - `nf-calibration/display-white` (new flow, **closed: folded into `nf-calibration/span-roll-slope`** 2026-10-09; the deps below are decision history): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
   — filed 2026-10-07: a white target in display terms, set together with the brightness
   target
@@ -2086,6 +2100,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   by review) or × 1 (`direct`); `pipeline_version` 10
 - [ ] [Mono as a rendering](tasks/nf-look/mono-mix.md) — a dye negative (colour or
   chromogenic B&W) rendered mono: a weighted pool first in the look, after white balance
+- [ ] [Colour under a steeper midtone](tasks/nf-look/midtone-contrast-colour.md) — **low
+  priority**: whether saturation follows the toe's steeper midtone
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the
@@ -2130,10 +2146,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   of top-end pixels under knees — so the knee'd whites are the per-channel shoulder's.
   It acts heavily only under the `shoulder` display tone. No off switch on either chain.
   Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
+- [ ] [Does more midtone contrast win?](tasks/nf-display-stages/midtone-contrast-probe.md)
+  — a steeper slope under the default placement, the ends left to clip; the overshoot's
+  size and split between the ends
 - [ ] [More midtone contrast, the ends held by a toe and the
-  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — spread a frame's span over
-  more look stops than the display's range, compressing the ends; probe whether more
-  midtone contrast wins first
+  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — if the probe wins: spread a
+  frame's span over more look stops than the display's range, a toe holding the dark end
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the two renderings (`direct` and
@@ -2263,6 +2281,8 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Protect short-span frames from too much
   contrast](tasks/nf-calibration/short-span-protection.md) — the maximum slope as a noise
   guard, fixed or keyed on the frame's span or noise
+- [ ] [The hybrid's span target with a toe](tasks/nf-calibration/hybrid-span-target.md) —
+  whether a toe lets the hybrid's R (7) rise
 - [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —
   **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps
   the roll's white to the target, so the two are chosen together
