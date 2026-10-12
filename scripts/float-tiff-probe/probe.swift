@@ -70,7 +70,8 @@ func write(_ path: String, _ headroom: Float, thumb: Bool) {
     else { print("FAILED: cannot create \(path) as \(type.identifier) (does its directory exist?)"); exit(1) }
     let opts = thumb ? [kCGImageDestinationEmbedThumbnail: true] as CFDictionary : nil
     CGImageDestinationAddImage(dst, tagged, opts)
-    print(CGImageDestinationFinalize(dst) ? "wrote \(path)" : "FAILED to finalize")
+    guard CGImageDestinationFinalize(dst) else { print("FAILED to finalize \(path)"); exit(1) }
+    print("wrote \(path)")
 }
 
 let args = CommandLine.arguments

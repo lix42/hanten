@@ -62,9 +62,19 @@ file is byte-identical, one IFD). Its thumbnail API
 (`CGImageSourceCreateThumbnailAtIndex`, `FromImageIfAbsent` false) ignores an 8-bit
 reduced-resolution IFD (`NewSubfileType` 1) appended with `tiffcp` and `tiffset`, and
 scales the float main image instead.
+Two thumbnail layouts were also tried, both 8-bit and written with `tifffile`.
+**SubIFD**: the thumbnail is placed in a SubIFD (tag 330) of the float main image,
+libtiff's thumbnail association. ImageIO still opens the float image.
+**Thumbnail-first** (TIFF/EP): the thumbnail is IFD0 and the float image sits in its
+SubIFD. This is disqualified because ImageIO opens the thumbnail *as the image*.
+
 Opened together in Preview (user, 2026-10-11), only the 8-bit TIFF and the PQ TIFF got
-a sidebar thumbnail. These did not: Apple's own float TIFF, nc's linear TIFF and film
-master, and both of nc's with the reduced-resolution IFD appended.
+a sidebar thumbnail. These did not:
+
+- Apple's own float TIFF;
+- nc's linear TIFF and film master;
+- both of nc's files with the reduced-resolution IFD appended;
+- both of nc's files with the SubIFD thumbnail.
 
 ## Not settled
 

@@ -132,9 +132,10 @@ What other epics need to know about `output`:
   as superseded by the removal.
 - **Apple's readers never show the linear float TIFF as HDR (2026-10-11,
   `float-tiff-in-readers`)**: no TIFF field carries a headroom they act on (ImageIO's own
-  encoder drops one), so it is an editor/interchange format and `viewer.json` expects SDR
-  there; Preview's sidebar shows no thumbnail for any float TIFF. HDR on Apple devices is
-  the gain-map JPEG or the PQ/HLG TIFF. Re-check with `scripts/float-tiff-probe/`.
+  encoder drops one), so it is an editor/interchange format, and `viewer.json` sets no
+  rendition requirement for it (record what the reader shows). Preview's sidebar shows
+  no thumbnail for any float TIFF. HDR on Apple devices is the gain-map JPEG or the
+  PQ/HLG TIFF. Re-check with `scripts/float-tiff-probe/`.
 - **`hdr-linear-tiff` is the display-linear HDR interchange master**: it is not
   `film-master` (linear ACEScg *before* display rendering), not `hdr-pq`/`hdr-hlg`
   (no transfer applied), and not `--out-depth f32` on `legacy` (print-rendered
@@ -1911,3 +1912,7 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 - **Verified:** every CI gate locally (fmt, machete, clippy, build, `cargo doc -D warnings`,
   `cargo test --all-features`, the nctool suite); the change is prose only, so no pixel,
   fingerprint or wire shape moved.
+- 2026-10-11: PR review (Codex) asked for a thumbnail in a SubIFD (tag 330), libtiff's
+  association, before ruling a fix out. Tried with `tifffile` on both float TIFFs: no
+  Preview sidebar thumbnail (user). Thumbnail-first (TIFF/EP) is out because ImageIO
+  opens IFD0, the thumbnail, as the image. The verdict stands.

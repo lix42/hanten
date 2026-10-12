@@ -29,10 +29,10 @@ $P read $OUT/h493.tif
 
 # nc's files, from the committed fixture
 base=(--film-base 0.9,0.55,0.42 --report none)
-target/release/hanten convert tests/fixtures/hdri-64bit.tif $base \
+target/release/hanten convert tests/fixtures/hdri-64bit.tif "${base[@]}" \
   --range hdr --transfer linear --gamut display-p3 --container tiff -o $OUT/linear.tiff
-target/release/hanten convert tests/fixtures/hdri-64bit.tif $base --film-master -o $OUT/master.tiff
-target/release/hanten convert tests/fixtures/hdri-64bit.tif $base \
+target/release/hanten convert tests/fixtures/hdri-64bit.tif "${base[@]}" --film-master -o $OUT/master.tiff
+target/release/hanten convert tests/fixtures/hdri-64bit.tif "${base[@]}" \
   --range hdr --transfer pq --gamut bt2020 --container tiff -o $OUT/pq.tiff
 $P read $OUT/linear.tiff $OUT/master.tiff $OUT/pq.tiff
 ```
