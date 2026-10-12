@@ -1787,7 +1787,8 @@ refused (exit 4) before anything renders, naming the TIFF of the same range:
 ```
 unsupported: a 65536x2 frame exceeds the 65535-pixel JPEG limit; write a TIFF instead:
        --container tiff --transfer linear --gamut display-p3 (recipe
-       `output.display.container`, `.transfer`, `.gamut`)
+       `output.display.container`, `.transfer`, `.gamut`), with the output named .tif or
+       .tiff or left without a suffix
 ```
 
 **The linear float TIFF is for editors, not for viewing.** No TIFF field tells a viewer

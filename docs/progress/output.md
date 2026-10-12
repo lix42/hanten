@@ -1547,7 +1547,7 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## sdr-jpeg-preset
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-11
 
 - Goal: the SDR rendition as an 8-bit JPEG with no gain map. Filed 2026-09-13 when the
@@ -1594,6 +1594,15 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   Also: one `Sdr` pixels variant carrying its container instead of a copied arm; the
   oracle refuses COM segments and bytes after EOI; `render-review-set` states
   `--range sdr`, since under `direct` `--container jpeg --gamut srgb` is the gain map.
+- 2026-10-11: **done.** The size refusal also says to name the output `.tif`/`.tiff` or
+  drop its suffix: the path is completed before `convert_frame`, so a typed `-o x.jpg`
+  cannot be told apart, and without the advice the remedy is refused for its suffix
+  (the test follows it with a typed `.jpg`). Verified: every CI gate, the nctool suite,
+  the Worker's `pnpm verify`, and a full `nctool acceptance run`. **Outstanding: run the
+  *Deploy telemetry ingestion* workflow from `main` before the next release.** For
+  dependents: every row of `destination::ROWS` is written, so a future planned row (PNG,
+  EXR) needs a "not yet" refusal rebuilt (in git before this task) if it is to be
+  refused by name before it ships.
 
 ## parallel-display-stages
 

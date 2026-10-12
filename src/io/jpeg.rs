@@ -22,7 +22,9 @@ const MAX_DIMENSION: u32 = u16::MAX as u32;
 /// Refuse a frame no JPEG can hold — checked on the probed size before anything
 /// renders, since the output keeps the scan's dimensions. The remedy is the TIFF of the
 /// same range and gamut: an HDR TIFF needs a transfer (`native` is JPEG-only), and the
-/// linear one is written in several gamuts, so it states the gamut too.
+/// linear one is written in several gamuts, so it states the gamut too. The output path
+/// is completed by now, so whether a `.jpg` was typed is unknown: the suffix advice is
+/// always given.
 pub fn check_fits(width: u32, height: u32, range: Range, gamut: Gamut) -> Result<()> {
     if width <= MAX_DIMENSION && height <= MAX_DIMENSION {
         return Ok(());
@@ -37,7 +39,8 @@ pub fn check_fits(width: u32, height: u32, range: Range, gamut: Gamut) -> Result
     };
     Err(NcError::Unsupported(format!(
         "a {width}x{height} frame exceeds the {MAX_DIMENSION}-pixel JPEG limit; write a \
-         TIFF instead: {tiff}"
+         TIFF instead: {tiff}, with the output named .tif or .tiff or left without a \
+         suffix"
     )))
 }
 

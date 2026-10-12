@@ -6483,20 +6483,26 @@ fn a_frame_too_wide_for_a_jpeg_is_refused_before_it_renders() {
             ],
         ),
     ] {
-        let (code, err, out) = convert(range, &["--range", range, "--container", "jpeg"]);
+        // A typed `.jpg` too: the remedy must say to rename it, or following it is
+        // refused for its suffix.
+        let (code, err, out) = convert(
+            &format!("{range}.jpg"),
+            &["--range", range, "--container", "jpeg"],
+        );
         assert_eq!(code, 4, "{range}: {err}");
         assert!(
             err.contains("exceeds the 65535-pixel JPEG limit"),
             "{range}: {err}"
         );
         assert!(err.contains(&remedy.join(" ")), "{range}: {err}");
+        assert!(err.contains("named .tif or .tiff"), "{range}: {err}");
         assert!(
             !err.contains("transfer") || range == "hdr",
             "{range}: {err}"
         );
-        assert!(!out.with_extension("jpg").exists());
+        assert!(!out.exists());
         let (code, err, _) = convert(
-            &format!("{range}-tiff"),
+            &format!("{range}.tif"),
             &[&["--range", range][..], remedy].concat(),
         );
         assert_eq!(code, 0, "{range}: following the remedy must convert: {err}");
@@ -14179,7 +14185,7 @@ fn convert_48bit(out: &Path, extra: &[&str]) -> (i32, String, String) {
 
 #[test]
 fn every_destination_renders_end_to_end() {
-    // Each ready row of the destination table, from the flags that name it: the path is
+    // Each row of the destination table, from the flags that name it: the path is
     // completed from its container, the bytes are that container, the report names every
     // resolved axis, and the encoder's own block is there. The look is named on each.
     let tmp = TempDir::new("destinations");
