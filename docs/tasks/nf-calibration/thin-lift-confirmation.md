@@ -1,5 +1,12 @@
 # Confirm the thin lift on an independent roll
 
+> **Closed, superseded, on 2026-10-11.** Since `envelope-hybrid-placement` the default
+> placement replaces both lifts; the thin lift renders only under `--placement roll`. The
+> hybrid gives 09-29's thin frames a steeper slope than the lift would, and
+> `hybrid-slope-bounds`' noise sweep measured it; grain on thin frames is
+> `short-span-protection`'s. Numbers in the progress log. This file is kept so existing
+> references resolve.
+
 ## Goal
 
 Confirm `thin-frame-lift`'s thresholds and slope bound on a roll that played no part in
