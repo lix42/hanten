@@ -1604,8 +1604,11 @@ dark end.
   at diffuse white; it is refused (exit 2), naming `measure-roll` to re-run or the
   `--roll-dark` to add. `direct` and the film master apply no roll, so they spare it.
 - The cap, floor and margin are provisional: they were chosen by review on nine rolls
-  with no deliberately bad frames, on whites measured before the colour correction. So
-  are the span's 9.049 stops and the 3.5 maximum (`nf-calibration/short-span-protection`).
+  with no deliberately bad frames, on whites measured before the colour correction. The
+  cap and floor were since checked on HDR on eleven rolls, and nothing moved
+  (`nf-calibration/white-rule-hdr`); the margin waits on `nf-calibration/saturation-margin`.
+  The span's 9.049 stops and the 3.5 maximum are provisional too
+  (`nf-calibration/short-span-protection`).
 
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
 `level_stops` is the log-average of its luma in linear ACEScg, in scene stops from

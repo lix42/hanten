@@ -16,7 +16,7 @@ The original Design section predated `span-roll-slope` and the hybrid placement.
 reviewed, at `pipeline_version` 14:
 
 - **What was under review.** The white target is gone (`span-roll-slope`). The cap (+2.0)
-  and floor (+1.5) now feed the span slope, the envelope and the clamp. The default
+  and floor (+1.5) now feed the span slope, the hybrid's slope bound and the clamp. The default
   placement is the hybrid; `--placement frame` is the opt-in alternative. There are eleven
   rolls, not nine.
 - **The rendition.** The default `--range hdr` gain-map JPEG in Chrome on an HDR

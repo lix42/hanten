@@ -692,7 +692,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
   provisional.
 - 2026-10-11: **started at `pipeline_version` 14** (`a2add14`). The task file was stale:
   `span-roll-slope` removed the white target, the cap and floor now feed the span slope,
-  the envelope and the clamp, the hybrid is the default placement, and there are eleven
+  the hybrid's slope bound and the clamp (not the envelope, which is unclamped), the hybrid is the default placement, and there are eleven
   rolls. Agreed scope (user): review under `hybrid` and `frame`. Round 1 is the default
   HDR beside SDR. A lever round (cap, floor, `--display-tone-headroom`, at most four arms)
   runs only for frames round 1 flags. Everything is in `../temp/white-rule-hdr/`, built
