@@ -365,6 +365,7 @@ graph TD
     nf-scene-correction/midtone-neutral
     nf-scene-correction/correction-confidence
     nf-scene-correction/midtone-neutral-fit
+    nf-scene-correction/lomo100-cast-vs-ccr
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -693,6 +694,8 @@ graph TD
   nf-scene-correction/midtone-neutral --> nf-scene-correction/correction-confidence
   nf-scene-correction/roll-white-balance --> nf-scene-correction/correction-confidence
   nf-calibration/taste-vs-quality --> nf-scene-correction/correction-confidence
+  nf-scene-correction/roll-white-balance --> nf-scene-correction/lomo100-cast-vs-ccr
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/lomo100-cast-vs-ccr
   nf-calibration/level-target-zero --> nf-calibration/span-roll-slope
   nf-scene-correction/midtone-neutral --> nf-calibration/span-roll-slope
   nf-look/contrast-on-luminance --> nf-calibration/span-roll-slope
@@ -1379,6 +1382,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-scene-correction/correction-confidence` (new flow): `nf-scene-correction/midtone-neutral`, `nf-scene-correction/roll-white-balance`, `nf-calibration/taste-vs-quality`
   — filed 2026-10-07 from the sea probe: a roll of one scene colour fools the corrections,
   so the report scores each one and suggests an alternative rather than auto-fixing
+- `nf-scene-correction/lomo100-cast-vs-ccr` (new flow): `nf-scene-correction/roll-white-balance`, `nf-scene-correction/midtone-neutral`
+  — filed 2026-10-11 from the Lomography 100 review: the user preferred SilverFast CCR to
+  Hanten on half the roll, Hanten leaving a blue, slightly green cast
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -2037,6 +2043,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   the white balance and the midtone line by frame count (in doubt under 16, with an
   advisory note) and the white balance gets a switch (`--neutral-balance`); nothing turns one off on its
   own, since no signal found detects a roll of one dominant colour
+- [ ] [Hanten against SilverFast CCR on the Lomography 100
+  roll](tasks/nf-scene-correction/lomo100-cast-vs-ccr.md) — the user preferred CCR on 18 of
+  36 frames; Hanten leaves a blue, slightly green cast; locate it with the roll's 18 white
+  patches and remove it without losing 2056's blue sky or the shadow detail
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
