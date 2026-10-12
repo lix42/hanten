@@ -2241,9 +2241,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
   `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply
   them or not
-- [ ] [The white rule in
-  HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
-  until its HDR rendition and headroom are looked at; every round so far was SDR
+- [x] [The white rule in
+  HDR](tasks/nf-calibration/white-rule-hdr.md) — **done 2026-10-12: the cap and floor
+  stand.** Nothing looked wrong on the gain-map JPEG under `hybrid` or `frame` (28 frames,
+  eleven rolls). How much HDR range is used is set by the headroom, not the rule. The
+  gamut map is inert on HDR
 - [x] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
   frames, so an under-exposed roll renders at a normal level; darker frames stay dark

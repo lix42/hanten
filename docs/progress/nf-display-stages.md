@@ -52,19 +52,16 @@ white and the peak pinned, any smooth shoulder stays within about 0.15 stop of r
 A brighter white with mid-grey pinned (+0.15, +0.30 stop, shadows untouched) lost to
 reinhard in review. Where white renders is `look.contrast` (the white rule). The
 headroom barely moves white (0.09 stop from 6 stops to 2); it sets how hard the stops
-above white are compressed. HDR under the white rule is still unreviewed
-(`nf-calibration/white-rule-hdr`).
+above white are compressed. HDR under the white rule was reviewed and stands
+(`nf-calibration/white-rule-hdr`, 2026-10-12).
 
-**The gamut map's share of highlight desaturation is near zero where it matters**
-(`gamut-map-share`, done 2026-09-23; `docs/reports/gamut-map-share.md`). It moves no
-marked white under `sigmoid-knees`, the desaturation spike's control, or
-`path-to-white`'s hand-set contrast, and every limit it hit was the cube's top, never
-P3's primaries. It acts heavily only under the `shoulder` display tone, whose plateau
-leaves no chroma room at the cube's top.
-
-So under the `none` and `reinhard` tones in SDR, `fit-gamut` need not shrink the map to
-make room for the look's operator. Re-check that if fit range's operator plateaus near
-display white, and for HDR, which was not measured.
+**The gamut map's share of highlight desaturation** (`docs/reports/gamut-map-share.md`).
+On the removed chain (`gamut-map-share`, 2026-09-23) it was near zero: it moved no
+marked white under the `none` and `reinhard` tones, and every limit it hit was the cube's
+top, never P3's primaries. It acted heavily only under the `shoulder` tone, whose plateau
+leaves no chroma room at the cube's top. **On the current chain** (2026-10-12,
+`nf-calibration/white-rule-hdr`) it is inert on HDR. On SDR it moves 28–69 % of the
+brightest 3 % on four rolls, still at the cube's top, and a review found nothing wrong.
 
 The map gets no diagnostic off switch. Should one ever be wanted, "off" means an unmapped
 float destination, never a per-channel clip.

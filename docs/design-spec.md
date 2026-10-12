@@ -419,8 +419,8 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   without them its film base (a roll's exposure alone exempt).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
-  Under reinhard it was near-inert where it matters on the removed chain's SDR renderer
-  (`docs/reports/gamut-map-share.md`); the HDR branch is unmeasured (`nf-calibration/white-rule-hdr`).
+  On the current chain it is inert on HDR. On SDR it moves 28–69 % of the brightest
+  3 % on four rolls (`docs/reports/gamut-map-share.md`, 2026-10-12).
   It has no knob.
 
 ### Two renderings: `direct` and `default`
@@ -2454,8 +2454,7 @@ Each names the task that owns it, or says it has none.
   that it is optional and in rendering, not which stage. No task yet.
 - **Other outputs the old chain had** (ProPhoto, arbitrary ICC paths): keep or drop.
   No task yet.
-- **The roll's white rule in HDR** (`nf-calibration/white-rule-hdr`) and the saturation
-  warning's margin (`nf-calibration/saturation-margin`).
+- **The saturation warning's margin** (`nf-calibration/saturation-margin`).
 - **Rebuilding the pipeline as decode → roll → style** (`nf-core/three-step-pipeline`).
 
 Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for the
@@ -2463,4 +2462,5 @@ film master (§6); the recipe travels in the report, not the image container (§
 reinhard over a parametric shoulder (§6); a separate contrast and per-channel grade
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
 (§6); one black point, fit range's display black (§6); the fallback slope without a
-roll measurement, a white +1.75 stops up (§9 Look).
+roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
+stands (`nf-calibration/white-rule-hdr`).
