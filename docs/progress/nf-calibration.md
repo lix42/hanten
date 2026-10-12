@@ -137,7 +137,7 @@ over the eleven rolls were reviewed as the gain-map JPEG beside the SDR JPEG, un
 `hybrid` and `frame`; none looked wrong. The HDR rendition uses little of its range:
 `hybrid`'s median frame reaches 1.8× reference white at p99.9, against a peak of 4.93.
 That is set by `--display-tone-headroom` (6), not by the white rule: frame whites sit 0.4–2.3
-stops above diffuse white, where the lift has barely started. The gamut map is inert on
+stops above diffuse white, low on the lift's 6-stop ramp. The gamut map is nearly inert on
 HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 and 09-14
 (`docs/reports/gamut-map-share.md`'s dated note).
 
@@ -707,11 +707,12 @@ frames; the look's default contrast is `no-roll-defaults`'.
     - 09-18 and 09-29 under `hybrid`: the median frame's p99.9 is about 1.0.
   - **Why.** The lift ramps in look stops from diffuse white (about 2.47 above mid-grey)
     to `W = 2^headroom`, 6 stops above. Frame whites sit 0.4–2.3 stops above diffuse white:
-    per-roll hybrid medians of 2.8–4.8 look stops, `frame` pinned at 4.46. So a white gets about
-    1.3–2× its SDR level.
+    per-roll hybrid medians of 2.8–4.8 look stops, `frame` pinned at 4.46. On the
+    smoothstep that lifts a white 1.04–2.3× above its SDR level (`frame`: 2.0×).
   - **So the headroom, not the cap or floor, decides how much HDR range is used.** The
-    cap and floor move a white at most half a stop. The headroom is shared with SDR above
-    the split, so moving it changes SDR too.
+    cap and floor are half a stop apart. A reviewable step in either moves a white by a
+    fraction of a stop, but the headroom moves the whole ramp. The headroom is shared
+    with SDR above the split, so moving it changes SDR too.
   - The extreme case is 07-23 1121, an overexposed frame. Its white lands at 7.8 look
     stops under `hybrid`, with 10 % of pixels at the peak.
 - 2026-10-11: **the gamut map's share on both branches** (`gamut.jsonl`, `gamut.txt`,
@@ -719,7 +720,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
   (`probe/probe.diff`); the map is re-done in float64 and checked against the shipped
   buffers. Maximum relative error: HDR 2e-5, SDR 1.3e-3 (not traced; likely near-zero
   channels).
-  - **HDR: inert.** Median 0.001 % of pixels moved, none of the brightest 3 %. One marked
+  - **HDR: nearly inert.** Median 0.001 % of pixels moved, none of the brightest 3 %. One marked
     white patch changes: 1121's curtain, C\* 66.5 → 49.5.
   - **SDR: not near-inert any more on four rolls.** Over the archive, the median frame
     has 0.9 % of its pixels moved, and 13 % of its brightest 3 % (mean ΔC\* 1.0 there).

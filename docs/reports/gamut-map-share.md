@@ -122,7 +122,7 @@ and exports both branches' float buffers with `--export-pre-encode`, and the map
 re-done in float64 and checked against the shipped buffers. Scripts and numbers are in
 `../temp/white-rule-hdr/` (`gamut_share.py`, `gamut.txt`).
 
-- **HDR: inert.** The median frame has 0.001 % of its pixels moved and none of its
+- **HDR: nearly inert.** The median frame has 0.001 % of its pixels moved and none of its
   brightest 3 %. One marked white changes (07-23 1121's curtain, C\* 66.5 → 49.5).
 - **SDR: no longer near-inert everywhere.** Over the archive, the median frame has 0.9 %
   of its pixels moved, and 13 % of its brightest 3 % (mean ΔC\* 1.0 there). On 07-15,

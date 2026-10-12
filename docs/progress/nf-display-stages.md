@@ -60,7 +60,7 @@ On the removed chain (`gamut-map-share`, 2026-09-23) it was near zero: it moved 
 marked white under the `none` and `reinhard` tones, and every limit it hit was the cube's
 top, never P3's primaries. It acted heavily only under the `shoulder` tone, whose plateau
 leaves no chroma room at the cube's top. **On the current chain** (2026-10-12,
-`nf-calibration/white-rule-hdr`) it is inert on HDR. On SDR it moves 28–69 % of the
+`nf-calibration/white-rule-hdr`) it is nearly inert on HDR (one marked white changes). On SDR it moves 28–69 % of the
 brightest 3 % on four rolls, still at the cube's top, and a review found nothing wrong.
 
 The map gets no diagnostic off switch. Should one ever be wanted, "off" means an unmapped

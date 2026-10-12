@@ -419,7 +419,7 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   without them its film base (a roll's exposure alone exempt).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
-  On the current chain it is inert on HDR. On SDR it moves 28–69 % of the brightest
+  On the current chain it is nearly inert on HDR (one marked white changes). On SDR it moves 28–69 % of the brightest
   3 % on four rolls (`docs/reports/gamut-map-share.md`, 2026-10-12).
   It has no knob.
 
