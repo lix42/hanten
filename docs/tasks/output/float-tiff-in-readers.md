@@ -33,6 +33,14 @@ Every other destination passed in every reader.
    sidebar, and is it worth the bytes and the encode-path change? It must not touch the
    pixel IFD the goldens and reports describe.
 
+## Outcome (2026-10-11)
+
+All three answered in [`docs/spike/float-tiff-in-readers.md`](../../spike/float-tiff-in-readers.md):
+(1) no signal exists, since even ImageIO's own TIFF encoder drops a headroom;
+(2) yes, the linear TIFF is an editor/interchange format, and `viewer.json` and
+`docs/using-nc.md` say so; (3) no: Preview's sidebar has no thumbnail for a float TIFF
+with an appended IFD, a SubIFD thumbnail, or for Apple's own float TIFF.
+
 ## Dependencies
 
 - [Viewer interoperability](../analysis/viewer-interoperability.md)

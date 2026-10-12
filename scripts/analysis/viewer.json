@@ -39,8 +39,8 @@
       "readers": ["macos-preview", "macos-photos", "iphone-photos"]
     },
     "hdr-linear-tiff": {
-      "hdr": true,
-      "rendition": "HDR: highlights brighter than SDR white on an HDR display",
+      "hdr": false,
+      "rendition": "an editor format, not shown as HDR by Apple's readers (TIFF carries no headroom they read; docs/spike/float-tiff-in-readers.md): record what the reader shows",
       "fallback": "not specified: record what the reader shows",
       "fallback_gated": false,
       "readers": ["macos-preview", "macos-photos", "iphone-photos"]
