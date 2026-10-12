@@ -1,12 +1,78 @@
-//! Baseline JPEG encoding for the gain-map container (`io::iso_gain_map`).
+//! Baseline JPEG encoding: the SDR JPEG destination ([`encode_sdr`]) and the gain-map
+//! container (`io::iso_gain_map`).
+//!
+//! The encoder settings are pinned parts of the destination, not knobs, so repeated
+//! encodes on one build are byte-identical.
+
+use std::path::Path;
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;
 
+use crate::destination::{Axis, Gamut, Range};
 use crate::io::QUANTIZE_BAND_SAMPLES;
-use crate::types::{EncodeReport, NcError, OutputStats, Result};
+use crate::io::staged::{self, Staged};
+use crate::types::{EncodeOutcome, EncodeReport, LinearImage, NcError, OutputStats, Result};
 
 const JPEG_QUALITY: u8 = 95;
+
+/// The largest width or height a JPEG frame header can state.
+const MAX_DIMENSION: u32 = u16::MAX as u32;
+
+/// Refuse a frame no JPEG can hold — checked on the probed size before anything
+/// renders, since the output keeps the scan's dimensions. The remedy is the TIFF of the
+/// same range and gamut: an HDR TIFF needs a transfer (`native` is JPEG-only), and the
+/// linear one is written in several gamuts, so it states the gamut too. The output path
+/// is completed by now, so whether a `.jpg` was typed is unknown: the suffix advice is
+/// always given.
+pub fn check_fits(width: u32, height: u32, range: Range, gamut: Gamut) -> Result<()> {
+    if width <= MAX_DIMENSION && height <= MAX_DIMENSION {
+        return Ok(());
+    }
+    let tiff = match range {
+        Range::Sdr => "--container tiff (recipe `output.display.container`)".to_string(),
+        Range::Hdr => format!(
+            "--container tiff --transfer linear --gamut {} (recipe `output.display.container`, \
+             `.transfer`, `.gamut`)",
+            gamut.name()
+        ),
+    };
+    Err(NcError::Unsupported(format!(
+        "a {width}x{height} frame exceeds the {MAX_DIMENSION}-pixel JPEG limit; write a \
+         TIFF instead: {tiff}, with the output named .tif or .tiff or left without a \
+         suffix"
+    )))
+}
+
+/// Encode `image` (display-encoded, in the primaries `icc` names) as the SDR JPEG
+/// staged at `path`: 8-bit, the ICC profile embedded, no other segment — encoded as
+/// the gain-map JPEG's base is ([`encode_display`]).
+pub fn encode_sdr(image: &LinearImage, icc: &[u8], path: &Path) -> Result<(Staged, EncodeOutcome)> {
+    let (bytes, outcome) = encode_display(image, icc, "SDR", Vec::new())?;
+    Ok((staged::stage_bytes(path, &bytes)?, outcome))
+}
+
+/// Quantize a display-encoded image to 8 bits and encode it with `icc` and `app2`
+/// embedded — the one path for both the SDR JPEG and the gain-map base, so they store
+/// a rendition identically.
+pub(crate) fn encode_display(
+    image: &LinearImage,
+    icc: &[u8],
+    label: &str,
+    app2: Vec<Vec<u8>>,
+) -> Result<(Vec<u8>, EncodeOutcome)> {
+    let (rgb, loss, stats) = quantize_u8(&image.rgb);
+    let bytes = encode_jpeg(
+        &rgb,
+        image.width,
+        image.height,
+        Some(icc),
+        label,
+        ColorType::Rgb,
+        app2,
+    )?;
+    Ok((bytes, EncodeOutcome { loss, stats }))
+}
 
 /// Encode 8-bit samples as a baseline 4:4:4 JPEG at [`JPEG_QUALITY`], with an
 /// optional ICC profile and APP2 segments (each given as its content after the
@@ -52,7 +118,7 @@ pub(crate) fn encode_jpeg(
 
 /// Quantize `[0, 1]` samples to 8 bits, counting every sample clamped or
 /// non-finite, with the per-channel means of what was stored.
-pub(crate) fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
+fn quantize_u8(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
     // One parallel pass over bands whose length is a multiple of 3
     // (`QUANTIZE_BAND_SAMPLES`), so a sample's channel is its index within the band
     // modulo 3. Loss counts and channel sums are integers, so their totals are exact

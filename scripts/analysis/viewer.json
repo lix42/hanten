@@ -59,6 +59,13 @@
       "fallback_gated": false,
       "readers": ["macos-preview", "macos-photos", "iphone-photos"]
     },
+    "sdr-jpeg": {
+      "hdr": false,
+      "rendition": "SDR, matching the SDR TIFF of the same gamut in tone",
+      "fallback": "n/a (an SDR file)",
+      "fallback_gated": false,
+      "readers": ["macos-preview", "macos-photos", "iphone-photos", "chrome", "sdr-only"]
+    },
     "gain-map-jpeg": {
       "hdr": true,
       "rendition": "HDR on an HDR display (the gain map applied)",

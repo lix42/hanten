@@ -92,7 +92,7 @@ XY_TOLERANCE = 1e-3
 CURVE_TOLERANCE = 1e-4
 
 # Every encoding an oracle exists for; a destination that maps to none fails loudly.
-ENCODINGS = ("film-master", "sdr-tiff", "hdr-linear-tiff", "hdr-pq-tiff",
+ENCODINGS = ("film-master", "sdr-tiff", "sdr-jpeg", "hdr-linear-tiff", "hdr-pq-tiff",
              "hdr-hlg-tiff", "gain-map-jpeg")
 DETERMINISM = ("byte-identical", "decoded")
 
@@ -202,6 +202,7 @@ def encoding_of(report: dict) -> tuple[str, str | None, str | None]:
     key = (d["range"], d["transfer"], d["container"])
     table = {
         ("sdr", "native", "tiff"): "sdr-tiff",
+        ("sdr", "native", "jpeg"): "sdr-jpeg",
         ("hdr", "linear", "tiff"): "hdr-linear-tiff",
         ("hdr", "pq", "tiff"): "hdr-pq-tiff",
         ("hdr", "hlg", "tiff"): "hdr-hlg-tiff",
@@ -571,6 +572,47 @@ def _jpeg_rgb(data: bytes):
         return np.asarray(im).astype(np.float64)
 
 
+def oracle_sdr_jpeg(path, pre, facts, spec, patches) -> list[dict]:
+    """8-bit SDR JPEG: no APP or COM segment beside JFIF and the ICC profile, nothing
+    after EOI, and the standard transfer of the canonical linear buffer, quantized to 8
+    bits, against the decoded codes."""
+    np = _np()
+    with open(path, "rb") as f:
+        data = f.read()
+    try:
+        segs = _gainmap.segments(data)
+        icc = _gainmap.icc_profile(segs)
+    except _gainmap.GainMapError as e:
+        return [_check("metadata", False, diffs=[dict(field="container",
+                                                      expected="a baseline JPEG",
+                                                      found=str(e))])]
+    others = [f"APP{s['marker'] - 0xE0}" if s["marker"] != 0xFE else "COM" for s in segs
+              if (0xE0 <= s["marker"] <= 0xEF or s["marker"] == 0xFE)
+              and not (s["marker"] == 0xE0 and s["payload"].startswith(b"JFIF\x00"))
+              and not (s["marker"] == 0xE2 and s["payload"].startswith(_gainmap.ICC_ID))]
+    # Entropy-coded data stuffs every 0xFF, so the first EOI after the scan header ends
+    # the image; anything past it (a second image, say) is another segment.
+    eoi = data.find(b"\xff\xd9", segs[-1]["offset"])
+    trailing = len(data) - (eoi + 2) if eoi >= 0 else None
+    canonical = pre["sdr-linear"].astype(np.float64)
+    curve = SDR_CURVES[facts["gamut"]]
+    rows = [("segments.other", [], others, not others),
+            ("bytes_after_eoi", 0, trailing, trailing == 0)]
+    rows += profile_rows(_icc.parse(icc) if icc else None, facts["gamut"], curve)
+    checks = [metadata_check(rows)]
+    reference = quantize(encode_curve(curve, canonical), 8)
+    decoded = _jpeg_rgb(data)
+    if decoded.shape != reference.shape:
+        return checks + [_check("pixels", False, error="shape differs from canonical")]
+    stats = diff_stats(decoded, reference)
+    ok, fails = _within(stats, spec["bounds"])
+    checks.append(_check("pixels", ok, metrics=stats, bounds=spec["bounds"], fails=fails,
+                         units="8-bit codes"))
+    checks += patch_checks(decoded, reference, patches, spec["bounds"], facts["inset"],
+                           _rgb_chroma)
+    return checks
+
+
 def oracle_gain_map(path, pre, facts, spec, patches) -> list[dict]:
     """ISO 21496-1 gain-map JPEG: metadata against the renditions, the map's gains at
     its own resolution, both JPEGs' codec loss, and the end-to-end reconstruction
@@ -709,6 +751,7 @@ def reconstruct_hdr(base_codes, map_codes, metadata: dict, curve: dict):
 ORACLES = {
     "film-master": oracle_lossless_float,
     "sdr-tiff": oracle_sdr_tiff,
+    "sdr-jpeg": oracle_sdr_jpeg,
     "hdr-linear-tiff": oracle_lossless_float,
     "hdr-pq-tiff": oracle_coded_tiff,
     "hdr-hlg-tiff": oracle_coded_tiff,
@@ -718,6 +761,7 @@ ORACLES = {
 PAGES = {
     "film-master": ["film-master"],
     "sdr-tiff": ["sdr-linear"],
+    "sdr-jpeg": ["sdr-linear"],
     "hdr-linear-tiff": ["hdr-linear"],
     "hdr-pq-tiff": ["hdr-linear"],
     "hdr-hlg-tiff": ["hdr-linear"],
@@ -740,6 +784,16 @@ def _xy_matrix(space: str):
     return cols * np.linalg.solve(cols, white)
 
 
+def _through_profile(codes01, profile: dict | None):
+    """`[0, 1]` codes decoded through a matrix/TRC profile to XYZ."""
+    np = _np()
+    if profile is None or profile["trc"] is None:
+        raise _icc.IccError("no matrix/TRC profile to decode the file through")
+    lin = np.stack([_icc.curve_decode(profile["trc"][c], codes01[..., c])
+                    for c in range(3)], axis=-1)
+    return lin @ np.asarray(_icc.rgb_to_xyz(profile)).T
+
+
 def decode_light(path: str, facts: dict) -> dict:
     """`{rendition: XYZ image}` decoded from the file alone, each normalized so its
     reference white is `Y = 1`. The film master is scene-referred and not decoded."""
@@ -750,13 +804,9 @@ def decode_light(path: str, facts: dict) -> dict:
     white = hdr["reference_white_nits"]
     if enc in ("sdr-tiff", "hdr-linear-tiff"):
         pixels, profile, _ = _tiff(path)
-        if profile is None or profile["trc"] is None:
-            raise _icc.IccError("no matrix/TRC profile to decode the file through")
         scale = 65535.0 if pixels.dtype.kind == "u" else 1.0
-        lin = np.stack([_icc.curve_decode(profile["trc"][c], pixels[..., c] / scale)
-                        for c in range(3)], axis=-1)
         rendition = "sdr" if enc == "sdr-tiff" else "hdr"
-        return {rendition: lin @ np.asarray(_icc.rgb_to_xyz(profile)).T}
+        return {rendition: _through_profile(pixels / scale, profile)}
     if enc in ("hdr-pq-tiff", "hdr-hlg-tiff"):
         codes, _, _ = _tiff(path)
         signal = codes / 65535.0
@@ -765,6 +815,12 @@ def decode_light(path: str, facts: dict) -> dict:
         else:
             nits = rec2100.hlg_display_nits(signal, hdr["peak_nits"], hdr["hlg_system_gamma"])
         return {"hdr": (nits / white) @ _xy_matrix("bt2020").T}
+    if enc == "sdr-jpeg":
+        with open(path, "rb") as f:
+            data = f.read()
+        icc = _gainmap.icc_profile(_gainmap.segments(data))
+        return {"sdr": _through_profile(_jpeg_rgb(data) / 255,
+                                        _icc.parse(icc) if icc else None)}
     if enc == "gain-map-jpeg":
         with open(path, "rb") as f:
             data = f.read()

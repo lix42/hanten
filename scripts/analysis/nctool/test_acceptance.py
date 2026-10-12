@@ -169,7 +169,7 @@ class Manifest(unittest.TestCase):
 
     def test_an_encoding_without_an_oracle_is_refused(self):
         man = json.loads(json.dumps(self.man))
-        man["encodings"]["sdr-jpeg"] = dict(determinism="byte-identical")
+        man["encodings"]["sdr-png"] = dict(determinism="byte-identical")
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
             json.dump(man, f)
         try:
@@ -180,7 +180,7 @@ class Manifest(unittest.TestCase):
 
     def test_a_destination_without_an_oracle_fails_loudly(self):
         report = dict(chain=dict(destination=dict(display=dict(
-            range="sdr", transfer="native", gamut="srgb", container="jpeg"))))
+            range="sdr", transfer="native", gamut="srgb", container="png"))))
         with self.assertRaisesRegex(acceptance.AcceptanceError, "no oracle"):
             acceptance.encoding_of(report)
 
@@ -208,6 +208,7 @@ class OraclesOnRealOutput(unittest.TestCase):
         "hlg": ["--range", "hdr", "--transfer", "hlg", "--gamut", "bt2020"],
         "master": ["--film-master"],
         "gain": ["--range", "hdr", "--gamut", "display-p3", "--container", "jpeg"],
+        "sdr-jpeg": ["--gamut", "display-p3", "--container", "jpeg"],
     }
 
     @classmethod
@@ -217,7 +218,7 @@ class OraclesOnRealOutput(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp(prefix="nc-acceptance-test-")
         cls.runs = {}
         for name, args in cls.CASES.items():
-            ext = "jpg" if name == "gain" else "tiff"
+            ext = "jpg" if name in ("gain", "sdr-jpeg") else "tiff"
             cls.runs[name] = acceptance.convert(NC, _case(name, args, ext), cls.tmp, "t")
 
     @classmethod
@@ -283,6 +284,44 @@ class OraclesOnRealOutput(unittest.TestCase):
                 got = self.checks(name, self.rewrite_tiff(name, "swap",
                                                           pixels=data[..., ::-1].copy()))
                 self.assertFalse(got["pixels"]["passed"])
+
+    def rewrite_jpeg(self, name, suffix, pixels=None, icc_from=None):
+        """A q95 4:4:4 re-encode of `name`'s JPEG with other pixels and/or another
+        TIFF's profile."""
+        from PIL import Image
+        with Image.open(self.runs[name]["output"]) as im:
+            data = np.asarray(im)
+            profile = im.info["icc_profile"]
+        if icc_from:
+            with tifffile.TiffFile(self.runs[icc_from]["output"]) as t:
+                profile = t.pages[0].tags["InterColorProfile"].value
+        dst = os.path.join(self.tmp, f"{name}-{suffix}.jpg")
+        Image.fromarray(data if pixels is None else pixels).save(
+            dst, quality=95, subsampling=0, icc_profile=profile)
+        return dst
+
+    def test_the_sdr_jpeg_refuses_a_gain_map_a_swap_and_another_profile(self):
+        from PIL import Image
+        # The gain-map file of the same frame carries ISO and MPF segments.
+        got = self.checks("sdr-jpeg", self.runs["gain"]["output"])
+        self.assertFalse(got["metadata"]["passed"])
+        self.assertTrue(self.checks("sdr-jpeg", self.rewrite_jpeg("sdr-jpeg", "same"))
+                        ["pixels"]["passed"])
+        with Image.open(self.runs["sdr-jpeg"]["output"]) as im:
+            data = np.asarray(im)
+        swapped = self.rewrite_jpeg("sdr-jpeg", "swap", pixels=data[..., ::-1].copy())
+        self.assertFalse(self.checks("sdr-jpeg", swapped)["pixels"]["passed"])
+        other = self.rewrite_jpeg("sdr-jpeg", "icc", icc_from="sdr-srgb")
+        self.assertFalse(self.checks("sdr-jpeg", other)["metadata"]["passed"])
+        # A comment after SOI, and a second image after EOI, are each a segment too.
+        data = self.read("sdr-jpeg")
+        for suffix, edited in (("com", data[:2] + b"\xff\xfe\x00\x05abc" + data[2:]),
+                               ("trailing", data + data)):
+            path = self.copy("sdr-jpeg", suffix)
+            with open(path, "wb") as f:
+                f.write(edited)
+            got = self.checks("sdr-jpeg", path)["metadata"]
+            self.assertFalse(got["passed"], suffix)
 
     def test_a_shifted_code_value_fails_the_pixels(self):
         # Three codes: whatever ±1 the sample already carried, it lands at 2 or more.

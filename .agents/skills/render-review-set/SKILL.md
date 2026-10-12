@@ -184,25 +184,15 @@ would make this first-class; until then it is manual. Three things to get right:
    **Verify one file per encoding** against an independent decode (`sips -m` with the
    embedded profile) before converting a batch — a wrong matrix still looks plausible.
 
-   **Converting only the reference is not enough, and no destination fixes it.** The
-   browser-displayable Hanten cell is the HDR Display P3 destination (`--range hdr`), a
-   gain-map JPEG: on an HDR display the browser shows the *HDR* rendition while the
-   reference stays plain SDR, so the two cells differ in rendering intent before any
-   conversion is compared — and `nctool metrics` meanwhile reads Hanten's **SDR base**, so
-   the charts and the picture describe different renditions. Hanten cannot be asked for a
-   plain SDR JPEG instead: the JPEG container is HDR-only, and every SDR destination writes
-   TIFF, which browsers will not display (the reference build's presets are no better:
-   `gain-map-hdr` and `ultra-hdr-v1` are both gain-map carriers). So either strip the gain map
-   from Hanten's JPEGs, or review on an SDR display and **say** that is what was done. Making
-   this first-class belongs to `analysis/review-reference-cells`.
-
-   **Stripping the gain map fixes the rendering intent, not the gamut.** Hanten's SDR base is
-   **Display P3** for every gain-map JPEG (`metrics.py`'s `DESTINATION_SPACES`, and
-   `PRESET_SPACES` for the reference build's presets), so a strip that
-   drops the ICC profile leaves P3 numbers that a viewer then shows as sRGB — saturation
-   errors that look like a conversion difference. Either convert the stripped base to sRGB as
-   well, so "a common sRGB pair" is true, or keep its P3 profile and stop calling the pair
-   common-sRGB. Whichever you pick, measure each side in the space it is actually in.
+   **Converting only the reference is not enough: render Hanten's cell as the SDR sRGB
+   JPEG** (`--range sdr --container jpeg --gamut srgb`; state the range, since under
+   `--rendering direct` the range defaults to HDR). A gain-map JPEG (`--range hdr`) is the wrong
+   cell: on an HDR display the browser shows its *HDR* rendition while the reference stays
+   plain SDR, and `nctool metrics` reads its SDR base, so the picture and the charts would
+   describe different renditions. The reference build has no SDR JPEG (`gain-map-hdr` and
+   `ultra-hdr-v1` are both gain-map carriers): strip its gain map, convert the base from
+   **Display P3** to sRGB (`metrics.py`'s `PRESET_SPACES`), or review on an SDR display and
+   **say** that is what was done. Measure each side in the space it is actually in.
 2. **Pair by filename identity, never registration.** An export usually carries its source's
    serial (`converted/<producer>/<roll>/<serial>.tif` ↔ `rolls/<roll>/<serial>.tif`). Exports
    are often cropped differently, so never expect pixel alignment. A frame with no match gets
@@ -312,9 +302,9 @@ weeks later.
 
 - **Never commit a review set or publish it anywhere public.** The images are personal
   photographs; a private claude.ai Artifact is the one allowed exception.
-- **An SDR set has no browser-displayable cell yet**: the SDR destinations are TIFF only
-  (SDR JPEG is `output/sdr-jpeg-preset`), and a gain-map JPEG shows its HDR rendition.
-  Render by hand and convert the TIFF to a JPEG keeping its ICC profile.
+- **An SDR set's browser-displayable cell is the SDR JPEG** (`--range sdr --container jpeg`, ICC
+  embedded), not a gain-map JPEG, which shows its HDR rendition. A TIFF cell does not
+  display in a browser.
 - **Nothing checks that a metric record describes the pixels beside it.** Re-render by hand
   and the charts go on describing the previous render; `nctool review generate` re-measures on
   checksum change, which is why it is the way to rebuild a set.

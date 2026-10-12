@@ -20,6 +20,11 @@ entries — don't rewrite earlier ones.
 
 What other epics need to know about `output`:
 
+- **The SDR JPEG (2026-10-11, `output/sdr-jpeg-preset`)** is the `--range sdr
+  --container jpeg` rows (Display P3, Adobe RGB, sRGB): the SDR TIFF's rendition through
+  the gain-map base's encode path (`io::jpeg::encode_display`, q95 4:4:4, ICC only). Every
+  row of `destination::ROWS` is now written; the "not written yet" refusal went with the
+  last planned row.
 - **Telemetry enum members are not a schema bump (2026-10-11,
   `output/sdr-preset-followups`).** A new `destination::Encoding` widens the upload
   contract's `conversion.encoding` and redeploys the Worker in the same change, with no
@@ -1542,12 +1547,62 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## sdr-jpeg-preset
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done
+**Updated:** 2026-10-11
 
 - Goal: the SDR rendition as an 8-bit JPEG with no gain map. Filed 2026-09-13 when the
   user set the product shape (SDR lossless default; HDR lossless, SDR JPEG supported;
   HDR JPEG good to have) and this was the one of the four nc lacks.
+- 2026-10-11: **implemented** as the `--range sdr --container jpeg` rows (the preset
+  framing of the task file predates destinations). Decided with the user: three rows —
+  Display P3, sRGB and **Adobe RGB**, which the gain map lacks only because its base
+  needs a decoder-verified gamut; q95 4:4:4 with the ICC embedded in every gamut, the
+  gain-map base's settings; telemetry `encoding` `sdr_jpeg` (schema enum grows, so the
+  ingestion Worker must be redeployed before a client sends it).
+  - **One encode path**: `io::jpeg::encode_display` quantizes and encodes both the SDR
+    JPEG and the gain-map base, so the SDR JPEG is that base without its APP2 segments —
+    pinned byte for byte from `SOF0` on (`io::iso_gain_map`'s
+    `the_sdr_jpeg_is_the_base_without_the_map`). The e2e test pins the encoder input
+    against the SDR TIFF's via `--export-pre-encode`, the ICC against the TIFF's, and
+    the decode within the codec (mean |Δ| 1.7–1.9 codes on the grainy fixture,
+    per-channel means within 0.08 code; a P3-vs-sRGB swap moves red's mean by 0.37,
+    over the 0.25 bound — narrow, so the exact checks carry the gamut).
+  - **`Status::NotYet` is gone**, with `Fault::NotYet` and its message: no planned row
+    remained (user's choice; git keeps it). `Row` holds its `Encoding` directly.
+    Derivation is unchanged for every command that resolved before; `--container jpeg`
+    alone now writes rather than refuses, and under `direct`, `--range sdr --container
+    jpeg` is the Adobe RGB SDR JPEG.
+  - **Row order is user-visible**: a suffix refusal offers rows in `ROWS` order, so the
+    SDR JPEGs sit beside the SDR TIFFs and `--container jpeg` is offered first.
+  - **Memory**: shares `RunProfile::U16Tiff` by measurement — 0.7–1.1 MB *below* the
+    SDR TIFF at 5.83 and 18.66 MP, every gamut and `--exposure 5`; JPEGs at most
+    0.46 B/px (`pipeline::memory`'s calibration notes).
+  - **Acceptance**: an `sdr-jpeg` oracle (no segment beside JFIF and ICC; 8-bit
+    standard transfer vs the decode, the gain-map base's bounds). P3 and sRGB measured
+    exactly the gain-map base's errors; Adobe RGB max 21 codes (bound 26). Cross-encoding
+    ΔE00 reaches 1.56 on the Adobe RGB JPEG's `muted-dark` patch (8-bit steps in the
+    wider gamut; the chart's pixels are within 1 code), under the 2.0 allowance.
+    `viewer.json` gained the encoding (an SDR file, every reader).
+- 2026-10-11 (review): **a rejected telemetry event is quarantined for good**
+  (`telemetry/drain.rs`), not retried after a Worker redeploy. Per the contract rule
+  `sdr-preset-followups` settled the same day, the schema value ships in this change and
+  the Worker is deployed before a release sends it; an SDR JPEG event a dev build uploads
+  before then is lost (accepted). No consent or schema bump (`consent::MANIFEST_VERSION`
+  points at the rule). **The JPEG size limit is checked before the render**:
+  `io::jpeg::check_fits` on the probed size, for both JPEG encodings, naming the TIFF of
+  the same range — and, for HDR, the gamut, since `--transfer linear` alone asks for one.
+  Also: one `Sdr` pixels variant carrying its container instead of a copied arm; the
+  oracle refuses COM segments and bytes after EOI; `render-review-set` states
+  `--range sdr`, since under `direct` `--container jpeg --gamut srgb` is the gain map.
+- 2026-10-11: **done.** The size refusal also says to name the output `.tif`/`.tiff` or
+  drop its suffix: the path is completed before `convert_frame`, so a typed `-o x.jpg`
+  cannot be told apart, and without the advice the remedy is refused for its suffix
+  (the test follows it with a typed `.jpg`). Verified: every CI gate, the nctool suite,
+  the Worker's `pnpm verify`, and a full `nctool acceptance run`. **Outstanding: run the
+  *Deploy telemetry ingestion* workflow from `main` before the next release.** For
+  dependents: every row of `destination::ROWS` is written, so a future planned row (PNG,
+  EXR) needs a "not yet" refusal rebuilt (in git before this task) if it is to be
+  refused by name before it ships.
 
 ## parallel-display-stages
 

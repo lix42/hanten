@@ -1665,7 +1665,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   block** (2026-10-11): the SDR TIFF and the gain-map base need no encoder block. An SDR encoding
   states no absolute luminance, so its ICC profile and `chain.destination` define it, and the gain
   map's values are in `chain.gain_map`; recorded in design-spec §5 and `docs/using-nc.md`
-- [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
+- [x] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — **done 2026-10-11.**
+  `--range sdr --container jpeg` in Display P3, Adobe RGB and sRGB: the SDR TIFF's rendition
+  as an 8-bit q95 4:4:4 JPEG, ICC only, through the gain-map base's encode path. Every
+  destination row is now written, so the "not written yet" refusal is gone; telemetry
+  `sdr_jpeg` needs the Worker deployed before a release
 - [x] [Float TIFFs in Apple's readers](tasks/output/float-tiff-in-readers.md) — from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. **Done 2026-10-11: no signal exists** (ImageIO's own TIFF encoder drops a headroom), so the linear TIFF is an editor/interchange format; the sidebar gap is Preview's, Apple's own float TIFF included. No encoder change ([spike](spike/float-tiff-in-readers.md))
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
@@ -1797,7 +1801,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 > it is not part of it.
 
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
-- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every ready destination row, the `direct` rendering and the film master; split into the two tasks below
+- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every destination row, the `direct` rendering and the film master; split into the two tasks below
 - [x] [Display-acceptance harness](tasks/analysis/display-acceptance-harness.md) — the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
 - [x] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
 - [ ] [Android gain-map check](tasks/analysis/android-gain-map-check.md) — **low priority** (user, 2026-10-04). Does Android 15+ display nc's ISO-only, three-channel gain-map JPEG as HDR (from `output/gain-map-dialect-activation`)? Needs a device

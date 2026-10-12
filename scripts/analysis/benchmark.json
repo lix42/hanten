@@ -4,7 +4,7 @@
   "sets": {
     "fixtures": {
       "root": "repo",
-      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` runs on any checkout; two runs of one build over it are the determinism / zero-diff check. One HDRi (64-bit, with IR) case per ready destination::ROWS row with all four axes stated (a Rust test fails when a ready row has no case), plus the film master, `--rendering direct` and `default` (no output flag: what a user gets). The HDR 48-bit fixture covers the other input format, as `default` and the film master. A preset block names the reference preset writing the same container; a destination the reference could not write (Adobe RGB, linear P3/sRGB/Adobe RGB, the sRGB gain map, `direct`) has none and runs on destination builds only.",
+      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` runs on any checkout; two runs of one build over it are the determinism / zero-diff check. One HDRi (64-bit, with IR) case per destination::ROWS row with all four axes stated (a Rust test fails when a row has no case), plus the film master, `--rendering direct` and `default` (no output flag: what a user gets). The HDR 48-bit fixture covers the other input format, as `default` and the film master. A preset block names the reference preset writing the same container; a destination the reference could not write (Adobe RGB, linear P3/sRGB/Adobe RGB, the sRGB gain map, the SDR JPEGs, `direct`) has none and runs on destination builds only.",
       "cases": [
         {
           "name": "hdri-default",
@@ -286,6 +286,69 @@
             "args": [
               "--range",
               "hdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "srgb",
+              "--container",
+              "jpeg"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-display-p3-jpeg",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "output_ext": "jpg",
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "display-p3",
+              "--container",
+              "jpeg"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-adobe-rgb-jpeg",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "output_ext": "jpg",
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
+              "--transfer",
+              "native",
+              "--gamut",
+              "adobe-rgb",
+              "--container",
+              "jpeg"
+            ]
+          }
+        },
+        {
+          "name": "hdri-sdr-native-srgb-jpeg",
+          "input": "tests/fixtures/hdri-64bit.tif",
+          "args": [
+            "--film-base",
+            "0.9,0.55,0.42"
+          ],
+          "output_ext": "jpg",
+          "destination": {
+            "args": [
+              "--range",
+              "sdr",
               "--transfer",
               "native",
               "--gamut",

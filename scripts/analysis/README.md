@@ -408,7 +408,7 @@ recipe may leave its axes to nc; the frames must agree:
 
 | destination (gamut, transfer) | space | notes |
 |---|---|---|
-| `display-p3`, `native` | `display-p3` | a gain-map JPEG is read as its **SDR base**, per `--jpeg-image` |
+| `display-p3`, `native` | `display-p3` | the TIFF or SDR JPEG; a gain-map JPEG is read as its **SDR base**, per `--jpeg-image` |
 | `adobe-rgb`, `native` | `adobe-rgb` | |
 | `srgb`, `native` | `srgb` | a gain-map JPEG as above |
 | `display-p3` / `adobe-rgb` / `srgb` / `bt2020`, `linear` | `linear-display-p3` / `linear-adobe-rgb` / `linear-srgb` / `linear-bt2020` | |
@@ -512,7 +512,7 @@ PYTHONPATH=scripts/analysis python3 -m nctool compare diff before.json after.jso
 ```
 
 Cases come from `benchmark.json`. The default `fixtures` set is self-contained: the
-HDRi fixture through every ready destination (all four axes stated), the film master,
+HDRi fixture through every destination (all four axes stated), the film master,
 `--rendering direct` and the product default, and the HDR 48-bit fixture (the other
 input format) through the default and the film master.
 Two runs of one build over it diff to zero, and CI checks exactly that. The `rolls`
@@ -564,6 +564,7 @@ profile parsed by `nctool.icc`, BT.2100 by `nctool.rec2100`, ISO 21496-1 and MPF
 |---|---|---|
 | film master, HDR linear TIFF | the file's f32 against the canonical buffer | bit-identical (written verbatim) |
 | SDR TIFF | the standard transfer of the canonical buffer, quantized to 16 bits | 1 code |
+| SDR JPEG | the same, quantized to 8 bits, against the decoded JPEG; no APP or COM segment beside JFIF and the ICC profile, nothing after EOI | the gain-map base's measured JPEG max/RMS |
 | PQ / HLG TIFF | BT.2100 of the canonical buffer in binary64, quantized to 16 bits; the profile's `A2B0` against BT.2100 | 1 code; 0.2 % or 0.1 cd/m² |
 | gain-map JPEG | the map's gains at its own grid; each JPEG against its pre-JPEG codes | ½ map step; measured JPEG max/RMS |
 
@@ -583,8 +584,8 @@ reconstruction matches the HDR rendition pixel for pixel, so that error is repor
 (`nctool.chart`: a neutral ramp, saturated and muted patches). The chart drives the
 patch bounds of the lossy encodings and the **cross-encoding** check: every rendition's
 patch means as XYZ (reference white at `Y = 1`) against the BT.2020 HDR linear TIFF's, at
-ΔE00 ≤ 0.5 and neutral Δu'v' ≤ 10⁻⁴. 8-bit quantization alone exceeds that, so the gain
-map has a measured allowance in the manifest. After editing `nctool.chart`, regenerate
+ΔE00 ≤ 0.5 and neutral Δu'v' ≤ 10⁻⁴. 8-bit quantization alone exceeds that, so each JPEG
+has a measured allowance in the manifest. After editing `nctool.chart`, regenerate
 the chart with `acceptance chart` (a test fails until you do).
 
 Nothing compares against a committed checksum: decode pixels differ by target, so the

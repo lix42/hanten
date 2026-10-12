@@ -18,8 +18,8 @@ PYTHONPATH=scripts/analysis python3 -m nctool viewer set \
 ```
 
 Stdlib only; it needs `../nc-assets` for the two real frames. It renders every
-destination the benchmark's `fixtures` set names (each ready `destination::ROWS` row
-plus the film master: 12) from each input of
+destination the benchmark's `fixtures` set names (each `destination::ROWS` row
+plus the film master: 15) from each input of
 [`scripts/analysis/viewer.json`](../analysis/viewer.json):
 
 | input | why |
@@ -75,8 +75,8 @@ Who opens what (`viewer.json`'s `expect.*.readers`):
 |---|---|---|
 | macOS Preview, macOS Photos | all | HDR display with HDR on; HDR off |
 | iPhone Photos | all | HDR on |
-| Chrome on macOS | gain-map JPEGs | HDR on; HDR off |
-| an SDR-only reader | gain-map JPEGs | as installed |
+| Chrome on macOS | JPEGs (SDR and gain-map) | HDR on; HDR off |
+| an SDR-only reader | JPEGs (SDR and gain-map) | as installed |
 
 Known, not findings (`docs/spike/float-tiff-in-readers.md`): Apple's readers never
 show the HDR linear TIFF as HDR, and Preview's sidebar has no thumbnail for either

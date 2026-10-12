@@ -323,6 +323,7 @@ fn encoding(destination: &OutputSection) -> Result<&'static str, NotUploadable> 
     let resolved = resolve(axes, &Defaults::STANDARD).map_err(|_| NotUploadable::Destination)?;
     Ok(match resolved.encoding {
         Encoding::SdrTiff => "sdr_tiff",
+        Encoding::SdrJpeg => "sdr_jpeg",
         Encoding::HdrLinearTiff => "hdr_linear_tiff",
         Encoding::HdrCodedTiff(_) => "hdr_coded_tiff",
         Encoding::GainMapJpeg => "gain_map_jpeg",

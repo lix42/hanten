@@ -266,6 +266,13 @@
 //! the gain map already dropped the plane before its split. Its model went down 4 B/px
 //! with nothing measured moving.
 //!
+//! **The SDR JPEG (2026-10-11, `output/sdr-jpeg-preset`) shares [`RunProfile::U16Tiff`]
+//! by measurement**: on the 5.83 and 18.66 MP frames above (macOS, highest of five) it
+//! peaked 0.7–1.1 MB *below* the SDR TIFF — 115.6–115.8 and 346.6 MB against 116.5 and
+//! 347.7 — in each of its three gamuts and at `--exposure 5`. Its encode phase holds a
+//! u8 copy and the JPEG (at most 0.46 B/px measured) where the TIFF holds 6 B/px of
+//! u16.
+//!
 //! Peak RSS varies by a few tens of KB between identical runs; the frozen literals
 //! in the tests are single observations, which is why the assertions are
 //! `estimate >= measured` rather than equality.
@@ -372,6 +379,8 @@ pub enum RunProfile {
     /// quantize buffer with `tiff` streaming strips. With nothing sampled, its **decode
     /// and encode** phases tie at 18 B/px.
     /// Measured for the SDR TIFF and the PQ TIFF (the module doc's calibration table).
+    /// The SDR JPEG shares it by measurement: its encode phase (the u8 copy and the
+    /// JPEG's bytes beside the chain's buffer) stays under the u16 quantize buffer.
     ///
     /// **One branch only.** A gain-map pair (`chain::render_pair`) copies the graded
     /// image and holds two working buffers through fit range and fit gamut, so it has

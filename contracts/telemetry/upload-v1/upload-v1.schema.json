@@ -195,7 +195,7 @@
       "properties": {
         "encoding": {
           "enum": [
-            "film_master", "sdr_tiff", "hdr_linear_tiff", "hdr_coded_tiff", "avif",
+            "film_master", "sdr_tiff", "sdr_jpeg", "hdr_linear_tiff", "hdr_coded_tiff", "avif",
             "gain_map_jpeg"
           ]
         },

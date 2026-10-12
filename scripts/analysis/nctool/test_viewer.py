@@ -20,12 +20,13 @@ from nctool import __main__ as cli  # noqa: E402
 from nctool import acceptance, compare, viewer  # noqa: E402
 
 NC = os.path.join(compare.repo_root(), "target", "debug", "hanten")
-# What the committed config must yield: one destination per ready ROWS row, plus the
+# What the committed config must yield: one destination per ROWS row, plus the
 # film master (`default` and `direct` state no destination flag).
 DESTINATIONS = {
     "sdr-native-display-p3-tiff", "sdr-native-adobe-rgb-tiff", "sdr-native-srgb-tiff",
     "hdr-linear-display-p3-tiff", "hdr-linear-adobe-rgb-tiff", "hdr-linear-srgb-tiff",
     "hdr-linear-bt2020-tiff", "hdr-pq-bt2020-tiff", "hdr-hlg-bt2020-tiff",
+    "sdr-native-display-p3-jpeg", "sdr-native-adobe-rgb-jpeg", "sdr-native-srgb-jpeg",
     "hdr-native-display-p3-jpeg", "hdr-native-srgb-jpeg", "film-master",
 }
 
@@ -62,8 +63,10 @@ class Config(unittest.TestCase):
         self.assertEqual(gated, {"gain-map-jpeg"})
 
     def test_tiffs_go_to_apple_readers_only(self):
+        # A JPEG opens anywhere.
+        jpegs = {"sdr-jpeg", "gain-map-jpeg"}
         for enc, e in _config()["expect"].items():
-            if enc != "gain-map-jpeg":
+            if enc not in jpegs:
                 self.assertNotIn("chrome", e["readers"], enc)
                 self.assertNotIn("sdr-only", e["readers"], enc)
 
@@ -135,7 +138,7 @@ class Config(unittest.TestCase):
             viewer.input_argv(cfg, "x", "/nonexistent/hanten", self.tmp, assets, self.tmp)
         self.assertIn("no single frame '9'", str(e.exception))
 
-    def test_the_destinations_are_the_ready_rows_and_the_film_master(self):
+    def test_the_destinations_are_the_rows_and_the_film_master(self):
         dests = viewer.destinations(_config(), compare.BENCHMARK)
         self.assertEqual({d["id"] for d in dests}, DESTINATIONS)
         self.assertEqual(len(dests), len(DESTINATIONS))

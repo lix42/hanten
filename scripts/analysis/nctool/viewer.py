@@ -1,7 +1,7 @@
 """The file set and pre-checks for `analysis/viewer-interoperability`.
 
 `viewer set` renders every destination the benchmark's fixtures set names (one per
-ready `destination::ROWS` row, plus the film master) from each input of
+`destination::ROWS` row, plus the film master) from each input of
 `viewer.json`, into a directory outside the repository, and writes beside them
 `viewer-set.json` (what each file is and what a viewer should show) and `rubric.md`
 (the manual checklist, one table per reader and display setting). A roll input renders under the recipe

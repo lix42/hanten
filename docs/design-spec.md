@@ -46,7 +46,7 @@ The deterministic core owns the image science. Any future ML assistance (see
 - **One reconstruction: the fixed, stock-agnostic decode** (§7). The curves it
   replaced are listed in §7.3.
 - **A staged rendering chain** — scene correction, look, fit range, fit gamut (§6) —
-  into a **destination set** (§5): SDR TIFF, HDR float or PQ/HLG TIFF, a gain-map
+  into a **destination set** (§5): SDR TIFF or JPEG, HDR float or PQ/HLG TIFF, a gain-map
   JPEG, and the unrendered film master. AVIF was removed
   ([`design/avif-removal.md`](design/avif-removal.md)).
 - **Measure once per roll** what a roll shares — its film base, white balance, white
@@ -62,8 +62,7 @@ The deterministic core owns the image science. Any future ML assistance (see
 - Camera RAW (Bayer/X-Trans) input, DNG processing.
 - ML/AI assistance of any kind (auto-crop, neutral-patch detection, inpainting).
 - GUI, scanner ICC profiling workflow.
-- Output beyond the destination set (§5): the SDR JPEG is a planned row; PNG/EXR and
-  HEIC gain maps are roadmap items.
+- Output beyond the destination set (§5): PNG/EXR and HEIC gain maps are roadmap items.
 
 ## 3. Design principles
 
@@ -246,10 +245,10 @@ the refusals and their remedies, and the container an output path is judged agai
 | Range | Transfer | Gamut | Container | Writes |
 |---|---|---|---|---|
 | sdr | native | display-p3, adobe-rgb, srgb | tiff | one SDR rendition, 16-bit integer, the gamut's own curve |
+| sdr | native | display-p3, adobe-rgb, srgb | jpeg | the same rendition as 8-bit baseline JPEG (q95, 4:4:4), the ICC profile its only metadata, encoded as the gain-map JPEG's base is |
 | hdr | linear | display-p3, adobe-rgb, srgb, bt2020 | tiff | one HDR rendition, display-linear 32-bit float, no transfer |
 | hdr | pq, hlg | bt2020 | tiff | a Rec.2100 signal as full-range 16-bit codes |
 | hdr | native | display-p3, srgb | jpeg | an 8-bit SDR base plus a per-channel ISO 21496-1 gain map to the HDR rendition |
-| sdr | native | display-p3, srgb | jpeg | *planned* (`output/sdr-jpeg-preset`); refused naming the task |
 | — | — | — | tiff | **film master** (`--film-master`, `"output": "film-master"`): the decode's linear ACEScg, unclamped 32-bit float, ACEScg profile, no rendering stage |
 
 **Unset axes are derived, stated ones never overridden.** An axis left unset is
@@ -258,9 +257,8 @@ when a row consistent with everything decided so far has it, else the one value
 left, else a refusal listing the choices. So `--transfer pq` alone is an HDR BT.2020
 TIFF, and `--transfer linear` alone asks for the gamut. A stated value is what the
 user asked for: `--gamut display-p3 --transfer pq` is refused rather than
-reinterpreted. Derivation ignores whether a row is ready, so a command names the
-same row on every build, and a planned row is refused *after* resolution. The
-report records every resolved axis (`chain.destination`), which replays exactly.
+reinterpreted. The report records every resolved axis (`chain.destination`), which
+replays exactly.
 A removed value — `avif` — is refused by name as a flag, a recipe value or an output
 suffix (`Axis::REMOVED`), so an old recipe never reads as a typo.
 
@@ -1909,6 +1907,11 @@ would cost a Unix-only code path for output that is reproducible by re-running.
 
 - **SDR TIFF** — 16-bit integer, lossless, the gamut's own transfer curve and ICC
   profile, `1.0` = the 203 cd/m² reference white.
+- **SDR JPEG** (`output/sdr-jpeg-preset`, `io::jpeg`) — the SDR TIFF's rendition as an
+  8-bit baseline JPEG, quality 95, 4:4:4, the ICC profile its only metadata. The quality
+  and subsampling are pinned parts of the destination, not knobs. It is encoded by the
+  path the gain-map JPEG's base takes, so in Display P3 and sRGB it is that base without
+  the map (the gain map has no Adobe RGB row).
 - **Gain-map JPEG** (`nf-destinations/gain-map-destination`, `io::iso_gain_map`) — an
   8-bit SDR base in Display P3 or sRGB, and a half-resolution **per-channel** gain map
   to the HDR rendition, described by **ISO 21496-1 metadata only**, in a Multi-Picture
@@ -2189,7 +2192,7 @@ src/
 ├── io/
 │   ├── decode.rs        # SilverFast HDR/HDRi (TIFF) → Scan (RGB + IR)
 │   ├── encode.rs        # 16-bit / f32 TIFF with ICC
-│   ├── jpeg.rs          # baseline JPEG for the gain-map container
+│   ├── jpeg.rs          # baseline JPEG: the SDR JPEG and the gain-map container
 │   ├── iso_gain_map.rs  # the gain-map JPEG: MPF container + ISO 21496-1 metadata
 │   └── staged.rs        # write to a temp beside the target, fsync, rename
 └── pipeline/
@@ -2326,8 +2329,7 @@ shipped or retired item keeps its number and shrinks to one line.
    item 1 must be disabled for them.
 4. **Camera RAW input.** Bayer/X-Trans and DNG ingestion (e.g. `rawler`/LibRaw)
    to support camera-scanning workflows.
-5. **More output formats.** The SDR JPEG (`output/sdr-jpeg-preset`), PNG for proofs,
-   EXR for HDR interchange. HEIC gain maps are deferred pending a portable
+5. **More output formats.** PNG for proofs, EXR for HDR interchange. HEIC gain maps are deferred pending a portable
    final-standard encoder and an approved HEVC licensing/packaging policy.
 6. **Roll workflow & automatic calibration.** Shipped: `hanten roll` (one frozen
    recipe, per-frame manifest overrides, one roll report) and its measure mode

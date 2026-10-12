@@ -36,10 +36,10 @@ For representative colour and HDR frames:
 
 1. **The default as shipped** — `rendering: default`, SDR, `native`, Display P3, 16-bit
    TIFF.
-2. **Every ready row of `destination::ROWS`** under `default`: SDR TIFF (Display P3,
+2. **Every row of `destination::ROWS`** under `default`: SDR TIFF (Display P3,
    Adobe RGB, sRGB); HDR linear float TIFF (Display P3, Adobe RGB, sRGB, BT.2020);
-   PQ and HLG BT.2020 TIFF; the gain-map JPEG (Display P3, sRGB). The
-   SDR JPEG rows join when `output/sdr-jpeg-preset` lands.
+   PQ and HLG BT.2020 TIFF; the SDR JPEG (Display P3, Adobe RGB, sRGB); the gain-map
+   JPEG (Display P3, sRGB).
 3. **`direct`** — its unset destination (HDR linear Adobe RGB float TIFF) and its SDR
    form.
 4. **Film master** — unclamped linear ACEScg, cross-frame exposure preserved under a
