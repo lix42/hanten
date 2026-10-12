@@ -619,3 +619,17 @@ float destination, never a per-channel clip.
 - 2026-10-11: filed (user) while planning `nf-calibration/hybrid-slope-bounds`: a slope
   targeting the span plus about 2 EV, the ends compressed by a toe and reinhard's
   shoulder. Waits on that task, whose maximum slope is the baseline it steepens.
+- 2026-10-11: **split** (user): too many questions for one task, each gating the next. The
+  probe — whether more midtone contrast wins, and the overshoot's size and split between
+  the ends — is now `midtone-contrast-probe`, which this task waits on; this task keeps the
+  toe and the tails `hybrid-slope-bounds` handed here, and closes with no code if the
+  probe loses. The hybrid's R moved to `nf-calibration/hybrid-span-target`, colour to
+  `nf-look/midtone-contrast-colour` (low priority), both after this task.
+
+## midtone-contrast-probe
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user), split from `midtone-contrast-toe`: probe a steeper slope under
+  the default placement with the ends left to clip, before any toe exists.
