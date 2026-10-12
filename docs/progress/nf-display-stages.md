@@ -610,3 +610,12 @@ float destination, never a per-channel clip.
 - 2026-09-27: **done.** Reinhard stays fit range's operator; no code, knob or report
   change. For dependents: `fit-gamut`'s "re-check if a shoulder replaces reinhard" and
   the white rule's cap and floor need no re-check, since nothing moved.
+
+## midtone-contrast-toe
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user) while planning `nf-calibration/hybrid-slope-bounds`: a slope
+  targeting the span plus about 2 EV, the ends compressed by a toe and reinhard's
+  shoulder. Waits on that task, whose maximum slope is the baseline it steepens.

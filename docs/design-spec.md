@@ -1564,9 +1564,13 @@ is refused (exit 2), since it asks for something the run will not do.
   exposure, the envelope renders over `k · (envelope + e0)`; the frame's slope spreads its
   span (white − dark end) over at least `roll.hybrid_span_stops` look stops, no steeper
   than the envelope allows, within the cap's slope and 3.5; its exposure keeps
-  `roll.hybrid_level_keep` of its level's offset, `e0 − (1 − keep) · (level + e0)`, held
+  `roll.hybrid_level_keep` of its level's offset, `e0 − (1 − keep) · (level + e0)` — the
+  offset from mid-grey, the level target, which is the roll's level unless `e0` was clamped
+  or stated — held
   where its white and dark end stay inside the envelope (centred when they cannot), then
-  within 1 EV of `e0` either way. The slope reaches luminance only: colour stays at `k`
+  within 1 EV of `e0` either way; where that limit holds it, the slope flattens until both
+  ends stay inside the envelope (`slope_bound` `limit`), never under the cap's slope. The
+  slope reaches luminance only: colour stays at `k`
   (§9 `look`). It needs the envelope and the frame's tones; a frame with neither renders
   at the roll's placement silently (a roll written by hand), and with one but not the
   other with a warning naming the missing half (a frame `measure-roll` did not measure).

@@ -111,9 +111,7 @@ replaces both lifts; `--placement roll` renders per-roll with them. Colour stays
 roll's slope. **Display black is off by default under `default`**: it compensated a roll
 slope taken from the white alone, and with the span slope and the hybrid it worked against
 them, darkening low-key frames throughout; read "with display black at its default" above
-as 6 stops, before this. Open in `hybrid-slope-bounds`: the EV limit can push a frame's dark
-end below the roll's (17 archive frames), and the kept exposure's and envelope top's
-references.
+as 6 stops, before this.
 
 **`per-frame-placement` is done (2026-10-10, `pipeline_version` 13): `--placement frame`
 places each frame on its own**, opt-in: the span slope from the frame's own ends, its white
@@ -123,6 +121,15 @@ white-pinned variant over a midtone-pinned one (43 / 12 / 7) and L\* 93 over 91 
 ±1 EV** around the roll's (were −1.5 / +0.5 above), which moves a measured roll's hybrid
 frames — the reason for v13. Report: `chain.roll.frame_placement` (was `hybrid`), `base_from`
 `"placement"` (was `"hybrid"`), `measure-roll`'s `frames[].frame`.
+
+**`hybrid-slope-bounds` is done (2026-10-11, `pipeline_version` 14): a hybrid frame the
+±1 EV limit holds flattens until its ends stay inside the envelope** (none on the archive).
+Measured and kept: the dark target −5 look stops (L\* 6.2; CCR's darkest 1 % medians L\*
+4.7–7.4), the roll's dark end at p10 (no frame under −5 at any percentile), per-roll's
+level (its ends float up on every roll: less contrast than a per-frame slope, by design),
+`frame`'s overshoot at the limit. The maximum slope stays a constant guard at 3.5; its
+value is `short-span-protection`'s, a noise question; the tails past a frame's ends are
+`nf-display-stages/midtone-contrast-toe`'s.
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -1584,8 +1591,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## hybrid-slope-bounds
 
-**Status:** not started
-**Updated:** 2026-10-09
+**Status:** done
+**Updated:** 2026-10-11
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`; `TODO.md` G2, G3(c), G4,
   A6): the span-based roll slope's anchor (its whitest point lands at L* 97.7) and whether
@@ -1599,6 +1606,111 @@ frames; the look's default contrast is `no-roll-defaults`'.
   the envelope, holds 17 archive frames (7 on 09-29) whose dark end then falls below the
   roll's (09-29 −5.68 against −4.42 look stops); whether the limit or the slope should give
   way belongs with the maximum.
+- 2026-10-11: **started; decided (user)**, case by case over where a frame's ends can land
+  past the span's targets (white +4.049 look stops ≈ L\* 91, dark −5 ≈ L\* 6.2):
+  - **The tails past a frame's own ends, and the floor binding on a span wider than ~7.3
+    stops**, go to a shoulder and toe (`nf-display-stages/midtone-contrast-toe`), not to the
+    slope. The maximum stays here for another reason: a steep slope raises grain everywhere,
+    so its sweep runs on **thin frames**, judged on noise, not range.
+  - **The maximum becomes a knob**, `roll.max_slope` / `--max-slope` (default 3.5), bounding
+    the roll's span slope and every frame placement's.
+  - **Where the ±1 EV limit pushes an end out, the slope is lowered** to keep it in (the
+    hybrid: the envelope's end; `frame`: its own targets), not the limit widened: film is
+    not sensitive at its ends either, and a flatter frame is less noisy.
+  - **Per-roll's level** (the roll's mid-grey anchor) floats both ends: a known limitation.
+    Measure where each roll's ends land; a lift-only guard on the dark end only if a roll
+    sinks below the dark target.
+  - **The roll's dark end at p10**: per-roll should pay with a little contrast rather than
+    lose the darkest frames' shadows (the hybrid and `frame` exist for those who object);
+    measure p0 / p2 / p5.
+  - **The dark target −5 is unreviewed** (the spike's placeholder; every round that used it
+    had display black on, which placed the dark end). With black off it places the dark end:
+    measured against CCR's darkest 1 % (09-18, 09-20, 09-29) before the percentile and the
+    maximum are chosen.
+  - **The envelope** need not equal per-roll's ends literally; check the hybrid's bounds
+    hold. Its p0 (extremes) against the roll slope's p10 is deliberate: the envelope is the
+    room per-roll gives its most extreme frame, the slope a robust statistic.
+  - Out of scope: HDR (`white-rule-hdr`); a steeper slope with a shoulder and toe absorbing
+    the ends (`midtone-contrast-toe`, filed today).
+- 2026-10-11: **the maximum is a knob**, `roll.max_slope` / `--max-slope` (unset is
+  `MAX_SLOPE` 3.5, at least the cap's slope 1.237): it bounds `roll_white::span_slope` and
+  both frame placements; refused without the roll's white and dark end (no span slope to
+  bound). `measure-roll` reports at the default. No default pixel moved: the v13 row's
+  `recipe` hash was refreshed in place for the new key.
+- 2026-10-11: **archive re-measure** (`../temp/hybrid-slope-bounds/`, `table.txt`; binary
+  `scripts/hanten-knob`, v13 at ±1 EV; eleven rolls) and **the dark target against CCR**
+  (`dark_target.txt`: CCR's luminance percentiles over each frame's `frames[].region`,
+  beside each placement's modelled p1 through reinhard).
+  - **Per-roll's ends float up on every roll**: the roll's white at +4.08…+6.33 look
+    stops, its dark end at −4.97…−2.72 (thin rolls highest: 09-11, 09-28). Nothing is lost;
+    the black is pale. No roll sinks under −5, so a lift-only dark guard would never fire.
+  - **The roll's dark percentile does not matter today**: at p0, p2, p5 or p10 no frame's
+    dark end lands under −5 at per-roll; p0 flattens the roll's slope by at most 0.06
+    (09-20 1.61 → 1.55).
+  - **The ±1 EV limit holds no hybrid frame**, and no hybrid end passes the envelope. It
+    holds 14 `frame` frames: 9 high-key at −1 EV, whites 0.03–0.73 look stops over L\* 93
+    (into the shoulder); 5 night frames on 09-29 at +1 EV (slope 3.2–3.5), dark ends
+    0.6–1.0 stop under −4.59 (L\* 4.1–5.4).
+  - **The dark target −5 (L\* 6.2) stands**: CCR's darkest 1 % has a median of L\* 4.8
+    (09-18, 16 of 33 frames: the rest are cropped exports), 4.7 (09-20) and 7.4 (09-29).
+    Ours, per-roll 13.7 / 15.6 / 16.7, hybrid 11.4 / 14.3 / 10.6, `frame` 8.2 (pinned).
+    CCR's frames range L\* 1.4–28: a per-frame slope keyed on content. On 2045, 2052 and
+    2053 CCR is darker (L\* 2.0–2.7) than `frame` with the limit.
+- 2026-10-11: **decided (user)**: the dark target, the p10 and per-roll's level stay —
+  per-roll and the hybrid are meant to have less contrast than a per-frame slope such as
+  CCR's. Where the limit holds a **hybrid** frame, the slope is lowered so its ends stay
+  inside the envelope (a guard: no archive frame); `frame` keeps its overshoot (the
+  shoulder holds the white; CCR goes darker on the night frames). The hybrid's R (7) is a
+  question of its own, not this task's.
+- 2026-10-11: **implemented**: the hybrid's limit guard (`SlopeBound::Limit`, never under the
+  floor) and `pipeline_version` **14** by hand (the guard acts after the gate; v13's row
+  keeps its own `recipe` hash, v14's has `roll.max_slope`). The kept exposure now names its
+  reference, `LEVEL_TARGET_STOPS` (no pixel moves): a clamped or stated roll exposure pulls
+  frames towards the target, not the roll's level. Documented, no key added.
+- 2026-10-11: **noise sweep** (`../temp/hybrid-slope-bounds/sweep.log`, `sweep.json`; binary
+  `scripts/hanten-sweep`): the 7 thin frames and the frames wanting more than 3.5, at
+  `--max-slope` 2.5 / 3.0 / 3.5 / 8 under `hybrid` and `frame`. Noise is the earlier rounds'
+  measure (q25 of `|I(x+1) − I(x)|` over the median, red, central 1200 px, ÷ the scan's
+  own), and the same over pixels rendered under L\* 30.
+  - **Noise follows the slope** on every frame, about +0.2–0.4× the scan's floor per +0.5.
+    At the same slope thin frames sit higher (at 2.5: 1.5–2.6× against 0.6–1.6×).
+  - **Under the hybrid the thin frames never reach 3.0** (span and envelope hold them at
+    2.48–2.94); 3.5 binds only 1612, 1719, 1799 and 1813, none thin.
+  - **Under `frame`, thin frames at 3.0 / 3.5**: 1641 2.05 / 2.52×, 1696 2.45 / 2.97×
+    (shadows 3.48 / 4.45×), 1698 2.30 / 2.84×, 2052 2.81 / 3.10×, 2053 3.16 / 3.92×.
+  - **Uncapped, 1612 (`frame`) and 1719 (both) are refused**: their slopes (5.2–6.2)
+    overflow the densest sample, and the refusal named only `--roll-white`. The probe now
+    names `--max-slope` (`PROBE_KNOBS`), and a binary test follows the remedy.
+  - A shadow figure over under 1 % of the crop (2038, 2047) is too few pixels to read.
+- 2026-10-11: **decided (user): the maximum is a guard, not a knob, and its value is a new
+  task**, `short-span-protection`. A placement's slope is about a fixed number over the
+  span, so the maximum binds only short spans already; what is left is grain, not bounds,
+  and a guard has no switch (design-spec §6). `roll.max_slope` / `--max-slope` and its
+  `PROBE_KNOBS` entry were removed before shipping: `MAX_SLOPE` stays a constant at 3.5,
+  and v14's `recipe` hash is v13's. With no knob, the overflow above cannot be reached.
+- 2026-10-11: **done.** Landed: the hybrid's limit guard (a frame the ±1 EV limit holds
+  flattens until its ends stay inside the envelope; `slope_bound` `limit`; never under the
+  floor), `pipeline_version` 14 (by hand; no archive frame moves); the kept exposure names
+  its reference, `LEVEL_TARGET_STOPS`. Measured and kept as they are: the dark target −5
+  (CCR's darkest 1 % medians L\* 4.7–7.4), the roll's dark p10, per-roll's level (its ends
+  float up, a lower-contrast design than a per-frame slope like CCR's), `frame`'s overshoot
+  at the limit. **For dependents:** `short-span-protection` owns the maximum's value, from
+  this task's sweep; `midtone-contrast-toe` owns the tails past a frame's ends and the
+  floor on wide spans; the hybrid's R (7) has no task.
+- 2026-10-11: **the hybrid's R goes to `midtone-contrast-toe`** (user): it is the hybrid's
+  span target, the lever that task pulls, and a toe may let it rise; its open questions
+  carry this task's darkest-1 % numbers.
+- 2026-10-11: **`/code-review high`**, 8 findings. Fixed: the guard's sign test
+  (`at · bound > 0`, `|·|`) flattened a frame already inside an envelope whose dark end
+  renders above mid-grey (a stated `--roll-exposure`) — now one-sided checks, each only
+  where flattening can help, and one floor step (a test pins the case); the envelope grid
+  test now includes limit-held frames and asserts it reaches some; the level-keep docs
+  name the level target; the guide's verification note records v14 (`--save-recipe`
+  writes 14, checked); `TASKS.md` marked done; a 147-column behaviour line rewrapped.
+  Left: the user-facing "offset from the roll's" wording (`--help`, the
+  `--hybrid-level-keep` error, the guide), true unless the roll's exposure is clamped or
+  stated, which design-spec §9 now says; a floor-held frame past the envelope reports
+  `floor` with no warning — only a hand-written envelope gets there.
 
 ## display-white
 
@@ -1859,3 +1971,14 @@ frames; the look's default contrast is `no-roll-defaults`'.
   placement's slope"). Its "pushed up" warning under `--placement frame`, estimated on the
   archive from the tones (`../temp/per-frame-placement/scripts/pushed_up.py`, look stops,
   an upper bound): 0 of 209 frames, the nearest 09-14 1719 (middle 1.41, dark −0.31).
+
+## short-span-protection
+
+**Status:** not started
+**Updated:** 2026-10-11
+
+- 2026-10-11: filed (user), split from `hybrid-slope-bounds`: the maximum slope is a noise
+  guard for short-span frames, not a bounds question, and a guard rather than a knob. Its
+  baseline is that task's noise sweep (`../temp/hybrid-slope-bounds/sweep.log`); it waits
+  on `nf-display-stages/midtone-contrast-toe`, whose toe changes the shadows where thin
+  frames' grain shows.

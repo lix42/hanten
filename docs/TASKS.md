@@ -388,6 +388,7 @@ graph TD
     nf-display-stages/parametric-shoulder
     nf-display-stages/branch-contract
     nf-display-stages/gamut-map-share
+    nf-display-stages/midtone-contrast-toe
   end
   subgraph nf-destinations
     nf-destinations/preset-set
@@ -415,6 +416,7 @@ graph TD
     nf-calibration/envelope-hybrid-placement
     nf-calibration/per-frame-placement
     nf-calibration/hybrid-slope-bounds
+    nf-calibration/short-span-protection
     nf-calibration/display-white
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
@@ -701,6 +703,9 @@ graph TD
   nf-calibration/envelope-hybrid-placement --> nf-calibration/hybrid-slope-bounds
   nf-calibration/per-frame-placement --> nf-calibration/hybrid-slope-bounds
   nf-scene-correction/midtone-neutral --> nf-calibration/hybrid-slope-bounds
+  nf-calibration/hybrid-slope-bounds --> nf-display-stages/midtone-contrast-toe
+  nf-calibration/hybrid-slope-bounds --> nf-calibration/short-span-protection
+  nf-display-stages/midtone-contrast-toe --> nf-calibration/short-span-protection
   nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
   nf-calibration/level-target-zero --> nf-calibration/display-white
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
@@ -1198,6 +1203,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   and against the white rule it would move (the rule was chosen under reinhard)
 - `nf-display-stages/branch-contract` (new flow): `nf-display-stages/fit-range`, `nf-display-stages/fit-gamut`
   — where the branch happens and what each side may differ in
+- `nf-display-stages/midtone-contrast-toe` (new flow): `nf-calibration/hybrid-slope-bounds`
+  — filed 2026-10-11: steepens the slope that task bounds, so its maximum is the baseline
+  and is re-checked after
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
   — the destinations and their suffix rules
 - `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`, `nf-calibration/roll-section`
@@ -1379,6 +1387,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-calibration/hybrid-slope-bounds` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/per-frame-placement`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: the hybrid's provisional anchor and maximum slope, measured on
   whites taken after colour correction; the anchor moved to `span-roll-slope` 2026-10-09
+- `nf-calibration/short-span-protection` (new flow): `nf-calibration/hybrid-slope-bounds`, `nf-display-stages/midtone-contrast-toe`
+  — filed 2026-10-11: the maximum slope's value, split from `hybrid-slope-bounds` as a
+  noise guard; a toe changes the shadows where thin frames' grain shows
 - `nf-calibration/display-white` (new flow, **closed: folded into `nf-calibration/span-roll-slope`** 2026-10-09; the deps below are decision history): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
   — filed 2026-10-07: a white target in display terms, set together with the brightness
   target
@@ -2119,6 +2130,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   of top-end pixels under knees — so the knee'd whites are the per-channel shoulder's.
   It acts heavily only under the `shoulder` display tone. No off switch on either chain.
   Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
+- [ ] [More midtone contrast, the ends held by a toe and the
+  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — spread a frame's span over
+  more look stops than the display's range, compressing the ends; probe whether more
+  midtone contrast wins first
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the two renderings (`direct` and
@@ -2239,8 +2254,13 @@ the design now in `docs/design-spec.md` (§6–§7):
   by default** (`--display-black 6` turns it on; `direct` keeps 6)
 - [x] [Per-frame placement](tasks/nf-calibration/per-frame-placement.md) — `--placement
   frame`: each frame its own contrast from its span, its white at L\* 93; exposure limits ±1 EV (v13). **Done 2026-10-10**
-- [ ] [The maximum slope](tasks/nf-calibration/hybrid-slope-bounds.md) — the limit every
-  slope-setting placement shares, provisional at 3.5
+- [x] [The maximum slope](tasks/nf-calibration/hybrid-slope-bounds.md) — **done
+  2026-10-11** (`pipeline_version` 14): a hybrid frame the ±1 EV limit holds flattens to stay
+  inside the envelope; the dark target, the roll's p10 and per-roll's level measured and
+  kept. The maximum stays 3.5, a guard; its value moved to `short-span-protection`
+- [ ] [Protect short-span frames from too much
+  contrast](tasks/nf-calibration/short-span-protection.md) — the maximum slope as a noise
+  guard, fixed or keyed on the frame's span or noise
 - [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —
   **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps
   the roll's white to the target, so the two are chosen together

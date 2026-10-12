@@ -51,7 +51,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > new version (`--save-recipe` writes 13). At `output/sdr-jpeg-preset` (the SDR JPEG,
 > `pipeline_version` 13 unchanged) §7's `direct` destination examples and §8's
 > destination table, derivation and conflict refusals, suffix refusals and `roll`
-> naming were re-run. The staleness
+> naming were re-run. At `pipeline_version` 14 (`nf-calibration/hybrid-slope-bounds`, a
+> hybrid frame the exposure limit holds flattens to stay inside the envelope) only the
+> recipe `meta` moved, re-checked against the binary (`--save-recipe` writes 14). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -233,7 +235,7 @@ abridged):
 
 ```json
 {
-  "meta": { "nc_version": "0.1.0", "pipeline_version": 13, … },
+  "meta": { "nc_version": "0.1.0", "pipeline_version": 14, … },
   "params": {
     "recipe_version": 3,
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
@@ -547,7 +549,7 @@ and the measuring commands write parts of it):
 ```json
 {
   "meta": { "nc_version": "0.1.0", "git_commit": "…", "git_dirty": false,
-            "pipeline_version": 13, "target": "aarch64-apple-darwin" },
+            "pipeline_version": 14, "target": "aarch64-apple-darwin" },
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
@@ -1592,7 +1594,7 @@ dark end.
   `--roll-dark` to add. `direct` and the film master apply no roll, so they spare it.
 - The cap, floor and margin are provisional: they were chosen by review on nine rolls
   with no deliberately bad frames, on whites measured before the colour correction. So
-  are the span's 9.049 stops and the 3.5 maximum (`nf-calibration/hybrid-slope-bounds`).
+  are the span's 9.049 stops and the 3.5 maximum (`nf-calibration/short-span-protection`).
 
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
 `level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
@@ -1622,10 +1624,10 @@ envelope, `placement.envelope_stops`); each frame then gets its own slope, steep
 spread its own span over at least 7 look stops (`--hybrid-span`) but no steeper than keeps
 it inside that envelope, within the cap's slope and 3.5, and its own exposure, keeping
 60 % of its level's offset from the roll's (`--hybrid-level-keep`), held inside the
-envelope, then within 1 EV of the roll's either way. So a flat frame gains
+envelope, then within 1 EV of the roll's either way — where that limit holds a frame, its
+slope flattens so its ends stay inside the envelope. So a flat frame gains
 contrast and a dark frame comes up part of the way, while the roll's ends stay where the
-roll's slope puts them — except a frame the exposure limit holds, whose dark end can fall
-below the roll's. The frame's slope moves tone only; its
+roll's slope puts them. The frame's slope moves tone only; its
 colour stays at the roll's. It replaces both lifts, and is solved at render time from the
 frame's `tones`, so its settings need no re-measure. `measure-roll` reports each frame's
 at the defaults as `frames[].hybrid`, and `convert` as `chain.roll.frame_placement` (each
