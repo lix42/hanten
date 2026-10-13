@@ -22,12 +22,22 @@ Known:
   and brightest 1 %), and a span wider than ~7.3 stops, where the floor slope (1.237) stops
   compressing. A steep frame's tail at ×1 also sinks (1719).
 
-Open:
+Settled (2026-10-12, review round 1 and the user):
 
-- The toe's shape, and where it sits: fit range is the natural stage, and it must keep
-  below diffuse white identical across peaks.
-- How it coexists with display black.
-- Whether ×1.29 with a toe compares differently with ×1.
+- The toe is **the dark floor**, in fit range: a frame's measured darkest 1 % lifted to no
+  deeper than 4.5 stops below mid-grey, on by default (`pipeline_version` 15). Shape S
+  (display black's curve, reversed) over T: very hard to tell apart, S for a little more
+  shadow detail. It acts below mid-grey only, so every peak still agrees below diffuse
+  white. At ×1 it lifts none of the reviewed frames; the default slope stays (the probe).
+- Display black and the floor are one key, `fit_range.dark_end`, refused together.
+
+- `--contrast 1.3` with the floor is acceptable under `--placement roll` and `frame`
+  (bright under `frame`, a user's choice), opt-in only. Under `frame` it is refused on
+  11 short-span frames by the densest-sample probe, filed as
+  [`nf-calibration/overflow-probe-scope`](../nf-calibration/overflow-probe-scope.md).
+
+Open, for the dependents:
+
 - Noise on thin frames: a steeper midtone raises grain in stops, and the maximum slope
   binds more often — `nf-calibration/short-span-protection` re-checks it after this task.
 

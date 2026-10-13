@@ -21,9 +21,11 @@
 //! white balance's on luminance: the placement model `roll_white` solves in, with what the
 //! render applied. `chain`'s `the_black_endpoint_model_is_the_chain_s_render_of_a_neutral`
 //! pins it to the stages. The base is the real grade's
-//! (`fit_range::ResolvedBlack::film_base_stops`). Display black on places the base itself
-//! and has its own warning (`ResolvedBlack::warning`), so this check is skipped there.
+//! (`fit_range::ResolvedDarkEnd::film_base_stops`). Display black places the base itself
+//! and has its own warning (`ResolvedDarkEnd::warning`), so this check is skipped there;
+//! the floor lifts only the darkest stops, so it runs beside it.
 
+use crate::pipeline::chain::graded_tone;
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_range::{MIN_FILM_BASE_STOPS, display_stops};
@@ -74,10 +76,9 @@ impl Inputs {
     /// Where a tone (scene stops from mid-grey, before exposure) lands on the display, in
     /// stops from mid-grey.
     pub fn land(&self, stops: f32) -> f32 {
-        let ev = self.exposure + dot(self.white_balance, ACESCG_LUMA).log2();
         display_stops(
             self.headroom_stops,
-            0.18 * (self.slope * (stops + ev)).exp2(),
+            graded_tone(stops, self.slope, self.exposure, self.white_balance),
         )
     }
 }

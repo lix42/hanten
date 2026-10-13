@@ -421,6 +421,7 @@ graph TD
     nf-calibration/hybrid-slope-bounds
     nf-calibration/short-span-protection
     nf-calibration/hybrid-span-target
+    nf-calibration/overflow-probe-scope
     nf-calibration/display-white
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
@@ -1410,6 +1411,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   noise guard; a toe changes the shadows where thin frames' grain shows
 - `nf-calibration/hybrid-span-target` (new flow): `nf-display-stages/midtone-contrast-toe`
   — split from `midtone-contrast-toe` 2026-10-11: the hybrid's R, reviewed with a toe
+- `nf-calibration/overflow-probe-scope` (new flow): none
+  — filed 2026-10-12 from `midtone-contrast-toe` step 4: the densest-sample probe refuses
+  `--placement frame --contrast 1.3` on 11 frames, and every entry is checked, so whole rolls;
+  related to `short-span-protection`
 - `nf-calibration/display-white` (new flow, **closed: folded into `nf-calibration/span-roll-slope`** 2026-10-09; the deps below are decision history): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/level-target-zero`
   — filed 2026-10-07: a white target in display terms, set together with the brightness
   target
@@ -2132,7 +2137,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   toe)](tasks/nf-display-stages/parametric-operator.md) — **done 2026-09-26.**
   Reinhard compresses upward only, so the new chain had no black; supersedes
   `algo/content-aware-sigmoid-toe`. Chosen by review: `--display-black`
-  (`fit_range.display_black`, stops below mid-grey, default 6) shifts where the film
+  (`fit_range.display_black`, stops below mid-grey, default 6; since `midtone-contrast-toe`
+  `fit_range.dark_end` `{"black": …}`) shifts where the film
   base renders, fading to nothing at mid-grey; the reference is the decoded base
   graded with the frame, so it follows each frame's contrast
 - [x] [Does a parametric shoulder beat
@@ -2160,10 +2166,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   — **done 2026-10-11:** not as the default (×1 preferred); ×1.29 is an opt-in, documented
   as `--contrast 1.3`, its dark end sinking (darkest 1 % near L\* 6). Spike:
   [`docs/spike/midtone-contrast-probe.md`](spike/midtone-contrast-probe.md)
-- [ ] [More midtone contrast, the ends held by a toe and the
-  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — a toe holding the dark end
-  under `--contrast 1.3` and in the default's deep tails; then that setting under
-  `--placement roll`
+- [x] [More midtone contrast, the ends held by a toe and the
+  shoulder](tasks/nf-display-stages/midtone-contrast-toe.md) — **done 2026-10-12**
+  (`pipeline_version` 15): the dark floor, `default`'s, lifts a frame's measured darkest
+  1 % to no deeper than 4.5 stops below mid-grey (none at ×1, most at ×1.3); display black
+  became the other setting of the one key, `fit_range.dark_end`. `--contrast 1.3` with it
+  is acceptable under `roll` and `frame` (bright under `frame`), opt-in only
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the two renderings (`direct` and
@@ -2297,6 +2305,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   guard, fixed or keyed on the frame's span or noise
 - [ ] [The hybrid's span target with a toe](tasks/nf-calibration/hybrid-span-target.md) —
   whether a toe lets the hybrid's R (7) rise
+- [ ] [A steep frame refused by a sample no picture
+  holds](tasks/nf-calibration/overflow-probe-scope.md) — the densest-sample probe refuses
+  `--placement frame --contrast 1.3` on 11 frames of 09-18 and 09-29, and since every
+  `roll.frames` entry is checked, whole rolls
 - [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —
   **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps
   the roll's white to the target, so the two are chosen together

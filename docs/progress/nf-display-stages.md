@@ -11,7 +11,7 @@ ones.
 
 ## Epic summary
 
-Fit range and fit gamut as real stages, shared by both display branches, display black, and the operator question.
+Fit range and fit gamut as real stages, shared by both display branches, the dark end, and the operator question.
 
 The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`docs/nf-migration.md`).
@@ -39,18 +39,22 @@ against the base as stored. No hard HDR ceiling above `W`: the encoder clamps an
 counts what passes the peak — a gain-map destination must do that itself
 (`nf-destinations/gain-map-destination`), since `gain_ratio` does not.
 
-**Display black has landed** (`parametric-operator`, 2026-09-26): fit range shifts where
-the film base renders to `--display-black` stops below mid-grey (`fit_range.display_black`,
-default 6, ≈ L\* 2.5, `off` to disable) — a shift in stops on luminance, whole at the base
-and below, fading to nothing at mid-grey. The reference is the decoded film base graded
-with the frame (`chain::render` takes it), so it follows each frame's contrast and nothing
-is measured from the image; a base already deeper is left alone. Mid-grey, white and the
-branch contract are untouched.
+**The dark end is fit range's** (`fit_range.dark_end`): a shift in stops on luminance,
+whole at a reference and below, fading to nothing at mid-grey, graded with the frame so
+nothing is measured from the image; mid-grey, white and the branch contract are
+untouched. Two settings of one key. **Display black** (`parametric-operator`, 2026-09-26;
+`--display-black`, `{"black": stops}`) pushes the decoded film base down to its target,
+never lifts it; it was the default (6, ≈ L\* 2.5) until the hybrid placement
+(`nf-calibration/envelope-hybrid-placement`, 2026-10-10), and stays `direct`'s.
+**The floor** (`midtone-contrast-toe`, 2026-10-12; `--dark-floor`, `{"floor": stops}`)
+is `default`'s: it lifts a frame's measured darkest 1 % to no deeper than 4.5 stops
+(≈ L\* 7), never pushes it down, and needs the frame's tones.
 
 **Reinhard stands** (`parametric-shoulder`, 2026-09-27). With mid-grey, the rendered
 white and the peak pinned, any smooth shoulder stays within about 0.15 stop of reinhard.
 A brighter white with mid-grey pinned (+0.15, +0.30 stop, shadows untouched) lost to
-reinhard in review. Where white renders is `look.contrast` (the white rule). The
+reinhard in review. Where white renders is the look's slope: the frame's placement,
+else the roll's span, times `look.contrast`. The
 headroom barely moves white (0.09 stop from 6 stops to 2); it sets how hard the stops
 above white are compressed. HDR under the white rule was reviewed and stands
 (`nf-calibration/white-rule-hdr`, 2026-10-12).
@@ -69,8 +73,9 @@ float destination, never a per-channel clip.
 **More midtone contrast is an opt-in, not the default** (`midtone-contrast-probe`, done
 2026-10-11; `docs/spike/midtone-contrast-probe.md`). The default slope stays; a steeper one
 (`--contrast 1.3`, reviewed under the hybrid) is documented for those who want it. Pivoted at
-mid-grey, its dark end sinks (darkest 1 % near L\* 6) with nothing to hold it; that toe is
-`midtone-contrast-toe`, which also checks the setting under `--placement roll`.
+mid-grey, its dark end sinks (darkest 1 % near L\* 6); the floor (`midtone-contrast-toe`)
+holds it, and with it the setting is acceptable under `--placement roll` and `frame` too
+(bright under `frame`).
 
 ## fit-range
 
@@ -616,8 +621,8 @@ mid-grey, its dark end sinks (darkest 1 % near L\* 6) with nothing to hold it; t
 
 ## midtone-contrast-toe
 
-**Status:** not started
-**Updated:** 2026-10-11
+**Status:** done
+**Updated:** 2026-10-12
 
 - 2026-10-11: filed (user) while planning `nf-calibration/hybrid-slope-bounds`: a slope
   targeting the span plus about 2 EV, the ends compressed by a toe and reinhard's
@@ -632,6 +637,95 @@ mid-grey, its dark end sinks (darkest 1 % near L\* 6) with nothing to hold it; t
   toe now holds the dark end under the opt-in `--contrast 1.3` and in the default's tails
   (the cases `hybrid-slope-bounds` handed here), then that setting is checked under
   `--placement roll`. Not closed: the probe judged ×1.29 with its shadows sinking.
+- 2026-10-12: **started.** The toe's reference (user): the frame's stored darkest 1 %
+  (`roll.frames[].tones.dark_stops`, graded by the look); with no stored dark end (no
+  measured roll, or `direct`) the toe cannot act, and the report says so when it was asked
+  for. It lifts only, below mid-grey, so every peak agrees under diffuse white.
+- 2026-10-12: **measured** (`../temp/midtone-contrast-toe/tails.txt`, from the probe's
+  renders): `slope · (dark_stops + exposure)` predicts the rendered darkest 1 % within
+  +0.35 stop (+0.25 to +0.59); ×1.29 drops it a median 1.15 stops; the tail from the darkest
+  1 % to the darkest 0.1 % is a median 0.5 stop (up to 2.7). A floor 4.5 display stops under
+  mid-grey (L\* ≈ 7) lifts 45 of 66 frames at ×1.29 and none at ×1.
+- 2026-10-12: **review round 1** (`../temp/midtone-contrast-toe/`, throwaway hook on f053678;
+  66 frames of 09-18 and 09-29, default placement, SDR, display black off): ×1, ×1.29, and
+  ×1.29 with toe S (the lift fading by a smoothstep in stops to mid-grey, slope 1 below the
+  reference) or toe T (lift `(1 − u)²`, flattest at the reference, the tail squeezed).
+  Both toes leave no frame's darkest 1 % under L\* 5 (23 without) and mid-grey unchanged;
+  S keeps the darkest 5 % about 0.7–1 L\* higher, T is slightly quieter in the deepest
+  shadows. **Verdict (user):** very hard to tell apart; if one, **S**, for a little more
+  shadow detail.
+- 2026-10-12: **decided (user): the toe is on by default**, shape S, floor 4.5 display stops
+  under mid-grey; a flag turns it off. At ×1 it lifts none of the 66 frames, so it acts on
+  the wide-span tails and under `--contrast 1.3` without a second flag.
+- 2026-10-12: **one key for the dark end** (user): display black and the floor pull the
+  same stops opposite ways, so refusing them together makes them one enum,
+  `fit_range.dark_end` = `"off"` | `{"floor": stops}` | `{"black": stops}`, set by
+  `--dark-floor` and `--display-black` (refused together; either's `off` turns the dark
+  end off). `fit_range.display_black` retired: a stated value is refused naming
+  `{"black": …}`, its old `null` stripped as unstated. `direct` keeps black at 6.
+- 2026-10-12: **implemented** (`pipeline_version` 15). The floor reuses display black's
+  curve (`log-shift-to-mid-grey-v1`) with the frame's dark end as the reference and the
+  shift positive only — shape S is that curve reversed, so no new pixel code. The
+  reference is `chain::graded_tone` (exposure, white balance on luminance and the look's
+  slope over `tones.dark_stops`), which `black_endpoint::Inputs::land` now shares; it
+  leaves out the roll's midtone line. Report `chain.fit_range.dark_end` gains
+  `frame_dark_stops` (`null` without tones). A stated floor with no tones warns (its
+  remedy names `--rendering default` under `direct`); the default's is silent.
+  - **Gotcha — the curve folds over past a 3:1 lift.** Its flattest log-log slope is
+    `1 − 1.5 · shift / span`, so a reference more than 13.5 stops under a 4.5-stop floor
+    would reverse tones. The lift is capped at a third of the span (slope ≥ ½,
+    `MAX_LIFT_SHARE`); it binds only past 6.75 stops under, which no reviewed frame
+    reaches (the deepest lifted one ≈ 5.4).
+  - **Gotcha — equivalence tests across routes.** Two `measure-roll` tests compare a
+    route carrying the frames' tones against one that cannot (style knobs, a hand-built
+    manifest); they now state `--dark-floor off` on both sides. The hybrid flag-vs-recipe
+    comparison keeps the floor on.
+  - Goldens: `golden_dark_floor_is_correct_within_its_libm_window` (seven libm results
+    enumerated ±2 ULP, `2^−4.5` among them, not a whole stop). Drift gate: v15 row, only
+    `recipe` moved; the gate's test now perturbs the dark end too. Gates green (806 unit,
+    277 integration, 589 nctool); the ignored asset probes pass.
+- 2026-10-12: **the shipped floor lifts less than the reviewed prototype, by design.** The
+  prototype's reference left out the roll's white balance on luminance, so it read a
+  frame's dark end too deep where the gains brighten (09-29) and over-lifted. With the
+  gain in (`graded_tone`), the rendered darkest 1 % at ×1.29 lands at L\* 6.8–7.9 on six
+  frames (09-29 2020/2025/2040, 09-18 1774/1795/1826), against 7.5–8.9 in the review and
+  4.4–6.5 bare; the floor's own L\* is 7.2. Lifts on 09-29 are ~0.3 stop smaller (2040:
+  0.57 vs 0.92), on 09-18 ~0.06. **Kept at 4.5 (user)**, the reviewed S/T difference being
+  smaller still.
+- 2026-10-12: **where the shipped floor acts** (all 66 measured frames, the probe's recipes):
+  at ×1 it lifts none (the deepest dark end renders 4.06 stops under mid-grey on 09-18,
+  3.96 on 09-29); at ×1.3 it lifts 25 of 35 on 09-18 (median 0.46, max 0.86 stop) and 20
+  of 31 on 09-29 (median 0.62, max 0.72).
+- 2026-10-12: **step 4 set built** (`../temp/midtone-contrast-toe-placement/`, binary
+  `hanten-v15`): 66 frames × `--placement roll` / `frame` at ×1 and ×1.3, the floor on.
+  Under `frame` ×1.3 the densest-sample probe refuses 11 frames on their own entry, and the
+  measured whole-roll recipe refuses both rolls; the set renders each cell from a recipe
+  holding only its frame's entry, the 11 as gaps. Filed as
+  `nf-calibration/overflow-probe-scope` (user).
+- 2026-10-12: **step 4 verdict (user, review app):** `--contrast 1.3` with the floor is
+  acceptable under `--placement roll` and `frame`; under `frame` it is "kind of bright"
+  (its brightest 1 % a median L\* 97, past the placement's 93) but a user's choice, as long
+  as it is not the default. Medians (09-18 / 09-29), roll ×1.3: darkest 1 % L\* 10.0 /
+  13.8, brightest 87.7 / 83.7; frame ×1.3: 7.1 / 7.0 and 96.9 / 97.1. `using-nc.md`'s
+  `--contrast 1.3` bullet now says so.
+- 2026-10-12: **done.** **For dependents:** the dark floor (`fit_range.dark_end`
+  `{"floor": 4.5}`) is on by default and acts only where a frame's measured darkest 1 %
+  renders deeper — at ×1 on no reviewed frame, at ×1.3 on 45 of 66; it reads the frame's
+  `tones`, so an unmeasured frame is untouched. `hybrid-span-target` and
+  `short-span-protection` judge with it on; thin frames' shadows under a steep slope are
+  lifted by up to a third of their span. Left open: `nf-calibration/overflow-probe-scope`
+  (frame ×1.3 refused on short spans).
+- 2026-10-12: **`/code-review` round** (8 findings; 6 fixed). A floor the cap holds short now
+  warns (`ResolvedDarkEnd::warning`), and the help, the guide and `PIPELINE_BEHAVIOR` name
+  the cap. A typed `--dark-floor STOPS` under `direct` is refused before the decode
+  (`cli::reject_a_floor_nothing_measures`; its `off` is spared). The unread-floor remedy
+  names the missing `roll.frames` entry on a measured roll. The `--dark-floor` help states
+  `direct`'s default. The floor golden drops the cap's `log2` (asserted not to bind):
+  5^6 cases. **Rejected:** the film-master remedy `--dark-floor off` failing beside a typed
+  `--display-black` — a typed flag cannot be repeated either, so dropping it is the remedy,
+  as the message offers, and for a recipe's black `--dark-floor off` works. **Kept (user):**
+  `display_black: null` stripped, its comment now saying why. Duplication between the two
+  goldens' oracles left as is.
 
 ## midtone-contrast-probe
 

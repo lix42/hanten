@@ -37,7 +37,7 @@
 //! **The chain splits after the look ([`GradedImage`]) and the branches differ in one
 //! argument: the display's peak.** A gain map needs the two renditions to agree below
 //! diffuse white ([`DIFFUSE_WHITE`]), so every stage that shapes contrast or colour
-//! sits above the split, and so do fit range's headroom and display black
+//! sits above the split, and so do fit range's headroom and dark end
 //! ([`SharedParams`]), with the film base graded once for both. The types carry it:
 //! nothing above the split can read a [`DisplayTarget`], and [`render_pair`] cannot
 //! set either per branch.
@@ -62,7 +62,7 @@
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, DisplayReferredImage, FitGamutParams};
-use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitRangeParams};
+use crate::pipeline::fit_range::{self, DarkEnd, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
 use crate::pipeline::scene_correction::{
     self, MidtoneCorrection, SceneCorrection, SceneCorrectionParams,
@@ -72,7 +72,7 @@ use crate::stage::{StageClock, StageKind, Untimed};
 use crate::types::{LinearImage, NcError, Result};
 
 /// Everything every rendition of a frame shares: the stages above the branch point,
-/// and fit range's headroom and display black.
+/// and fit range's headroom and dark end.
 ///
 /// **The headroom is here, not in [`DisplayTarget`], on purpose.** Reinhard's white
 /// point `W = 2^headroom_stops` shapes every luminance, the midtones included, so two
@@ -86,10 +86,13 @@ pub struct SharedParams {
     pub look: LookParams,
     /// Fit range's headroom in stops (the recipe's `fit_range.headroom_stops`).
     pub headroom_stops: f32,
-    /// Where the film base renders on the display (the recipe's
-    /// `fit_range.display_black`). Shared for the reason the headroom is: it acts below
-    /// mid-grey, where the branches must agree.
-    pub display_black: DisplayBlack,
+    /// Where the dark end renders on the display (the recipe's `fit_range.dark_end`).
+    /// Shared for the reason the headroom is: it acts below mid-grey, where the branches
+    /// must agree.
+    pub dark_end: DarkEnd,
+    /// The frame's measured dark end in scene stops (`roll_white::FrameStops::dark_stops`),
+    /// where the roll applies: the floor's reference, graded by [`graded_tone`].
+    pub frame_dark_stops: Option<f32>,
 }
 
 /// What a destination states about the display it renders for: the peak fit range
@@ -143,7 +146,7 @@ pub struct RenderedPair {
 ///
 /// **Today this is scene correction's per-channel gains, the look's print contrast, saturation,
 /// per-channel grade and highlight desaturation, fit range's luminance operator and
-/// display black, and
+/// dark end, and
 /// the destination's 3×3 with the radial gamut map.** Nothing is clamped: content fit
 /// range left above the peak rides through to the encoder, which is the only place
 /// clamping happens. The gamut map is
@@ -165,7 +168,8 @@ pub struct RenderedPair {
 /// through the same NC film RGB v1 mapping as the frame): it is graded beside the
 /// frame, so display black's reference follows every parameter that moves where the
 /// base renders — the look's contrast above all — and nothing is estimated from the
-/// image.
+/// image. The floor's reference, the frame's measured dark end, is graded by
+/// [`graded_tone`] from what the grade applied.
 pub fn render(
     image: AcesCgImage,
     film_base: AcesCgImage,
@@ -242,6 +246,16 @@ fn graded_luminance(
     Ok(dot([r, g, b], ACESCG_LUMA))
 }
 
+/// A scene tone's graded ACEScg luminance: `stops` from mid-grey before exposure, through
+/// the exposure and the white balance's gain on luminance, then the look's slope pivoted
+/// at mid-grey. The placement's model of a neutral (`roll_white`), which
+/// `the_black_endpoint_model_is_the_chain_s_render_of_a_neutral` pins to the stages; the
+/// roll's midtone line, a per-channel correction, is left out.
+pub fn graded_tone(stops: f32, slope: f32, exposure: f32, white_balance: [f32; 3]) -> f32 {
+    let ev = exposure + dot(white_balance, ACESCG_LUMA).log2();
+    0.18 * (slope * (stops + ev)).exp2()
+}
+
 /// [`grade`] on a few pixels, for a value rule to read (`recipe::validate_render`): the
 /// stages a render runs, so the rule sees the values the render will.
 pub fn graded_pixels(image: AcesCgImage, shared: &SharedParams) -> Result<LinearImage> {
@@ -275,8 +289,16 @@ fn display(
     let fit_range_params = FitRangeParams {
         headroom_stops: shared.headroom_stops,
         peak: target.peak,
-        display_black: shared.display_black,
+        dark_end: shared.dark_end,
         film_base,
+        frame_dark: shared.frame_dark_stops.map(|stops| {
+            graded_tone(
+                stops,
+                shared.look.section.slope,
+                scene_correction.exposure,
+                scene_correction.white_balance,
+            )
+        }),
     };
     let fit_gamut_params = FitGamutParams {
         target: target.gamut,
@@ -419,7 +441,8 @@ mod tests {
                 midtone: None,
                 look: LookParams::off(),
                 headroom_stops: 0.0,
-                display_black: DisplayBlack::Off,
+                dark_end: DarkEnd::Off,
+                frame_dark_stops: None,
             },
             target: DisplayTarget {
                 peak: DisplayPeak::SDR,
@@ -435,15 +458,16 @@ mod tests {
         p
     }
 
-    /// Fit range's parameters as `display` builds them from `p`, for a `p` with display
-    /// black off (the film base is then unread).
+    /// Fit range's parameters as `display` builds them from `p`, for a `p` with the dark
+    /// end off (the film base and the frame's dark end are then unread).
     fn fit_range_params(p: &ChainParams) -> FitRangeParams {
-        assert_eq!(p.shared.display_black, DisplayBlack::Off);
+        assert_eq!(p.shared.dark_end, DarkEnd::Off);
         FitRangeParams {
             headroom_stops: p.shared.headroom_stops,
             peak: p.target.peak,
-            display_black: p.shared.display_black,
+            dark_end: p.shared.dark_end,
             film_base: FILM_BASE,
+            frame_dark: None,
         }
     }
 
@@ -985,14 +1009,13 @@ mod tests {
 
     #[test]
     fn display_black_places_the_film_base_itself_at_its_target() {
-        let black_on =
-            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+        let black_on = DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         // A frame holding its own film base renders that pixel at the target, whatever
         // the contrast: the reference is graded with the frame.
         for contrast in [1.2_f32, 1.25, 1.4, 1.65] {
             let mut shared = shared_acting();
             shared.look.section.slope = contrast;
-            shared.display_black = black_on;
+            shared.dark_end = black_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1007,7 +1030,7 @@ mod tests {
                 &mut Untimed,
             )
             .unwrap();
-            let black = rendered.fit_range.display_black;
+            let black = rendered.fit_range.dark_end;
             let (out, _) = rendered.image.into_parts();
             let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
             let want = 0.18 * (-crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS).exp2();
@@ -1023,7 +1046,7 @@ mod tests {
         let shift = |contrast: f32| {
             let mut shared = shared_acting();
             shared.look.section.slope = contrast;
-            shared.display_black = black_on;
+            shared.dark_end = black_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1034,7 +1057,7 @@ mod tests {
             render(grid(), film_base(), &p, &mut Untimed)
                 .unwrap()
                 .fit_range
-                .display_black
+                .dark_end
                 .shift_stops
         };
         assert!(
@@ -1044,19 +1067,54 @@ mod tests {
     }
 
     #[test]
+    fn the_floor_holds_the_frame_s_measured_dark_end_at_its_target() {
+        use crate::pipeline::fit_range::DEFAULT_DARK_FLOOR_STOPS;
+        // A neutral at the frame's measured dark end renders at the floor, whatever the
+        // slope and exposure that would have sunk it: the reference is graded with the
+        // frame. Each dark end is graded to about 5.2 stops down: under the floor, and
+        // within the lift's cap.
+        for (slope, exposure) in [(1.2_f32, 0.0_f32), (1.6, 0.25), (2.0, -0.4)] {
+            let dark = -5.2 / slope - exposure;
+            let mut p = shipped_params();
+            p.shared.look.section.slope = slope;
+            p.shared.scene_correction.exposure = exposure;
+            p.shared.dark_end = DarkEnd::default();
+            p.shared.frame_dark_stops = Some(dark);
+            let rendered = render(
+                aces_from(1, 1, &[0.18 * dark.exp2(); 3]),
+                film_base(),
+                &p,
+                &mut Untimed,
+            )
+            .unwrap();
+            let floor = rendered.fit_range.dark_end;
+            assert!(floor.shift_stops > 0.0, "slope {slope}: {floor:?}");
+            let (out, _) = rendered.image.into_parts();
+            let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
+            let want = 0.18 * (-DEFAULT_DARK_FLOOR_STOPS).exp2();
+            assert!(
+                (y / want - 1.0).abs() < 3e-3,
+                "slope {slope}, exposure {exposure}: {y} vs {want}"
+            );
+        }
+    }
+
+    #[test]
     fn a_film_base_that_grades_to_nothing_is_refused() {
         let mut p = shipped_params();
-        p.shared.display_black =
-            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+        p.shared.dark_end =
+            DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         let err = render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed)
             .err()
             .expect("refused");
         assert!(err.message().contains("film base"), "{}", err.message());
-        // With display black off the base is never read, so it cannot fail the render.
-        p.shared.display_black = DisplayBlack::Off;
-        render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed).unwrap();
-        p.shared.display_black =
-            DisplayBlack::StopsBelowMid(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+        // Without display black the base is never read, so it cannot fail the render.
+        for unread in [DarkEnd::Off, DarkEnd::default()] {
+            p.shared.dark_end = unread;
+            render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed).unwrap();
+        }
+        p.shared.dark_end =
+            DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
         let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6]), &p, &mut Untimed)
             .err()
             .expect("refused");
@@ -1083,7 +1141,8 @@ mod tests {
                 linearization: crate::algo::fixed::LINEARIZATION,
             },
             headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
-            display_black: DisplayBlack::default(),
+            dark_end: DarkEnd::default(),
+            frame_dark_stops: None,
         }
     }
 
@@ -1110,15 +1169,23 @@ mod tests {
     #[test]
     fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
         // At the shipped headroom, and at zero, where reinhard is the identity and
-        // pixels reach fit gamut at luminance near white. Display black is on in both,
-        // so the contrast is checked with it in the chain.
+        // pixels reach fit gamut at luminance near white. The dark end acts in every
+        // case — display black, and the floor lifting a dark end 7 scene stops down —
+        // so the contract is checked with it in the chain.
         for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
-            let mut shared = shared_acting();
-            shared.headroom_stops = stops;
-            shared.display_black = DisplayBlack::StopsBelowMid(
-                crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS,
-            );
-            pair_agrees_below_white(&shared);
+            for (dark_end, frame_dark_stops) in [
+                (
+                    DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS),
+                    None,
+                ),
+                (DarkEnd::default(), Some(-7.0)),
+            ] {
+                let mut shared = shared_acting();
+                shared.headroom_stops = stops;
+                shared.dark_end = dark_end;
+                shared.frame_dark_stops = frame_dark_stops;
+                pair_agrees_below_white(&shared);
+            }
         }
     }
 
@@ -1398,7 +1465,7 @@ mod tests {
                 roll_exposure: false,
                 stated_exposure: exposure,
                 stated_white_balance: [gain; 3],
-                film_base_stops: out.fit_range.display_black.film_base_stops,
+                film_base_stops: out.fit_range.dark_end.film_base_stops,
                 headroom_stops: out.fit_range.headroom_stops,
                 contrast: 1.0,
                 base_slope: slope,

@@ -2073,3 +2073,16 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-11: re-scoped by `nf-display-stages/midtone-contrast-probe`: without a toe, a
   steeper hybrid slope (×1.15, ×1.29) lost to ×1, so the default stays; R is re-asked only
   with the toe ([`docs/spike/midtone-contrast-probe.md`](../spike/midtone-contrast-probe.md)).
+
+## overflow-probe-scope
+
+**Status:** not started
+**Updated:** 2026-10-12
+
+- 2026-10-12: filed (user) from `nf-display-stages/midtone-contrast-toe` step 4: under
+  `--placement frame --contrast 1.3`, `recipe::validate_render`'s densest-sample probe (a
+  zero sample at the scan floor) overflows f32 on 11 frames' own entries (09-18: 1789, 1799,
+  1813, 1820; 09-29: 2038, 2040, 2045, 2047, 2048, 2051, 2053), and since every
+  `roll.frames` entry is checked, the measured recipe refuses both whole rolls. On 1789 the
+  limit is between slope 4.33 and 4.50; the pre-toe binary refuses the same. Set:
+  `../temp/midtone-contrast-toe-placement/`.

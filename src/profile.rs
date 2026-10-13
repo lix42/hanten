@@ -144,9 +144,10 @@ pub const NOTES: &[Note] = &[
         "stops above reference white; 0 is the identity",
     ),
     value(
-        "fit_range.display_black",
-        "--display-black",
-        "where the film base renders, in display stops below mid-grey, or \"off\"",
+        "fit_range.dark_end",
+        "--dark-floor",
+        "{\"floor\": S}, the frame's darkest 1 % no deeper than S display stops below \
+         mid-grey; {\"black\": S}, the film base at S (--display-black); or \"off\"",
     ),
     section("fit_gamut", "no settings yet"),
     section(

@@ -7920,7 +7920,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     let (default, report) = convert("default.tiff", &[]);
     assert_eq!(report["chain"]["fit_range"]["headroom_stops"], 6.0);
     let default_clipped = clipped(&report);
-    let report_default_black = report["chain"]["fit_range"]["display_black"].clone();
+    let report_default_dark_end = report["chain"]["fit_range"]["dark_end"].clone();
 
     let (four, report) = convert("four.tiff", &["--display-tone-headroom", "4"]);
     let fr = &report["chain"]["fit_range"];
@@ -7951,21 +7951,29 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         clipped(&report)
     );
 
-    // Display black: off by default; on, and deeper, each render differently.
-    let black = &report_default_black;
-    assert_eq!(black["setting"], "off", "{black}");
-    assert_eq!(black["curve"], "identity");
-    assert_eq!(black["shift_stops"], 0.0);
+    // The dark end: the floor by default, which a frame with no measured dark end
+    // leaves alone; display black on, and deeper, each render differently.
+    let dark_end = &report_default_dark_end;
+    assert_eq!(
+        dark_end["setting"],
+        serde_json::json!({"floor": 4.5}),
+        "{dark_end}"
+    );
+    assert_eq!(dark_end["curve"], "identity");
+    assert_eq!(dark_end["frame_dark_stops"], serde_json::Value::Null);
+    assert_eq!(dark_end["shift_stops"], 0.0);
+    let (off, _) = convert("off.tiff", &["--dark-floor", "off"]);
+    assert_eq!(read_u16_tiff(&off), read_u16_tiff(&default));
     let (on, report) = convert("on.tiff", &["--display-black", "6"]);
     assert_eq!(
-        report["chain"]["fit_range"]["display_black"]["curve"],
+        report["chain"]["fit_range"]["dark_end"]["curve"],
         "log-shift-to-mid-grey-v1"
     );
     assert_ne!(read_u16_tiff(&on), read_u16_tiff(&default));
     let (deeper, report) = convert("deeper.tiff", &["--display-black", "7"]);
     assert_eq!(
-        report["chain"]["fit_range"]["display_black"]["setting"],
-        7.0
+        report["chain"]["fit_range"]["dark_end"]["setting"],
+        serde_json::json!({"black": 7.0})
     );
     assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&on));
 
@@ -7983,7 +7991,8 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("`fit_range.headroom_stops`"), "{err}");
 
-    // A bad display black is refused naming its flag and key.
+    // A bad dark end is refused naming its flag and key, and the two flags that set it
+    // together are refused.
     let refused = |extra: &[&str]| {
         let out = tmp.path("refused.tiff");
         let mut argv = vec![
@@ -8001,8 +8010,159 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     };
     let err = refused(&["--display-black", "0"]);
     assert!(
-        err.contains("--display-black (recipe `fit_range.display_black`)"),
+        err.contains("--display-black (recipe `fit_range.dark_end`)"),
         "{err}"
+    );
+    let err = refused(&["--dark-floor", "0"]);
+    assert!(
+        err.contains("--dark-floor (recipe `fit_range.dark_end`)"),
+        "{err}"
+    );
+    let err = refused(&["--dark-floor", "4", "--display-black", "6"]);
+    assert!(
+        err.contains("--dark-floor") && err.contains("--display-black"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
+    // `nf-display-stages/midtone-contrast-toe` through the binary: 09-18 Gold200 1774's
+    // tones under the hybrid, at a contrast steep enough to sink its darkest 1 % under
+    // the default floor, which lifts it there. A floor stated where no frame was
+    // measured does nothing, and says so; the default's is silent.
+    let tmp = TempDir::new("dark-floor");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (out, json(&stdout))
+    };
+    let hybrid = [
+        "--roll-white-balance",
+        "1,1,1",
+        "--roll-white",
+        "1.5",
+        "--roll-dark=-3.73",
+        "--roll-exposure",
+        "1.25",
+        "--roll-envelope=-3.78,2.09",
+        "--roll-frame-tones=0.46,-1.96,-3.76",
+        "--contrast",
+        "1.6",
+    ];
+    let (lifted, report) = convert("lifted.tiff", &hybrid);
+    let d = &report["chain"]["fit_range"]["dark_end"];
+    assert_eq!(d["setting"], serde_json::json!({"floor": 4.5}), "{d}");
+    assert_eq!(d["curve"], "log-shift-to-mid-grey-v1", "{d}");
+    let (dark, shift) = (
+        d["frame_dark_stops"].as_f64().unwrap(),
+        d["shift_stops"].as_f64().unwrap(),
+    );
+    assert!(dark > 4.5 && shift > 0.0, "{d}");
+    assert!((dark - shift - 4.5).abs() < 1e-3, "{d}");
+    assert_eq!(
+        report["chain"]["stages"][2]["applied"],
+        "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1"
+    );
+    let (off, report) = convert(
+        "off.tiff",
+        &[&hybrid[..], &["--dark-floor", "off"]].concat(),
+    );
+    assert_eq!(
+        report["chain"]["fit_range"]["dark_end"]["curve"],
+        "identity"
+    );
+    assert_ne!(read_u16_tiff(&lifted), read_u16_tiff(&off));
+
+    let unread = |w: &serde_json::Value| {
+        w.as_array()
+            .into_iter()
+            .flatten()
+            .any(|w| w.as_str().unwrap().contains("no measured dark end"))
+    };
+    let (_, report) = convert("stated.tiff", &["--dark-floor", "5"]);
+    assert!(unread(&report["warnings"]), "{report}");
+    assert!(
+        report.to_string().contains("hanten measure-roll"),
+        "{report}"
+    );
+    let (_, report) = convert("default.tiff", &[]);
+    assert!(!unread(&report["warnings"]), "{report}");
+    // A measured roll with no tones for this file: the remedy is the file, not a re-run.
+    let measured = [&hybrid[..8], &["--dark-floor", "5"]].concat();
+    assert!(!measured.contains(&"--roll-frame-tones=0.46,-1.96,-3.76"));
+    let (_, report) = convert("measured.tiff", &measured);
+    assert!(unread(&report["warnings"]), "{report}");
+    assert!(
+        report.to_string().contains("no tones reach this frame"),
+        "{report}"
+    );
+
+    // `direct` leaves the measured tones out: a typed floor is refused before decoding,
+    // its `off` (which turns `direct`'s display black off) is not, and a recipe's floor
+    // renders and warns, naming the rendering.
+    let direct = |extra: &[&str]| {
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            "/dev/null/never",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--rendering",
+            "direct",
+            "--range",
+            "sdr",
+        ];
+        argv.extend_from_slice(extra);
+        run(&argv)
+    };
+    let (code, _, err) = direct(&["--dark-floor", "5"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--dark-floor holds") && err.contains("--rendering default"),
+        "{err}"
+    );
+    let (_, report) = convert(
+        "direct-off.tiff",
+        &[
+            "--rendering",
+            "direct",
+            "--range",
+            "sdr",
+            "--dark-floor",
+            "off",
+        ],
+    );
+    assert_eq!(
+        report["chain"]["fit_range"]["dark_end"]["setting"], "off",
+        "{report}"
+    );
+    let recipe = tmp.path("floor.json");
+    std::fs::write(
+        &recipe,
+        r#"{"recipe_version": 3, "rendering": "direct", "fit_range": {"dark_end": {"floor": 5}}}"#,
+    )
+    .unwrap();
+    let (_, report) = convert(
+        "direct.tiff",
+        &["--params", recipe.to_str().unwrap(), "--range", "sdr"],
+    );
+    assert!(unread(&report["warnings"]), "{report}");
+    assert!(
+        report.to_string().contains("--rendering default"),
+        "{report}"
     );
 }
 
@@ -8202,14 +8362,19 @@ fn the_default_destination_renders_a_display_p3_tiff() {
         assert_eq!(fr["headroom_stops"], 6.0);
         assert_eq!(fr["white_point"], 64.0);
         assert_eq!(fr["display_peak"], 1.0);
-        // Display black is off by default: at the fallback slope (a white 1.75 stops
-        // up) the base stays where the grade puts it, ≈ 5.0 stops under mid-grey.
-        let black = &fr["display_black"];
-        assert_eq!(black["setting"], "off", "{stdout}");
-        assert_eq!(black["curve"], "identity");
-        let base = black["film_base_stops"].as_f64().unwrap();
-        assert!((base - 4.96).abs() < 0.05, "{black}");
-        assert_eq!(black["shift_stops"], 0.0, "{black}");
+        // The dark end is the floor by default, and an unmeasured frame has nothing for
+        // it to hold: at the fallback slope (a white 1.75 stops up) the base stays where
+        // the grade puts it, ≈ 5.0 stops under mid-grey.
+        let dark_end = &fr["dark_end"];
+        assert_eq!(
+            dark_end["setting"],
+            serde_json::json!({"floor": 4.5}),
+            "{stdout}"
+        );
+        assert_eq!(dark_end["curve"], "identity");
+        let base = dark_end["film_base_stops"].as_f64().unwrap();
+        assert!((base - 4.96).abs() < 0.05, "{dark_end}");
+        assert_eq!(dark_end["shift_stops"], 0.0, "{dark_end}");
         // No section of the removed chain's report survives to claim an operation this
         // run did not perform.
         for absent in [
@@ -9629,6 +9794,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
             .ends_with(&flag[..8].join(" ")),
         "the roll's flag is the frame's without its envelope, lift and tones: {report}"
     );
+    // The dark floor reads the frame's tones, which the style knobs below cannot carry:
+    // off on both routes.
     let (code, stdout, err) = run(&[
         &[
             "convert",
@@ -9637,6 +9804,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
             "0.9,0.55,0.42",
             "--placement",
             "roll",
+            "--dark-floor",
+            "off",
             "-o",
             by_flag.to_str().unwrap(),
         ][..],
@@ -9705,6 +9874,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         &stops_text,
         "--roll-dark",
         &dark_text,
+        "--dark-floor",
+        "off",
         "-o",
         as_style.to_str().unwrap(),
     ]);
@@ -9745,6 +9916,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         recipe.to_str().unwrap(),
         "--placement",
         "roll",
+        "--dark-floor",
+        "off",
         "-o",
         by_recipe.to_str().unwrap(),
     ]);
@@ -11389,6 +11562,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     }
     // The input it was decoded under travels too: these scans state no transfer.
     assert_eq!(written["input"]["transfer"], "linear", "{written}");
+    // The dark floor reads the frames' tones, which the hand-built route below leaves
+    // out: off on both.
     let out = tmp.path("out");
     let (code, stdout, err) = run(&[
         "roll",
@@ -11398,6 +11573,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         measured.to_str().unwrap(),
         "--placement",
         "roll",
+        "--dark-floor",
+        "off",
         "-o",
         out.to_str().unwrap(),
     ]);
@@ -11447,6 +11624,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         manifest.to_str().unwrap(),
         "--placement",
         "roll",
+        "--dark-floor",
+        "off",
         "-o",
         by_manifest.to_str().unwrap(),
     ]);
@@ -11978,7 +12157,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         "{roll}"
     );
     let base_stops = |r: &serde_json::Value| {
-        r["chain"]["fit_range"]["display_black"]["film_base_stops"]
+        r["chain"]["fit_range"]["dark_end"]["film_base_stops"]
             .as_f64()
             .unwrap()
     };
@@ -14595,6 +14774,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         (&["--white-balance", "1.2,1,1.1"][..], "scene correction"),
         (&["--display-tone-headroom", "3"][..], "fit range"),
         (&["--display-black", "5"][..], "fit range"),
+        (&["--dark-floor", "5"][..], "fit range"),
         (&["--contrast", "1.3"][..], "the look"),
     ]
     .into_iter()
@@ -14634,6 +14814,8 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         &["--display-tone-headroom", "0"][..],
         &["--display-tone-headroom", "6"][..],
         &["--display-black", "off"][..],
+        &["--dark-floor", "off"][..],
+        &["--dark-floor", "4.5"][..],
     ]
     .into_iter()
     .enumerate()
@@ -14645,7 +14827,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     let recipe = write_file(
         &tmp.path("stages.json"),
         r#"{"recipe_version": 3, "scene_correction": {"exposure": 1.5},
-            "fit_range": {"headroom_stops": 4, "display_black": 5}}"#,
+            "fit_range": {"headroom_stops": 4, "dark_end": {"black": 5}}}"#,
     );
     let r = recipe.to_str().unwrap();
     let (code, _, err) = convert_48bit(&tmp.path("rec"), &["--film-master", "--params", r]);
@@ -14665,7 +14847,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
             "0",
             "--display-tone-headroom",
             "0",
-            "--display-black",
+            "--dark-floor",
             "off",
         ],
     );
