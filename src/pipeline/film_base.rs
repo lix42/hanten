@@ -20,9 +20,14 @@
 //!   and picture, and there the base is the most transparent sub-population, which a
 //!   high percentile reaches past the rest.
 //!
-//! Nothing searches for a rebate: the inset passes over it blind. The effective-area
-//! measurement is not a [`FilmBaseSource`] — it runs only in the measurement commands,
-//! and a conversion takes their result as an explicit base.
+//! - **The roll's picture frames, pooled** ([`ContentPool`]), read at
+//!   [`CONTENT_PERCENTILE`]: the last resort for a roll with no unexposed film
+//!   (`measure-roll --base-content`), where the deepest black of the scenes stands in
+//!   for the base.
+//!
+//! Nothing searches for a rebate: the inset passes over it blind. Neither the
+//! effective-area nor the content measurement is a [`FilmBaseSource`] — they run only in
+//! the measurement commands, and a conversion takes their result as an explicit base.
 //!
 //! The effective area also feeds [`polarity_warning`] on every `convert`, `roll` and
 //! `measure-roll` picture frame, so a change to the area or inset moves that warning
@@ -229,7 +234,7 @@ pub fn estimate(image: &LinearImage, source: &FilmBaseSource) -> Result<BaseEsti
 /// tiling is fed by the same scan, into its own fixed histograms.
 pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEstimate> {
     let [_, _, w, h] = area.region;
-    let mut hist = CodeHistogram::new();
+    let mut hist = AreaCounts::new();
     let mut tiling = area_uniformity::Tiling::new(w, h);
     for_each_code(image, area.region, |dx, dy, c, code| {
         hist.add(c, code);
@@ -237,14 +242,7 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
             t.add(dx, dy, c, code);
         }
     })?;
-    let [lo, hi] = AREA_SPREAD_PERCENTILES;
-    let mut base = [0.0f32; 3];
-    let mut spread = 0.0f32;
-    for (c, b) in base.iter_mut().enumerate() {
-        *b = hist.percentile(c, AREA_PERCENTILE);
-        let range = hist.percentile(c, hi) - hist.percentile(c, lo);
-        spread = spread.max(if *b > 0.0 { range / *b } else { 1.0 });
-    }
+    let (base, spread) = hist.median_and_spread();
     let mut warnings = Vec::new();
     if spread > AREA_MAX_RELATIVE_SPREAD {
         warnings.push(format!(
@@ -389,8 +387,9 @@ fn sample_region(image: &LinearImage, rect: [u32; 4]) -> Result<BaseEstimate> {
 }
 
 /// Per-channel counts of the 16-bit codes over a rectangle, and the number of
-/// finite samples counted per channel.
-struct CodeHistogram {
+/// finite samples counted per channel. A fixed ~1.5 MB whatever the rectangle.
+#[derive(Clone, Debug)]
+pub struct AreaCounts {
     counts: Vec<[u64; 3]>,
     n: [u64; 3],
 }
@@ -427,12 +426,19 @@ pub(crate) fn quantile_rank(n: u64, p: f32) -> u64 {
     (n.saturating_sub(1) as f64 * p.clamp(0.0, 1.0) as f64).round() as u64
 }
 
-impl CodeHistogram {
+impl AreaCounts {
     fn new() -> Self {
         Self {
             counts: vec![[0u64; 3]; CODES],
             n: [0u64; 3],
         }
+    }
+
+    /// Count the rectangle `[x, y, w, h]` ([`for_each_code`]).
+    pub fn of(image: &LinearImage, rect: [u32; 4]) -> Result<Self> {
+        let mut counts = Self::new();
+        for_each_code(image, rect, |_, _, c, code| counts.add(c, code))?;
+        Ok(counts)
     }
 
     fn add(&mut self, c: usize, code: usize) {
@@ -456,6 +462,194 @@ impl CodeHistogram {
         }
         unreachable!("rank {k} is below the channel's count")
     }
+
+    /// The per-channel `p`-quantile.
+    fn percentiles(&self, p: f32) -> [f32; 3] {
+        std::array::from_fn(|c| self.percentile(c, p))
+    }
+
+    /// The per-channel [`AREA_PERCENTILE`] and the worst per-channel
+    /// [`AREA_SPREAD_PERCENTILES`] spread, as [`measure_area`] reads them.
+    pub fn median_and_spread(&self) -> ([f32; 3], f32) {
+        let [lo, hi] = AREA_SPREAD_PERCENTILES;
+        let median = self.percentiles(AREA_PERCENTILE);
+        let spread = (0..3).fold(0.0f32, |s, c| {
+            let range = self.percentile(c, hi) - self.percentile(c, lo);
+            s.max(if median[c] > 0.0 {
+                range / median[c]
+            } else {
+                1.0
+            })
+        });
+        (median, spread)
+    }
+
+    /// Sum `other`'s counts into these.
+    fn merge(&mut self, other: &Self) {
+        for (a, b) in self.counts.iter_mut().zip(&other.counts) {
+            for c in 0..3 {
+                a[c] += b[c];
+            }
+        }
+        for c in 0..3 {
+            self.n[c] += other.n[c];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The content base (`film-base/content-fallback`): `measure-roll --base-content`.
+// ---------------------------------------------------------------------------
+//
+// With no unexposed film on a roll, its base is estimated from the pictures: the
+// deepest black in a scene is the thinnest part of the negative, near the base. Each
+// picture frame's effective area is counted into one pool, and the base is a high
+// percentile of the pool, per channel, so frames that hold deep shadows set it and
+// high-key frames contribute nothing. On the 12 archive rolls it lands within
+// -0.069..+0.092 density of each one's unexposed frame; the evidence, and the
+// estimators it beat, are in `docs/progress/film-base.md` (`content-fallback`).
+
+/// The percentile the content pool is read at.
+pub const CONTENT_PERCENTILE: f32 = 0.99;
+
+/// How much clearer, in density on any channel, one frame's own [`CONTENT_PERCENTILE`]
+/// may read than the pooled base before it is warned about: an overscan strip or a light
+/// leak in that frame. Picture frames legitimately read clearer than the base (it is not
+/// the brightest thing on a roll); over the archive the clearest is 0.075, so this is
+/// twice that.
+pub const CONTENT_MAX_CLEARER_DENSITY: f32 = 0.15;
+
+/// The pooled base at or above this transmission, on any channel, is warned about: a
+/// roll whose every frame shows clear film or backlight, which no frame-to-frame check
+/// sees. Archive bases read 0.07-0.58 and no picture sample exceeds 0.62.
+pub const CONTENT_MAX_TRANSMISSION: f32 = 0.9;
+
+/// The roll's picture frames' effective areas, counted for the content base. A frame
+/// that could be a leader (as flat as [`AREA_MAX_RELATIVE_SPREAD`]) is held apart when
+/// asked, so a leader found among the inputs afterwards can be left out exactly; every
+/// other frame goes straight into one sum, a fixed size however long the roll.
+#[derive(Debug)]
+pub struct ContentPool {
+    hold_flat: bool,
+    sum: Option<AreaCounts>,
+    held: Vec<(usize, AreaCounts)>,
+    /// Each frame's own [`CONTENT_PERCENTILE`], by input index, in the order added.
+    frames: Vec<(usize, [f32; 3])>,
+}
+
+/// What [`ContentPool::estimate`] measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContentBase {
+    pub base: FilmBase,
+    /// Each pooled frame's own [`CONTENT_PERCENTILE`], by input index.
+    pub frames: Vec<(usize, [f32; 3])>,
+    /// The pooled frames more than [`CONTENT_MAX_CLEARER_DENSITY`] clearer than the base
+    /// on some channel, with their worst channel's density.
+    pub clearer: Vec<(usize, f32)>,
+    /// Whether the base reaches [`CONTENT_MAX_TRANSMISSION`] on some channel.
+    pub near_full_scale: bool,
+}
+
+impl ContentPool {
+    /// `hold_flat` when a leader may be found among the frames later.
+    pub fn new(hold_flat: bool) -> Self {
+        Self {
+            hold_flat,
+            sum: None,
+            held: Vec::new(),
+            frames: Vec::new(),
+        }
+    }
+
+    /// Add input `frame`'s counts; returns their [`AreaCounts::median_and_spread`], which
+    /// decided whether the frame is held apart, for the leader classifier.
+    pub fn add(&mut self, frame: usize, counts: AreaCounts) -> ([f32; 3], f32) {
+        self.frames
+            .push((frame, counts.percentiles(CONTENT_PERCENTILE)));
+        let stats = counts.median_and_spread();
+        if self.hold_flat && stats.1 <= AREA_MAX_RELATIVE_SPREAD {
+            self.held.push((frame, counts));
+        } else if let Some(sum) = &mut self.sum {
+            sum.merge(&counts);
+        } else {
+            self.sum = Some(counts);
+        }
+        stats
+    }
+
+    /// The base over every added frame but `exclude` (found leaders), and the evidence
+    /// for its warnings ([`content_warnings`]).
+    pub fn estimate(&self, exclude: &[usize]) -> Result<ContentBase> {
+        let mut pooled = self.sum.clone();
+        for (i, counts) in &self.held {
+            if exclude.contains(i) {
+                continue;
+            }
+            match &mut pooled {
+                Some(p) => p.merge(counts),
+                None => pooled = Some(counts.clone()),
+            }
+        }
+        let pooled = pooled.ok_or_else(|| {
+            NcError::Usage("the content base has no picture frame to pool".into())
+        })?;
+        let rgb = pooled.percentiles(CONTENT_PERCENTILE);
+        let base = FilmBase::from(rgb);
+        guard_base(
+            &base,
+            "no picture frame has signal on some channel at the top of its range — are \
+             these the roll's picture frames?",
+        )?;
+        let frames: Vec<(usize, [f32; 3])> = self
+            .frames
+            .iter()
+            .filter(|(i, _)| !exclude.contains(i))
+            .copied()
+            .collect();
+        let clearer = frames
+            .iter()
+            .filter_map(|&(i, own)| {
+                // Density of the base above the frame's own value: positive when clearer.
+                let d = (0..3)
+                    .map(|c| (own[c] / rgb[c]).log10())
+                    .fold(f32::NEG_INFINITY, f32::max);
+                (d > CONTENT_MAX_CLEARER_DENSITY).then_some((i, d))
+            })
+            .collect();
+        Ok(ContentBase {
+            base,
+            frames,
+            clearer,
+            near_full_scale: rgb.iter().any(|&v| v >= CONTENT_MAX_TRANSMISSION),
+        })
+    }
+}
+
+/// The content base's warnings, each frame named by `name(input index)`.
+pub fn content_warnings(est: &ContentBase, name: impl Fn(usize) -> String) -> Vec<String> {
+    let mut warnings: Vec<String> = est
+        .clearer
+        .iter()
+        .map(|&(i, d)| {
+            format!(
+                "{}: its brightest content reads {d:.2} density clearer than the roll's \
+                 content base (over {CONTENT_MAX_CLEARER_DENSITY}), so the frame shows \
+                 something brighter than film: overscan past the film's edge (raise \
+                 --measure-inset) or a light leak. Leave it out of the frames if it \
+                 should not count",
+                name(i)
+            )
+        })
+        .collect();
+    if est.near_full_scale {
+        warnings.push(format!(
+            "the content base {:?} reaches {CONTENT_MAX_TRANSMISSION} of full scale on some \
+             channel: no film base transmits that much, so the frames show clear backlight \
+             past the film's edge (raise --measure-inset), or are not negatives",
+            <[f32; 3]>::from(est.base)
+        ));
+    }
+    warnings
 }
 
 // ---------------------------------------------------------------------------
@@ -1529,8 +1723,7 @@ mod tests {
     fn the_histogram_reproduces_the_sorted_percentile_on_decoded_data() {
         let img = grainy_film(64, 48, [0.53, 0.26, 0.16]);
         let rect = [5, 3, 50, 40];
-        let mut hist = CodeHistogram::new();
-        for_each_code(&img, rect, |_, _, c, code| hist.add(c, code)).unwrap();
+        let hist = AreaCounts::of(&img, rect).unwrap();
         for p in [0.0, 0.1, 0.5, 0.9, 0.97, 1.0] {
             let want = sorted_percentile(&img, rect, p);
             for (c, want) in want.iter().enumerate() {
@@ -2272,6 +2465,114 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    /// A 10x10 frame at `rest`, its first `rows` rows at `patch`; values are 16-bit codes.
+    fn counts(rest: [u16; 3], patch: [u16; 3], rows: u32) -> AreaCounts {
+        let rgb = (0..100u32)
+            .flat_map(|i| if i / 10 < rows { patch } else { rest })
+            .map(|v| f32::from(v) / 65535.0)
+            .collect();
+        AreaCounts::of(&LinearImage::new(10, 10, rgb).unwrap(), [0, 0, 10, 10]).unwrap()
+    }
+
+    const BASE: [u16; 3] = [30_000, 16_000, 9_000];
+    const PICTURE: [u16; 3] = [6_000, 3_000, 1_500];
+    const LEADER: [u16; 3] = [900, 500, 300];
+
+    fn code(v: [f32; 3]) -> [u16; 3] {
+        v.map(|x| (x * 65535.0).round() as u16)
+    }
+
+    #[test]
+    fn the_pool_reads_the_deepest_black_the_pictures_hold() {
+        let mut pool = ContentPool::new(false);
+        pool.add(0, counts(PICTURE, BASE, 2));
+        pool.add(1, counts(PICTURE, PICTURE, 0));
+        let est = pool.estimate(&[]).unwrap();
+        // 20 of 200 pooled pixels are base: p99 lands on them.
+        assert_eq!(code(est.base.into()), BASE);
+        assert_eq!(est.frames.len(), 2);
+        assert!(est.clearer.is_empty() && !est.near_full_scale);
+    }
+
+    #[test]
+    fn a_found_leader_leaves_the_pool_exactly() {
+        // A flat leader with one row clearer than the pictures' floor (dust-free film
+        // past the holder, say), which would move the pool.
+        let leader = || counts(LEADER, [40_000; 3], 1);
+        let mut with = ContentPool::new(true);
+        with.add(0, counts(PICTURE, BASE, 1));
+        with.add(1, leader());
+        let mut without = ContentPool::new(false);
+        without.add(0, counts(PICTURE, BASE, 1));
+        assert_eq!(
+            with.estimate(&[1]).unwrap().base,
+            without.estimate(&[]).unwrap().base
+        );
+        assert_ne!(
+            with.estimate(&[]).unwrap().base,
+            without.estimate(&[]).unwrap().base
+        );
+        assert_eq!(
+            with.estimate(&[1]).unwrap().frames,
+            [(0, without.frames[0].1)]
+        );
+    }
+
+    #[test]
+    fn the_input_order_does_not_move_the_base() {
+        let frames = [
+            counts(PICTURE, BASE, 1),
+            counts(PICTURE, [20_000, 9_000, 5_000], 4),
+            counts(PICTURE, PICTURE, 0),
+        ];
+        let base = |order: [usize; 3]| {
+            let mut pool = ContentPool::new(true);
+            for i in order {
+                pool.add(i, frames[i].clone());
+            }
+            pool.estimate(&[]).unwrap().base
+        };
+        assert_eq!(base([0, 1, 2]), base([2, 0, 1]));
+    }
+
+    #[test]
+    fn a_frame_far_clearer_than_the_pool_and_a_clear_roll_warn() {
+        let mut pool = ContentPool::new(false);
+        for i in 0..12 {
+            pool.add(i, counts(PICTURE, BASE, 1));
+        }
+        // A row of backlight: 10% of this frame, 0.8% of the pool.
+        pool.add(12, counts(PICTURE, [65_535; 3], 1));
+        let est = pool.estimate(&[]).unwrap();
+        assert_eq!(code(est.base.into()), BASE);
+        assert_eq!(est.clearer.len(), 1);
+        assert_eq!(est.clearer[0].0, 12);
+        let w = content_warnings(&est, |i| format!("f{i}.tif"));
+        assert!(w[0].starts_with("f12.tif: its brightest content"), "{w:?}");
+
+        let mut clear = ContentPool::new(false);
+        clear.add(0, counts([60_000; 3], [60_000; 3], 0));
+        let est = clear.estimate(&[]).unwrap();
+        assert!(est.near_full_scale && est.clearer.is_empty());
+        let w = content_warnings(&est, |i| i.to_string());
+        assert!(w[0].contains("of full scale"), "{w:?}");
+    }
+
+    #[test]
+    fn an_empty_pool_and_a_dark_channel_refuse() {
+        let mut pool = ContentPool::new(true);
+        pool.add(0, counts(LEADER, LEADER, 0));
+        assert!(pool.estimate(&[0]).is_err());
+        let mut dark = ContentPool::new(false);
+        dark.add(0, counts([5_000, 5_000, 0], [5_000, 5_000, 0], 0));
+        assert!(dark.estimate(&[]).is_err());
+    }
+}
+
 /// Probe: [`share_above_base`] on every manifest roll's picture frames, against the
 /// base measured from its unexposed frame. Prints derived numbers only.
 #[cfg(test)]
@@ -2279,17 +2580,23 @@ mod polarity_probe {
     use super::*;
     use std::path::PathBuf;
 
-    #[test]
-    #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
-    fn share_above_base_on_real_rolls() {
+    /// The asset root (`NC_ASSETS`, else `../nc-assets`) and its manifest; `None`, with a
+    /// SKIP line, when there is none.
+    pub(super) fn manifest() -> Option<(PathBuf, serde_json::Value)> {
         let root = std::env::var("NC_ASSETS")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nc-assets"));
         let Ok(text) = std::fs::read_to_string(root.join("manifest.json")) else {
             eprintln!("SKIP: no manifest");
-            return;
+            return None;
         };
-        let m: serde_json::Value = serde_json::from_str(&text).unwrap();
+        Some((root, serde_json::from_str(&text).unwrap()))
+    }
+
+    #[test]
+    #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+    fn share_above_base_on_real_rolls() {
+        let Some((root, m)) = manifest() else { return };
         for (roll, entry) in m["rolls"].as_object().unwrap() {
             let frames = entry["frames"].as_array().unwrap();
             let of = |role: &str| -> Vec<PathBuf> {
@@ -2335,6 +2642,58 @@ mod polarity_probe {
                     p.file_name().unwrap().to_string_lossy(),
                     s.join("  ")
                 );
+            }
+        }
+    }
+}
+
+/// Probe (`film-base/content-fallback`): high percentiles of every manifest frame's
+/// effective area, and of each roll's picture frames pooled, beside the base from its
+/// unexposed frame. Prints `CSV,` lines of derived numbers only.
+#[cfg(test)]
+mod content_probe {
+    use super::*;
+
+    const PS: [f32; 8] = [0.5, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9999, 1.0];
+
+    fn row(roll: &str, role: &str, file: &str, h: &AreaCounts) {
+        for c in 0..3 {
+            let v: Vec<String> = PS
+                .iter()
+                .map(|&p| format!("{:.6}", h.percentile(c, p)))
+                .collect();
+            println!("CSV,{roll},{role},{file},{c},{}", v.join(","));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+    fn content_percentiles_on_real_rolls() {
+        let Some((root, m)) = super::polarity_probe::manifest() else {
+            return;
+        };
+        for (roll, entry) in m["rolls"].as_object().unwrap() {
+            let mut pooled: Option<AreaCounts> = None;
+            for f in entry["frames"].as_array().unwrap() {
+                let role = f["role"].as_str().unwrap();
+                let p = root.join(f["file"].as_str().unwrap());
+                let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
+                let Ok(area) = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET) else {
+                    eprintln!("{}: no area", p.display());
+                    continue;
+                };
+                let h = AreaCounts::of(&scan.image, area.region).unwrap();
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                row(roll, role, &name, &h);
+                if role == "real" {
+                    match &mut pooled {
+                        None => pooled = Some(h),
+                        Some(acc) => acc.merge(&h),
+                    }
+                }
+            }
+            if let Some(h) = pooled {
+                row(roll, "pooled", "-", &h);
             }
         }
     }

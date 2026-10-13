@@ -66,10 +66,10 @@ roll, and the look file is the only one meant for other rolls.
 | Command | Does | Writes |
 |---|---|---|
 | `inspect` | what is this file (unchanged) | report |
-| `measure-roll` | **everything a roll shares**: the film base (`--unexposed`), white balance, midtone line, white and exposure | report; `--out` → `{"recipe_version": 3, "calibration": {…}, "roll": {…}}`, plus the per-frame clamps |
+| `measure-roll` | **everything a roll shares**: the film base (`--unexposed`, or `--base-content` with no unexposed film), white balance, midtone line, white and exposure | report; `--out` → `{"recipe_version": 3, "calibration": {…}, "roll": {…}}`, plus the per-frame clamps |
 | **`measure-base`** (was `estimate`) | the film base alone, from one frame or a region — for a single-frame `convert`, or a roll with no unexposed frame | report; `--out` → `{"recipe_version": 3, "calibration": {…}}` |
 | **`profile`** (was `params`) | author a look from flags, no image | annotated look file (JSONC), to stdout or `--out` |
-| `roll` | convert frames from layered recipes and flags — or, with `--measure-roll` (implied by `--unexposed`), measure the roll first | images; report; opt-in recipe (`--save-recipe`) |
+| `roll` | convert frames from layered recipes and flags — or, with `--measure-roll` (implied by `--unexposed` and `--base-content`), measure the roll first | images; report; opt-in recipe (`--save-recipe`) |
 
 The workflow becomes:
 
@@ -205,7 +205,9 @@ measure mode.
 
 So a roll with no unexposed frame is still one command after its base:
 `measure-base frame.tif --base-region … --out base.json`, then
-`roll frames/*.tif --params base.json --measure-roll --leader L --out-dir out/`.
+`roll frames/*.tif --params base.json --measure-roll --leader L --out-dir out/`. With no
+clear film at all, `roll frames/*.tif --base-content --leader L --out-dir out/` estimates
+the base from the pictures, as `measure-roll --base-content` does.
 
 **`--save-recipe PATH` is opt-in**, and it writes the resolved run — the measured
 sections, the clamps, every layer and every flag — so `roll --params PATH` over the
@@ -229,7 +231,8 @@ There is no automatic region rung, since nothing searches for a rebate, and no d
 single-frame conversion, since no per-frame base exists. **Nothing trustworthy is a
 refusal** (exit 2) naming `--unexposed FILE` and `measure-base --base-region`. A base
 from one frame is used with a warning, which `--strict` refuses. Content-based base
-estimation is never an automatic rung. Evidence and constants:
+estimation (`--base-content`, which the refusal names last) is never an automatic rung.
+Evidence and constants:
 `pipeline::reference_frames`.
 
 ### Authored files
