@@ -110,7 +110,8 @@ What other epics need to know about `analysis`:
   `io/streaming-tiled-io`: `io/memory-preflight` is required, streaming is a
   conditional GO pending a post-preflight re-measure. (`io/memory-preflight` has
   since shipped and re-measured: 975 → 681 MB at 18.66 MP, 3.808 → 3.146 GB on the
-  74.65 MP `largest.tif` — see `docs/progress/io.md`; STEP 0 is still unwritten.)
+  74.65 MP `largest.tif` — see `docs/progress/io.md`. STEP 0 was decided **no-go** on
+  2026-10-13: `docs/progress/io.md` `## streaming-tiled-io`.)
 - **Also found:** `--auto-base` fails loudly on every real frame (correct, given
   the holder layout — use the measured-reference workflow); u16 output clips
   4.8–10.3% high by default, routed to the display-output roadmap; float output is
