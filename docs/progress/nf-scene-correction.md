@@ -59,6 +59,15 @@ Nothing detects a roll of one dominant colour. `roll.neutral_balance` (`--neutra
 turns the roll's gains off at render time, frame-local, and takes the line with them;
 read the gains through `RollSection::applied_white_balance`, never the stated field.
 
+**A warm roll misleads both (`lomo100-cast-vs-ccr`, 2026-10-12).** On Lomography 100 the
+roll's p99 gains and the midtone line's blue term both read warm content as a cast and
+added blue. Oracle gains fitted to five neutrally lit white patches (red +0.06, blue −0.04 stop off
+the measured ones) fixed it. So one roll-level correction is enough, and the estimate is
+what fails: it needs ≈ 0.03 stop, since the look roughly doubles a scene cast. No
+statistic of the roll's own pixels found it. Follow-ups: `two-point-tilt` (a tilt pinned
+at black instead of the gains) and `midtone-line-terms` (each line term off, by hand or on
+a signal).
+
 ## stage
 
 **Status:** done
@@ -427,8 +436,8 @@ read the gains through `RollSection::applied_white_balance`, never the stated fi
 
 ## lomo100-cast-vs-ccr
 
-**Status:** not started
-**Updated:** 2026-10-11
+**Status:** done
+**Updated:** 2026-10-12
 
 - 2026-10-11: filed (user) from the first review of `2026-10-10-LomoColor100` (37 frames,
   RGB scans without IR): NLP vs SilverFast CCR vs Hanten `--placement frame` from one
@@ -449,3 +458,92 @@ read the gains through `RollSection::applied_white_balance`, never the stated fi
   - Patches (white): cloud on 2061 (2), 2063, 2064, 2066 (2), 2071 (3), 2074 (2); white
     cloth on 2072, 2073, 2075, 2076 (2), 2083; white wall on 2088 — 18 on 12 frames, in
     the manifest.
+- 2026-10-12: **measured** (`../temp/lomo100-cast/`, its `README` row; `f053678`, v14, the
+  review's recipe reproduced exactly). Report Artifact
+  https://claude.ai/artifact/WoFindud6Y1B8Xw4ZjBSzg. Whole roll copied from the archive into
+  `../nc-assets`, CCR and NLP exports under `converted/` (the manifest does not list them yet).
+  - **Where the blue comes from** (7 cloth/wall patches, median a\*, b\*; highlight
+    desaturation off, it does not move them): fixed decode alone +11.7, +2.1 (magenta, not
+    blue); + roll white balance −0.4, −4.8; + midtone line +1.5, −10.2. Cloud: −1.4 → −13.7 →
+    −16.8 b\*. The gains (red ×0.85, blue ×1.06) come from the roll's p99, which on this roll
+    is warm light; the line votes the roll 0.11–0.18 stop short of blue through the
+    midtones, where near-neutral pixels sit within ±0.05 — it votes the warm scene content
+    (`correction-confidence`'s one-colour roll, from light instead of sea).
+  - **What CCR does** (every pixel paired with Hanten's, binned by the film master's scene
+    stops): it does **not** place white past the range with a shoulder — its bright end is
+    at or below Hanten's (median L\* 88.9 vs 92.5), neither clips highlights. It clips black:
+    the film base to L\* 0 (Hanten ≈ 9), a median ¼ of the frame below L\* 3, 0.5–1.9 stops
+    darker from −3 to −1.5 stops. Colour differs at both ends and in the upper midtones
+    (CCR's near-neutrals yellower in the shadows, less blue above −0.5, less green at the
+    top). It is **per frame**: CCR − Hanten b\* spans −31 … +20; +6.5 median on the frames the
+    user preferred CCR, +2.0 where Hanten; it turns 2085, 2086, 2090 blue. Over all 7
+    cloth/wall patches its median b\* is close to Hanten's (−8.9 vs −10.2: the shade cloth
+    stays blue under both); it does fix cloud (−8.9 vs −16.8).
+  - **A roll-level fix is enough; the estimate is what fails.** Oracle gains fitted to the 5
+    neutrally lit patches (2073, 2075, 2076 ×2, 2088; shade cloth 2072/2083 left out as
+    skylight) differ from the measured gains by only red +0.06, blue −0.04 stops, and leave
+    those patches within ±0.08 stop. Since the look roughly doubles a scene cast, an
+    estimator needs ≈ 0.03 stop. Gains from near-neutral pixels (iterated, frames voting
+    equally) went the **wrong** way (red −0.10, blue +0.14), from either start: every
+    statistic of a warm roll — p99, line votes, near-neutral pixels — reads the warmth as
+    the cast. More pixels cannot separate a roll-wide content bias from a roll-wide cast.
+  - **Review 1** (`review/`, 37 frames, SDR sRGB vs CCR): A today, B line off (whites
+    re-measured), O B + oracle gains, D O + a red-only top-end tilt. **User: O best overall,
+    "really good enough"**; D adds nothing seen. Patch distance from neutral (median
+    √(a\*²+b\*²) on the review's sRGB JPEGs), lit cloth+wall / cloud — "lit" is the 5
+    neutrally lit patches, not the 7 above, so these do not compare with the stage medians: A 7.4 / 15.8, B 5.9 / 13.6, O 2.8 / 9.2, CCR 1.9 /
+    9.6 (O is fitted on the lit patches; cloud is the independent check). O needs marked
+    patches, so it is a bound, not a method.
+  - **Review 2**: the poor-development spike's two-point slope (B1: per-channel decode scale
+    pivoted at the base, neutral at the roll's p99 → `[0.9024, 0.84, 0.7399]`; measure-roll
+    under it finds gains ≈ 1) as T; T + the line measured under it (TL); TL with the line's
+    blue term zeroed (TR). Lit cloth+wall / cloud: T 5.6 / 11.4, TL 6.8 / 15.2, TR 5.1 / 12.7.
+    T keeps black neutral (near-neutral pixels at the film base: a\*, b\* −2.7, −6.8 under
+    A, +0.9, +0.8 under T) but leaves the lower midtones magenta (a\* +10…+12); the line under
+    T votes red +0.20 → −0.12 across the bands (removes that magenta) and blue −0.13…−0.27
+    (re-adds the blue). **User: TR not bad; acceptable on every frame but 2061.** O and D off
+    for the next review.
+  - **2061 is its light, not the film** (user's 4 patches, `notes/2061-patches.md`, not in
+    the manifest): under the oracle gains its window (the frame's brightest, −0.29 stop) is
+    neutral while its walls (−1.9, −2.2) and cloud are 0.22–0.31 stop blue in the scene — a
+    dim frame (top −0.65 vs the roll's median +0.14, 3.1 stops of range), overcast or shade.
+    No roll-level correction reaches it; CCR shifts this frame warmer per frame and renders
+    the walls 16–18 L\* darker. A per-frame light neutral would be its own knob, off by
+    default — a rendering choice, not a cast correction.
+  - **Two-point vs today, in one line**: both are neutral at the same roll white; gains are
+    one log offset at every tone (the film base gets tinted), the two-point scale is a tilt
+    pinned at the base. TR is two changes, measured from different arms, so they do not add
+    up to its gain: dropping the blue term (TL → TR) moved lit cloth+wall 1.7 and cloud 2.5;
+    the tilt (B → T, line off) moved them 0.3 and 2.2 and neutralised black. Adding the red
+    term to T (T → TR) helped lit cloth+wall (5.6 → 5.1) but cost cloud (11.4 → 12.7). Both
+    the gains and the tilt inherit a warm roll's wrong white.
+  - Next (user): TR support goes to a follow-up task; the calibration-frame rolls (Gold200
+    being scanned) are the ground truth an estimator spike would need.
+- 2026-10-12: **done (user).** The cast is located, and the reviewed candidate arms answer
+  the task. Filed: `two-point-tilt` (the tilt alone) and `midtone-line-terms` (each line
+  term off, manually or on a signal; TR's blue term was dropped by hand from the patches,
+  so its numbers are not a rule's). Not done here: the copied CCR/NLP exports and 2061's four patches are not in the
+  manifest (`asset-manifest`), and no estimator spike is filed. That waits for the
+  calibration rolls, which give it ground truth. A spare arm AR (today's gains + the red
+  term) is defined in `review.py` but was never rendered.
+
+## two-point-tilt
+
+**Status:** not started
+**Updated:** 2026-10-12
+
+- 2026-10-12: filed (user) from `lomo100-cast-vs-ccr`'s second review: TR (two-point tilt +
+  the line's red term) was acceptable on every Lomography 100 frame but 2061. Numbers and
+  arms in that section; open questions in the task file.
+- 2026-10-12: **narrowed (user)** to the tilt alone. TR's other change, dropping the line's
+  blue term, is not specific to blue: it moved to `midtone-line-terms`.
+
+## midtone-line-terms
+
+**Status:** not started
+**Updated:** 2026-10-12
+
+- 2026-10-12: filed (user) from `lomo100-cast-vs-ccr`. Neither term is special: whichever one
+  a roll's dominant colour fools is the one to drop. Two forms: a manual switch per term
+  (both off is today's `--midtone-neutral off`) and an automatic turn-off on a signal. TR's
+  blue term was dropped by hand from the roll's patches, so its numbers are not a rule's.
