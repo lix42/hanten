@@ -364,7 +364,7 @@ def resolve_cases(bench: dict, set_name: str, asset_root: str,
         assets, err = load_json(os.path.join(asset_root, "manifest.json"))
         if err:
             return [], (f"benchmark set {set_name!r} needs the asset manifest: {err}\n"
-                        "Sync the nc-assets Drive folder and point ../nc-assets at it, "
+                        "Point ../nc-assets (or --asset-root) at the asset folder, "
                         "then run `python -m nctool manifest generate`.")
 
     cases = spec.get("cases", [])

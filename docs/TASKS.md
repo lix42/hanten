@@ -1086,7 +1086,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
 - `analysis/nlp-comparison` (post-MVP): `analysis/conversion-metrics`
-- `analysis/drive-asset-migration` (post-MVP, in progress — move+reorg+manifest done): `analysis/asset-manifest`
+- `analysis/drive-asset-migration` (post-MVP, **closed—superseded** 2026-10-13: the assets left Google Drive for a local SSD; the dep below is decision history): `analysis/asset-manifest`
 - `analysis/harness-regression-tests` (post-MVP): `analysis/real-scan-verification`
   — filed 2026-08-09 after the `output/presets` default flip broke `harness.sh` in three
   places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote
@@ -1868,7 +1868,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   pair nc output with NLP / SmartConvert / hand-edited **targets** by `source_frame` (no
   registration) and report per-axis deltas, so `|nc − target| < |NLP − target|` becomes a
   checkable claim; NLP outputs are already in the manifest
-- [ ] [Drive asset migration](tasks/analysis/drive-asset-migration.md) — assets **moved** to the shared Google Drive folder + reorganized + self-relative `manifest.json` (2026-07-24); remaining: repo `../nc-assets` path convention (symlink/env), stream-on-demand materialization guard, sync hygiene
+- [x] [Drive asset migration](tasks/analysis/drive-asset-migration.md) — **closed 2026-10-13,
+  superseded**: the assets moved off Google Drive to a local external SSD, so the
+  Drive-specific work (materialization guard, sync hygiene) has nothing to guard; the
+  `../nc-assets` symlink convention it decided stays
 - [x] [Harness regression tests](tasks/analysis/harness-regression-tests.md) — fixture-backed
   black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and
   TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full

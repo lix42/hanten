@@ -1,5 +1,11 @@
 # Drive Asset Migration
 
+> **Closed, superseded, on 2026-10-13.** The assets moved off Google Drive to a local
+> external SSD (`/Volumes/square/hanten/assets`, the full set), so the Drive-only work —
+> placeholder detection, sync hygiene, write-back — has nothing to guard. Its one decision
+> stays: `../nc-assets` is a machine-local symlink to the asset root. This file is kept so
+> existing references resolve.
+
 ## Goal
 
 Make working from the Google Drive-hosted asset folder robust across machines,
