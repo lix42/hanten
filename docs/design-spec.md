@@ -508,7 +508,7 @@ what does is whether the adjustment restores the roll or reacts to one frame.
 | adjustment | kind | why | off at render |
 |---|---|---|---|
 | roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour | `--neutral-balance off`, `roll.neutral_balance` (the midtone line goes off with it) |
-| midtone neutral (`roll.midtone_line`) | correction | removes the cast a poor development leaves in the midtones, which the white balance, exact at the roll's p99, cannot; no bad frame on four reviewed rolls | `--midtone-neutral off`, `roll.midtone_neutral` |
+| midtone neutral (`roll.midtone_line`) | correction | removes the cast a poor development leaves in the midtones, which the white balance, exact at the roll's p99, cannot; no bad frame on four reviewed rolls. A roll's dominant colour can mislead either term alone (`nf-scene-correction/midtone-line-terms`) | `--midtone-neutral off`, or `red` / `blue` to keep one term; `roll.midtone_neutral` |
 | the midtone line's data floor (10 frames, 3 voted bands) and tint gate | guard | keep the line off a roll too short to measure it, and off strongly coloured light (a sunset-lit cloud) | — |
 | roll exposure (`roll.exposure`) | correction | brings a thin or dense roll to a normal level with one gain, so frames keep their relative levels | — |
 | roll white and dark end (`roll.white_stops`, `roll.dark_stops`) | correction | spread the roll's measured span, highlights (after its colour correction) to its dark end, over a fixed range of the look's stops, mid-grey pinned | — |
@@ -1610,14 +1610,16 @@ is refused (exit 2), since it asks for something the run will not do.
   from the line's cast (the tint gate); luminance is restored. Roll-wide: a `frames` entry
   cannot carry one. Every value finite, `LO ≤ HI`, and refused without `roll.white_balance`,
   which it is measured after.
-- `--midtone-neutral on|off` ⇒ `roll.midtone_neutral` — whether the line applies. Frame-local.
-  Off drops only the line: the whites stay measured after it (`measure-roll
-  --midtone-neutral off` measures them without it).
+- `--midtone-neutral on|red|blue|off` ⇒ `roll.midtone_neutral` — which of the line's terms
+  apply: both, red or blue alone, or none. Frame-local. A dropped term's slope and offset
+  are zero, so the tint gate measures from the kept cast. It drops only terms: the whites
+  stay measured with the whole line (`measure-roll --midtone-neutral off` measures them
+  without it; a measurement never states the switch, so there is no `red` / `blue` there).
 - `--neutral-balance on|off` ⇒ `roll.neutral_balance` — whether `roll.white_balance`
   applies. Frame-local. Off keeps the gains in the recipe and takes the line with them,
-  which is measured after them; the whites stay as measured. A typed `--midtone-neutral
-  on` is refused against a typed or recipe off; a recipe's `"on"` (the default) is
-  spared, and a `roll` manifest frame's own off wins over the flag.
+  which is measured after them; the whites stay as measured. A typed `--midtone-neutral`
+  other than `off` is refused against a typed or recipe off; a recipe's value is spared,
+  and a `roll` manifest frame's own off wins over the flag.
 
 Each switch is unset (`null`) by default, which is on, so `measure-roll`'s file layered
 last keeps an earlier `"off"`. Off keeps the measured values in the recipe, so one frame
@@ -1665,7 +1667,7 @@ The report's `chain.roll` states each value (`midtone_line`, `envelope_stops` an
 applied, the frame's `frame_placement` (slope, exposure as a delta on the roll's, and what
 bound each), whether each was applied (`white_balance_applied`, `slope_applied`,
 `exposure_applied`, `frame_exposure_applied`, `thin_lift_applied`,
-`midtone_neutral_applied`), and `taste_applied`, the preferences
+`midtone_neutral_applied`, and the line's terms in `midtone_terms_applied`), and `taste_applied`, the preferences
 applied by their switch's key (`small_lift`, `thin_lift`, `placement`);
 `chain.look.base_from` is `placement` or `thin` when a frame's own slope set the look's. A rendered run
 warns once where a recipe file's `scene_correction.white_balance` (not the identity)

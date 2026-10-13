@@ -2,11 +2,10 @@
 
 ## Goal
 
-Let the midtone line's red and blue terms be turned off one at a time:
-- **manually**, a switch per term beside today's whole-line `--midtone-neutral`;
-- **automatically**, when a signal says that term was misled by the roll's content.
-
-Neither term is special: a roll's dominant colour can fool either, or both.
+Let the midtone line's red and blue terms be turned off one at a time, by hand, beside
+today's whole-line `--midtone-neutral`. Neither term is special: a roll's dominant colour
+can fool either, or both. The automatic turn-off, on a signal, is
+[`midtone-term-signal`](midtone-term-signal.md).
 
 ## Design
 
@@ -32,23 +31,16 @@ Known (`lomo100-cast-vs-ccr`, 2026-10-12; `../temp/lomo100-cast/`):
 
 Open:
 
-- The manual form: a switch per term, or one selector. Mutually exclusive knobs are one
-  enum, independent ones separate switches (CLAUDE.md, "Knobs and recipes").
-- What happens to the whites, which are measured after the line, when one term is off at
-  render time.
+- ~~The manual form~~ — one selector, `--midtone-neutral on|red|blue|off` (2026-10-13).
+- ~~The whites when one term is off~~ — they stay measured with the whole line; the term
+  is a render-time choice only, since a measurement never states a switch (2026-10-13).
 - A roll that fools both terms, or shows as a green cast, which no single term can drop.
-- An automatic signal per term. Lomo suggests one candidate: a term's vote disagreeing with
-  the roll's near-neutral pixels at the same brightness. Untested, one roll. **The
-  automatic half waits for `analysis/calibration-frame-capture`** (the second labelled
-  case); the manual switch does not, so the task is not blocked on it.
-- Whether the report should name which term looks doubtful, the way `confidence.advice`
-  names the correction.
+- The automatic signal per term, and whether the report names a doubtful term, moved to
+  `midtone-term-signal` (2026-10-13), which waits for the calibration rolls.
 
 ## How to Verify
 
 - Patch casts with each term off, across every archive roll with marked neutrals.
-- For an automatic rule: it turns a term off on Lomography 100 and leaves the
-  poor-development rolls' terms on.
 - `docs/using-nc.md` describes the switch.
 
 ## Dependencies

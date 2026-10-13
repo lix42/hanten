@@ -267,8 +267,9 @@ pub struct RollSection {
     /// while [`Self::midtone_neutral`] is on. One line for the roll: a `frames` entry
     /// cannot carry one.
     pub midtone_line: Option<MidtoneLine>,
-    /// Whether `midtone_line` applies. Unset (`null`) is on, like the lifts' switches.
-    pub midtone_neutral: Option<Switch>,
+    /// Which of `midtone_line`'s terms apply. Unset (`null`) is both, like the lifts'
+    /// switches.
+    pub midtone_neutral: Option<MidtoneTerms>,
     /// The frames with their own values — a white clamped to the cap, a lift
     /// (`roll_white::small_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
     /// recipe still applies after the scans move. [`Recipe::for_frame`] applies an entry; a `roll --frames`
@@ -292,14 +293,69 @@ pub struct FrameRoll {
     pub tones: Option<FrameStops>,
 }
 
-/// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift`,
-/// `roll.midtone_neutral` / `--midtone-neutral` and `roll.neutral_balance` /
-/// `--neutral-balance`: whether an automatic adjustment applies.
+/// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift` and
+/// `roll.neutral_balance` / `--neutral-balance`: whether an automatic adjustment applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Switch {
     On,
     Off,
+}
+
+/// `roll.midtone_neutral` / `--midtone-neutral`: which terms of the midtone line apply.
+/// `red` or `blue` keeps that term alone, for a roll whose content misleads the other
+/// (`nf-scene-correction/midtone-line-terms`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum MidtoneTerms {
+    On,
+    Red,
+    Blue,
+    Off,
+}
+
+impl MidtoneTerms {
+    /// Whether `[red, blue]` are kept.
+    fn keeps(self) -> [bool; 2] {
+        match self {
+            Self::On => [true, true],
+            Self::Red => [true, false],
+            Self::Blue => [false, true],
+            Self::Off => [false, false],
+        }
+    }
+
+    /// The terms kept, by name, in line order.
+    pub fn kept(self) -> Vec<&'static str> {
+        ["red", "blue"]
+            .into_iter()
+            .zip(self.keeps())
+            .filter_map(|(name, kept)| kept.then_some(name))
+            .collect()
+    }
+
+    /// `line` with only the kept terms: a dropped term's slope and offset are zero, so it
+    /// corrects nothing and the tint gate measures from the kept cast alone. `None` when
+    /// off.
+    pub fn apply(self, line: MidtoneLine) -> Option<MidtoneLine> {
+        let [red, blue] = self.keeps();
+        let keep = |term: [f32; 2], kept: bool| if kept { term } else { [0.0; 2] };
+        (self != Self::Off).then(|| MidtoneLine {
+            red: keep(line.red, red),
+            blue: keep(line.blue, blue),
+            ..line
+        })
+    }
+
+    /// The flag that types it.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::On => "--midtone-neutral on",
+            Self::Red => "--midtone-neutral red",
+            Self::Blue => "--midtone-neutral blue",
+            Self::Off => "--midtone-neutral off",
+        }
+    }
 }
 
 /// `roll.placement` / `--placement`: how a frame is placed on the roll's tone scale.
@@ -463,12 +519,17 @@ impl RollSection {
             .filter(|_| self.neutral_balance != Some(Switch::Off))
     }
 
-    /// The midtone line as it applies: `None` under `--midtone-neutral off`, or with the
-    /// gains it was measured after.
+    /// The midtone line as it applies, with only its kept terms ([`MidtoneTerms::apply`]):
+    /// `None` under `--midtone-neutral off`, or with the gains it was measured after.
     pub fn applied_midtone_line(&self) -> Option<MidtoneLine> {
-        self.midtone_line.filter(|_| {
-            self.midtone_neutral != Some(Switch::Off) && self.applied_white_balance().is_some()
-        })
+        self.midtone_line
+            .filter(|_| self.applied_white_balance().is_some())
+            .and_then(|line| self.midtone_terms().apply(line))
+    }
+
+    /// Which terms of the line apply, as stated: unset is both.
+    pub fn midtone_terms(&self) -> MidtoneTerms {
+        self.midtone_neutral.unwrap_or(MidtoneTerms::On)
     }
 
     /// The taste adjustments that apply, by their switch's key (design-spec §6).
@@ -715,6 +776,9 @@ pub struct RollReport {
     /// Whether it reached scene correction (not under `--midtone-neutral off` or
     /// `--neutral-balance off`).
     pub midtone_neutral_applied: bool,
+    /// The line's terms that reached scene correction (`--midtone-neutral red|blue`
+    /// keeps one); empty when the line did not.
+    pub midtone_terms_applied: Vec<&'static str>,
     /// The taste adjustments applied, by their switch's key ([`RollSection::taste_applied`]):
     /// each is a choice, off by `roll.<key>` `"off"`.
     pub taste_applied: Vec<&'static str>,
@@ -1401,8 +1465,8 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(line) = args.roll.roll_midtone_line {
         r.roll.midtone_line = Some(line);
     }
-    if let Some(switch) = args.roll.midtone_neutral {
-        r.roll.midtone_neutral = Some(switch);
+    if let Some(terms) = args.roll.midtone_neutral {
+        r.roll.midtone_neutral = Some(terms);
     }
     if let Some(switch) = args.roll.neutral_balance {
         r.roll.neutral_balance = Some(switch);
@@ -1893,9 +1957,9 @@ fn validate_roll(p: &RollSection, applies: bool, names: KnobNames) -> Result<()>
             )));
         }
     }
-    // A `"midtone_neutral": "on"` beside `"neutral_balance": "off"` is spared: "on" is the
-    // default, and the line goes off with the gains as it does unset. Only a typed
-    // `--midtone-neutral on` is refused (`cli::reject_a_line_without_its_gains`).
+    // A `"midtone_neutral"` other than "off" beside `"neutral_balance": "off"` is spared: the
+    // line goes off with the gains as it does unset. Only a typed `--midtone-neutral` asking
+    // for terms is refused (`cli::reject_a_line_without_its_gains`).
     Ok(())
 }
 
@@ -2976,6 +3040,7 @@ impl Recipe {
     pub fn roll_report(&self, rendered: bool) -> Option<RollReport> {
         let r = &self.roll;
         let applies = rendered && self.base().applies_roll;
+        let line_applied = applies && r.applied_midtone_line().is_some();
         // Other frames' `frames` entries are not this frame's measurement.
         (r.white_balance.is_some()
             || r.white_stops.is_some()
@@ -3010,7 +3075,12 @@ impl Recipe {
             frame_exposure_applied: applies && r.applied_small_exposure().is_some(),
             thin_lift_applied: applies && r.applied_thin_slope().is_some(),
             midtone_line: r.midtone_line,
-            midtone_neutral_applied: applies && r.applied_midtone_line().is_some(),
+            midtone_neutral_applied: line_applied,
+            midtone_terms_applied: if line_applied {
+                r.midtone_terms().kept()
+            } else {
+                Vec::new()
+            },
             taste_applied: if applies {
                 r.taste_applied()
             } else {
@@ -3207,6 +3277,42 @@ mod tests {
 
     fn parse(json: &str) -> std::result::Result<Recipe, serde_json::Error> {
         serde_json::from_str(json)
+    }
+
+    #[test]
+    fn midtone_terms_keep_their_term_and_go_off_with_the_gains() {
+        let line = MidtoneLine {
+            red: [-0.06, 0.04],
+            blue: [-0.02, 0.37],
+            bands: [-2.75, 1.75],
+            fade_end_stops: 1.87,
+        };
+        let mut roll = RollSection {
+            white_balance: Some([1.05, 1.0, 0.95]),
+            midtone_line: Some(line),
+            ..RollSection::default()
+        };
+        let applied = |roll: &RollSection, terms| {
+            let mut roll = roll.clone();
+            roll.midtone_neutral = terms;
+            roll.applied_midtone_line().map(|l| (l.red, l.blue))
+        };
+        let (red, blue) = (line.red, line.blue);
+        assert_eq!(applied(&roll, None), Some((red, blue)));
+        assert_eq!(applied(&roll, Some(MidtoneTerms::On)), Some((red, blue)));
+        assert_eq!(
+            applied(&roll, Some(MidtoneTerms::Red)),
+            Some((red, [0.0; 2]))
+        );
+        assert_eq!(
+            applied(&roll, Some(MidtoneTerms::Blue)),
+            Some(([0.0; 2], blue))
+        );
+        assert_eq!(applied(&roll, Some(MidtoneTerms::Off)), None);
+        roll.neutral_balance = Some(Switch::Off);
+        assert_eq!(applied(&roll, Some(MidtoneTerms::Red)), None);
+        // The stated line is untouched: the switch filters what applies.
+        assert_eq!(roll.midtone_line, Some(line));
     }
 
     fn check(json: &str, whole: bool) -> std::result::Result<(), String> {
@@ -5878,8 +5984,8 @@ mod tests {
                         })
                 },
             ),
-            ("--midtone-neutral", &["--midtone-neutral", "off"], |r| {
-                r.roll.midtone_neutral == Some(Switch::Off)
+            ("--midtone-neutral", &["--midtone-neutral", "blue"], |r| {
+                r.roll.midtone_neutral == Some(MidtoneTerms::Blue)
             }),
             ("--neutral-balance", &["--neutral-balance", "off"], |r| {
                 r.roll.neutral_balance == Some(Switch::Off)

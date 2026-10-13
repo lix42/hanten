@@ -409,7 +409,8 @@ pub struct MeasureRollArgs {
     /// line when the roll has 10 frames or more and enough bands of brightness voted;
     /// `on` writes it on a shorter roll of 3 or more frames, if enough bands count; `off`
     /// writes none, and measures the whites without it. `convert --midtone-neutral off`
-    /// turns a written one off without re-measuring, the whites still measured after it.
+    /// turns a written one off, or `red` / `blue` keeps one term, without re-measuring:
+    /// the whites stay measured with the whole line.
     #[arg(
         long,
         value_enum,
@@ -701,7 +702,7 @@ pub struct DestinationOverrides {
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-dark`, `--roll-exposure`,
     /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
-    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on`,
+    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on|red|blue`,
     /// `--neutral-balance on`), which only a rendering applies — refused under a recipe's film master too. A
     /// recipe's `roll` section is spared, since a measurement is not a stage asked for,
     /// and so is a switch turned off.
@@ -1023,15 +1024,16 @@ pub struct RollOverrides {
         allow_hyphen_values = true
     )]
     pub roll_midtone_line: Option<MidtoneLine>,
-    /// Whether the midtone line applies: `on` (the default) or `off`, which keeps it in
-    /// the recipe (recipe key `roll.midtone_neutral`) and the whites measured after it. A
-    /// correction with a switch, since a roll dominated by one scene colour can mislead it.
-    #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
-    pub midtone_neutral: Option<recipe::Switch>,
+    /// Which terms of the midtone line apply: `on` (the default) both, `red` or `blue` that
+    /// term alone, `off` none. The line stays in the recipe (recipe key
+    /// `roll.midtone_neutral`), and the whites stay measured as written. A correction with
+    /// a switch, since a roll dominated by one scene colour can mislead either term.
+    #[arg(long, value_enum, ignore_case = true, value_name = "ON|RED|BLUE|OFF")]
+    pub midtone_neutral: Option<recipe::MidtoneTerms>,
     /// Whether the roll's white balance applies: `on` (the default) or `off`, which keeps
     /// the gains in the recipe (recipe key `roll.neutral_balance`) and takes the midtone
-    /// line with them, since it is measured after them (a typed `--midtone-neutral on` is
-    /// refused beside it); the whites stay as measured. A correction with a switch, since a
+    /// line with them, since it is measured after them (a typed `--midtone-neutral` other
+    /// than `off` is refused beside it); the whites stay as measured. A correction with a switch, since a
     /// roll dominated by one scene colour can mislead it.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub neutral_balance: Option<recipe::Switch>,
@@ -1068,8 +1070,9 @@ impl RollOverrides {
             ("--hybrid-level-keep", self.hybrid_level_keep.is_some()),
             ("--roll-midtone-line", self.roll_midtone_line.is_some()),
             (
-                "--midtone-neutral on",
-                self.midtone_neutral == Some(recipe::Switch::On),
+                self.midtone_neutral.map_or("", recipe::MidtoneTerms::flag),
+                self.midtone_neutral
+                    .is_some_and(|t| t != recipe::MidtoneTerms::Off),
             ),
             (
                 "--neutral-balance on",
@@ -2091,16 +2094,20 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
     Ok(())
 }
 
-/// Refuse a typed `--midtone-neutral on` when the roll's white balance is off: the line is
-/// measured after the gains and goes off with them. Only the typed `on` is refused, since a
-/// recipe's `"on"` is the default. It runs before [`reject_roll_flags_nothing_applies`],
-/// whose `--rendering default` remedy would meet it next; where nothing applies the roll,
-/// dropping the `on` is the one remedy that works.
+/// Refuse a typed `--midtone-neutral` asking for terms when the roll's white balance is
+/// off: the line is measured after the gains and goes off with them. Only a typed value is
+/// refused, since a recipe's is spared like its unset default. It runs before
+/// [`reject_roll_flags_nothing_applies`], whose `--rendering default` remedy would meet it
+/// next; where nothing applies the roll, dropping the flag is the one remedy that works.
 fn reject_a_line_without_its_gains(args: &ConversionFlags, r: &Recipe) -> Result<()> {
-    use recipe::Switch::{Off, On};
-    if args.roll.midtone_neutral != Some(On) || r.roll.neutral_balance != Some(Off) {
+    use recipe::Switch::Off;
+    let Some(terms) = args.roll.midtone_neutral else {
+        return Ok(());
+    };
+    if terms == recipe::MidtoneTerms::Off || r.roll.neutral_balance != Some(Off) {
         return Ok(());
     }
+    let typed = terms.flag();
     let nothing_applies =
         r.output == OutputSection::FilmMaster || r.rendering == crate::rendering::Rendering::Direct;
     let (off, other) = if args.roll.neutral_balance == Some(Off) {
@@ -2112,13 +2119,13 @@ fn reject_a_line_without_its_gains(args: &ConversionFlags, r: &Recipe) -> Result
         )
     };
     let remedy = if nothing_applies {
-        "drop --midtone-neutral on".to_string()
+        format!("drop {typed}")
     } else {
-        format!("drop --midtone-neutral on, or {other}")
+        format!("drop {typed}, or {other}")
     };
     Err(NcError::Usage(format!(
-        "--midtone-neutral on asks for the roll's midtone line, which is measured after its \
-         white balance and goes off with it under {off}: {remedy}"
+        "{typed} asks for the roll's midtone line, which is measured after its white balance \
+         and goes off with it under {off}: {remedy}"
     )))
 }
 
@@ -2168,8 +2175,8 @@ fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Resu
     };
     let message = if r.output == OutputSection::FilmMaster {
         // Under `direct` too, either remedy alone would meet the film master + `direct`
-        // refusal next, so each carries `--rendering default`. Only a switch typed `on`
-        // reaches here beside a typed `--film-master`; the other roll flags conflict.
+        // refusal next, so each carries `--rendering default`. Only a switch asking for
+        // something reaches here beside a typed `--film-master`; the other roll flags conflict.
         let (master, choose) = if args.destination.film_master {
             ("--film-master writes", "drop --film-master")
         } else {
@@ -5598,7 +5605,7 @@ const ROLL_WIDE: &[RollWide] = &[
     RollWide {
         key: "roll.midtone_line",
         breaks: "this frame's midtones are corrected apart from the roll's (a frame's own \
-                 is `roll.midtone_neutral` \"off\")",
+                 is `roll.midtone_neutral` \"off\", or \"red\" / \"blue\" for one term)",
         compare: |f, r| {
             if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
                 || f.roll.applied_midtone_line().is_none()
@@ -7879,7 +7886,7 @@ struct ClampedFrame {
 /// The midtone line, why there is none, and its rule.
 #[derive(Debug, Serialize)]
 struct MeasuredMidtone {
-    /// `correction` (design-spec §6), switched off at render by `--midtone-neutral off`.
+    /// `correction` (design-spec §6), its terms chosen at render by `--midtone-neutral`.
     kind: &'static str,
     mode: MidtoneMode,
     #[serde(flatten)]
@@ -11671,7 +11678,7 @@ mod tests {
         assert!(breaks(&inherits, &roll_off).is_empty());
         // A line switched off on the frame: only the gains differ.
         let mut line_off = frame;
-        line_off.roll.midtone_neutral = Some(recipe::Switch::Off);
+        line_off.roll.midtone_neutral = Some(recipe::MidtoneTerms::Off);
         let w = breaks(&line_off, &shared);
         assert!(
             w.len() == 1 && w[0].contains("`roll.white_balance`"),
