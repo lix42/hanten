@@ -1264,6 +1264,37 @@ fn estimate_warns_that_a_picture_frame_is_not_unexposed_film() {
 }
 
 #[test]
+fn measure_base_reports_the_area_tiling_only_for_the_effective_area() {
+    let fix = fixture("hdr-48bit.tif");
+    let (code, stdout, err) = run(&["measure-base", fix.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let u = &report["area_uniformity"];
+    assert_eq!(u["tiles"], serde_json::json!([4, 4]), "{u}");
+    // The fixture is a picture: a gradient and local structure, both said.
+    assert_eq!(u["verdict"], "sloped_with_outlier_tiles", "{u}");
+    assert!(!u["outlier_tiles"].as_array().unwrap().is_empty(), "{u}");
+    let warned = |what: &str| {
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains(what))
+    };
+    assert!(warned("the effective area is sloped"), "{report}");
+    assert!(warned("part of the effective area stands out"), "{report}");
+    // A stated region reads no tiling.
+    let (code, stdout, err) = run(&[
+        "measure-base",
+        fix.to_str().unwrap(),
+        "--base-region",
+        "0,0,8,8",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(json(&stdout).get("area_uniformity").is_none(), "{stdout}");
+}
+
+#[test]
 fn a_conversion_reports_the_percentile_its_base_was_read_at() {
     // The stage returns the method; the report states it rather than leaving a
     // region base to be mistaken for an explicit one.

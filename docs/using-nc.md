@@ -418,7 +418,37 @@ median over it is not a film base. …
 ```
 
 It is a coarse guard — it catches a picture frame, not a leader — so point it at the
-right frame. A scan whose holder was not measured also warns — every 48-bit scan
+right frame.
+
+The report's `area_uniformity` says whether the frame is flat. It splits the area
+into 4x4 tiles and reports, per channel `[r, g, b]` and in density:
+
+- `within`: the grain inside a tile.
+- `between`: the range of the tile medians.
+- `outlier_tiles`: tiles more than 0.03 off the plane through the others (dust, a
+  leak, a holder sliver), up to four, in the order they were set aside, by `column`
+  and `row` from the top left, with their `offset`.
+- `tilt`: the plane through the remaining tiles, `[left → right, top → bottom]` from
+  edge to edge; positive is denser toward the right or bottom.
+
+`verdict` is `uniform`, `sloped`, `outlier_tiles` or `sloped_with_outlier_tiles`.
+The real unexposed frames tilt at most 0.030 and none has an outlier tile. A tilt
+over 0.05 (left-to-right and top-to-bottom added) or any outlier tile warns, and
+`--strict` then fails:
+
+```
+hanten: warning: the effective area is sloped: its blue density changes by +0.075
+from the left edge to the right and +0.039 from the top to the bottom (more than
+0.05 in all; …
+hanten: warning: part of the effective area stands out, more than 0.03 density off
+the plane through the rest of its 4x4 tiles (counted from the top left): column 2,
+row 3 (+0.040 on blue) — …
+```
+
+(That is the Portra 160 leader, not an unexposed frame.) `measure-roll` raises the
+same warnings for its unexposed frame but does not report the field.
+
+A scan whose holder was not measured also warns — every 48-bit scan
 (no IR plane), and an HDRi scan whose IR plane could not do it: the area is then the
 inset alone, so raise `--measure-inset` if the holder reaches past it.
 

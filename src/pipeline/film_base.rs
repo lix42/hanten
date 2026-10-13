@@ -30,6 +30,7 @@
 
 use serde::Serialize;
 
+use super::area_uniformity::{self, AreaUniformity};
 use crate::types::{
     FilmBase, FilmBaseSource, LinearImage, NcError, Result, Scan, check_measure_inset,
 };
@@ -64,14 +65,15 @@ const AREA_SPREAD_PERCENTILES: [f32; 2] = [0.10, 0.90];
 /// (grain and scanner noise, wider on the thinner-scanned 2026-09 rolls; each
 /// frame's centre and whole-area medians agree to <1%, so it is not a gradient),
 /// picture frames 0.87-2.26. This is their geometric midpoint. It is a coarse "is
-/// this a picture?" guard, not a uniformity verdict: a leader (0.23-0.45) and a
-/// near-blank frame pass it.
+/// this a picture?" guard — a leader (0.23-0.45) and a near-blank frame pass it —
+/// kept because frame classification reads it (`reference_frames`); the uniformity
+/// verdict is [`area_uniformity`]'s.
 pub const AREA_MAX_RELATIVE_SPREAD: f32 = 0.5;
 
 /// The 16-bit code count: decoded samples are `code / 65535`
 /// (`io::decode::normalize_u16`), so a histogram over the codes holds every sample
 /// exactly.
-const CODES: usize = 1 << 16;
+pub(crate) const CODES: usize = 1 << 16;
 
 /// IR transmission at or below which a near-edge segment reads as the opaque film
 /// holder. Chromogenic film (base, rebate, picture, even fully-exposed leader) is
@@ -178,6 +180,9 @@ pub struct BaseEstimate {
     /// The worst per-channel [`AREA_SPREAD_PERCENTILES`] spread over the effective
     /// area; `None` for a stated source. Detecting an unexposed frame reads it.
     pub spread: Option<f32>,
+    /// The effective area's tiled decomposition; `None` for a stated source or an area
+    /// too small to tile.
+    pub uniformity: Option<AreaUniformity>,
 }
 
 /// An image edge, for the holder march.
@@ -203,6 +208,7 @@ pub fn estimate(image: &LinearImage, source: &FilmBaseSource) -> Result<BaseEsti
             warnings: Vec::new(),
             percentile: None,
             spread: None,
+            uniformity: None,
         },
         FilmBaseSource::Region(rect) => sample_region(image, rect)?,
     };
@@ -213,14 +219,24 @@ pub fn estimate(image: &LinearImage, source: &FilmBaseSource) -> Result<BaseEsti
 /// Measure the base over a resolved [`EffectiveArea`]: the per-channel
 /// [`AREA_PERCENTILE`] (the median) over `area.region`, and a warning when the
 /// area's [`AREA_SPREAD_PERCENTILES`] spread exceeds [`AREA_MAX_RELATIVE_SPREAD`] on
-/// any channel — the sign that the frame is not unexposed film.
+/// any channel — the sign that the frame is not unexposed film. Its tiled
+/// decomposition ([`area_uniformity`]) adds warnings for a gradient or outlier tiles.
 ///
 /// Takes the area rather than resolving it, so the caller reports the same area the
 /// base was read over. Reads a per-channel histogram of the 16-bit codes
 /// ([`CODES`]), not a copy of the pixels: exact on decoded data, and a fixed
-/// ~1.5 MB whatever the frame size, so `pipeline::memory` owes it no term.
+/// ~1.5 MB whatever the frame size, so `pipeline::memory` owes it no term. The
+/// tiling is fed by the same scan, into its own fixed histograms.
 pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEstimate> {
-    let hist = CodeHistogram::of(image, area.region)?;
+    let [_, _, w, h] = area.region;
+    let mut hist = CodeHistogram::new();
+    let mut tiling = area_uniformity::Tiling::new(w, h);
+    for_each_code(image, area.region, |dx, dy, c, code| {
+        hist.add(c, code);
+        if let Some(t) = tiling.as_mut() {
+            t.add(dx, dy, c, code);
+        }
+    })?;
     let [lo, hi] = AREA_SPREAD_PERCENTILES;
     let mut base = [0.0f32; 3];
     let mut spread = 0.0f32;
@@ -238,6 +254,8 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
              unexposed frame, or state a region of unexposed film (--base-region)"
         ));
     }
+    let uniformity = tiling.and_then(area_uniformity::Tiling::finish);
+    warnings.extend(uniformity.iter().flat_map(area_uniformity::warnings));
     let base = FilmBase::from(base);
     guard_base(
         &base,
@@ -250,6 +268,7 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
         warnings,
         percentile: Some(AREA_PERCENTILE),
         spread: Some(spread),
+        uniformity,
     })
 }
 
@@ -365,6 +384,7 @@ fn sample_region(image: &LinearImage, rect: [u32; 4]) -> Result<BaseEstimate> {
         warnings,
         percentile: Some(SAMPLE_PERCENTILE),
         spread: None,
+        uniformity: None,
     })
 }
 
@@ -375,38 +395,58 @@ struct CodeHistogram {
     n: [u64; 3],
 }
 
-impl CodeHistogram {
-    /// Count the rectangle `[x, y, w, h]`, which must lie within the image (the same
-    /// bounds rule as a stated region). A non-finite sample is skipped; any other is
-    /// rounded to its code, which is exact for decoded data.
-    fn of(image: &LinearImage, rect: [u32; 4]) -> Result<Self> {
-        check_rect(image, rect)?;
-        let [x, y, w, h] = rect;
-        let mut counts = vec![[0u64; 3]; CODES];
-        let mut n = [0u64; 3];
-        let max = (CODES - 1) as f32;
-        for row in y..y + h {
-            let start = (row as usize * image.width as usize + x as usize) * 3;
-            for px in image.rgb[start..start + w as usize * 3].as_chunks::<3>().0 {
-                for (c, &v) in px.iter().enumerate() {
-                    if v.is_finite() {
-                        counts[(v * max).round().clamp(0.0, max) as usize][c] += 1;
-                        n[c] += 1;
-                    }
+/// Visit every finite sample of the rectangle `[x, y, w, h]` as its 16-bit code:
+/// `f(dx, dy, channel, code)`, `dx, dy` within the rectangle. It must lie within the
+/// image (the same bounds rule as a stated region). Rounding to the code is exact for
+/// decoded data.
+pub(crate) fn for_each_code(
+    image: &LinearImage,
+    rect: [u32; 4],
+    mut f: impl FnMut(u32, u32, usize, usize),
+) -> Result<()> {
+    check_rect(image, rect)?;
+    let [x, y, w, h] = rect;
+    let max = (CODES - 1) as f32;
+    for dy in 0..h {
+        let start = ((y + dy) as usize * image.width as usize + x as usize) * 3;
+        let row = image.rgb[start..start + w as usize * 3].as_chunks::<3>().0;
+        for (dx, px) in (0..w).zip(row) {
+            for (c, &v) in px.iter().enumerate() {
+                if v.is_finite() {
+                    f(dx, dy, c, (v * max).round().clamp(0.0, max) as usize);
                 }
             }
         }
-        Ok(Self { counts, n })
+    }
+    Ok(())
+}
+
+/// The rounded rank `round((n-1)·p)` of the `p`-quantile of `n` samples. In `f64`: a
+/// region can exceed 2^24 samples, past which an `f32` rank picks the wrong statistic.
+pub(crate) fn quantile_rank(n: u64, p: f32) -> u64 {
+    (n.saturating_sub(1) as f64 * p.clamp(0.0, 1.0) as f64).round() as u64
+}
+
+impl CodeHistogram {
+    fn new() -> Self {
+        Self {
+            counts: vec![[0u64; 3]; CODES],
+            n: [0u64; 3],
+        }
     }
 
-    /// The `p`-quantile of channel `c`, by the same rounded rank `round((n-1)·p)` as
-    /// [`percentile`], so the two agree on decoded data. `0.0` when the channel
-    /// counted nothing.
+    fn add(&mut self, c: usize, code: usize) {
+        self.counts[code][c] += 1;
+        self.n[c] += 1;
+    }
+
+    /// The `p`-quantile of channel `c`, by [`quantile_rank`] as [`percentile`] takes
+    /// it, so the two agree on decoded data. `0.0` when the channel counted nothing.
     fn percentile(&self, c: usize, p: f32) -> f32 {
         if self.n[c] == 0 {
             return 0.0;
         }
-        let k = ((self.n[c] - 1) as f64 * p.clamp(0.0, 1.0) as f64).round() as u64;
+        let k = quantile_rank(self.n[c], p);
         let mut seen = 0u64;
         for (code, counts) in self.counts.iter().enumerate() {
             seen += counts[c];
@@ -1103,7 +1143,7 @@ fn channel_stats(chans: &mut [Vec<f32>; 3]) -> ([f32; 3], f32) {
 
 /// Refuse a rectangle `[x, y, w, h]` that is empty or leaves the image — a usage
 /// error rather than a clamp, so a bad `--base-region` fails loudly.
-fn check_rect(image: &LinearImage, [x, y, w, h]: [u32; 4]) -> Result<()> {
+pub(crate) fn check_rect(image: &LinearImage, [x, y, w, h]: [u32; 4]) -> Result<()> {
     if w == 0 || h == 0 {
         return Err(NcError::Usage(format!(
             "base-region must be non-empty (got {w}x{h})"
@@ -1158,10 +1198,7 @@ fn percentile(values: &mut Vec<f32>, p: f32) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    // f64 for the index: a region can exceed 2^24 samples (a 24 MP interior),
-    // above which an `as f32` rank cast loses integer precision and would pick a
-    // slightly wrong order statistic. f64 is exact here with no measurable cost.
-    let k = ((values.len() - 1) as f64 * p.clamp(0.0, 1.0) as f64).round() as usize;
+    let k = quantile_rank(values.len() as u64, p) as usize;
     *values.select_nth_unstable_by(k, |a, b| a.total_cmp(b)).1
 }
 
@@ -1492,7 +1529,8 @@ mod tests {
     fn the_histogram_reproduces_the_sorted_percentile_on_decoded_data() {
         let img = grainy_film(64, 48, [0.53, 0.26, 0.16]);
         let rect = [5, 3, 50, 40];
-        let hist = CodeHistogram::of(&img, rect).unwrap();
+        let mut hist = CodeHistogram::new();
+        for_each_code(&img, rect, |_, _, c, code| hist.add(c, code)).unwrap();
         for p in [0.0, 0.1, 0.5, 0.9, 0.97, 1.0] {
             let want = sorted_percentile(&img, rect, p);
             for (c, want) in want.iter().enumerate() {
@@ -1667,6 +1705,26 @@ mod tests {
             }
         }
         img
+    }
+
+    #[test]
+    fn a_holder_mounted_frame_tiles_uniform_inside_its_holder() {
+        // The old full-frame grid read the holder in its corner cells as a light leak.
+        let (w, h) = (200, 200);
+        let mut scan = ir_holder_edges(w, h, [6, 10, 8, 6]);
+        for rect in [
+            [0, 0, w, 6],
+            [0, h - 10, w, 10],
+            [0, 0, 8, h],
+            [w - 6, 0, 6, h],
+        ] {
+            fill_rect(&mut scan.image, rect, [0.01; 3]);
+        }
+        let est = measure_area(&scan.image, &effective_area(&scan, 0.0).unwrap()).unwrap();
+        let u = est.uniformity.expect("the area is large enough to tile");
+        assert_eq!(u.verdict, area_uniformity::Verdict::Uniform, "{u:?}");
+        assert_eq!(u.between, [0.0; 3], "{u:?}");
+        assert!(est.warnings.is_empty(), "{:?}", est.warnings);
     }
 
     #[test]

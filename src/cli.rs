@@ -43,8 +43,8 @@ use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::roll_white::FrameStops;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, correction_confidence, film_base, gain_encode, gain_ratio, hdr, look, midtone_neutral,
-    reference_frames, roll_white, scene_correction, working_space,
+    area_uniformity, color, correction_confidence, film_base, gain_encode, gain_ratio, hdr, look,
+    midtone_neutral, reference_frames, roll_white, scene_correction, working_space,
 };
 use crate::profile;
 use crate::recipe::{self, KnobNames, Recipe};
@@ -1583,6 +1583,10 @@ pub struct Report {
     /// `(p90 - p10) / p50`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub area_spread: Option<f32>,
+    /// `measure-base` over the effective area: its tiled decomposition into grain, tilt
+    /// and outlier tiles (`pipeline::area_uniformity`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area_uniformity: Option<area_uniformity::AreaUniformity>,
     /// The declared film chemistry, echoed back. It gates nothing
     /// (`ir-usability-detection`); it is recorded so a declaration a user made is
     /// visible in the artifact the run produced — without it the flag would be parsed
@@ -7238,6 +7242,9 @@ struct BaseMeasurement {
     /// stated source.
     #[serde(skip_serializing_if = "Option::is_none")]
     area_spread: Option<f32>,
+    /// Reported by `measure-base` alone; its warnings reach every caller.
+    #[serde(skip)]
+    area_uniformity: Option<area_uniformity::AreaUniformity>,
     #[serde(flatten)]
     reuse: Option<ReuseReady>,
 }
@@ -7389,6 +7396,7 @@ fn measure_base_into(
         film_base_source,
         film_base_percentile: est.percentile,
         area_spread: est.spread,
+        area_uniformity: est.uniformity,
         reuse,
     })
 }
@@ -7516,6 +7524,7 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
         film_base_source: Some(m.film_base_source),
         film_base_percentile: m.film_base_percentile,
         area_spread: m.area_spread,
+        area_uniformity: m.area_uniformity,
         reuse: m.reuse,
         warnings,
         elapsed_ms: Some(elapsed_ms(started)),
