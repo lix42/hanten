@@ -384,7 +384,9 @@ in the code.
 - 2026-10-13 (**STEP 0: no-go**). Criterion, from the task file: go only if realistic
   inputs come within a documented margin of the budget, i.e. the preflight would
   reject real work. The gate acts on the **estimate**, so the margin is on it: an
-  estimate above half the default 6 GiB (6.44 GB) budget.
+  estimate within 25% of the default 6 GiB (6.44 GB) budget, i.e. above 4.83 GB. The
+  margin is narrow because the estimate is already padded: its allowance (15% +
+  128 MiB) puts it 33–45% above the measured gain-map peaks below.
   - **Input envelope.** The largest of the 873 frames in `../nc-assets/manifest.json`
     is 18.66 MP (5184×3600, Plustek 8300i). The one larger real scan, the 74.65 MP
     `samples/largest.tif` behind `memory-preflight`, is no longer on hand. So that
@@ -406,9 +408,10 @@ in the code.
     to run (`memory.rs`). Its TIFF numbers match these.
   - **Verdict.** The worst real input, an 18.66 MP gain map, estimates 1.01 GB (16% of
     the budget) and peaks at 0.70 GB. The gain-map estimate grows ~47 B/px over
-    ~0.13 GB: it crosses the half-budget margin near **65 MP** and the budget near
-    **134 MP**. So the gate rejects no real run. A 7200-dpi gain map would sit
-    inside the margin (3.65 GB, 57%) but still pass, at a measured 2.75 GB. On the
+    ~0.13 GB: it enters the margin near **100 MP** and crosses the budget near
+    **134 MP**. A 7200-dpi gain map, the size of the one larger real scan, estimates
+    3.65 GB (57%), outside the margin, and measures 2.75 GB. So the gate rejects no
+    realistic run. On the
     smallest target machine, the 8 GB Air (~4–5 GB usable,
     `reports/real-scan-verification.md`), both peaks fit.
   - **Why the July "conditional GO" no longer holds.** That was 42 B/px for a u16
@@ -420,7 +423,7 @@ in the code.
     remove the u16 quantize buffer, but the decode peaks as high without it.
     Streaming decode would remove the read buffers, but every stage still wants
     the whole frame.
-  - **Revisit when** real scans past ~65 MP appear (scanning at 7200 dpi), a
+  - **Revisit when** real scans past ~100 MP appear, a
     destination or stage adds full-frame buffers beyond the gain map's ~41 B/px,
     or multi-frame buffering returns. For a future design: tiles under 8 MiB go
     through malloc rather than `crate::allocator`'s direct mapping
