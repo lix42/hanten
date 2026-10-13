@@ -212,8 +212,10 @@ pub const SPAN_LOOK_STOPS: f32 = 9.049;
 pub const MAX_SLOPE: f32 = 3.5;
 
 /// The fewest look stops a hybrid frame's span renders over ([`hybrid_placement`]): R in
-/// the poor-development spike, chosen by its whole-roll review.
-pub const HYBRID_SPAN_STOPS: f32 = 7.0;
+/// the poor-development spike. On a thin roll the envelope holds the dark end, so a higher
+/// R brightens rather than deepens. Changing it moves default renders: bump
+/// `PIPELINE_VERSION` by hand (the drift gate cannot see it).
+pub const HYBRID_SPAN_STOPS: f32 = 8.0;
 
 /// The share of its level's offset that a hybrid frame keeps: α in the spike. 1 keeps every
 /// frame's level, 0 brings each to the level target — the roll's median unless the roll's
@@ -1257,17 +1259,18 @@ mod tests {
     #[test]
     fn a_short_span_steepens_toward_the_minimum_and_a_wide_one_keeps_the_roll_slope() {
         let (k, e0, env) = (1.65, 1.0, [-6.0, 2.0]);
-        // 4 stops: 7 / 4 = 1.75, inside the envelope's 1.65 · 8 / 4 = 3.3.
+        // 4 stops: 8 / 4 = 2, inside the envelope's 1.65 · 8 / 4 = 3.3.
         let p = hybrid(stops(1.0, -1.0, -3.0), k, e0, env);
         assert_eq!(p.slope_bound, SlopeBound::Span);
-        assert!((p.slope - 1.75).abs() < 1e-6, "{p:?}");
-        // 7 stops already render over 7 · 1.65.
+        // A literal, so a new default R fails here and asks for a `PIPELINE_VERSION` bump.
+        assert!((p.slope - 2.0).abs() < 1e-6, "{p:?}");
+        // 7 stops already render over 7 · 1.65 > 8.
         let p = hybrid(stops(1.5, -1.0, -5.5), k, e0, env);
         assert_eq!((p.slope, p.slope_bound), (k, SlopeBound::Roll));
-        // 1.5 stops would want 4.67: the envelope allows 8.8, the maximum 3.5.
+        // 1.5 stops would want 5.3: the envelope allows 8.8, the maximum 3.5.
         let p = hybrid(stops(0.5, 0.0, -1.0), k, e0, env);
         assert_eq!((p.slope, p.slope_bound), (MAX_SLOPE, SlopeBound::Max));
-        // A narrow envelope: 1.65 · 2 / 2 = 1.65 at most, from a wanted 3.5.
+        // A narrow envelope: 1.65 · 2 / 2 = 1.65 at most, from a wanted 4.
         let p = hybrid(stops(1.0, 0.0, -1.0), k, e0, [-1.0, 1.0]);
         assert_eq!(p.slope_bound, SlopeBound::Envelope);
         assert!((p.slope - 1.65).abs() < 1e-5, "{p:?}");

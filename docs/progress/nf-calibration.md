@@ -105,7 +105,7 @@ the cap's span. It is the base of every placement the epic adds next.
 frame is placed inside the roll's envelope.** `measure-roll` stores the envelope
 (`roll.envelope_stops`, the frames' lowest dark end and highest white) and each frame's
 tones (`roll.frames` entry `tones`); `convert` solves the frame's slope (spreading its span
-over at least R = 7 look stops, inside the envelope, within the cap's slope and 3.5) and
+over at least R = 7 look stops, 8 since `hybrid-span-target`, inside the envelope, within the cap's slope and 3.5) and
 exposure (keeping α = 0.6 of its level's offset, inside the envelope, then −1.5 / +0.5 EV)
 at render time, so `--hybrid-span` and `--hybrid-level-keep` need no re-measure. It
 replaces both lifts; `--placement roll` renders per-roll with them. Colour stays at the
@@ -148,6 +148,13 @@ HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 a
 ~5.4–5.9; and the probe checks only the recipe a frame renders, so one frame's
 `roll.frames` entry no longer refuses its neighbours. `--placement frame --contrast 1.3`
 renders 09-18 and 09-29 whole.
+
+**`hybrid-span-target` is done (2026-10-13, `pipeline_version` 16): the hybrid's R is 8**
+(was 7), by review over 7 and 9 on 09-20 and 09-28 with the dark floor on; α stays 0.6.
+R sets the slope of most frames (192 of 226 move at 8). The dark floor barely acts at any
+R: the envelope keeps each frame's dark end at or above the roll's darkest frame, above
+the floor on every roll. On a thin roll it holds the dark end, so a higher R brightens
+instead. Shadow noise rises with R (09-20 median 2.5 → 2.8× the scan's at 8).
 
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
@@ -2071,8 +2078,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## hybrid-span-target
 
-**Status:** not started
-**Updated:** 2026-10-11
+**Status:** done
+**Updated:** 2026-10-13
 
 - 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, which
   `hybrid-slope-bounds` had handed the hybrid's R (7): whether a toe lets it rise. Waits on
@@ -2080,6 +2087,44 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-11: re-scoped by `nf-display-stages/midtone-contrast-probe`: without a toe, a
   steeper hybrid slope (×1.15, ×1.29) lost to ×1, so the default stays; R is re-asked only
   with the toe ([`docs/spike/midtone-contrast-probe.md`](../spike/midtone-contrast-probe.md)).
+- 2026-10-12: **started; re-scoped (user)**: R is not `--contrast`. It acts inside the
+  placement, so the envelope and the 3.5 maximum still bound it, and the probe's ×1.29
+  verdict does not carry over. The question is R on its own merits, with the floor on. Any
+  roll with more than 10 frames may be used.
+- 2026-10-12: **sweep** (`../temp/hybrid-span-target/`, `table.txt`; frozen binary
+  a4f9999, v15; the eight rolls with more than 10 frames re-measured, 226 frames). Each
+  frame's placement at R 7–11 came from the report of a fixture copied under the frame's
+  file name, which resolves its `roll.frames` entry with no scan rendered.
+  - **R is the main lever**: at R 7, 156 frames take their slope from R (68 from the roll's
+    slope, 2 from the maximum). R 8 moves 192 frames, R 9 214; median slope 1.82 → 2.08 → 2.32.
+  - **Past R 9 the guards decide**: at R 10 the envelope holds 79 frames, the maximum 22.
+  - **The floor barely acts at any R** (≤ 5 frames, ≤ 0.07 stop): the envelope keeps each
+    frame's dark end at or above the roll's darkest frame, above −4.5 on every roll. The
+    toe does not make room for R; R is a taste question.
+- 2026-10-12: **review round** (`review.json`, `summary.txt`): R 7 / 8 / 9 on 09-20 (good)
+  and 09-28 (thin), 68 frames, default placement, floor on, SDR. Medians R 7 → 9: 09-20
+  darkest 1 % L\* 14.0 → 9.0, median 49.6 → 54.4, brightest 1 % 90.6 → 95.7, shadow noise
+  2.5 → 3.0× the scan's (max 3.6 → 5.1×, 1904 at the maximum). **09-28's darkest 1 % stays
+  at L\* 19.4 on every frame**: the envelope's bottom holds it, so a higher R only
+  brightens a thin roll (median 51 → 61, brightest 92 → 98).
+  - **Gotcha — the whole-crop noise measure fails on bright frames**: where the centre crop is
+    mostly clipped highlight, a quarter of the neighbouring differences are zero and the
+    figure reads near 0 (09-28 2000, 2010). Shadow noise (under L\* 30) is the usable one.
+- 2026-10-13: **decided (user): R 8**; α stays 0.6. At R 8 the envelope sets 122 frames'
+  exposure (79 at R 7), so α decides fewer. Frames' rendered levels spread 1.52 → 1.78 look
+  stops (p10–p90); α ≈ 0.52 would undo that, unreviewed. R already was a knob
+  (`--hybrid-span`).
+- 2026-10-13: **implemented** (`pipeline_version` 16, by hand: R acts after the gate, so no
+  fingerprint moved; v15's behaviour frozen as a literal, the new one names the 8 stops).
+  Of the two unit tests that pinned 7, one now reads the constant; the other
+  (`a_short_span_steepens…`) pins the literal 2.0 (8 / 4), so a new R fails it and asks
+  for the hand bump. `using-nc.md`: the hybrid example,
+  the `measure-roll` report (1774 now `span`-bound, 1.8964), the placement table and the
+  dark-floor example re-run; its recipe `meta` had been left at 14.
+  - **Found: R 8 made `--contrast 1.3` refuse three whole measured rolls** (09-18, 09-28,
+    09-29: one steep frame's entry each, slope 3.5 × 1.3), the densest-sample probe's
+    scope bug. Gone after rebasing onto `overflow-probe-scope` (#281): every measured roll
+    renders, and the 18 frames steeper than 3 at R 8 render at × 1.3 (up to 4.55).
 
 ## overflow-probe-scope
 

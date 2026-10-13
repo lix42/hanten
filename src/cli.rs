@@ -1003,7 +1003,7 @@ pub struct RollOverrides {
     #[arg(long, value_enum, ignore_case = true, value_name = "ROLL|HYBRID|FRAME")]
     pub placement: Option<recipe::Placement>,
     /// The fewest look stops a hybrid frame's span renders over (recipe key
-    /// `roll.hybrid_span_stops`; default 7): larger gives a short-span frame more contrast,
+    /// `roll.hybrid_span_stops`; default 8): larger gives a short-span frame more contrast,
     /// within the roll's envelope.
     #[arg(long, value_name = "STOPS")]
     pub hybrid_span: Option<f32>,

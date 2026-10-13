@@ -414,8 +414,8 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   - **The floor, `default`'s** (`nf-display-stages/midtone-contrast-toe`): the
     frame's measured darkest 1 % (`roll.frames` entry `tones.dark_stops`), graded by
     its own slope and exposure, is **lifted** to no deeper than 4.5 stops below
-    mid-grey (L\* ≈ 7), never pushed down. At the default slope the hybrid leaves no
-    reviewed frame under it; it holds the dark end of a steeper `look.contrast` (the
+    mid-grey (L\* ≈ 7), never pushed down. At the default slope the roll's envelope
+    keeps nearly every frame above it; it holds the dark end of a steeper `look.contrast` (the
     opt-in 1.3) and of a frame wider than the placement fits. Without measured tones
     it cannot act.
   - **Display black, `direct`'s**: the decoded film base, graded with the frame, is
@@ -1182,7 +1182,7 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #         "blue": [...], "bands": [-2.75, 2.25], "fade_end_stops": 1.9 }, "off_because": null, … },
 #     "confidence": { "white_balance": { "tier": "confident", "frames": 24, "confident_from": 16 },
 #         "midtone_neutral": { … } },
-#     "placement": { "kind": "taste", "envelope_stops": [-4.6, 2.3], "span_stops": 7, "level_keep": 0.6, … },
+#     "placement": { "kind": "taste", "envelope_stops": [-4.6, 2.3], "span_stops": 8, "level_keep": 0.6, … },
 #     "frames": [ { "input": "frames/f07.tif", "hybrid": { "slope": 1.83, "exposure": -0.21,
 #         "slope_bound": "span", "exposure_bound": "none" }, "frame": { … }, "flag": "… --roll-frame-tones …", … }, … ],
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5 --roll-dark -3.79 --roll-exposure 0.455 --roll-midtone-line …" } }
@@ -1593,11 +1593,12 @@ is refused (exit 2), since it asks for something the run will not do.
   and the roll's white and dark end, not the envelope; being always stated, it warns
   without either, naming what is missing. **`roll`** renders every frame at `k` and `e0`
   with the lifts.
-- `--hybrid-span STOPS` ⇒ `roll.hybrid_span_stops` (finite and positive, default 7) and
+- `--hybrid-span STOPS` ⇒ `roll.hybrid_span_stops` (finite and positive, default 8) and
   `--hybrid-level-keep SHARE` ⇒ `roll.hybrid_level_keep` (0 to 1, default 0.6) — the
   hybrid's minimum span and the share of its level offset a frame keeps (1 keeps every
   frame's level, 0 brings each to the roll's). Both from the poor-development spike's
-  review (`docs/spike/poor-development.md`, "As reviewed").
+  review (`docs/spike/poor-development.md`, "As reviewed"), the span since re-chosen
+  (`nf-calibration/hybrid-span-target`).
 - `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` ⇒ `roll.midtone_line = {"red": [RS, RO],
   "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` — the roll's **midtone
   neutral**, a correction (§6; `nf-scene-correction/midtone-neutral`). Per band of scene

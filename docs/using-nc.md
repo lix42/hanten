@@ -63,7 +63,12 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > rendering table, §7's fit-range table, report, dark-end section and refusals, §7's
 > `--contrast 1.3` bullet, §10's warnings and render-fault example, and the film-master
 > remedy were re-run against the binary; the floor's lightness figures are from the toe's
-> review of the probe's real rolls. The staleness
+> review of the probe's real rolls. At `pipeline_version` 16
+> (`nf-calibration/hybrid-span-target`, the hybrid's span target 7 → 8) §7's hybrid
+> example, `measure-roll` report (on its real roll), placement table and dark-floor
+> example (09-18's 1774) were re-run, and `--contrast 1.3` re-checked on every measured
+> roll (it renders, after `nf-calibration/overflow-probe-scope`); §4's and §5's recipe
+> `meta` carry the new version (`--save-recipe` writes 16). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -245,7 +250,7 @@ abridged):
 
 ```json
 {
-  "meta": { "nc_version": "0.1.0", "pipeline_version": 14, … },
+  "meta": { "nc_version": "0.1.0", "pipeline_version": 16, … },
   "params": {
     "recipe_version": 3,
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
@@ -559,7 +564,7 @@ and the measuring commands write parts of it):
 ```json
 {
   "meta": { "nc_version": "0.1.0", "git_commit": "…", "git_dirty": false,
-            "pipeline_version": 14, "target": "aarch64-apple-darwin" },
+            "pipeline_version": 16, "target": "aarch64-apple-darwin" },
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
@@ -1209,9 +1214,8 @@ grade is off.
 - **For a contrastier look, `--contrast 1.3`.** Reviewed against the default under the
   hybrid placement: the midtones get 30 % more contrast, mid-grey stays put, and the ends
   move apart: the highlights go further into fit range's shoulder, and the dark floor
-  (below) holds the dark end. Alone, ×1.3 sinks a frame's darkest 1 % to near L\* 6
-  (from 12) and a third of frames under L\* 5; with the floor, the frames it sank are
-  lifted back to about L\* 7–8. Reviewed under `--placement roll` and `frame` too, and
+  (below) holds the dark end. Alone, ×1.3 sinks a frame's darkest 1 % about a stop; the
+  floor lifts the frames it sank back to about L\* 7–8. Reviewed under `--placement roll` and `frame` too, and
   acceptable under both: under `frame` it renders bright, its whites past `frame`'s L\* 93
   (the brightest 1 % near L\* 97).
 - **Saturation is the colour's slope**: each pixel's ratios between channels are raised
@@ -1321,17 +1325,17 @@ is graded with the frame's own white balance, exposure and slope.
 darkest 1 % — its `dark_stops`, which `hanten measure-roll` measures — no deeper than
 that. A frame whose darkest 1 % renders deeper is lifted to it; a lighter one is left
 alone. Below its darkest 1 % the shadows rise by the same factor, so their texture is
-kept. At the default slope the hybrid already holds the dark end near L\* 10–11, so the
-floor lifts none of the reviewed frames; it acts on a frame wider than the placement can
-fit, and under a steeper `--contrast`:
+kept. At the default slope the roll's envelope already holds the dark end above it, so
+the floor lifts almost nothing (2 of 226 measured frames, by 0.05 stop); it acts on a
+frame wider than the placement can fit, and under a steeper `--contrast`:
 
 ```console
 $ hanten convert 1774.tif -o out … --contrast 1.3 | jq -c '.chain.fit_range.dark_end'
-{"setting":{"floor":4.5},"curve":"log-shift-to-mid-grey-v1","film_base_stops":4.612723,"frame_dark_stops":4.730485,"shift_stops":0.2304852}
+{"setting":{"floor":4.5},"curve":"log-shift-to-mid-grey-v1","film_base_stops":5.0270963,"frame_dark_stops":5.1680937,"shift_stops":0.6680935}
 ```
 
 `frame_dark_stops` is where the darkest 1 % would have rendered, and `shift_stops` the
-lift (`4.73 − 0.23 = 4.5`). The rendered darkest 1 % lands near the floor, at
+lift (`5.17 − 0.67 = 4.5`). The rendered darkest 1 % lands near the floor, at
 L\* 7–8 on the reviewed rolls.
 
 - **Without a measured dark end it does nothing**: `frame_dark_stops` is `null`. Stated
@@ -1411,8 +1415,8 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                 "leader_distance_stops": 2.0644333, "level_stops": -1.7618053,
                 "white_role": "under", "spread_stops": 3.7179117,
                 "dark_stops": -3.5714598, "base_share": 0.38004303, "lift_ev": 0.0,
-                "hybrid": { "slope": 1.7957463, "exposure": 0.28257036,
-                            "slope_bound": "roll", "exposure_bound": "none" },
+                "hybrid": { "slope": 1.8964152, "exposure": 0.28257036,
+                            "slope_bound": "span", "exposure_bound": "none" },
                 "frame": { "slope": 2.1450827, "exposure": 0.37770128,
                            "slope_bound": "span", "exposure_bound": "none" },
                 "flag": "… --roll-frame-tones 0.64702564,-1.7618053,-3.5714598", … }, … ],
@@ -1442,7 +1446,7 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
                  "slope_bound": 2.4 },
   "placement": { "kind": "taste", "envelope_stops": [-3.5862844, 2.2856762], "placed": 35,
-                 "span_stops": 7.0, "level_keep": 0.6, "exposure_below_ev": 1.0,
+                 "span_stops": 8.0, "level_keep": 0.6, "exposure_below_ev": 1.0,
                  "exposure_above_ev": 1.0, "max_slope": 3.5, "frame_white_look_stops": 4.462 },
   "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-dark -3.5391304 --roll-exposure 1.0553794 --roll-midtone-line -0.023591928,-0.024393905,-0.044650972,-0.06559556,-2.75,2.25,1.114628" },
   "warnings": [ "frames/1815.tif: near film saturation — its white sits 0.34 stop under the leader (margin 0.5 stop); …", … ]
@@ -1475,7 +1479,7 @@ measured value is never mistaken for a chosen one:
 | `--roll-envelope DARKEST,BRIGHTEST` | `roll.envelope_stops` | the roll's envelope: its frames' lowest dark end and highest white, in scene stops |
 | `--roll-frame-tones WHITE,LEVEL,DARK` | `roll.frame_tones` = `{"white_stops", "level_stops", "dark_stops"}` | this frame's white, level and dark end, in scene stops, which the hybrid and `frame` place it from |
 | `--placement roll\|hybrid\|frame` | `roll.placement` | how the frame is placed (below): `hybrid` (unset, the default), `frame` (each frame on its own), or the roll's slope and exposure with the lifts |
-| `--hybrid-span STOPS` | `roll.hybrid_span_stops` | the fewest look stops a hybrid frame's span renders over (default 7) |
+| `--hybrid-span STOPS` | `roll.hybrid_span_stops` | the fewest look stops a hybrid frame's span renders over (default 8) |
 | `--hybrid-level-keep SHARE` | `roll.hybrid_level_keep` | the share, 0 to 1, of its level's offset from the roll's a hybrid frame keeps (default 0.6) |
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
 | `--midtone-neutral on\|off` | `roll.midtone_neutral` | whether the midtone line applies; off keeps it in the recipe |
@@ -1676,7 +1680,7 @@ names the preferences applied, by their switch's key; `measure-roll`'s `placemen
 **Each frame is placed inside the roll's envelope** — the hybrid placement, the default.
 The roll's slope and exposure place its brightest white and darkest dark end (the
 envelope, `placement.envelope_stops`); each frame then gets its own slope, steep enough to
-spread its own span over at least 7 look stops (`--hybrid-span`) but no steeper than keeps
+spread its own span over at least 8 look stops (`--hybrid-span`) but no steeper than keeps
 it inside that envelope, within the cap's slope and 3.5, and its own exposure, keeping
 60 % of its level's offset from the roll's (`--hybrid-level-keep`), held inside the
 envelope, then within 1 EV of the roll's either way — where that limit holds a frame, its
@@ -1696,7 +1700,7 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --roll-white-balance 
     --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 --roll-envelope=-4.5,2.2 \
     --roll-frame-tones=0.9,-1.4,-3.2 \
     | jq -c '[(.chain.roll | {placement, frame_placement, taste_applied}), .chain.scene_correction.exposure, .chain.look.base_from, .chain.look.saturation_base_from]'
-[{"placement":"hybrid","frame_placement":{"slope":1.7073171,"exposure":0.39999995,"slope_bound":"span","exposure_bound":"none"},"taste_applied":["placement"]},0.79999995,"placement","roll"]
+[{"placement":"hybrid","frame_placement":{"slope":1.9512196,"exposure":0.39999995,"slope_bound":"span","exposure_bound":"none"},"taste_applied":["placement"]},0.79999995,"placement","roll"]
 ```
 
 **`--placement frame` places each frame on its own** instead, opt-in: its slope spreads
