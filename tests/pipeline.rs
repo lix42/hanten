@@ -18421,3 +18421,251 @@ fn a_per_frame_placement_refuses_what_it_ignores_and_warns_without_tones() {
     let (code, _, err) = no_envelope(&[]);
     assert_eq!(code, 0, "the remedy, dropping the knob: {err}");
 }
+
+/// A roll base for `--base-content`, far enough below full scale that its ceiling warning
+/// stays quiet.
+const CONTENT_BASE: [f32; 3] = [0.45, 0.25, 0.15];
+
+#[test]
+fn measure_roll_base_content_pools_the_pictures_and_replays_as_an_explicit_base() {
+    let tmp = TempDir::new("measure-roll-base-content");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [a, b, leader] = ["a.tif", "b.tif", "leader.tif"].map(|n| tmp.path(n));
+    // `a`'s bottom quarter is unexposed film: the pool's deepest black is the base.
+    write_split_density(&a, CONTENT_BASE, 0.9, 0.0, 16);
+    write_split_density(&b, CONTENT_BASE, 1.1, 0.3, 16);
+    write_uniform_density(&leader, CONTENT_BASE, 1.5);
+    let [a, b, leader] = [&a, &b, &leader].map(|p| s(p));
+    let content_out = s(&tmp.path("content.json"));
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &a,
+        &b,
+        &leader,
+        "--base-content",
+        "--leader",
+        "auto",
+        "--params",
+        &input,
+        "--out",
+        &content_out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let base: Vec<f64> = ["r", "g", "b"]
+        .iter()
+        .map(|c| report["film_base"][c].as_f64().unwrap())
+        .collect();
+    for (got, want) in base.iter().zip(CONTENT_BASE) {
+        assert!((got - f64::from(want)).abs() < 1e-4, "{base:?}");
+    }
+    let content = &report["content_base"];
+    assert_eq!(content["percentile"], 0.99, "{report}");
+    // The leader `auto` found is not pooled.
+    let pooled: Vec<&str> = content["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["input"].as_str().unwrap())
+        .collect();
+    assert_eq!(pooled, [a.as_str(), b.as_str()], "{content}");
+    assert_eq!(report["references"]["leader"]["frames"][0], leader.as_str());
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    // The file is an ordinary explicit base: stating it measures the same roll.
+    let flag = base
+        .iter()
+        .map(|v| (*v as f32).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let stated_out = s(&tmp.path("stated.json"));
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &a,
+        &b,
+        "--leader",
+        &leader,
+        "--film-base",
+        &flag,
+        "--params",
+        &input,
+        "--out",
+        &stated_out,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let recipe = |p: &str| json(&std::fs::read_to_string(p).unwrap())["params"].clone();
+    assert_eq!(recipe(&content_out), recipe(&stated_out));
+}
+
+#[test]
+fn measure_roll_base_content_warns_of_content_brighter_than_film() {
+    let tmp = TempDir::new("measure-roll-base-content-bright");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [a, b, c, leak, clear, leader] = [
+        "a.tif",
+        "b.tif",
+        "c.tif",
+        "leak.tif",
+        "clear.tif",
+        "leader.tif",
+    ]
+    .map(|n| tmp.path(n));
+    write_uniform_density(&leader, CONTENT_BASE, 1.5);
+    let leader = s(&leader);
+    write_split_density(&a, CONTENT_BASE, 0.9, 0.0, 16);
+    write_split_density(&b, CONTENT_BASE, 1.1, 0.3, 16);
+    write_split_density(&c, CONTENT_BASE, 1.0, 0.2, 16);
+    // A band far clearer than film, mostly under the inset: what reaches the effective
+    // area is past 1% of its own frame and under 1% of the pool.
+    write_split_density(&leak, CONTENT_BASE, 0.9, -0.5, 5);
+    write_uniform_density(&clear, [0.95; 3], 0.0);
+    let [a, b, c, leak, clear] = [&a, &b, &c, &leak, &clear].map(|p| s(p));
+    for (frames, expect) in [
+        (
+            vec![a.as_str(), &b, &c, &leak],
+            "leak.tif: its brightest content reads",
+        ),
+        (vec![clear.as_str()], "reaches 0.9 of full scale"),
+    ] {
+        let base = [&frames[..], &["--base-content", "--params", &input]].concat();
+        let (code, stdout, err) = run(&[&["measure-roll"][..], &base].concat());
+        assert_eq!(code, 0, "{frames:?}: {err}");
+        let warnings = json(&stdout)["warnings"].to_string();
+        assert!(warnings.contains(expect), "{frames:?}: {warnings}");
+        // The polarity warning, whose remedy is an unexposed frame, stays quiet.
+        assert!(
+            !warnings.contains("does not look like a negative"),
+            "{frames:?}: {warnings}"
+        );
+        let strict = ["--strict", "--leader", &leader];
+        let (code, _, err) = run(&[&["measure-roll"][..], &base, &strict].concat());
+        assert_eq!(code, 1, "{frames:?}: {err}");
+    }
+}
+
+#[test]
+fn measure_roll_base_content_refusals() {
+    let tmp = TempDir::new("measure-roll-base-content-refusals");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let [a, blank] = ["a.tif", "blank.tif"].map(|n| tmp.path(n));
+    write_split_density(&a, CONTENT_BASE, 0.9, 0.0, 16);
+    write_uniform_density(&blank, CONTENT_BASE, 0.0);
+    let [a, blank] = [&a, &blank].map(|p| s(p));
+    for (args, expect, absent) in [
+        (
+            vec![
+                a.as_str(),
+                "--base-content",
+                "--film-base",
+                "0.45,0.25,0.15",
+            ],
+            "--base-content measures the film base, and --film-base states one",
+            "needs its film base",
+        ),
+        (
+            vec![a.as_str(), "--base-content", "--unexposed", &blank],
+            "cannot be used with",
+            "needs its film base",
+        ),
+        (
+            vec![a.as_str(), "--params", &input],
+            "`--base-content` estimates it from the pictures' deepest shadows",
+            "measures the film base, and",
+        ),
+    ] {
+        let (code, stdout, err) = run(&[&["measure-roll"][..], &args].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(stdout.is_empty(), "{args:?}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+        assert!(!err.contains(absent), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn roll_base_content_is_byte_identical_to_measure_roll_then_roll() {
+    let roll = MeasureModeRoll::new("roll-base-content-identity");
+    let (input, blank, leader) = (&roll.input, &roll.blank, &roll.leader);
+    let measured = roll.path("roll.json");
+    let (code, stdout, err) = roll.run(
+        "measure-roll",
+        &[
+            "--base-content",
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "--out",
+            &measured,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let by_hand = json(&stdout);
+    let hand = roll.path("hand");
+    let (code, _, err) = roll.run(
+        "roll",
+        &["--params", input, "--params", &measured, "-o", &hand],
+    );
+    assert_eq!(code, 0, "{err}");
+    let one = roll.path("one");
+    let (code, stdout, err) = roll.run(
+        "roll",
+        &[
+            "--base-content",
+            "--leader",
+            leader,
+            "--params",
+            input,
+            "-o",
+            &one,
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_same_outputs(&roll, &one, &hand, "--base-content");
+    let measurement = &json(&stdout)["measurement"];
+    for key in ["content_base", "film_base", "white_balance", "frames"] {
+        assert_eq!(measurement[key], by_hand[key], "measurement.{key}");
+    }
+    assert!(measurement["content_base"].is_object(), "{measurement}");
+
+    // Refused beside a stated base, and beside `--unexposed`; a refusal that measures first
+    // names the base flag, which `measure-roll` needs as well.
+    let base = roll.path("base.json");
+    let (code, _, err) = run(&["measure-base", blank, "--out", &base]);
+    assert_eq!(code, 0, "{err}");
+    let out = roll.path("out");
+    let manifest = write_file(
+        &roll.tmp.path("frames.json"),
+        &serde_json::json!({"frames": [{"input": roll.frames[0]}]}).to_string(),
+    );
+    let manifest = manifest.to_str().unwrap();
+    let measure_first = "`hanten measure-roll <frames> --base-content --out roll.json`";
+    let common = ["roll", "--params", input, "--base-content", "-o", &out];
+    let frames: Vec<&str> = roll.frames.iter().map(String::as_str).collect();
+    for args in [
+        [&common[..], &["--frames", manifest]].concat(),
+        [&common[..], &frames, &["--roll-white", "1.5"]].concat(),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(measure_first), "{args:?}: {err}");
+    }
+    for (args, expect) in [
+        (
+            vec!["--params", input, "--params", &base, "--base-content"],
+            "--base-content measures the film base, and the recipe's `calibration.film_base` \
+             states one; the base is measured or stated, never both. Drop the recipe's \
+             `calibration.film_base`, or replace --base-content with --measure-roll",
+        ),
+        (
+            vec!["--params", input, "--base-content", "--unexposed", blank],
+            "cannot be used with",
+        ),
+    ] {
+        let (code, _, err) = roll.run("roll", &[&args[..], &["-o", &out]].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+    }
+}

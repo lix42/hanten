@@ -29,6 +29,10 @@ What other epics need to know about `film-base`:
   measurement is **not** a `FilmBaseSource` — over a picture it is a plausible, wrong
   base — so conversions take its result as `Explicit`. `--auto-base`, `"auto"` and
   `estimate --grid` are refused with migration messages; `inspect` suggests no Dmin.
+  **A roll with no unexposed film** can take `measure-roll --base-content`
+  (`content-fallback`, 2026-10-13): the pooled p99 of the picture frames, explicit and
+  opt-in — like the area median, a measurement and never a `FilmBaseSource`, and never
+  a rung `--unexposed auto` falls to.
 - **`calibration.film_base` has NO default — `convert` and `roll` refuse an unstated
   source (exit 2).** `Dmin` is the divisor of the density conversion, so it sets
   black point and colour balance together; it must be a decision, not an omission.
@@ -388,8 +392,8 @@ mask that feeds the RGB rebate search.
 
 ## content-fallback
 
-**Status:** not started
-**Updated:** 2026-10-01
+**Status:** done (2026-10-13)
+**Updated:** 2026-10-13
 
 - Goal: Add an explicit, opt-in film-base source that estimates `Dmin` from the exposed image **content** when no unexposed film (dedicated frame, rebate, or holder-inset band) is available to sample — the design-spec §9 acquisition-ladder **Tier 3**.
 - 2026-10-01: **Re-scoped for the new chain.** `--auto-base` is gone, and the film base
@@ -398,6 +402,110 @@ mask that feeds the RGB rebate search.
   effective areas into one explicit base, its source in the report, and named in the
   no-base refusal. Whether `convert` keeps a per-frame form is open. New dependency:
   `core/measure-base`.
+
+### 2026-10-13 — implemented: `measure-roll --base-content`, `roll --base-content`
+
+**Decisions (user):** no per-frame form — a lone frame is `measure-roll frame.tif
+--base-content`, and there is no `"content"` recipe value; `roll`'s measure mode takes the
+flag too (it implies `--measure-roll`). Mine: refused beside `--unexposed` (clap conflict)
+and beside any stated base (the `--unexposed` rule, generalised as `MeasuredBase`);
+`--leader` and `--leader auto` allowed, the found leader left out of the pool.
+
+**The estimator was measured before it was chosen** (`content_probe`, an `#[ignore]`d probe
+in `film_base.rs`; 12 rolls, 246 picture frames, each roll against its unexposed frame's
+median; review page published as a private Artifact). Error in density, 36 roll-channels:
+
+| estimator | clearest | densest | mean | mean size |
+|---|---|---|---|---|
+| **pooled p99** (chosen) | −0.069 | +0.092 | −0.001 | 0.026 |
+| pooled p99.5 | −0.082 | +0.069 | −0.013 | 0.027 |
+| clearest frame's p99 | −0.102 | +0.039 | −0.030 | 0.036 |
+| median frame's p99 | −0.048 | +0.254 | +0.040 | 0.048 |
+
+Higher percentiles only push every estimator clearer. The worst misses are Ektar blue
+(+0.09 on 09-09 and 09-14, the deepest scene blacks keep blue-layer density); the 09-11 and
+09-13 Portra 400 rolls err clear on every channel (−0.05..−0.07).
+
+- **The base is not the brightest thing on a roll.** Most rolls have picture frames whose
+  own p99 is clearer than the unexposed frame (up to ~0.1 density), as `polarity_probe`
+  saw at 1.25×. So the guard is relative to the pool, never "clearer than base".
+- **Guards (user-approved):** a frame whose p99 is more than 0.15 density clearer than the
+  pooled base on any channel (archive worst 0.075 → 2×), and a pooled base ≥ 0.9 of full
+  scale (archive bases 0.07-0.58, no picture sample above 0.615) — the whole-roll overscan
+  the frame check cannot see. Both `--strict`-promotable warnings.
+- **Exact leader exclusion without holding every frame:** a leader must be flat
+  (`AREA_MAX_RELATIVE_SPREAD`), so `ContentPool` holds only flat frames' counts apart (and
+  only with `--leader auto`); the rest go straight into one sum. The leader is found
+  against the all-inputs base, then the base is re-read without it. Not in the memory
+  model (noted on `RunProfile::MeasureRoll`), freed before the frame loop.
+- **Its own pass**, not `measure_areas`: that path runs `measure_area`'s birth guard and
+  uniformity warning, which are about unexposed film. `pool_content` decodes, resolves the
+  area (refusing as a picture would) and counts; with `--leader auto` it also gives the
+  classifier its statistics, so nothing is decoded a third time.
+
+**Verified.** The real 2026-07-15 Ektar 100 roll with its unexposed frame left out:
+`--base-content --leader auto` gives `[0.454, 0.249, 0.153]` against `[0.486, 0.262,
+0.177]` (+0.029/+0.022/+0.064 density), the leader found and left out of the pool. Rendered
+as a roll, the white balance takes part of the blue error (blue gain 1.188 → 1.301), and
+`nctool metrics` on the three frames moves mean b* by ≤0.7 and mean chroma by ≤0.7 against
+the unexposed-frame render; the deep-shadow band shrinks (0.69% → 0.43% on 971), as a
+slightly dense base predicts. Gates: fmt, machete, clippy, build, rustdoc, `nctool` (589),
+`cargo test` (811 unit, 282 + 32 + 1 integration).
+
+**Left as found:** measure mode's `--frames` and `--roll-*` refusals name `measure-roll
+<frames> --out roll.json` with no base flag, which refuses on its own — for `--unexposed`
+as much as `--base-content`.
+
+### 2026-10-13 — review round (`/code-review high`): nine fixed, one declined
+
+This entry supersedes "Left as found" above.
+- **The measure-first remedy now carries the base:** `--frames` and `--roll-*` in measure
+  mode name `measure-roll <frames> <the measuring flag> --out roll.json`, or a placeholder
+  for a stated base, for `--unexposed` too.
+- **No polarity warning on a content run** (`RollScan::ContentFrame`): a frame that trips
+  it (1% past 1.5x the base) already trips the content warning (its p99 past 1.41x), and
+  its remedy is an unexposed frame the roll does not have.
+- `RollMeasureRequest` carries one `Option<MeasuredBase>`, not a reference beside a bool
+  (CLAUDE.md: mutually exclusive knobs are one enum). `ContentPool::add` returns the
+  spread that decided holding, which `--leader auto` classifies on, so the two cannot
+  drift.
+- Prose: `measure-roll --film-base`'s help, the `--leader` refusal, two rustdocs, design-spec
+  §3's `roll` and `measure-roll` rows. The guide's single-frame example said `base.json`
+  for what is a whole one-frame roll recipe; it now says so.
+- **Declined: weighting frames equally in the pool.** A roll is scanned at one
+  resolution, and the measured estimator is the pixel-pooled one; equal weights would be
+  an unmeasured estimator.
+
+### 2026-10-13 — ship review (`ship:diff-reviewer`; Codex skipped, out of credits)
+
+- **Declined: skipping the polarity warning in `roll --base-content`'s conversion.**
+  Measure mode is `measure-roll` then `roll --params`, and that replay checks every frame
+  against its explicit base, which records no origin. Only the measurement's own pass
+  skips it, where the content warning already names the frame; the conversion's warning
+  lists the backlight cause and its remedy (`--measure-inset`).
+- Declined: an input-semantics refusal ordered after `pool_content`'s area refusal. The
+  `auto` pass (`measure_areas`) has the same order; both refuse before any picture is
+  measured.
+- The guide now says every leader-like frame `--leader auto` finds leaves the pool, not
+  only the guarding one.
+
+### 2026-10-13 — closed
+
+Landed as `measure-roll --base-content` and `roll --base-content`
+(`film_base::ContentPool`, `AreaCounts`; `cli::pool_content`): the per-channel p99 of
+every picture frame's effective area pooled, written as `calibration.film_base`
+explicit, the evidence in the report's `content_base`. No per-frame or recipe form.
+Verified: every CI gate; the estimator across 12 archive rolls (−0.069..+0.092 density);
+the Ektar 2026-07-15 roll measured and rendered against its unexposed-frame base.
+
+For dependent work:
+- **It is never a rung of `--unexposed auto`** — that still refuses, naming it. A future
+  automatic cascade must keep it explicit.
+- **The archive cannot test the over-bright guards on real data**: no roll has overscan
+  or a light leak, so 0.15 density and 0.9 rest on synthetic fixtures and the archive's
+  margins. A real leak frame is the evidence that would move them.
+- `AreaCounts` is now the public histogram behind `measure_area`, and the probe
+  `content_probe` re-measures the estimator table.
 
 
 ## dmax-anchor-reliability

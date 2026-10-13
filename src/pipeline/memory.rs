@@ -409,7 +409,9 @@ pub enum RunProfile {
     /// the **decode** phase. The per-frame samples (~1.5 MB each,
     /// `roll_white::FRAME_SAMPLE_PIXELS`) are not in this model: they peak after the
     /// frame loop at three per frame (film RGB, its ACEScg copy, the pooled white's
-    /// per-channel copy), ~160 MB on a 36-frame roll.
+    /// per-channel copy), ~160 MB on a 36-frame roll. Nor is `--base-content`'s pool
+    /// (`film_base::ContentPool`): one ~1.5 MB sum, plus as much per flat frame held for
+    /// `--leader auto`, freed before the frame loop.
     MeasureRoll,
 }
 

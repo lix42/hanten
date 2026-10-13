@@ -71,7 +71,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `meta` carry the new version (`--save-recipe` writes 16). At
 > `nf-scene-correction/midtone-line-terms` (`pipeline_version` 16 unchanged,
 > `--midtone-neutral red|blue`) §7's roll report example, roll-flag table, `direct` and
-> film-master refusals and midtone-line section were re-run against the binary. The staleness
+> film-master refusals and midtone-line section were re-run against the binary. At
+> `film-base/content-fallback` (`--base-content`, `pipeline_version` 16 unchanged) §4's
+> no-base refusals were re-run, and its `--base-content` section on the real 2026-07-15
+> Ektar 100 roll. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -237,7 +240,9 @@ usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per r
        with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H to read
        it from a region of unexposed film. Recipe key: `calibration.film_base`, which
        `hanten measure-roll <frames> --unexposed <unexposed-scan> --out roll.json`
-       writes for `--params`.
+       writes for `--params`. With no unexposed film on the roll, `hanten measure-roll
+       <frames> --base-content --out roll.json` estimates it from the pictures' deepest
+       shadows.
 ```
 
 One command measures everything a roll shares — the film base from its **unexposed
@@ -358,7 +363,8 @@ source flag, so each frame is decoded twice. Then:
          unexposed frame with --unexposed <file>, leaving it out of the frames; or, with
          none on the roll, measure a region of clear film (`hanten measure-base <frame>
          --base-region X,Y,W,H --out base.json`) and pass --params base.json in place of
-         --unexposed
+         --unexposed, or, with no clear film at all, estimate the base from the pictures
+         with --base-content in place of --unexposed
   ```
 
 The report's `references` object records the evidence: each input's `class`
@@ -384,6 +390,59 @@ pictures, and each frame's `measurements` as `measure-base` reports them. Under
   "leader": { "frames": ["…/leader.tif"], "min_density": 0.7 }
 }
 ```
+
+#### No unexposed film at all: `--base-content`
+
+A roll with no unexposed frame and no visible clear film can still be measured, as a
+last resort. `--base-content` estimates the base from the pictures: the deepest black in
+a scene is the thinnest part of the negative, close to the base.
+
+```sh
+hanten measure-roll frames/*.tif --base-content --leader leader.tif --out roll.json
+```
+
+The base is the per-channel **99th percentile** of every picture frame's effective area
+(§9) pooled, so the frames that hold deep shadows set it and high-key frames add
+nothing. `--out` writes it as an ordinary explicit base, so a replay is the same as
+stating it with `--film-base`. Every input is decoded twice. With `--leader auto` every
+leader-like frame it finds is left out of the pool. On the archive's 12 rolls, each checked against
+its own unexposed frame, it lands within −0.07 to +0.09 density of the real base,
+0.026 on average. The worst misses are Ektar's blue channel, estimated slightly dense.
+A roll with no near-black in any frame (fog, a high-key roll) gets a base that is too
+dense: its blacks render raised and with a cast.
+
+The report's `content_base` object is the evidence. On the Ektar 100 roll with its
+unexposed frame left out (abridged), the base reads `[0.454, 0.249, 0.153]` against
+`[0.486, 0.262, 0.177]` from that frame:
+
+```json
+"content_base": {
+  "percentile": 0.99,
+  "frames": [
+    { "input": "…/971.tif", "value": { "r": 0.4111391, "g": 0.20781262, "b": 0.11046006 },
+      "density_above_base": [0.043112442, 0.07897391, 0.1412325] },
+    { "input": "…/989.tif", … }, { "input": "…/991.tif", … }
+  ],
+  "max_clearer_density": 0.15,
+  "max_transmission": 0.9
+}
+```
+
+Two warnings guard the case where something brighter than film is in frame, and
+`--strict` refuses on either: a frame whose own 99th percentile reads more than 0.15
+density clearer than the pooled base (overscan past the film's edge, or a light leak;
+raise `--measure-inset` or leave the frame out), and a base at 0.9 of full scale or more
+on any channel. `--base-content` beside `--unexposed` or a stated base exits 2:
+
+```
+usage: --base-content measures the film base, and --film-base states one; the base is
+       measured or stated, never both. Drop one of them
+```
+
+It is never a fallback: `--unexposed auto` that finds nothing refuses, and names it.
+There is no per-frame recipe value for it. A single frame with no roll is a roll of one:
+`measure-roll frame.tif --base-content --out frame.json` writes that frame's base with its
+own white balance, white and exposure, for `convert --params frame.json`.
 
 #### The film base alone: `measure-base`
 
@@ -539,11 +598,12 @@ measurement too, so by hand `measure-roll` must measure under them: pass it
 (`reconstruction.linearization` for `--density-gamma`). The measurement is layered after every
 `--params` recipe, as `roll.json` would be, and the flags apply over it. The report is
 `roll`'s, with a `measurement` object holding what `measure-roll`'s report would (the
-`unexposed` and `references` evidence, each frame's white, the warnings).
+`unexposed`, `content_base` and `references` evidence, each frame's white, the warnings).
 
-- **The base must be explicit**: a recipe's, `--film-base`, or `--unexposed` (a path or
-  `auto`, as on `measure-roll`). `--unexposed` beside a stated base exits 2, and so does
-  a `--base-region` base, which would measure each frame under a different decode.
+- **The base must be explicit**: a recipe's, `--film-base`, `--unexposed` (a path or
+  `auto`, as on `measure-roll`), or `--base-content` (which also implies the mode).
+  `--unexposed` or `--base-content` beside a stated base exits 2, and so does a
+  `--base-region` base, which would measure each frame under a different decode.
 - **What is measured cannot be stated.** A `--params` recipe holding a measured `roll`
   value, and a `--roll-*` flag, exit 2 (a frame's lift, `--roll-frame-exposure` or
   `roll.thin_slope`, with the refusal it gets on any `roll`):
@@ -2529,7 +2589,8 @@ Neither `convert` nor `roll` has a default film base. Pass `--film-base R,G,B`
 (measured once per roll), or a `--params` recipe stating `calibration.film_base` (the
 file `hanten measure-roll … --out` writes). `--base-region X,Y,W,H` also works, but on
 `roll` it re-reads the base on every frame. `hanten measure-base <unexposed-frame>`
-is the way to get a value in the first place.
+is the way to get a value in the first place; with no unexposed film on the roll at all,
+`hanten measure-roll <frames> --base-content` estimates one (§4).
 
 **"the effective area is not uniform … it does not look like unexposed film"**
 `measure-base` was given a picture frame. Give it the roll's unexposed frame, or, if the
@@ -2598,7 +2659,6 @@ So you don't go looking:
 | Missing | Owning task |
 |---|---|
 | **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/auto-calibration`](tasks/core/auto-calibration.md) |
-| **Content-based film-base fallback** (a `measure-roll` option) for cropped scans with no visible rebate | [`film-base/content-fallback`](tasks/film-base/content-fallback.md) |
 | **IR dust removal** | roadmap follow-up, no task file yet |
 
 [`docs/TASKS.md`](TASKS.md) is the authoritative status for all of it.

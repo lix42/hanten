@@ -393,9 +393,16 @@ pub struct MeasureRollArgs {
     /// with a warning (uncorroborated), which `--strict` refuses.
     #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
     pub unexposed: Option<Reference>,
+    /// A last resort for a roll with no unexposed film: estimate the film base from the
+    /// pictures' deepest shadows, the per-channel 99th percentile of every input's
+    /// effective area pooled. Within about 0.1 density of the real base on the archive's
+    /// rolls; a roll with no near-black (fog, high key) renders raised, cast blacks.
+    /// Refused beside `--unexposed` or a stated base.
+    #[arg(long, conflicts_with = "unexposed")]
+    pub base_content: bool,
     /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
-    /// the other — this, the recipe, or `--unexposed` — and explicit: a base estimated
-    /// per frame would measure each frame under a different decode.
+    /// the other — this, the recipe, `--unexposed` or `--base-content` — and explicit: a
+    /// base estimated per frame would measure each frame under a different decode.
     #[arg(long = "film-base", value_name = "R,G,B", value_parser = parse_rgb)]
     pub film_base: Option<[f32; 3]>,
     #[command(flatten)]
@@ -624,6 +631,11 @@ pub struct RollArgs {
     /// Implies `--measure-roll`. Refused beside a stated base.
     #[arg(long, value_name = "PATH|auto", value_parser = parse_reference)]
     pub unexposed: Option<Reference>,
+    /// Estimate the film base from the pictures' deepest shadows, as `measure-roll
+    /// --base-content` does: a last resort for a roll with no unexposed film. Implies
+    /// `--measure-roll`. Refused beside `--unexposed` or a stated base.
+    #[arg(long, conflicts_with = "unexposed")]
+    pub base_content: bool,
     /// Write the resolved recipe — every layer and flag, and in measure mode the
     /// measurement — to PATH once the roll has succeeded, so `roll --params PATH` over the
     /// same frames (and the same `--frames` manifest) replays it.
@@ -649,9 +661,14 @@ pub struct RollArgs {
 
 impl RollArgs {
     /// Whether the roll is measured before it converts: `--measure-roll`, or implied by
-    /// `--unexposed`.
+    /// `--unexposed` or `--base-content`.
     fn measures(&self) -> bool {
-        self.measure_roll || self.unexposed.is_some()
+        self.measure_roll || self.unexposed.is_some() || self.base_content
+    }
+
+    /// How the base is measured, when it is.
+    fn measured_base(&self) -> Option<MeasuredBase<'_>> {
+        measured_base(self.unexposed.as_ref(), self.base_content)
     }
 
     /// Measure mode's named reference scans, which no write target may overwrite.
@@ -2567,7 +2584,9 @@ pub const MISSING_FILM_BASE: &str = "no film base selected: pass --film-base R,G
      measured once per roll with `hanten measure-base <unexposed-frame>`), or --base-region \
      X,Y,W,H to read it from a region of unexposed film. Recipe key: \
      `calibration.film_base`, which `hanten measure-roll <frames> --unexposed \
-     <unexposed-scan> --out roll.json` writes for `--params`.";
+     <unexposed-scan> --out roll.json` writes for `--params`. With no unexposed film on \
+     the roll, `hanten measure-roll <frames> --base-content --out roll.json` estimates it \
+     from the pictures' deepest shadows.";
 
 /// Validate the recipe's **shared** sections — the input, the film base and the
 /// measurement region, which the decode and the film-base stage read before any
@@ -6463,19 +6482,26 @@ fn reject_measure_mode_flags(args: &RollArgs) -> Result<()> {
         return Ok(());
     }
     let mode = measure_mode_name(args);
+    // `measure-roll` needs the base too: the flag that measures it, else the stated one.
+    let measure = format!(
+        "hanten measure-roll <frames> {} --out roll.json",
+        args.measured_base().map_or_else(
+            || "<the base: --film-base or --params>".to_owned(),
+            |m| m.to_string()
+        )
+    );
     if args.frames.is_some() {
         return Err(NcError::Usage(format!(
             "{mode} measures the positional frames and refuses --frames: a manifest's `params` \
-             can change the decode a frame is measured under. Measure first with `hanten \
-             measure-roll <frames> --out roll.json`, then `hanten roll --frames <manifest> \
-             --params roll.json`"
+             can change the decode a frame is measured under. Measure first with `{measure}`, \
+             then `hanten roll --frames <manifest> --params roll.json`"
         )));
     }
     if let Some(flag) = args.knobs.roll.measured().first() {
         return Err(NcError::Usage(format!(
             "{flag} states a roll value, and {mode} measures the roll's values. Drop {flag}, \
-             or render with it without measuring: `hanten measure-roll <frames> --out \
-             roll.json`, then `hanten roll … --params roll.json {flag} …`"
+             or render with it without measuring: `{measure}`, then `hanten roll … --params \
+             roll.json {flag} …`"
         )));
     }
     Ok(())
@@ -6485,6 +6511,8 @@ fn reject_measure_mode_flags(args: &RollArgs) -> Result<()> {
 fn measure_mode_name(args: &RollArgs) -> &'static str {
     if args.measure_roll {
         "--measure-roll"
+    } else if args.base_content {
+        "--base-content, which implies --measure-roll,"
     } else {
         "--unexposed, which implies --measure-roll,"
     }
@@ -6494,8 +6522,8 @@ fn measure_mode_name(args: &RollArgs) -> &'static str {
 /// layer that states it. A look states none ([`MEASURED_ROLL_KEYS`]).
 fn refuse_stated_roll_values(args: &RollArgs, layers: &LoadedLayers) -> Result<()> {
     if let Some((name, key)) = stated_roll_value(layers) {
-        // `--unexposed` is refused beside a stated base.
-        let instead = if args.unexposed.is_some() {
+        // A measured base is refused beside a stated one.
+        let instead = if args.measured_base().is_some() {
             "a look from `hanten profile`"
         } else {
             "a look from `hanten profile`, a base from `hanten measure-base --out`"
@@ -6550,7 +6578,7 @@ fn reject_a_leader_without_measuring(args: &RollArgs, layers: &LoadedLayers) -> 
     };
     Err(NcError::Usage(format!(
         "--leader {leader} guards the roll's measurement, and without --measure-roll (or \
-         --unexposed) roll measures nothing. {remedy}"
+         --unexposed or --base-content) roll measures nothing. {remedy}"
     )))
 }
 
@@ -6569,7 +6597,7 @@ fn measure_for_roll(
     // remedy (render without measuring) it would refuse next.
     reject_a_lift_for_every_frame(&args.knobs, &shared, true)?;
     refuse_stated_roll_values(args, layers)?;
-    if let Some(unexposed) = &args.unexposed {
+    if let Some(measured) = args.measured_base() {
         let flags = &args.knobs.film_base;
         let stated_by = if flags.film_base.is_some() {
             Some("--film-base")
@@ -6580,7 +6608,7 @@ fn measure_for_roll(
         } else {
             None
         };
-        refuse_unexposed_beside_a_base(unexposed, stated_by, true)?;
+        refuse_a_measured_base_beside_a_stated_one(measured, stated_by, true)?;
     }
     // What the recipe and flags state, before a scan is decoded; the base is measured or
     // checked by the measurement's own rules below.
@@ -6613,7 +6641,7 @@ fn measure_for_roll(
     let mut req = RollMeasureRequest {
         inputs: &inputs,
         leader: args.leader.as_ref(),
-        unexposed: args.unexposed.as_ref(),
+        base: args.measured_base(),
         recipe: shared,
         midtone: MidtoneMode::Auto,
         lifts: Lifts {
@@ -7623,6 +7651,9 @@ struct MeasureRollReport {
     /// The `--unexposed` frame's base measurement, the evidence `measure-base` reports.
     #[serde(skip_serializing_if = "Option::is_none")]
     unexposed: Option<BaseMeasurement>,
+    /// How `--base-content` estimated the base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_base: Option<ContentBaseReport>,
     /// What `--unexposed auto` and `--leader auto` found among the inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     references: Option<FoundReferences>,
@@ -8073,6 +8104,12 @@ struct RollReuse {
 enum RollScan {
     Leader,
     Frame,
+    /// A picture frame under a `--base-content` base, which the measurement does not
+    /// polarity-check: a frame that trips it (1% past 1.5x the base) already reads
+    /// clearer than the base by more than `film_base::CONTENT_MAX_CLEARER_DENSITY`, and
+    /// that warning names it. The conversion still checks it, as a replay of the recipe
+    /// would.
+    ContentFrame,
 }
 
 /// One input decoded into linear ACEScg at the recipe's decode, plus its effective
@@ -8413,6 +8450,99 @@ fn measure_areas(
         .collect()
 }
 
+/// `--base-content`'s pass: every input's effective area counted into the content pool,
+/// with its area statistics for `--leader auto` (`None` for a channel-dark median, which
+/// no leader has). `hold_flat` keeps leader-like frames apart so a found leader leaves the
+/// pool. An input whose area cannot be resolved refuses here, as it would as a picture.
+fn pool_content(
+    inputs: &[PathBuf],
+    inset: f32,
+    hold_flat: bool,
+    budget: memory::Budget,
+    log: &Log,
+) -> Result<(
+    film_base::ContentPool,
+    Vec<Option<reference_frames::AreaStats>>,
+)> {
+    let quiet = Log {
+        verbose: log.verbose,
+        quiet: true,
+    };
+    let mut pool = film_base::ContentPool::new(hold_flat);
+    let mut stats = Vec::with_capacity(inputs.len());
+    for (i, input) in inputs.iter().enumerate() {
+        // The picture pass decodes the frame again and reports its warnings then.
+        let mut repeated = Vec::new();
+        let memory = preflight_memory(
+            input,
+            RunProfile::DecodeOnly,
+            SamplePlan::none(),
+            budget,
+            memory::detect_total_ram(),
+            &quiet,
+            &mut repeated,
+        )
+        .map_err(|e| e.prefixed(input.display()))?;
+        log_memory_preflight(&memory, log);
+        let (scan, _) =
+            decode_within(input, budget.bytes()).map_err(|e| e.prefixed(input.display()))?;
+        let area = film_base::effective_area(&scan, inset).map_err(|e| {
+            NcError::Usage(format!(
+                "{}: {} (every frame is measured over its effective area)",
+                input.display(),
+                e.message()
+            ))
+        })?;
+        let counts = film_base::AreaCounts::of(&scan.image, area.region)?;
+        let (median, spread) = pool.add(i, counts);
+        stats.push(
+            median
+                .iter()
+                .all(|&m| m > 0.0)
+                .then_some(reference_frames::AreaStats { median, spread }),
+        );
+    }
+    Ok((pool, stats))
+}
+
+/// The report's `content_base`: how `--base-content` estimated the base.
+#[derive(Debug, Serialize)]
+struct ContentBaseReport {
+    /// The per-channel percentile of the pooled effective areas.
+    percentile: f32,
+    /// Each pooled frame's own percentile, and its density above the base (negative:
+    /// clearer than the base).
+    frames: Vec<ContentFrame>,
+    max_clearer_density: f32,
+    max_transmission: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct ContentFrame {
+    input: PathBuf,
+    value: FilmBase,
+    density_above_base: [f32; 3],
+}
+
+impl ContentBaseReport {
+    fn new(inputs: &[PathBuf], est: &film_base::ContentBase) -> Self {
+        Self {
+            percentile: film_base::CONTENT_PERCENTILE,
+            frames: est
+                .frames
+                .iter()
+                .map(|&(i, value)| ContentFrame {
+                    input: inputs[i].clone(),
+                    value: FilmBase::from(value),
+                    density_above_base: reference_frames::density_above(est.base.into(), value),
+                })
+                .collect(),
+            max_clearer_density: film_base::CONTENT_MAX_CLEARER_DENSITY,
+            max_transmission: film_base::CONTENT_MAX_TRANSMISSION,
+        }
+    }
+}
+
 /// `--unexposed auto`: the base from the inputs' area measurements, refused when no
 /// input is flat enough or the base is unusable. Takes the frames' measurements out
 /// of `areas`.
@@ -8458,7 +8588,8 @@ fn find_unexposed(
              roll's unexposed frame with --unexposed <file>, leaving it out of the frames; \
              or, with none on the roll, measure a region of clear film (`hanten \
              measure-base <frame> --base-region X,Y,W,H --out base.json`) and pass {pass} \
-             in place of --unexposed"
+             in place of --unexposed, or, with no clear film at all, estimate the base from \
+             the pictures with --base-content in place of --unexposed"
         ))
     })?;
     if reuse_ready(found.base).is_none() {
@@ -8553,9 +8684,10 @@ fn found_references(
     }
 }
 
-/// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` its film
-/// base ([`measure_base`]), then its white balance, midtone line, white and exposure over its picture frames;
-/// report them, and with `--out` write them as one recipe `roll --params` renders alone.
+/// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` or
+/// `--base-content` its film base, then its white balance, midtone line, white and exposure
+/// over its picture frames; report them, and with `--out` write them as one recipe `roll
+/// --params` renders alone.
 fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
@@ -8569,9 +8701,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
 
     let loaded = load_recipes(&args.recipe_in)?;
     let mut recipe = loaded.recipe;
-    // A measured base is not overridden: the unexposed frame is refused beside any
-    // other statement of the base, before a rule about that base could refuse first.
-    if let Some(unexposed) = &args.unexposed {
+    // A measured base is not overridden: it is refused beside any other statement of the
+    // base, before a rule about that base could refuse first.
+    if let Some(measured) = measured_base(args.unexposed.as_ref(), args.base_content) {
         let stated = if args.film_base.is_some() {
             Some("--film-base")
         } else if recipe.calibration.film_base.is_some() {
@@ -8579,7 +8711,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         } else {
             None
         };
-        refuse_unexposed_beside_a_base(unexposed, stated, false)?;
+        refuse_a_measured_base_beside_a_stated_one(measured, stated, false)?;
     }
     if let Some(b) = args.film_base {
         recipe.calibration.film_base = Some(FilmBaseSource::Explicit(b));
@@ -8590,7 +8722,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let mut req = RollMeasureRequest {
         inputs: &args.inputs,
         leader: args.leader.as_ref(),
-        unexposed: args.unexposed.as_ref(),
+        base: measured_base(args.unexposed.as_ref(), args.base_content),
         recipe,
         midtone: args.midtone_neutral,
         lifts: Lifts {
@@ -8647,11 +8779,46 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     Ok(())
 }
 
-/// `--unexposed` measures the base, so a base stated beside it (`stated` names where) is
-/// refused: the base is measured or stated, never both. On `roll`, dropping `--unexposed`
-/// also leaves measure mode, so the remedy names `--measure-roll` in its place.
-fn refuse_unexposed_beside_a_base(
-    unexposed: &Reference,
+/// A film base the measurement measures rather than is given: from the roll's unexposed
+/// frame, or from the pictures' content (`film-base/content-fallback`).
+#[derive(Clone, Copy, Debug)]
+enum MeasuredBase<'a> {
+    Unexposed(&'a Reference),
+    Content,
+}
+
+fn measured_base(unexposed: Option<&Reference>, content: bool) -> Option<MeasuredBase<'_>> {
+    match (unexposed, content) {
+        (Some(u), _) => Some(MeasuredBase::Unexposed(u)),
+        (None, true) => Some(MeasuredBase::Content),
+        (None, false) => None,
+    }
+}
+
+impl MeasuredBase<'_> {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Unexposed(_) => "--unexposed",
+            Self::Content => "--base-content",
+        }
+    }
+}
+
+impl std::fmt::Display for MeasuredBase<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unexposed(u) => write!(f, "--unexposed {u}"),
+            Self::Content => f.write_str("--base-content"),
+        }
+    }
+}
+
+/// `--unexposed` and `--base-content` measure the base, so a base stated beside one
+/// (`stated` names where) is refused: the base is measured or stated, never both. On
+/// `roll`, dropping the flag also leaves measure mode, so the remedy names
+/// `--measure-roll` in its place.
+fn refuse_a_measured_base_beside_a_stated_one(
+    measured: MeasuredBase,
     stated: Option<&str>,
     on_roll: bool,
 ) -> Result<()> {
@@ -8665,13 +8832,14 @@ fn refuse_unexposed_beside_a_base(
         "Drop --base-region".to_owned()
     } else {
         format!(
-            "Drop {stated}, or replace --unexposed with --measure-roll to measure the roll \
-             over the stated base"
+            "Drop {stated}, or replace {} with --measure-roll to measure the roll over the \
+             stated base",
+            measured.flag()
         )
     };
     Err(NcError::Usage(format!(
-        "--unexposed {unexposed} measures the film base, and {stated} states one; the base is \
-         measured or stated, never both. {remedy}"
+        "{measured} measures the film base, and {stated} states one; the base is measured or \
+         stated, never both. {remedy}"
     )))
 }
 
@@ -8681,7 +8849,8 @@ struct RollMeasureRequest<'a> {
     /// The frames, in the order they are measured.
     inputs: &'a [PathBuf],
     leader: Option<&'a Reference>,
-    unexposed: Option<&'a Reference>,
+    /// How the base is measured; `None` when the recipe states it.
+    base: Option<MeasuredBase<'a>>,
     /// The recipe the frames are measured under: the layers, and the base and inset flags.
     recipe: Recipe,
     midtone: MidtoneMode,
@@ -8700,12 +8869,23 @@ impl RollMeasureRequest<'_> {
         self.leader.and_then(Reference::path)
     }
 
+    fn unexposed(&self) -> Option<&Reference> {
+        match self.base {
+            Some(MeasuredBase::Unexposed(u)) => Some(u),
+            _ => None,
+        }
+    }
+
+    fn content(&self) -> bool {
+        matches!(self.base, Some(MeasuredBase::Content))
+    }
+
     fn named_unexposed(&self) -> Option<&Path> {
-        self.unexposed.and_then(Reference::path)
+        self.unexposed().and_then(Reference::path)
     }
 
     fn auto(&self) -> bool {
-        self.leader == Some(&Reference::Auto) || self.unexposed == Some(&Reference::Auto)
+        self.leader == Some(&Reference::Auto) || self.unexposed() == Some(&Reference::Auto)
     }
 
     /// The scans the measurement reads, named for a write-target clash.
@@ -8718,7 +8898,7 @@ impl RollMeasureRequest<'_> {
     }
 
     /// Every rule decidable before a scan is decoded; returns the stated base (none when
-    /// `--unexposed` measures it). Clears what the measurement never reads from the recipe.
+    /// the measurement measures it). Clears what the measurement never reads from the recipe.
     fn check(&mut self) -> Result<Option<FilmBase>> {
         let recipe = &mut self.recipe;
         // Before any decode: a bad inset would otherwise surface from the first frame's
@@ -8797,13 +8977,15 @@ impl RollMeasureRequest<'_> {
         if self.keyed && !self.auto() {
             refuse_shared_file_names(self.inputs)?;
         }
-        match (self.unexposed, &self.recipe.calibration.film_base) {
-            (Some(_), _) => Ok(None),
-            (None, Some(FilmBaseSource::Explicit(b))) => {
+        if self.base.is_some() {
+            return Ok(None);
+        }
+        match &self.recipe.calibration.film_base {
+            Some(FilmBaseSource::Explicit(b)) => {
                 validate_explicit_film_base(b)?;
                 Ok(Some(FilmBase::from(*b)))
             }
-            (None, Some(FilmBaseSource::Region(_))) => Err(NcError::Usage(format!(
+            Some(FilmBaseSource::Region(_)) => Err(NcError::Usage(format!(
                 "measuring the roll needs an explicit film base, and {} is a region, which \
                  re-reads the base from each frame and so measures each under a different \
                  decode. In place of the region, measure the base from the roll's unexposed \
@@ -8816,13 +8998,14 @@ impl RollMeasureRequest<'_> {
                     "the recipe's `calibration.film_base`"
                 }
             ))),
-            (None, None) => Err(NcError::Usage(
+            None => Err(NcError::Usage(
                 "measuring the roll needs its film base: `--unexposed <unexposed.tif>` to \
                  measure it too, `--unexposed auto` to find the unexposed frame among the \
                  inputs, or stated explicitly — `--film-base R,G,B`, or \
                  `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the recipe (what \
-                 `hanten measure-base --out` writes). A base estimated per frame would \
-                 measure each frame under a different decode"
+                 `hanten measure-base --out` writes). With no unexposed film on the roll, \
+                 `--base-content` estimates it from the pictures' deepest shadows. A base \
+                 estimated per frame would measure each frame under a different decode"
                     .into(),
             )),
         }
@@ -8839,8 +9022,9 @@ struct RollMeasurement {
 }
 
 /// Measure what a roll shares, over a request that passed [`RollMeasureRequest::check`]:
-/// with `--unexposed` its film base ([`measure_base`]), then its white balance, midtone
-/// line, white and exposure over its picture frames. The report carries `warnings` on.
+/// with `--unexposed` its film base ([`measure_base`]), or with `--base-content` from the
+/// frames' content ([`pool_content`]), then its white balance, midtone line, white and
+/// exposure over its picture frames. The report carries `warnings` on.
 fn measure_roll(
     req: &RollMeasureRequest,
     stated_base: Option<FilmBase>,
@@ -8850,7 +9034,7 @@ fn measure_roll(
 ) -> Result<RollMeasurement> {
     let recipe = &req.recipe;
     let budget = req.budget;
-    let auto_unexposed = req.unexposed == Some(&Reference::Auto);
+    let auto_unexposed = req.unexposed() == Some(&Reference::Auto);
     let auto_leader = req.leader == Some(&Reference::Auto);
     let auto = auto_unexposed || auto_leader;
     let mut decode = None;
@@ -8858,7 +9042,7 @@ fn measure_roll(
     // The unexposed frame first: every other frame is decoded with its base, and a bad one
     // refuses before the inputs are measured. Measured exactly as `measure-base` measures
     // it with no source flag: its effective area at the median.
-    let unexposed = match req.unexposed {
+    let unexposed = match req.unexposed() {
         Some(Reference::Path(path)) => {
             let base_req = BaseRequest {
                 input: path,
@@ -8885,20 +9069,31 @@ fn measure_roll(
     // `auto` (`core/auto-calibration`): every input's effective area, measured as
     // `measure-base` measures it with no source flag; the base and the leader are found
     // from those measurements. `None` is an input whose area could not be measured.
-    let mut areas = if auto {
+    // `--base-content` (`film-base/content-fallback`) reads every input in its own pass,
+    // which also gives `--leader auto` its statistics.
+    let (pool, content_stats) = if req.content() {
+        let (pool, stats) =
+            pool_content(req.inputs, recipe.measure.inset, auto_leader, budget, log)?;
+        (Some(pool), Some(stats))
+    } else {
+        (None, None)
+    };
+    let mut areas = if auto && pool.is_none() {
         measure_areas(req.inputs, recipe.measure.inset, budget, log)?
     } else {
         Vec::new()
     };
-    let stats: Vec<Option<reference_frames::AreaStats>> = areas
-        .iter()
-        .map(|a| {
-            a.as_ref().map(|(m, _)| reference_frames::AreaStats {
-                median: m.film_base.into(),
-                spread: m.area_spread.expect("measured over the effective area"),
+    let stats: Vec<Option<reference_frames::AreaStats>> = content_stats.unwrap_or_else(|| {
+        areas
+            .iter()
+            .map(|a| {
+                a.as_ref().map(|(m, _)| reference_frames::AreaStats {
+                    median: m.film_base.into(),
+                    spread: m.area_spread.expect("measured over the effective area"),
+                })
             })
-        })
-        .collect();
+            .collect()
+    });
     let found_unexposed = if auto_unexposed {
         Some(find_unexposed(
             req.inputs,
@@ -8913,10 +9108,13 @@ fn measure_roll(
         None
     };
 
-    let base = match (&unexposed, &found_unexposed, stated_base) {
-        (Some(m), _, _) => m.film_base,
-        (None, Some((u, _)), _) => FilmBase::from(u.base),
-        (None, None, Some(b)) => b,
+    // With `--base-content`, every input pooled: a found leader leaves it below.
+    let mut content_base = pool.as_ref().map(|p| p.estimate(&[])).transpose()?;
+    let mut base = match (&unexposed, &found_unexposed, &content_base, stated_base) {
+        (Some(m), _, _, _) => m.film_base,
+        (None, Some((u, _)), _, _) => FilmBase::from(u.base),
+        (None, None, Some(c), _) => c.base,
+        (None, None, None, Some(b)) => b,
         _ => unreachable!("refused above"),
     };
     // Every input is classified once the base is known: a leader is dense against it.
@@ -8930,6 +9128,22 @@ fn measure_roll(
             base.into(),
         )
     });
+    if let (Some(pool), Some(Some((_, leaders)))) = (&pool, &found_leader)
+        // With every input a leader, the refusal below names that.
+        && leaders.len() < req.inputs.len()
+    {
+        let est = pool.estimate(leaders)?;
+        base = est.base;
+        content_base = Some(est);
+    }
+    let content_base = content_base.map(|est| {
+        for w in film_base::content_warnings(&est, |i| req.inputs[i].display().to_string()) {
+            push_warning_buf(&mut warnings, log, w);
+        }
+        ContentBaseReport::new(req.inputs, &est)
+    });
+    // Freed before the frames' samples are taken.
+    drop(pool);
     let leader_path = match req.leader {
         Some(Reference::Path(p)) => Some(p.clone()),
         Some(Reference::Auto) => found_leader
@@ -9053,7 +9267,11 @@ fn measure_roll(
     for input in &pictures {
         let (aces, area, film_sample, decoded, memory) = decode_for_roll_white(
             input,
-            RollScan::Frame,
+            if req.content() {
+                RollScan::ContentFrame
+            } else {
+                RollScan::Frame
+            },
             recipe,
             &base,
             budget,
@@ -9369,6 +9587,7 @@ fn measure_roll(
         command: "measure-roll",
         identity: Identity::new(),
         unexposed,
+        content_base,
         references,
         film_base: base,
         decode: decode.expect("refused above when no picture frame is left"),
@@ -11457,6 +11676,7 @@ mod tests {
             measure_roll: false,
             leader: None,
             unexposed: None,
+            base_content: false,
             save_recipe: None,
             knobs: ConversionFlags::default(),
             export_film_rgb: None,

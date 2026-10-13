@@ -1561,7 +1561,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [Film-base / Dmin estimation](tasks/film-base/estimation.md)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
-- [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — *re-scoped 2026-10-01*: an opt-in `measure-roll` option pooling a high percentile over the roll's picture frames into one explicit base, its source in the report; whether `convert` keeps a per-frame form is open
+- [x] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — shipped as `measure-roll --base-content` and `roll --base-content`: the pooled p99 of the picture frames' effective areas, written as an explicit base with `content_base` evidence; no per-frame form
 - [x] [Reuse-ready `hanten estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
 
