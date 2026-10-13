@@ -14,12 +14,12 @@ Known (`lomo100-cast-vs-ccr`, 2026-10-12, Lomography 100; `../temp/lomo100-cast/
 
 - **Arms.** The two-point slope (the colour-cast table of `docs/spike/poor-development.md`)
   as T. With the line off in both, gains → tilt (B → T) moved patch distance from
-  neutral, cloth+wall / cloud, from 5.9 / 13.6 to 5.6 / 11.4. The tilt keeps the film base
+  neutral, lit cloth+wall / cloud, from 5.9 / 13.6 to 5.6 / 11.4. The tilt keeps the film base
   neutral (near-neutral pixels at the base: a\*, b\* −2.7, −6.8 today, +0.9, +0.8 under T).
   It leaves the lower midtones magenta (a\* +10…+12). Adding the line's red term (TR)
-  removed that and helped cloth+wall (5.6 → 5.1), but cost cloud (11.4 → 12.7).
+  removed that and helped lit cloth+wall (5.6 → 5.1), but cost cloud (11.4 → 12.7).
 - **TR combined two changes.** TR was the tilt plus the line without its blue term.
-  Dropping that term (TL → TR) moved cloth+wall 1.7 and cloud 2.5. The tilt (B → T)
+  Dropping that term (TL → TR) moved lit cloth+wall 1.7 and cloud 2.5. The tilt (B → T)
   moved them 0.3 and 2.2. The blue term is [`midtone-line-terms`](midtone-line-terms.md).
 - **The fixed-decode conflict.** The spike's two-point was a per-roll decode scale
   (`reconstruction.scale`). The fixed decode's rule is one global scale, never varied per

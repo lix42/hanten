@@ -16,9 +16,9 @@ Known (`lomo100-cast-vs-ccr`, 2026-10-12; `../temp/lomo100-cast/`):
   midtones short of blue and added that much back, though the white patches were already
   slightly blue: 0.11–0.18 stop under today's gains, 0.13–0.27 under the two-point tilt.
   The same warmth also biased the gains in both red and blue.
-- **What dropping the blue term did.** Patch distance from neutral, cloth+wall / cloud:
+- **What dropping the blue term did.** Patch distance from neutral, lit cloth+wall / cloud:
   TL 6.8 / 15.2 → TR 5.1 / 12.7. The user found TR acceptable on every frame but 2061.
-  The red term kept in TR helped cloth+wall but cost cloud (T, with no line, scores 11.4).
+  The red term kept in TR helped lit cloth+wall but cost cloud (T, with no line, scores 11.4).
 - **TR's blue term was dropped by hand, from this roll's patches.** A real conversion has
   no patches, so TR's numbers are not what a rule would get automatically.
 - **The whole line already has a switch** (`--midtone-neutral` / `roll.midtone_neutral`),
@@ -38,8 +38,9 @@ Open:
   render time.
 - A roll that fools both terms, or shows as a green cast, which no single term can drop.
 - An automatic signal per term. Lomo suggests one candidate: a term's vote disagreeing with
-  the roll's near-neutral pixels at the same brightness. Untested, one roll. The
-  calibration-frame rolls would be the second labelled case.
+  the roll's near-neutral pixels at the same brightness. Untested, one roll. **The
+  automatic half waits for `analysis/calibration-frame-capture`** (the second labelled
+  case); the manual switch does not, so the task is not blocked on it.
 - Whether the report should name which term looks doubtful, the way `confidence.advice`
   names the correction.
 

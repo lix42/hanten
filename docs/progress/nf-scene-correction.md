@@ -476,8 +476,9 @@ a signal).
     darker from −3 to −1.5 stops. Colour differs at both ends and in the upper midtones
     (CCR's near-neutrals yellower in the shadows, less blue above −0.5, less green at the
     top). It is **per frame**: CCR − Hanten b\* spans −31 … +20; +6.5 median on the frames the
-    user preferred CCR, +2.0 where Hanten; it turns 2085, 2086, 2090 blue. It does not fix
-    the cloth either (b\* −8.9 vs Hanten −10.2); it does fix cloud (−8.9 vs −16.8).
+    user preferred CCR, +2.0 where Hanten; it turns 2085, 2086, 2090 blue. Over all 7
+    cloth/wall patches its median b\* is close to Hanten's (−8.9 vs −10.2: the shade cloth
+    stays blue under both); it does fix cloud (−8.9 vs −16.8).
   - **A roll-level fix is enough; the estimate is what fails.** Oracle gains fitted to the 5
     neutrally lit patches (2073, 2075, 2076 ×2, 2088; shade cloth 2072/2083 left out as
     skylight) differ from the measured gains by only red +0.06, blue −0.04 stops, and leave
@@ -489,13 +490,14 @@ a signal).
   - **Review 1** (`review/`, 37 frames, SDR sRGB vs CCR): A today, B line off (whites
     re-measured), O B + oracle gains, D O + a red-only top-end tilt. **User: O best overall,
     "really good enough"**; D adds nothing seen. Patch distance from neutral (median
-    √(a\*²+b\*²)), cloth+wall / cloud: A 7.4 / 15.8, B 5.9 / 13.6, O 2.8 / 9.2, CCR 1.9 /
-    9.6 (O is fitted on the cloth+wall; cloud is the independent check). O needs marked
+    √(a\*²+b\*²) on the review's sRGB JPEGs), lit cloth+wall / cloud — "lit" is the 5
+    neutrally lit patches, not the 7 above, so these do not compare with the stage medians: A 7.4 / 15.8, B 5.9 / 13.6, O 2.8 / 9.2, CCR 1.9 /
+    9.6 (O is fitted on the lit patches; cloud is the independent check). O needs marked
     patches, so it is a bound, not a method.
   - **Review 2**: the poor-development spike's two-point slope (B1: per-channel decode scale
     pivoted at the base, neutral at the roll's p99 → `[0.9024, 0.84, 0.7399]`; measure-roll
     under it finds gains ≈ 1) as T; T + the line measured under it (TL); TL with the line's
-    blue term zeroed (TR). Cloth+wall / cloud: T 5.6 / 11.4, TL 6.8 / 15.2, TR 5.1 / 12.7.
+    blue term zeroed (TR). Lit cloth+wall / cloud: T 5.6 / 11.4, TL 6.8 / 15.2, TR 5.1 / 12.7.
     T keeps black neutral (near-neutral pixels at the film base: a\*, b\* −2.7, −6.8 under
     A, +0.9, +0.8 under T) but leaves the lower midtones magenta (a\* +10…+12); the line under
     T votes red +0.20 → −0.12 across the bands (removes that magenta) and blue −0.13…−0.27
@@ -511,9 +513,9 @@ a signal).
   - **Two-point vs today, in one line**: both are neutral at the same roll white; gains are
     one log offset at every tone (the film base gets tinted), the two-point scale is a tilt
     pinned at the base. TR is two changes, measured from different arms, so they do not add
-    up to its gain: dropping the blue term (TL → TR) moved cloth+wall 1.7 and cloud 2.5;
+    up to its gain: dropping the blue term (TL → TR) moved lit cloth+wall 1.7 and cloud 2.5;
     the tilt (B → T, line off) moved them 0.3 and 2.2 and neutralised black. Adding the red
-    term to T (T → TR) helped cloth+wall (5.6 → 5.1) but cost cloud (11.4 → 12.7). Both
+    term to T (T → TR) helped lit cloth+wall (5.6 → 5.1) but cost cloud (11.4 → 12.7). Both
     the gains and the tilt inherit a warm roll's wrong white.
   - Next (user): TR support goes to a follow-up task; the calibration-frame rolls (Gold200
     being scanned) are the ground truth an estimator spike would need.
