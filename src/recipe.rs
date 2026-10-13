@@ -4457,7 +4457,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             level,
-            roll_white::hybrid_placement(tones, roll_slope, 1.0, [-4.5, 2.4], 7.0, 1.0)
+            roll_white::hybrid_placement(
+                tones,
+                roll_slope,
+                1.0,
+                [-4.5, 2.4],
+                roll_white::HYBRID_SPAN_STOPS,
+                1.0
+            )
         );
         // `direct` applies no roll, so no placement.
         let direct = frame(&["--rendering", "direct"]);

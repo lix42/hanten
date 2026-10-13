@@ -2325,8 +2325,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Protect short-span frames from too much
   contrast](tasks/nf-calibration/short-span-protection.md) — the maximum slope as a noise
   guard, fixed or keyed on the frame's span or noise
-- [ ] [The hybrid's span target with a toe](tasks/nf-calibration/hybrid-span-target.md) —
-  whether a toe lets the hybrid's R (7) rise
+- [x] [The hybrid's span target](tasks/nf-calibration/hybrid-span-target.md) — **done
+  2026-10-13** (`pipeline_version` 16): R 7 → 8 by review (09-20, 09-28); the envelope, not
+  the dark floor, holds the dark end, so on a thin roll a higher R brightens
 - [x] [A steep frame refused by a sample no picture
   holds](tasks/nf-calibration/overflow-probe-scope.md) — **done 2026-10-13**: the scan
   floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the
