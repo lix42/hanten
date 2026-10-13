@@ -78,7 +78,7 @@ also cover wrong suffixes, TIFF-named non-TIFF content, directory-shaped final
 targets, and invalid strict-probe failures; the harness must reject those runs
 before reporting success.
 
-CI deliberately does not run the full Drive-backed verification matrix,
+CI deliberately does not run the full real-scan verification matrix,
 `classify`, `ir`, `determinism`, or `resource`. Those remain manual checks over the
 real scans and external tools. The fixture test covers CLI/recipe/container
 plumbing; it is not a substitute for image-quality, interoperability, or resource

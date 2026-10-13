@@ -3,7 +3,7 @@
 Hermetic: a temporary one-roll asset tree is populated from the committed TIFF
 fixtures. The happy path invokes the real debug ``hanten`` binary; the failure path
 uses a fake binary that exits successfully while writing the wrong container,
-reproducing the silent 2026-08-09 regression without reading Drive assets.
+reproducing the silent 2026-08-09 regression without reading real-scan assets.
 """
 from __future__ import annotations
 

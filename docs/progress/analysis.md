@@ -115,8 +115,8 @@ What other epics need to know about `analysis`:
   the holder layout — use the measured-reference workflow); u16 output clips
   4.8–10.3% high by default, routed to the display-output roadmap; float output is
   byte-lossless; determinism is byte-identical.
-- **Assets live in a shared Google Drive folder**, reached through a
-  **machine-local, uncommitted symlink** `../nc-assets`. The tracked inventory is
+- **Assets live on a local external SSD** (since 2026-10-13; Google Drive before), reached
+  through a **machine-local, uncommitted symlink** `../nc-assets`. The tracked inventory is
   `manifest.json` **at the assets root**, with paths relative to its own directory
   (no `asset_root` field), so it is machine-portable. sha256 is recorded for
   irreplaceable data and omitted for regenerable nc outputs.
@@ -168,7 +168,7 @@ What other epics need to know about `analysis`:
   reorder them.
 - **The analysis stdlib suite is CI-gated on Linux and macOS (2026-08-11).** It
   includes a hermetic real-binary `freeze` → `convert` harness test plus a fake
-  successful-wrong-container regression. The Drive-backed verification matrix
+  successful-wrong-container regression. The real-scan verification matrix
   remains manual; CI protects its CLI/recipe/container plumbing.
 
 
@@ -508,10 +508,19 @@ What other epics need to know about `analysis`:
 
 ## drive-asset-migration
 
-**Status:** not started
-**Updated:** —
+**Status:** closed — superseded
+**Updated:** 2026-10-13
 
 - Goal: Make working from the Google Drive-hosted asset folder robust across machines, now that the assets — inputs *and* conversion outputs — physically live there (moved and reorganized 2026-07-24, with a self-relative `manifest.json` at the root). The move and reorg are done; this task covers the remaining robustness/tooling and the repo path-convention decision.
+- 2026-10-13: **closed, superseded** (user). The assets left Google Drive: the full set
+  (formerly the `/Volumes/blackbox/full-assets` archive, with the trimmed Drive copy merged
+  in — a strict subset by path, size and checksum) now sits on an APFS external SSD at
+  `/Volumes/square/hanten/assets`, with `../nc-assets` a symlink to it; blackbox stays as
+  a cold backup, not kept in sync. Every Drive-specific item (dehydrated-placeholder
+  guard, checksum drift on re-sync, write-back) has nothing left to guard. The path
+  convention it decided — a machine-local `../nc-assets` symlink, `--asset-root` /
+  `$NC_ASSET_ROOT` to override — is unchanged. Not done: nothing guards against the SSD
+  being unmounted beyond the dangling symlink failing loudly.
 
 
 ## nlp-comparison

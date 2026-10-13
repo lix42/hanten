@@ -1,6 +1,6 @@
 """Unit tests for `nctool.metrics` (run: `python3 -m unittest`).
 
-Hermetic: every image is synthesized in the test, so no Drive asset and no `nc`
+Hermetic: every image is synthesized in the test, so no real-scan asset and no `nc`
 binary is needed. Two groups carry most of the weight.
 
 *Colorimetry is not restated here, it is checked against the Rust.*

@@ -4,7 +4,7 @@
   "sets": {
     "fixtures": {
       "root": "repo",
-      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` runs on any checkout; two runs of one build over it are the determinism / zero-diff check. One HDRi (64-bit, with IR) case per destination::ROWS row with all four axes stated (a Rust test fails when a row has no case), plus the film master, `--rendering direct` and `default` (no output flag: what a user gets). The HDR 48-bit fixture covers the other input format, as `default` and the film master. A preset block names the reference preset writing the same container; a destination the reference could not write (Adobe RGB, linear P3/sRGB/Adobe RGB, the sRGB gain map, the SDR JPEGs, `direct`) has none and runs on destination builds only.",
+      "note": "The committed decoder fixtures -- tiny (502x462), no real-scan assets needed, so `compare` runs on any checkout; two runs of one build over it are the determinism / zero-diff check. One HDRi (64-bit, with IR) case per destination::ROWS row with all four axes stated (a Rust test fails when a row has no case), plus the film master, `--rendering direct` and `default` (no output flag: what a user gets). The HDR 48-bit fixture covers the other input format, as `default` and the film master. A preset block names the reference preset writing the same container; a destination the reference could not write (Adobe RGB, linear P3/sRGB/Adobe RGB, the sRGB gain map, the SDR JPEGs, `direct`) has none and runs on destination builds only.",
       "cases": [
         {
           "name": "hdri-default",
@@ -433,7 +433,7 @@
     },
     "rolls": {
       "root": "assets",
-      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on). A destination build runs each roll's frozen recipe from scripts/real-scan-verify/recipes/, so the roll-fixed Dmin comes from that roll's own calibration; the reference build cannot read those recipes, so its block states the same Dmin as --film-base (a test keeps the two equal). Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json.",
+      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on). A destination build runs each roll's frozen recipe from scripts/real-scan-verify/recipes/, so the roll-fixed Dmin comes from that roll's own calibration; the reference build cannot read those recipes, so its block states the same Dmin as --film-base (a test keeps the two equal). Requires the asset folder via ../nc-assets plus a generated manifest.json.",
       "cases": [
         {
           "name": "Ektar-971",

@@ -200,7 +200,7 @@ footing:
 
 ```sh
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image \
-  /Volumes/blackbox/full-assets/converted/nlp/2026-07-23-Portra160/1102.tif \
+  ../nc-assets/converted/nlp/2026-07-23-Portra160/1102.tif \
   --space linear-srgb --inset 0.05
 ```
 
@@ -633,7 +633,7 @@ NCTOOL_REQUIRE_DEPS=1 PYTHONPATH=scripts/analysis python3 -m unittest discover \
 ```
 
 The tests are hermetic: they use temporary asset manifests, committed tiny TIFF
-fixtures, and images synthesized in the test itself, rather than the Drive-hosted
+fixtures, and images synthesized in the test itself, rather than the real
 scans. `NCTOOL_REQUIRE_DEPS=1` makes a missing `numpy`/`tifffile` a failure
 instead of letting the metrics tests skip while the run still prints `ok`; leave
 it unset locally if you have not made the venv. The harness tests, `compare`'s

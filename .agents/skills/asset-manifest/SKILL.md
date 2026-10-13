@@ -18,8 +18,8 @@ derived facts (dimensions, format, `ir_present`, `sha256`, bytes), each roll
 frame's **role**, and links every converted output back to its source frame.
 
 It lives **at the assets root** (not in the repo) with paths **relative to its
-own directory**, so it travels with the assets over Google Drive and works on any
-machine regardless of where Drive mounts. A trimmed schema reference is committed
+own directory**, so it travels with the assets and works wherever the folder is
+mounted. A trimmed schema reference is committed
 at [`scripts/analysis/manifest.sample.json`](../../../scripts/analysis/manifest.sample.json).
 
 ## Invariants (do not break)
@@ -46,7 +46,7 @@ is a thin backward-compat shim that forwards to the same code (needs no
 `PYTHONPATH`).
 
 - `--asset-root` (shim: positional `ASSET_ROOT`) defaults to `$NC_ASSET_ROOT`, else
-  `../nc-assets` (the machine-local symlink to the Drive folder). Point it elsewhere
+  `../nc-assets` (the machine-local symlink to the asset folder). Point it elsewhere
   to scan a different copy.
 - The binary is found via `--nc`, `$NC`, `./target/release/hanten`,
   `./target/debug/hanten`, or `hanten` on `PATH` — each candidate is **verified**
@@ -138,21 +138,18 @@ disk it writes nothing (exit 2) until `--drop-patches` says to. A frame whose by
 changed at the same path keeps its patches with a warning — check they still sit on
 their subject.
 
-## Trimmed assets and the archive
+## Where the assets live
 
-Since 2026-09-30 `../nc-assets` holds at most 8 picture frames per roll (plus its
-base, leader and calibration frames) and no `converted/` outputs. The full set —
-every frame, every outside conversion, and the manifest with every frame's patches
-— is the archive at `/Volumes/blackbox/full-assets` (machine-local external drive,
-same layout). Restore a frame by copying it back to the same path, then
+Since 2026-10-13 the machine-local `../nc-assets` symlink points at the **full set**
+on the external SSD, `/Volumes/square/hanten/assets`: every frame, every outside
+conversion (`converted/`), and the manifest with every frame's patches. Work from
+it directly.
+
+`/Volumes/blackbox/full-assets` (slow external drive, same layout) is a **cold
+backup**, not kept in sync. To recover a file, copy it back to the same path, then
 `generate --carry-from /Volumes/blackbox/full-assets/manifest.json`, which takes
-its role and patches from the archive's manifest (matched by checksum). Without
-it the restored frame comes back as `real` with no patches.
-
-**The archive drive is slow: work from `../nc-assets` by default** — every
-calculation, probe and experiment runs on the frames kept there. Reach for the
-archive only for a **whole-roll** comparison or one against **another tool's
-conversion** (`converted/`), which `../nc-assets` no longer holds.
+its role and patches from the backup's manifest (matched by checksum). Without it
+the restored frame comes back as `real` with no patches.
 
 ## Metadata source & fallback
 

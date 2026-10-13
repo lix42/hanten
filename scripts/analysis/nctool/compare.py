@@ -93,6 +93,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -364,8 +365,8 @@ def resolve_cases(bench: dict, set_name: str, asset_root: str,
         assets, err = load_json(os.path.join(asset_root, "manifest.json"))
         if err:
             return [], (f"benchmark set {set_name!r} needs the asset manifest: {err}\n"
-                        "Sync the nc-assets Drive folder and point ../nc-assets at it, "
-                        "then run `python -m nctool manifest generate`.")
+                        "Generate it with `python -m nctool manifest generate "
+                        f"--asset-root {shlex.quote(asset_root)}`.")
 
     cases = spec.get("cases", [])
     if not isinstance(cases, list):

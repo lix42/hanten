@@ -29,7 +29,7 @@ from . import roll as _roll
 from . import viewer as _viewer
 
 ASSET_ROOT_HELP = ("asset root (the folder containing manifest.json); defaults to "
-                   "$NC_ASSET_ROOT, else ../nc-assets (the machine-local Drive symlink)")
+                   "$NC_ASSET_ROOT, else ../nc-assets (the machine-local symlink to the asset folder)")
 
 
 def _add_root(p: argparse.ArgumentParser) -> None:
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "a comparison of two builds must never auto-discover one)")
     crun.add_argument("--set", dest="set_name", default="fixtures",
                       help="benchmark set from benchmark.json (default: fixtures — the "
-                           "committed fixtures, runnable without the Drive assets)")
+                           "committed fixtures, runnable without the real-scan assets)")
     crun.add_argument("--out", help="write the run record here (default: stdout)")
     crun.add_argument("--benchmark", default=_compare.BENCHMARK,
                       help="path to the benchmark manifest (default: "

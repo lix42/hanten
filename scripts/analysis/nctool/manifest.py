@@ -3,7 +3,7 @@
 The manifest is the tracked inventory + source-of-truth for nc-assets: every roll
 frame (with its role), every standalone sample, and every converted output (nc +
 NLP). It lives **at the assets root** with paths relative to its own directory, so
-it is portable across machines / Drive mounts.
+it is portable across machines and mount points.
 
 This module NEVER reads sample pixels into an agent context — only derived numbers
 (via `hanten inspect`) and streamed file checksums.
