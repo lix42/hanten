@@ -193,6 +193,9 @@ close to it — with `--max-memory` as the escape hatch when a bigger one turns 
 - So streaming stays a **conditional GO** on the same terms: justified if the true
   input envelope moves toward the per-side reading, or a real >~5 GiB peak turns
   up. Today's worst real scan is comfortably gated instead.
+- **Superseded 2026-10-13:** `io/streaming-tiled-io` STEP 0 decided **no-go** on
+  later numbers (one image through the chain); see `progress/io.md`
+  `## streaming-tiled-io`.
 
 Details, the calibration table, and the two accounting subtleties that cost real
 accuracy are in [`docs/progress/io.md`](../progress/io.md) (`## memory-preflight`)

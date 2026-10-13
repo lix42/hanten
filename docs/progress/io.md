@@ -377,11 +377,54 @@ in the code.
 
 ## streaming-tiled-io
 
-**Status:** not started
-**Updated:** —
+**Status:** not started — STEP 0 evaluated: **no-go** (2026-10-13), low priority
+**Updated:** 2026-10-13
 
 - Goal: Bound peak memory to a small working set (a few strips/tiles) instead of several whole-image buffers, by moving decode and encode toward **strip/tile streaming**: strip/tile decode, quantize-and-write encode strip-by-strip, avoiding materializing the full u16 and f32 images at once.
+- 2026-10-13 (**STEP 0: no-go**). Criterion, from the task file: go only if realistic
+  inputs come within a documented margin of the budget, i.e. the preflight would
+  reject real work. The gate acts on the **estimate**, so the margin is on it: an
+  estimate above half the default 6 GiB (6.44 GB) budget.
+  - **Input envelope.** The largest of the 873 frames in `../nc-assets/manifest.json`
+    is 18.66 MP (5184×3600, Plustek 8300i). No larger real scan exists. A 7200-dpi
+    scan is the plausible next size, so it is stood in for by a 2×2 tile of
+    `2026-07-24-Gold200/1137` (10368×7200 = 74.65 MP, IR as `NewSubfileType=4`,
+    XMP kept; `inspect` reads `hdri`, no warning). It sits at
+    `../temp/streaming-step0/`; the tiling script is not committed.
+  - **Measured** (`main` `bd3f8af`, release, macOS/aarch64, 18 GB RAM,
+    `/usr/bin/time -l`, explicit `--film-base`, highest of 3 runs), peak vs
+    `memory.estimated_peak_bytes`:
 
+    | frame | SDR TIFF | float TIFF | SDR JPEG | gain map |
+    |---|---|---|---|---|
+    | 18.66 MP | 0.348 / 0.521 GB | 0.347 / 0.521 | 0.347 / 0.521 | 0.697 / 1.014 |
+    | 74.65 MP | 1.355 / 1.679 GB | 1.354 / 1.679 | 1.354 / 1.679 | 2.535 / 3.654 |
+
+    The 74.65 MP TIFFs match `buffer-strategy`'s numbers (`nf-core.md`). Its gain map
+    read 2.747 GB, highest of five; that is the figure to cite, since 74.65 MP gain-map
+    peaks vary run to run (`memory.rs`).
+  - **Verdict.** The worst real input, an 18.66 MP gain map, estimates 1.01 GB (16% of
+    the budget) and peaks at 0.70 GB. The gain-map estimate grows ~47 B/px over
+    ~0.13 GB: it crosses the half-budget margin near **65 MP** and the budget near
+    **134 MP**. So the gate rejects no real run. A 7200-dpi gain map would sit
+    inside the margin (3.65 GB, 57%) but still pass, at a measured 2.75 GB. On the
+    smallest target machine, the 8 GB Air (~4–5 GB usable,
+    `reports/real-scan-verification.md`), both peaks fit.
+  - **Why the July "conditional GO" no longer holds.** That was 42 B/px for a u16
+    `convert`, with two overlapping images (`memory-preflight`). Since then the
+    decode works in place, and one buffer runs through the chain
+    (`nf-core/release-decoded-image`, `buffer-strategy`). Big blocks also leave
+    on free (`multi-frame-memory-growth`). A TIFF now peaks at ~18 B/px: the
+    scan's f32 RGB beside its u16 read buffers, one image. Streaming encode would
+    remove the u16 quantize buffer, but the decode peaks as high without it.
+    Streaming decode would remove the read buffers, but every stage still wants
+    the whole frame.
+  - **Revisit when** real scans past ~65 MP appear (scanning at 7200 dpi), a
+    destination or stage adds full-frame buffers beyond the gain map's ~41 B/px,
+    or multi-frame buffering returns. For a future design: tiles under 8 MiB go
+    through malloc rather than `crate::allocator`'s direct mapping
+    (`multi-frame-memory-growth`).
+  - Left `[ ]` and marked **low priority** (user).
 
 ## transactional-output-writes
 

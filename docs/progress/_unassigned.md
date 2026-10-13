@@ -52,6 +52,13 @@ framing, kept because `io/streaming-tiled-io`'s STEP 0 reads these numbers:
   rectangle unstrided into three `Vec<f32>`), so a model counting only the images
   under-estimates `inspect`/`estimate`.
 
+### Streaming STEP 0 decided — 2026-10-13
+
+The table's "conditional GO" for `io/streaming-tiled-io` is superseded: STEP 0 came
+out **no-go**. The worst real frame estimates 1.01 GB against the 6 GiB budget, and
+the gate would first reject near 134 MP. The task stays open as low priority; numbers and
+revisit triggers are in `progress/io.md` `## streaming-tiled-io`.
+
 
 ## color-characterization-calibration
 **Status:** superseded (2026-07-23)

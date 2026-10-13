@@ -838,7 +838,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `io/input-data-semantics` (post-MVP): `core/pipeline-orchestration`
 - `io/transactional-output-writes` (post-MVP, hardening): `core/pipeline-orchestration`
 - `io/memory-preflight` (post-MVP, hardening): `core/pipeline-orchestration`
-- `io/streaming-tiled-io` (post-MVP, **evaluate-first**): `io/memory-preflight`, `analysis/real-scan-verification`
+- `io/streaming-tiled-io` (post-MVP, **evaluate-first**, **low priority**): `io/memory-preflight`, `analysis/real-scan-verification`
 - `io/multi-frame-memory-growth` (hardening): `io/memory-preflight`
   — the gate judges each frame alone, and a roll of slightly different frame sizes
   peaks several times higher (0.6 → 2.8 GB over 35 frames)
@@ -1527,7 +1527,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   fixed 6 GiB default budget + `--max-memory` (operational, not a recipe key), new
   exit code 6; peak on the 74.65 MP `largest.tif` 3.808 → 3.146 GB and 975 → 681 MB
   at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement
-  feeds `io/streaming-tiled-io` STEP 0 (still a conditional GO).
+  fed `io/streaming-tiled-io` STEP 0 (evaluated no-go 2026-10-13).
 - [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work. Blocks the one-channel half of `nf-reconstruction/mono-input`; it becomes three equal channels inside ([`design/mono.md`](design/mono.md))
 - [x] [Negatives scanned in positive mode](tasks/io/positive-input-mode.md) — convert a negative scanned in SilverFast's positive mode (same raw transmission, IT8 profile recorded, not applied), warning when a frame does not look like a negative under its base
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — **low priority** (user, 2026-10-08): no slide scans to verify against. Convert positive (E-6) film: no film base or decode, enters at the working space; the embedded SilverFast IT8 profile is the likely scanner characterization
@@ -1539,10 +1539,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   photographed grey card is not a known density). `algo/reference-anchored-sigmoid`
   performs the first diagnostic measurement inside its own baseline harness and does not
   wait on this task; this task productises the result.
-- [ ] [Streaming / tiled I/O](tasks/io/streaming-tiled-io.md) — memory-safety review
+- [ ] [Streaming / tiled I/O](tasks/io/streaming-tiled-io.md) — **low priority** (user, 2026-10-13): STEP 0 evaluated **no-go** — the worst real frame (18.66 MP gain map) estimates 1.01 GB against the 6 GiB budget, and the gate would first reject near 134 MP ([progress/io.md](progress/io.md) `## streaming-tiled-io`); revisit only if the input envelope grows. Memory-safety review
   Phase B (expensive, **evaluate-first**): strip/tile decode + streaming encode.
-  STEP 0 gate — evaluate from measured peak whether this is needed at all; if data
-  is insufficient, collect it first; proceed only if real scans exceed the budget.
 - [x] [Multi-frame runs outgrow the per-frame memory
   model](tasks/io/multi-frame-memory-growth.md) — macOS malloc kept freed full-frame
   blocks resident, so a roll's peak climbed with every slightly larger frame; a global
