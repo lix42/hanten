@@ -386,23 +386,24 @@ in the code.
   reject real work. The gate acts on the **estimate**, so the margin is on it: an
   estimate above half the default 6 GiB (6.44 GB) budget.
   - **Input envelope.** The largest of the 873 frames in `../nc-assets/manifest.json`
-    is 18.66 MP (5184×3600, Plustek 8300i). No larger real scan exists. A 7200-dpi
-    scan is the plausible next size, so it is stood in for by a 2×2 tile of
+    is 18.66 MP (5184×3600, Plustek 8300i). The one larger real scan, the 74.65 MP
+    `samples/largest.tif` behind `memory-preflight`, is no longer on hand. So that
+    size (a 7200-dpi scan) is stood in for by a 2×2 tile of
     `2026-07-24-Gold200/1137` (10368×7200 = 74.65 MP, IR as `NewSubfileType=4`,
     XMP kept; `inspect` reads `hdri`, no warning). It sits at
     `../temp/streaming-step0/`; the tiling script is not committed.
   - **Measured** (`main` `bd3f8af`, release, macOS/aarch64, 18 GB RAM,
-    `/usr/bin/time -l`, explicit `--film-base`, highest of 3 runs), peak vs
-    `memory.estimated_peak_bytes`:
+    `/usr/bin/time -l`, explicit `--film-base`, highest of 3 runs, except where
+    marked), peak vs `memory.estimated_peak_bytes`:
 
     | frame | SDR TIFF | float TIFF | SDR JPEG | gain map |
     |---|---|---|---|---|
     | 18.66 MP | 0.348 / 0.521 GB | 0.347 / 0.521 | 0.347 / 0.521 | 0.697 / 1.014 |
-    | 74.65 MP | 1.355 / 1.679 GB | 1.354 / 1.679 | 1.354 / 1.679 | 2.535 / 3.654 |
+    | 74.65 MP | 1.355 / 1.679 GB | 1.354 / 1.679 | 1.354 / 1.679 | 2.747\* / 3.654 |
 
-    The 74.65 MP TIFFs match `buffer-strategy`'s numbers (`nf-core.md`). Its gain map
-    read 2.747 GB, highest of five; that is the figure to cite, since 74.65 MP gain-map
-    peaks vary run to run (`memory.rs`).
+    \* `buffer-strategy`'s highest of five on the same tile (`nf-core.md`). This
+    run's three read at most 2.535 GB, because 74.65 MP gain-map peaks vary from run
+    to run (`memory.rs`). Its TIFF numbers match these.
   - **Verdict.** The worst real input, an 18.66 MP gain map, estimates 1.01 GB (16% of
     the budget) and peaks at 0.70 GB. The gain-map estimate grows ~47 B/px over
     ~0.13 GB: it crosses the half-budget margin near **65 MP** and the budget near
