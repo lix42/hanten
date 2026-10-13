@@ -1063,7 +1063,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/parallel-hdr-stages` (post-MVP): `output/parallel-display-stages`, `output/hdr-display-rendering`, `output/gain-map-hdr-output` — the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
 - `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
 - `output/drop-avif` (post-MVP, **done** 2026-10-01): `output/hdr-avif-output` — remove the AVIF destinations and `libaom-sys`, so the build needs no CMake or NASM
-- `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
+- `output/post-fanout-encode-slowdown` (post-MVP, **done** 2026-10-13): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section; a non-issue on an M3 Pro (no thread-count dependence; slow writes are page-cache episodes)
 - `output/content-light-levels` (post-MVP): `output/hdr-display-rendering` — measure MaxCLL/MaxFALL from each pixel's max(R, G, B) per CTA-861.3, not luminance; found by `analysis/display-acceptance-harness`
 - `telemetry/perf-instrumentation` (post-MVP, **parked**): `core/pipeline-orchestration`
   — LAB criterion benches; prototyped and parked on git branch
@@ -1777,9 +1777,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   `hdr-pq`/`hdr-hlg` bytes; **no `pipeline_version` bump** since neither is the default — the
   change is recorded in [reports/render-defaults-v3.md](reports/render-defaults-v3.md)'s
   addendum and pinned by a thread-count equality test in CI
-- [ ] [Sequential encode slows after a wide rayon fan-out](tasks/output/post-fanout-encode-slowdown.md) —
-  `film-master`'s f32 TIFF write measured 96 → 150–192 ms after the parallel stages landed,
-  back to ~117 ms with `RAYON_NUM_THREADS=4`; cause unknown, not yet reproduced on Linux
+- [x] [Sequential encode slows after a wide rayon fan-out](tasks/output/post-fanout-encode-slowdown.md) —
+  **a non-issue on an M3 Pro**: load-gated, shuffled runs show the
+  `--film-master` encode flat across rayon thread counts, 1 included; its slow writes are
+  page-cache episodes that hit every arm. The M4 Pro that showed the effect and Linux were
+  not measured. [reports/post-fanout-encode-slowdown.md](reports/post-fanout-encode-slowdown.md).
+  **Done 2026-10-13.**
 - [x] [Content-light levels per CTA-861.3](tasks/output/content-light-levels.md) — the HDR
   TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measured
   luminance, not each pixel's max(R, G, B): 391 vs 578 cd/m² on the scan fixture. Found

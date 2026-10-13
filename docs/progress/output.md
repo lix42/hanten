@@ -20,6 +20,12 @@ entries — don't rewrite earlier ones.
 
 What other epics need to know about `output`:
 
+- **Timing `encode` (2026-10-13, `post-fanout-encode-slowdown`):** the stage includes
+  the staged write's `fsync`, so write the output to the internal disk, shuffle arm
+  order per round and gate runs on load, or page-cache episodes read as an effect.
+  The post-fan-out slowdown did not reproduce on an M3 Pro; see
+  [the report](../reports/post-fanout-encode-slowdown.md).
+
 - **The SDR JPEG (2026-10-11, `output/sdr-jpeg-preset`)** is the `--range sdr
   --container jpeg` rows (Display P3, Adobe RGB, sRGB): the SDR TIFF's rendition through
   the gain-map base's encode path (`io::jpeg::encode_display`, q95 4:4:4, ICC only). Every
@@ -1818,8 +1824,8 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## post-fanout-encode-slowdown
 
-**Status:** not started
-**Updated:** 2026-09-16
+**Status:** done
+**Updated:** 2026-10-13
 
 - Goal: explain the 30–90 ms slowdown of the sequential encode that follows a wide
   rayon section, seen on the M4 Pro while landing `parallel-display-stages`
@@ -1828,6 +1834,26 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   multithreading work; the measurements and the candidate causes are in the task file
   and under `parallel-display-stages` above. A clean re-measurement was blocked by a
   loaded machine (load average ~40 from other sessions).
+- 2026-10-13: **a non-issue on an M3 Pro** (5P + 6E); the M4 Pro and Linux were not
+  measured. Report: [post-fanout-encode-slowdown](../reports/post-fanout-encode-slowdown.md).
+  Load-gated runs on the spike frame: the `--film-master` encode's sequential steps
+  (non-finite scan 7 ms, f64 channel means ~36, TIFF write ~32, fsync 20–30) are flat
+  across the default pool and `RAYON_NUM_THREADS` 1/4/5. The write has 130–325 ms
+  episodes that hit every arm, `=1` included, clustered in time: page-cache reclaim
+  on a machine with ~75 MB free, not rayon. Gotchas for anyone re-measuring:
+  **`encode` includes the staged write's `fsync`**, so write the output to the
+  internal disk (`../temp` is the external SSD); **shuffle the arm order per round**,
+  or the slow episodes masquerade as an arm effect; gate each run on the 1-minute load
+  average. The main thread is already `QOS_CLASS_USER_INTERACTIVE`, and a sleep before
+  the encode makes the passes slower, not faster.
+  `quantize_coded_u16` **can** go parallel with no error buffer (parallel codes, then
+  recompute each error from sample and code in the original order, so RMS is
+  unchanged), but it saves only 68 → 58 ms: the sequential `f64` sum is the floor.
+  Not taken.
+- 2026-10-13: **done** as a documented non-issue. No code changed, so every output
+  is byte-identical by construction; no knob was added. Reopen only with an
+  interleaved, load-gated measurement on the affected machine that shows the effect
+  by arm.
 
 ## ultrahdr-dependency-externalization (closed)
 
