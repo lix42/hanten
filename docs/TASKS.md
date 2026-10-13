@@ -366,6 +366,8 @@ graph TD
     nf-scene-correction/correction-confidence
     nf-scene-correction/midtone-neutral-fit
     nf-scene-correction/lomo100-cast-vs-ccr
+    nf-scene-correction/two-point-tilt
+    nf-scene-correction/midtone-line-terms
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -697,6 +699,10 @@ graph TD
   nf-calibration/taste-vs-quality --> nf-scene-correction/correction-confidence
   nf-scene-correction/roll-white-balance --> nf-scene-correction/lomo100-cast-vs-ccr
   nf-scene-correction/midtone-neutral --> nf-scene-correction/lomo100-cast-vs-ccr
+  nf-scene-correction/lomo100-cast-vs-ccr --> nf-scene-correction/two-point-tilt
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/two-point-tilt
+  nf-scene-correction/lomo100-cast-vs-ccr --> nf-scene-correction/midtone-line-terms
+  nf-scene-correction/midtone-neutral --> nf-scene-correction/midtone-line-terms
   nf-calibration/level-target-zero --> nf-calibration/span-roll-slope
   nf-scene-correction/midtone-neutral --> nf-calibration/span-roll-slope
   nf-look/contrast-on-luminance --> nf-calibration/span-roll-slope
@@ -1386,6 +1392,12 @@ the design now in `docs/design-spec.md` (§6–§7):
 - `nf-scene-correction/lomo100-cast-vs-ccr` (new flow): `nf-scene-correction/roll-white-balance`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-11 from the Lomography 100 review: the user preferred SilverFast CCR to
   Hanten on half the roll, Hanten leaving a blue, slightly green cast
+- `nf-scene-correction/two-point-tilt` (new flow): `nf-scene-correction/lomo100-cast-vs-ccr`, `nf-scene-correction/midtone-neutral`
+  — filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: the roll white as a tilt pinned at
+  black
+- `nf-scene-correction/midtone-line-terms` (new flow): `nf-scene-correction/lomo100-cast-vs-ccr`, `nf-scene-correction/midtone-neutral`
+  — filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: each term of the midtone line off,
+  manually or on a signal
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -2048,10 +2060,20 @@ the design now in `docs/design-spec.md` (§6–§7):
   the white balance and the midtone line by frame count (in doubt under 16, with an
   advisory note) and the white balance gets a switch (`--neutral-balance`); nothing turns one off on its
   own, since no signal found detects a roll of one dominant colour
-- [ ] [Hanten against SilverFast CCR on the Lomography 100
+- [x] [Hanten against SilverFast CCR on the Lomography 100
   roll](tasks/nf-scene-correction/lomo100-cast-vs-ccr.md) — the user preferred CCR on 18 of
-  36 frames; Hanten leaves a blue, slightly green cast; locate it with the roll's 18 white
-  patches and remove it without losing 2056's blue sky or the shadow detail
+  36 frames; Hanten leaves a blue, slightly green cast. **Done 2026-10-12**: the roll gains
+  and the midtone line's blue term add it, both misled by a warm roll; one roll-level
+  correction is enough (oracle gains), the estimate is what fails. Follow-ups
+  `two-point-tilt` and `midtone-line-terms`
+- [ ] [The roll white as a tilt pinned at
+  black](tasks/nf-scene-correction/two-point-tilt.md) — the two-point slope as a
+  scene-correction grade: a neutral film base where today's gains tint it; one of the two
+  changes in the Lomography 100 "TR" arm
+- [ ] [Each term of the midtone line on its
+  own](tasks/nf-scene-correction/midtone-line-terms.md) — turn the red or blue term off
+  manually, or automatically when a signal says the roll's content misled it; the other
+  change in "TR"
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
