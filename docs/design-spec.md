@@ -1457,7 +1457,12 @@ searches a frame for one (§9 `measure`):
   warns (`--strict` fails) when the area's worst per-channel spread
   `(p90 − p10) / p50` exceeds 0.5 — unexposed frames measure 0.06–0.29, picture frames
   0.87–2.26. It is a coarse "is this a picture?" guard, not a uniformity verdict: a
-  leader passes. An empty area is a usage error (exit 2).
+  leader passes. The verdict is the area's 4x4 tiling (`pipeline::area_uniformity`,
+  reported as `area_uniformity`): grain within tiles, the tiles more than 0.03
+  off the plane through the others, and that plane's edge-to-edge tilt, in density;
+  a tilt over 0.05 or any outlier tile warns.
+  Diagnostic only — the base is still the pooled median. An empty area is a usage
+  error (exit 2).
 - **A stated region** — `--base-region x,y,w,h` ⇒ `{ "region": [x, y, w, h] }`,
   read at the per-channel **p97**. A hand-drawn rectangle may mix holder, rebate
   and picture, and the base is its most transparent sub-population, which a high

@@ -35,6 +35,11 @@ What other epics need to know about `film-base`:
   `roll` accepts none of the film-base flags, so its diagnosis points at the shared
   `--params` recipe. Any orchestrator added later must call `cli::validate_shared`
   rather than reaching for a default that no longer exists.
+- **The area measurement also judges uniformity** (`tiling-uniformity-validator`):
+  `measure_area` tiles the area 4x4 in the same scan (`pipeline::area_uniformity`) and
+  warns on a tilt or outlier tiles, so `measure-roll --strict` refuses a sloped unexposed
+  frame too; only `measure-base` reports the `area_uniformity` field. Frame
+  classification (`reference_frames`) still reads the pooled `area_spread`.
 - **`estimate` / `measure_area` return `BaseEstimate { base, warnings, percentile }`**
   and **guard the base finite-and-positive on every channel at birth**. Warnings ride
   to the report and `--strict` promotes them; `percentile` is what the report states
@@ -1063,8 +1068,8 @@ to <1%); `harness.sh classify` gets 9/9 unexposed and 9/9 leaders. Two review ro
 
 ## tiling-uniformity-validator
 
-**Status:** not started
-**Updated:** 2026-08-11
+**Status:** done (2026-10-13)
+**Updated:** 2026-10-13
 
 - Goal: replace the 5-cell grid with a coarse tiling in the estimate's own pass, reporting
   within-tile and between-tile variation separately. Covers `Dmax` too. No pixel change.
@@ -1085,6 +1090,71 @@ to <1%); `harness.sh classify` gets 9/9 unexposed and 9/9 leaders. Two review ro
   goal was replacing `GridEstimate.agreement: bool` and its overloaded spread sentinel
   with a self-describing verdict. That intent carries over to the tiling verdict; the
   task itself made no sense once `--grid` goes. It had no dependents.
+
+### 2026-10-13 — implemented: 4x4 tiling of the effective area
+
+User decisions: `measure-base` (the former `estimate`) alone reports it; a gradient and
+an outlier tile both warn, so `--strict` refuses either; after review, outliers are
+set aside iteratively and listed; `measure-roll`'s report stays without the field.
+
+- **`pipeline::area_uniformity`**, fed by `measure_area`'s one scan
+  (`film_base::for_each_code` drives both the code histogram and the `Tiling`). Per-tile
+  histograms in density bins of 0.0005 (fixed ~1.9 MB; a code histogram per tile would
+  be 24 MB). Per channel: `within` (median tile p05–p95), `between` (tile-median range),
+  `outlier_tiles`, and `tilt`, the edge-to-edge change of the plane through the tiles
+  kept. Verdict: `uniform` | `sloped` | `outlier_tiles` | `sloped_with_outlier_tiles`.
+  A tile channel with no finite sample leaves the area untiled rather than reading as
+  density 0.
+- **Outliers are judged against a plane they are not in, round by round** (up to 4). A
+  single exclusion was not enough: a corner outlier of δ left in the fit tilts the plane
+  by ~0.45δ, so a second defect, or one on another channel than the worst, read as
+  tilt and got blamed on uneven light.
+- **Calibrated on unexposed frames, not leaders.** The leader table motivated the task,
+  but the leader `Dmax` is retired and `measure-base` measures unexposed frames. Over
+  the 12 unexposed frames: tilt ≤ 0.030 (Gold 200 2026-09-18, blue), no outlier tile
+  (worst 0.012 off the plane through the other 15). Leaders tilt 0.015–0.152.
+  Thresholds: `MAX_TILT` 0.05, `MAX_TILE_OFFSET` 0.03. No unexposed frame warns.
+- **On leaders, edge falloff is not planar**: four leaders set aside three or four
+  tiles along one edge column as outliers, so the outlier warning's "dust, a light leak"
+  is wrong there. Leaders are not what `measure-base` is for; recorded so it is not
+  mistaken for a bug if this is pointed at one.
+- **The leader finding reproduces in shape, not to the digit.** Portra 160's leader
+  tilts 0.114 (blue +0.075 left to right edge to edge; the baseline report had 0.048
+  between tile medians), Gold 200's 0.027 — flagged and not. The old "between-tile
+  0.0081 / 0.0390" came from a lost script whose definition was never recorded;
+  `between` here reads 0.044 / 0.119 on blue.
+- **The pooled 0.5 gate stays**: `reference_frames` classifies frames by `area_spread`.
+- **`measure-roll`** raises the warnings for its unexposed frame (the same
+  measurement), but its report omits the field (`BaseMeasurement.area_uniformity` is
+  `serde(skip)`). The sloped warning's region remedy names `hanten measure-base`, since
+  `--unexposed` refuses `--base-region`.
+- `film-base/dmax-anchor-reliability` (open question 2's coordination) is retired.
+
+### 2026-10-13 — close-out
+
+**Landed.** `hanten measure-base FRAME` (no source flag) reports `area_uniformity`: a 4x4
+tiling of the effective area fed by the median's own scan. Fields per channel, in density:
+`within`, `between`, `tilt` (edge to edge), `outlier_tiles` (each with the offset it was set
+aside at), and `verdict` (`uniform` | `sloped` | `outlier_tiles` | `sloped_with_outlier_tiles`).
+`MAX_TILT` 0.05 and `MAX_TILE_OFFSET` 0.03 raise warnings, which `--strict` promotes. The base
+value, `pipeline_version` and the drift gate are untouched.
+
+**Verified.** fmt, machete, clippy, build, rustdoc, `nctool` (589), `cargo test` (817 + 279 +
+32 + 1). Real scans, via the `#[ignore]` probe and the binary: none of the 12 unexposed frames
+warns; Portra 160's leader is `sloped_with_outlier_tiles`, Gold 200's is `uniform`. Reviewed by
+`/code-review` (10 findings, all fixed except `measure-roll`'s report field, which the user kept
+out) and `ship:diff-reviewer` (stale docs; offsets recorded at removal). The Codex review did not
+run (out of credits).
+
+**What a dependent task needs to know.**
+
+- `film_base::for_each_code` is the one scan over an area's 16-bit codes; a new per-area
+  statistic should join it rather than add a pass.
+- The tiling is diagnostic; `reference_frames` still classifies on the pooled `area_spread`.
+  `core/auto-calibration` could use the verdict to prefer a flat unexposed frame, but nothing
+  calibrated it for that.
+- On leaders, non-planar edge falloff sets aside an edge column as "outlier tiles"; the warning's
+  "dust, a light leak" is wrong there.
 
 ## half-frame-calibration
 

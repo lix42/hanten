@@ -1584,11 +1584,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   `estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one
   population sits 0.01-0.085 density pale on 9 real frames); a stated region keeps p97. Retires
   `--auto-base` / `"auto"`, `--grid` and `inspect`'s suggested Dmin. No pixel change, no bump
-- [ ] [Validate reference frames by tiling](tasks/film-base/tiling-uniformity-validator.md) — coarse tiling in
-  the estimate's own pass, separating within-tile grain from between-tile gradient: 0.0081 on Gold 200 against
-  0.0390 on Portra 160, independently reproducing the baseline report's blue-gradient finding on that roll.
-  Tiles the effective-area measurement (`--grid` is already gone) and absorbs the removed
-  `film-base/grid-verdict-enum`; diagnostics only, no pixel change
+- [x] [Validate reference frames by tiling](tasks/film-base/tiling-uniformity-validator.md) —
+  `measure-base` tiles the effective area 4x4 in the median's own scan (`pipeline::area_uniformity`):
+  within-tile grain, outlier tiles set aside against the plane through the rest, and that plane's
+  edge-to-edge tilt, reported as `area_uniformity` with a self-describing verdict. A tilt over 0.05 or
+  a tile over 0.03 warns; no unexposed frame does (tilt ≤ 0.030), Portra 160's leader does (0.114),
+  Gold 200's does not. Absorbs `film-base/grid-verdict-enum`; diagnostics only, no pixel change
 - [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) —
   **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both
   references (HP5 frame 1330 is one). Convenience over `core/measure-base`'s one-reference-per-frame path

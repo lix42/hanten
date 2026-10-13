@@ -40,8 +40,9 @@
 //! `s` is the sampled rectangle as a fraction of the frame ([`SamplePlan`]): `0`
 //! for an explicit `--film-base` (nothing is sampled), up to 1.0 for a full-frame
 //! `--base-region`. The effective-area measurement (`film_base::measure_area`) is
-//! `0` too: it counts 16-bit codes into a fixed ~1.5 MB histogram instead of
-//! copying pixels, which the allowance covers.
+//! `0` too: it counts into fixed histograms instead of copying pixels — ~1.5 MB of
+//! 16-bit codes and ~1.9 MB of per-tile density bins (`pipeline::area_uniformity`) —
+//! which the allowance covers.
 //!
 //! Notes on the non-obvious entries:
 //!
