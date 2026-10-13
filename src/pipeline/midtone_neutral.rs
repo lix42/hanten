@@ -20,7 +20,8 @@
 //! development from good, and the line did no visible harm on good rolls, so it is on
 //! unless the roll has fewer than [`MIN_FRAMES`] frames or [`MIN_BANDS`] voted bands.
 //! What it cannot tell from a cast is a roll dominated by one scene colour (beach, sky),
-//! and no statistic found does ([`super::correction_confidence`]).
+//! and no statistic found does ([`super::correction_confidence`]). Such a roll can mislead
+//! one term alone, so the recipe can keep either (`recipe::MidtoneTerms`).
 //!
 //! Its values (band width, cluster radius, fade width, gate) are the spike's, reviewed
 //! on four rolls; `nf-scene-correction/midtone-neutral-fit` settles the fit range and fade

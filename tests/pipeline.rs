@@ -11121,6 +11121,127 @@ fn measure_roll_writes_a_midtone_line_on_a_long_roll_that_convert_applies() {
 }
 
 #[test]
+fn midtone_neutral_red_or_blue_keeps_one_term_of_the_line() {
+    let tmp = TempDir::new("midtone-terms");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frames: Vec<PathBuf> = (0..10)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.75 + 0.01 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    let measure = |extra: &[&str]| {
+        let out = tmp.path(&format!("measured{}.json", extra.join("")));
+        let (code, stdout, err) = run(&[
+            &["measure-roll", "--params", input.to_str().unwrap()][..],
+            &names[..],
+            extra,
+            &["--out", out.to_str().unwrap()],
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), written_recipe(&out), out)
+    };
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                names[0],
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                input.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), std::fs::read(out).unwrap())
+    };
+    let (_, written, recipe) = measure(&[]);
+    let line = written["roll"]["midtone_line"].clone();
+    assert!(line.is_object(), "{written}");
+    let recipe = recipe.to_str().unwrap();
+    let (_, on_px) = convert("on.tiff", &["--params", recipe]);
+    let (_, off_px) = convert(
+        "off.tiff",
+        &["--params", recipe, "--midtone-neutral", "off"],
+    );
+
+    for (term, dropped) in [("red", "blue"), ("blue", "red")] {
+        // At render: the kept term alone reaches the pixels, exactly as a line stated with
+        // the other term zeroed.
+        let (report, px) = convert(
+            &format!("{term}.tiff"),
+            &["--params", recipe, "--midtone-neutral", term],
+        );
+        let roll = &report["chain"]["roll"];
+        assert_eq!(roll["midtone_neutral_applied"], true, "{report}");
+        assert_eq!(roll["midtone_terms_applied"], serde_json::json!([term]));
+        assert_eq!(
+            roll["midtone_line"], line,
+            "the stated line is reported whole"
+        );
+        let applied = &report["chain"]["scene_correction"]["midtone_line"];
+        assert_eq!(applied[dropped], serde_json::json!([0.0, 0.0]), "{report}");
+        assert_eq!(applied[term], line[term], "{report}");
+        let zeroed = tmp.path(&format!("zeroed-{term}.json"));
+        let mut stated = written.clone();
+        stated["roll"]["midtone_line"][dropped] = serde_json::json!([0.0, 0.0]);
+        std::fs::write(&zeroed, stated.to_string()).unwrap();
+        let (_, zeroed_px) = convert(
+            &format!("zeroed-{term}.tiff"),
+            &["--params", zeroed.to_str().unwrap()],
+        );
+        assert_eq!(px, zeroed_px, "{term}");
+        assert_ne!(px, on_px, "not vacuous: {dropped} moved pixels");
+        assert_ne!(px, off_px, "not vacuous: {term} moved pixels");
+    }
+
+    // A measurement never states a switch: the term is a render-time choice only.
+    assert!(written["roll"]["midtone_neutral"].is_null(), "{written}");
+    let (code, _, err) = run(&[
+        &["measure-roll", "--params", input.to_str().unwrap()][..],
+        &names[..],
+        &["--midtone-neutral", "red"],
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("invalid value 'red'"), "{err}");
+
+    // A typed term beside the gains' off is refused by its own spelling.
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        input.to_str().unwrap(),
+        "--params",
+        recipe,
+        "-o",
+        tmp.path("refused.tiff").to_str().unwrap(),
+        "--neutral-balance",
+        "off",
+        "--midtone-neutral",
+        "blue",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--midtone-neutral blue asks for the roll's midtone line")
+            && err.contains("drop --midtone-neutral blue, or drop --neutral-balance off")
+            && !err.contains("--midtone-neutral on"),
+        "{err}"
+    );
+}
+
+#[test]
 fn measure_roll_runs_the_polarity_check_on_picture_frames_only() {
     // A leader can show backlight past the strip's end; the check's thresholds were
     // measured on picture frames, so the leader is spared. The same scan as a picture

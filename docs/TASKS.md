@@ -368,6 +368,7 @@ graph TD
     nf-scene-correction/lomo100-cast-vs-ccr
     nf-scene-correction/two-point-tilt
     nf-scene-correction/midtone-line-terms
+    nf-scene-correction/midtone-term-signal
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -703,6 +704,8 @@ graph TD
   nf-scene-correction/midtone-neutral --> nf-scene-correction/two-point-tilt
   nf-scene-correction/lomo100-cast-vs-ccr --> nf-scene-correction/midtone-line-terms
   nf-scene-correction/midtone-neutral --> nf-scene-correction/midtone-line-terms
+  nf-scene-correction/midtone-line-terms --> nf-scene-correction/midtone-term-signal
+  analysis/calibration-frame-capture --> nf-scene-correction/midtone-term-signal
   nf-calibration/level-target-zero --> nf-calibration/span-roll-slope
   nf-scene-correction/midtone-neutral --> nf-calibration/span-roll-slope
   nf-look/contrast-on-luminance --> nf-calibration/span-roll-slope
@@ -1396,8 +1399,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   — filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: the roll white as a tilt pinned at
   black
 - `nf-scene-correction/midtone-line-terms` (new flow): `nf-scene-correction/lomo100-cast-vs-ccr`, `nf-scene-correction/midtone-neutral`
-  — filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: each term of the midtone line off,
-  manually or on a signal
+  — filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: each term of the midtone line off
+  by hand (the automatic half split off 2026-10-13)
+- `nf-scene-correction/midtone-term-signal` (new flow): `nf-scene-correction/midtone-line-terms`, `analysis/calibration-frame-capture`
+  — split 2026-10-13 from `midtone-line-terms`: the automatic turn-off needs a second labelled
+  case, which the calibration rolls give
 - `nf-look/contrast-on-luminance` (new flow): `nf-look/contrast-definition`, `nf-scene-correction/midtone-neutral`
   — filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on
   corrected colour
@@ -2071,10 +2077,14 @@ the design now in `docs/design-spec.md` (§6–§7):
   black](tasks/nf-scene-correction/two-point-tilt.md) — the two-point slope as a
   scene-correction grade: a neutral film base where today's gains tint it; one of the two
   changes in the Lomography 100 "TR" arm
-- [ ] [Each term of the midtone line on its
+- [x] [Each term of the midtone line on its
   own](tasks/nf-scene-correction/midtone-line-terms.md) — turn the red or blue term off
-  manually, or automatically when a signal says the roll's content misled it; the other
-  change in "TR"
+  by hand (`--midtone-neutral red|blue`); the other change in "TR". **Done 2026-10-13**:
+  render-time only (a measurement never states a switch); the blue term is the one a roll
+  of sea or warm light misleads. Follow-up `midtone-term-signal`
+- [ ] [An automatic turn-off per midtone-line
+  term](tasks/nf-scene-correction/midtone-term-signal.md) — drop a term when an in-roll
+  signal says the roll's content misled it; waits for the calibration rolls
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to

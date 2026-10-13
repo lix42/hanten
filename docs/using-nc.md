@@ -68,7 +68,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > example, `measure-roll` report (on its real roll), placement table and dark-floor
 > example (09-18's 1774) were re-run, and `--contrast 1.3` re-checked on every measured
 > roll (it renders, after `nf-calibration/overflow-probe-scope`); §4's and §5's recipe
-> `meta` carry the new version (`--save-recipe` writes 16). The staleness
+> `meta` carry the new version (`--save-recipe` writes 16). At
+> `nf-scene-correction/midtone-line-terms` (`pipeline_version` 16 unchanged,
+> `--midtone-neutral red|blue`) §7's roll report example, roll-flag table, `direct` and
+> film-master refusals and midtone-line section were re-run against the binary. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -870,7 +873,8 @@ A frame renders exactly as `convert --params` would with the shared recipe and i
 override merged. Some keys describe the *roll*, not the frame:
 `calibration.film_base`, `roll.white_balance`, `roll.midtone_line`, `roll.dark_stops`, `roll.exposure`,
 `reconstruction` (every key), `rendering` and `output`. (A frame may turn the midtone
-line off, `"roll": {"midtone_neutral": "off"}`, or the white balance with it,
+line off, `"roll": {"midtone_neutral": "off"}`, keep one of its terms (`"red"` or
+`"blue"`), or turn the white balance off with it,
 `"roll": {"neutral_balance": "off"}`, without a warning.) An override that changes one is applied but warns, naming
 both values (and `--strict` turns the warning into a failing exit), because the frame
 then renders apart from its siblings — a roll is one piece of film through one
@@ -1124,7 +1128,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-dark` / `--roll-exposure` / `--roll-frame-exposure` /
   `--roll-thin-slope` / `--roll-thin-exposure` / `--roll-midtone-line` / `--small-lift on`
-  / `--thin-lift on` / `--midtone-neutral on` / `--neutral-balance on`, or pass
+  / `--thin-lift on` / `--midtone-neutral on|red|blue` / `--neutral-balance on`, or pass
   `--rendering default`. A recipe's `roll` section is not refused, nor is
   `--small-lift off`, `--thin-lift off`, `--midtone-neutral off` or
   `--neutral-balance off`, which ask for nothing (under the film master too).
@@ -1482,8 +1486,8 @@ measured value is never mistaken for a chosen one:
 | `--hybrid-span STOPS` | `roll.hybrid_span_stops` | the fewest look stops a hybrid frame's span renders over (default 8) |
 | `--hybrid-level-keep SHARE` | `roll.hybrid_level_keep` | the share, 0 to 1, of its level's offset from the roll's a hybrid frame keeps (default 0.6) |
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
-| `--midtone-neutral on\|off` | `roll.midtone_neutral` | whether the midtone line applies; off keeps it in the recipe |
-| `--neutral-balance on\|off` | `roll.neutral_balance` | whether the roll's white balance applies; off keeps the gains in the recipe and turns the midtone line off with them, since it is measured after them. A typed `--midtone-neutral on` against a typed or recipe off is refused (exit 2); a recipe's `"on"` is spared, and a `roll` manifest frame's own off wins over the flag |
+| `--midtone-neutral on\|red\|blue\|off` | `roll.midtone_neutral` | which of the midtone line's terms apply: both, red or blue alone, or none; the line stays in the recipe |
+| `--neutral-balance on\|off` | `roll.neutral_balance` | whether the roll's white balance applies; off keeps the gains in the recipe and turns the midtone line off with them, since it is measured after them. A typed `--midtone-neutral` other than `off` against a typed or recipe off is refused (exit 2); a recipe's value is spared, and a `roll` manifest frame's own off wins over the flag |
 | — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}}`, any `null`: a frame's own white, in place of the roll's, its lifts and its tones. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
@@ -1533,13 +1537,15 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","frame_placement":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"taste_applied":[]}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","frame_placement":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"midtone_terms_applied":[],"taste_applied":[]}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
 With `--roll-midtone-line` too, `chain.roll` states the line with
-`"midtone_neutral_applied": true`, `chain.scene_correction` carries it as `midtone_line`,
-and the stage list reads `midtone-neutral+white-balance+exposure`.
+`"midtone_neutral_applied": true` and `"midtone_terms_applied": ["red","blue"]`,
+`chain.scene_correction` carries it as `midtone_line`, and the stage list reads
+`midtone-neutral+white-balance+exposure`. Under `--midtone-neutral blue` the terms read
+`["blue"]` and `chain.scene_correction.midtone_line` carries red as `[0.0,0.0]`.
 
 `slope_applied` stays `true` with `--contrast` stated: the contrast multiplies the
 roll's slope (`chain.look.base_from` is `roll`). The film master and `direct` apply
@@ -1599,6 +1605,13 @@ scene colour (sand, sea) can read that colour as the cast; re-run `measure-roll
 recipe alone: a `null` in a later `--params` layer does not clear an earlier line. At
 render, `--midtone-neutral off` (recipe `roll.midtone_neutral` `"off"`) drops only the
 line and keeps it in the recipe: the whites stay as measured after it.
+
+Either term alone can be misled, so `--midtone-neutral red` or `blue` keeps just that
+one: the other's slope and offset count as zero, and the tint gate measures from the
+kept cast. On the archive rolls it was the blue term that a roll of sea or warm light
+misled, and a development cast needed both (`nf-scene-correction/midtone-line-terms`). It
+is a render-time choice only: the whites stay measured with the whole line, and
+`measure-roll` takes no `red` or `blue`, since a measurement never states a switch.
 
 **How far to trust them.** `confidence` grades the white balance and the line by how many
 frames they were measured from: `confident` from 16 frames (`confident_from`), else

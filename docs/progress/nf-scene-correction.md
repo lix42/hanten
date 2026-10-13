@@ -68,6 +68,14 @@ statistic of the roll's own pixels found it. Follow-ups: `two-point-tilt` (a til
 at black instead of the gains) and `midtone-line-terms` (each line term off, by hand or on
 a signal).
 
+**Each line term has its own switch (`midtone-line-terms`, 2026-10-13).**
+`--midtone-neutral on|red|blue|off` keeps both, one or no terms at render
+(`RollSection::applied_midtone_line` zeroes a dropped term; the tint gate measures from the
+kept cast); `measure-roll` stays `auto|on|off`, since a measurement never states a switch.
+Across the archive the blue term is the one a roll of sea or warm light misleads, and
+development casts need both. The automatic rule is `midtone-term-signal`, waiting for the
+calibration rolls.
+
 ## stage
 
 **Status:** done
@@ -540,10 +548,76 @@ a signal).
 
 ## midtone-line-terms
 
-**Status:** not started
-**Updated:** 2026-10-12
+**Status:** done
+**Updated:** 2026-10-13
 
 - 2026-10-12: filed (user) from `lomo100-cast-vs-ccr`. Neither term is special: whichever one
   a roll's dominant colour fools is the one to drop. Two forms: a manual switch per term
   (both off is today's `--midtone-neutral off`) and an automatic turn-off on a signal. TR's
   blue term was dropped by hand from the roll's patches, so its numbers are not a rule's.
+- 2026-10-13: **started; decisions (user).** The manual form widens the existing switch:
+  `--midtone-neutral on|red|blue|off` / `roll.midtone_neutral`, one enum, since the four
+  states are exclusive (both terms off is `off`). A dropped term counts as zero, so the
+  tint gate measures from the kept cast, as TR did. The automatic half is split off into
+  its own task, waiting for the calibration rolls.
+- 2026-10-13: **study** (`../temp/midtone-line-terms/`, `scripts/terms.py`; report
+  Artifact https://claude.ai/artifact/K5LVNgF32Sb5e8wT8iaQFp). The marked neutral patches'
+  median cast (log2 × 1000, after the roll's gains; tint gate ignored, whites not
+  re-measured), from `correction-confidence`'s port on the archive rolls and the binary's
+  line on Lomography 100. Rolls with a line by default:
+
+  | roll | on | red only | blue only | off |
+  |---|---|---|---|---|
+  | 09-09 Ektar | 200 | 363 | **178** | 331 |
+  | 09-11 Portra 400 | **169** | 185 | 270 | 270 |
+  | 09-14 Ektar (sea) | 137 | **104** | 137 | 105 |
+  | 09-18 Gold 200 (sea, sand) | 125 | **102** | 134 | 105 |
+  | 09-20 Portra 400 | **154** | 240 | 259 | 292 |
+  | 09-28 Portra 400 dark | **187** | 261 | 189 | 262 |
+  | 09-29 Ektar (poor development) | **67** | 288 | 113 | 287 |
+  | Lomography 100 | 231 | **169** | 236 | 176 |
+
+  Lomography 100's lit cloth and wall: 149 / 86 / 149 / 91. **The blue term is the one a
+  roll of sea or warm light misleads** (09-14, 09-18, Lomo), and then the red term adds
+  almost nothing (red only within 1–7 of off). Only 09-09 has one term clearly beating both
+  on and off (blue only). Development casts need the pair (09-29, 09-20). So the switch
+  gains little over `off` today; its value is a target for the automatic rule, whose
+  first candidate is "blue, on a roll of one dominant colour".
+- 2026-10-13: **implemented.** `recipe::MidtoneTerms` in place of `Switch` for
+  `roll.midtone_neutral` (`on` / `off` unchanged, so no recipe migrates); `applied_midtone_line`
+  zeroes a dropped term, so every reader follows it. `measure-roll --midtone-neutral red|blue`
+  fits like `on`, writes the term, measures the whites with it, and adds it to the reuse
+  flags. Report: `chain.roll.midtone_terms_applied`; `chain.scene_correction.midtone_line`
+  is the applied line (a dropped term `[0.0, 0.0]`). The `--neutral-balance off` conflict,
+  and the `direct` and film-master refusals, name the typed value. No default pixel moves:
+  the drift gate passes unchanged, no row.
+- 2026-10-13: **review (`/code-review`), fixed.** `measure-roll --midtone-neutral red|blue`
+  wrote `roll.midtone_neutral`, breaking design-spec §6's "a measurement never states a
+  switch" (a measured file layered last would undo an earlier `"off"`). Decided (user):
+  `measure-roll` stays `auto|on|off`; the term is a render-time choice only, the whites
+  measured with the whole line, as for a render-time `off`. That also drops the entry
+  above's reuse-flag term, the floor bundling and the duplicate enum. Also fixed: the
+  `roll.midtone_line` roll-wide warning and the guide name `red` / `blue` as a frame's own,
+  `MidtoneTerms::apply` matches on the variant, the report computes the line once.
+  Rejected: the tint gate keyed on the full measured cast. A dropped term is one judged
+  wrong, so the gate's neutral drops it too, as TR did (the decision above).
+- 2026-10-13: **done.** `--midtone-neutral on|red|blue|off` / `roll.midtone_neutral`
+  (`recipe::MidtoneTerms`), render-time and frame-local; every reader goes through
+  `RollSection::applied_midtone_line`, which zeroes a dropped term. Review: the user's
+  `/code-review` (fixed above), Codex (no findings) and ship's diff reviewer (one stale
+  comment, fixed). Verified: CI gates green (807 + 279 + 32 + 1 Rust tests, 589 `nctool`);
+  through the binary, a kept term renders byte-identical to the line stated with the other
+  term zeroed, differs from both `on` and `off`, and `measure-roll` refuses `red`. For
+  dependents: `midtone-term-signal` has the study's per-term table as its evidence and
+  would switch `roll.midtone_neutral` (a render-time key, so an automatic rule must not
+  be written by `measure-roll` as a switch; a measured zeroed line, or a report advice, is
+  the shape that respects §6).
+
+## midtone-term-signal
+
+**Status:** not started
+**Updated:** 2026-10-13
+
+- 2026-10-13: split (user) from `midtone-line-terms`, which ships the manual switch: the
+  automatic turn-off per term, and whether the report names a doubtful term. Waits for
+  `analysis/calibration-frame-capture`. Evidence so far is `midtone-line-terms`' study.
