@@ -19,16 +19,16 @@
 //! - **`P = 1` is exactly reinhard.** The lift multiplies by `1 + 0·s = 1`, so on the
 //!   SDR branch reinhard's per-pixel arithmetic is transcendental-free; its one libm
 //!   call is the white point, `2^headroom_stops` (`exp2`), exact at whole stops.
-//!   **Display black is not**: it calls `log2` and `exp2` per frame and per pixel below
-//!   mid-grey (see below), so with it on, output below mid-grey may
-//!   differ by a ULP across targets. From mid-grey up, and with black off, SDR output
+//!   **The dark end is not**: it calls `log2` and `exp2` per frame and per pixel below
+//!   mid-grey (see below), so where it acts, output below mid-grey may differ by a ULP
+//!   across targets. From mid-grey up, and where it leaves a frame alone, SDR output
 //!   is bit-reproducible at a whole-stop headroom.
 //! - **Below diffuse white every peak agrees exactly**, because the lift is zero there
 //!   and `r` is shared. A gain map needs the two renditions to agree below diffuse
 //!   white, and here that is a property of the formula rather than a tolerance.
 //! - **Mid-grey is preserved** (`r(0.18) = 0.18` at every `W`), and `headroom_stops = 0`
-//!   makes reinhard the identity on every branch. The stage is the identity only with
-//!   display black off too: at zero headroom black still places the film base.
+//!   makes reinhard the identity on every branch. The stage is the identity only where
+//!   the dark end acts on nothing too.
 //! - **Not bounded by the peak above `W`.** `r` keeps rising past `W` (as `v/W²`), so
 //!   content brighter than the headroom exceeds the display's peak on every branch —
 //!   SDR above `1.0`, HDR above `P` — and the encoder clamps and counts it. The legacy
@@ -39,40 +39,41 @@
 //!   clamped and counted (`nf-display-stages/branch-contract` has the measurement; for
 //!   a gain map the destination clamps and counts, since `gain_ratio` does not).
 //!
-//! # Display black
+//! # The dark end
 //!
 //! **Reinhard compresses upward only**: below mid-grey it is nearly a gain (log-log
-//! slope 1.00 at 0.002, 0.94 near 0.05), so without help black lands wherever the
-//! decode and the look's contrast put it — the film base at L\* 7–9 on a roll at whole
-//! contrast ≈ 2.25, pale. So the stage also places black, on reinhard's output `y` and
-//! before the peak's lift:
+//! slope 1.00 at 0.002, 0.94 near 0.05), so without help the dark end lands wherever
+//! the decode and the look's slope put it. The stage can move it, on reinhard's output
+//! `y` and before the peak's lift, by one curve ([`DARK_END_CURVE`]):
 //!
 //! ```text
 //! y′ = y · 2^(shift · (1 − smoothstep(u)))    u = (log2 y − log2 b) / (log2 0.18 − log2 b)
-//! shift = log2(T / b)                          b = r(film base),  T = 0.18 · 2^−display_black
+//! shift = log2(T / b)                          T = 0.18 · 2^−stops
 //! ```
 //!
-//! - **The reference is the film base, where it renders** (`b`): every frame's darkest
-//!   content bottoms out there, and where it lands is decided by the frame's own
-//!   parameters — above all the look's contrast — so it is the base run through the
-//!   frame's grade (`chain::render` does that), never an image statistic. A frame
-//!   clamped to a different contrast from its roll gets its own shift.
-//! - **A shift in stops, whole at the base and below, none from mid-grey up.** Below the
-//!   base the slope stays 1 (shadow texture is darker, not squeezed toward 0); the
-//!   stops between the base and mid-grey take the extra contrast; mid-grey, white and
-//!   everything the peak's lift touches are untouched, bit for bit.
-//! - **Luminance only**, like the rest of the stage: the channels scale together, so a
-//!   dark near-neutral keeps its chromaticity. A per-channel subtraction — the legacy
-//!   `--black-point`, and the probe `nf-calibration/anchor-comparison` judged with —
-//!   amplifies whatever tint the shadows carry.
-//! - **A base already at or below the target is left alone**, never lifted
-//!   (`nf-display-stages/parametric-operator`, reviewed 2026-09-26).
-//! - **Below diffuse white every peak still agrees exactly**: black acts below
-//!   mid-grey, where the lift is zero.
+//! A shift in stops, whole at the reference `b` and below (slope 1 there), fading to
+//! nothing at mid-grey, so mid-grey, white and everything the peak's lift touches are
+//! untouched, bit for bit, and every peak still agrees below diffuse white. Luminance
+//! only, like the rest of the stage: a per-channel subtraction (the legacy
+//! `--black-point`) amplifies whatever tint the shadows carry. `fit_range.dark_end` picks
+//! the reference and the direction ([`DarkEnd`]):
 //!
-//! This is where the base lands on the display, and the only black placement: there is
-//! no scene-side flare/fog subtraction (`nf-scene-correction/flare-removal`, closed as
-//! not needed).
+//! - **The floor** (the default, `nf-display-stages/midtone-contrast-toe`): `b` is the
+//!   frame's measured dark end — its darkest 1 % (`roll_white::FrameStops::dark_stops`)
+//!   graded by the frame's own slope and exposure — **lifted** to `T` when it renders
+//!   below it, never pushed down. It holds the shadows of a steep slope (`--contrast
+//!   1.3`) and of a frame wider than the placement can fit; at the default slope it
+//!   leaves the reviewed rolls alone. Without measured tones it cannot act. The lift is
+//!   capped at [`MAX_LIFT_SHARE`] of the stops between `b` and mid-grey, which keeps
+//!   the curve's slope at or above one half (`1 − 1.5 · shift / span` at its flattest).
+//! - **Display black**: `b` is the film base, where the frame's grade renders it
+//!   (`chain::render`), **pushed down** to `T` when it renders above it, never lifted
+//!   (`nf-display-stages/parametric-operator`). `direct`'s pinned dark end. A base close
+//!   under mid-grey squeezes the shift into a narrow band ([`ResolvedDarkEnd::warning`]).
+//!
+//! The two are one setting because they pull the same stops opposite ways. There is no
+//! scene-side flare/fog subtraction (`nf-scene-correction/flare-removal`, closed as not
+//! needed).
 //!
 //! **Reinhard is kept on purpose** (`nf-display-stages/parametric-shoulder`,
 //! 2026-09-27). With mid-grey, the rendered white and the peak all pinned, any smooth
@@ -83,7 +84,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::pipeline::colorimetry::dot;
@@ -105,130 +106,97 @@ pub const IDENTITY: &str = "identity";
 /// Scene mid-grey, which the operator leaves where the decode put it.
 const MID_GREY: f64 = 0.18;
 
-/// Pinned identifier of display black's curve, for the report. A change to its pixels
+/// Pinned identifier of the dark end's curve, for the report. A change to its pixels
 /// moves the version.
-pub const BLACK_CURVE: &str = "log-shift-to-mid-grey-v1";
+pub const DARK_END_CURVE: &str = "log-shift-to-mid-grey-v1";
 
-/// What the stage list names when reinhard and display black both run,
-/// joined in the order they run, as the look joins its controls.
-pub const OPERATOR_AND_BLACK: &str = "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1";
+/// What the stage list names when reinhard and the dark end both run, joined in the
+/// order they run, as the look joins its controls.
+pub const OPERATOR_AND_DARK_END: &str = "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1";
+
+/// The floor review chose: a frame's darkest 1 % no deeper than 4.5 stops below
+/// mid-grey (L\* ≈ 7; `nf-display-stages/midtone-contrast-toe`).
+pub const DEFAULT_DARK_FLOOR_STOPS: f32 = 4.5;
 
 /// The depth review chose while display black was on by default: the film base 6 stops
-/// below mid-grey (L\* ≈ 2.5; `nf-display-stages/parametric-operator`).
-#[cfg(test)]
+/// below mid-grey (L\* ≈ 2.5; `nf-display-stages/parametric-operator`). `direct`'s.
 pub const REVIEWED_DISPLAY_BLACK_STOPS: f32 = 6.0;
 
-/// The deepest display black accepted, in stops below mid-grey: 16 stops puts the base
-/// at `0.18 · 2^−16`, under a 16-bit encode's first code value.
-pub const MAX_DISPLAY_BLACK_STOPS: f32 = 16.0;
+/// The deepest target accepted, in stops below mid-grey: 16 stops puts it at
+/// `0.18 · 2^−16`, under a 16-bit encode's first code value.
+pub const MAX_DARK_END_STOPS: f32 = 16.0;
 
-/// Where the film base renders on the display — the recipe's `fit_range.display_black`,
-/// `--display-black`: stops below mid-grey, or `"off"`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DisplayBlack {
-    /// Black left where the decode and the look put it.
+/// The most the floor lifts, as a share of the stops between its reference and
+/// mid-grey: a third keeps the curve's log-log slope at or above one half.
+pub const MAX_LIFT_SHARE: f64 = 1.0 / 3.0;
+
+/// Where the dark end renders on the display — the recipe's `fit_range.dark_end`, set by
+/// `--dark-floor` or `--display-black`: `"off"`, `{"floor": stops}` or
+/// `{"black": stops}`, stops below mid-grey.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DarkEnd {
+    /// Left where the decode and the look put it.
     Off,
-    /// The base at `0.18 · 2^−stops` on the display.
-    StopsBelowMid(f32),
+    /// The frame's measured dark end lifted to no deeper than `0.18 · 2^−stops`.
+    Floor(f32),
+    /// The film base pushed down to `0.18 · 2^−stops`.
+    Black(f32),
 }
 
-/// Off: the roll's and the hybrid's slopes place the dark end
-/// (`nf-calibration/envelope-hybrid-placement`).
-impl Default for DisplayBlack {
+/// The floor at its reviewed depth.
+impl Default for DarkEnd {
     fn default() -> Self {
-        DisplayBlack::Off
+        DarkEnd::Floor(DEFAULT_DARK_FLOOR_STOPS)
     }
 }
 
-/// A [`DisplayBlack`] that is not finite, or not in `(0, MAX_DISPLAY_BLACK_STOPS]`.
+/// A [`DarkEnd`] whose stops are not finite, or not in `(0, MAX_DARK_END_STOPS]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DisplayBlackFault(pub f32);
+pub struct DarkEndFault(pub f32);
 
-impl DisplayBlack {
+/// The literal `"off"`, spelled once for the flags.
+const OFF: &str = "off";
+
+impl DarkEnd {
     /// The value rule, rendered by the recipe gate as a usage error.
-    pub fn check(self) -> std::result::Result<(), DisplayBlackFault> {
+    pub fn check(self) -> std::result::Result<(), DarkEndFault> {
         match self {
-            DisplayBlack::StopsBelowMid(v) if !(v > 0.0 && v <= MAX_DISPLAY_BLACK_STOPS) => {
-                Err(DisplayBlackFault(v))
+            DarkEnd::Floor(v) | DarkEnd::Black(v) if !(v > 0.0 && v <= MAX_DARK_END_STOPS) => {
+                Err(DarkEndFault(v))
             }
             _ => Ok(()),
         }
     }
 
+    /// `--dark-floor`'s spelling: stops below mid-grey, or `off`. The range is the
+    /// recipe gate's, so the flag and the key share one message.
+    pub fn parse_floor(s: &str) -> std::result::Result<Self, String> {
+        Self::parse(s, DarkEnd::Floor, DEFAULT_DARK_FLOOR_STOPS)
+    }
+
+    /// `--display-black`'s spelling, as [`DarkEnd::parse_floor`].
+    pub fn parse_black(s: &str) -> std::result::Result<Self, String> {
+        Self::parse(s, DarkEnd::Black, REVIEWED_DISPLAY_BLACK_STOPS)
+    }
+
+    fn parse(s: &str, on: fn(f32) -> Self, example: f32) -> std::result::Result<Self, String> {
+        if s == OFF {
+            return Ok(DarkEnd::Off);
+        }
+        s.parse::<f32>().map(on).map_err(|_| {
+            format!("expected stops below mid-grey (e.g. {example}) or `{OFF}`, got {s:?}")
+        })
+    }
+
     /// The target's luminance on the display, when on.
     fn target(self) -> Option<f64> {
         match self {
-            DisplayBlack::Off => None,
-            DisplayBlack::StopsBelowMid(stops) => Some(MID_GREY * (-f64::from(stops)).exp2()),
-        }
-    }
-}
-
-/// The literal `"off"`, spelled once for the recipe, the flag and the report.
-const OFF: &str = "off";
-
-impl std::str::FromStr for DisplayBlack {
-    type Err = String;
-
-    /// The flag's spelling: a number of stops, or `off`. The range is the recipe
-    /// gate's, so the flag and the key share one message.
-    fn from_str(s: &str) -> std::result::Result<Self, String> {
-        if s == OFF {
-            return Ok(DisplayBlack::Off);
-        }
-        s.parse::<f32>()
-            .map(DisplayBlack::StopsBelowMid)
-            .map_err(|_| format!("expected stops below mid-grey (e.g. 6) or `{OFF}`, got {s:?}"))
-    }
-}
-
-impl Serialize for DisplayBlack {
-    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        match self {
-            DisplayBlack::Off => s.serialize_str(OFF),
-            DisplayBlack::StopsBelowMid(v) => s.serialize_f32(*v),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for DisplayBlack {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        struct Visitor;
-        impl serde::de::Visitor<'_> for Visitor {
-            type Value = DisplayBlack;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "stops below mid-grey (a number) or \"{OFF}\"")
-            }
-            fn visit_str<E: serde::de::Error>(
-                self,
-                v: &str,
-            ) -> std::result::Result<DisplayBlack, E> {
-                if v == OFF {
-                    Ok(DisplayBlack::Off)
-                } else {
-                    Err(E::invalid_value(serde::de::Unexpected::Str(v), &self))
-                }
-            }
-            fn visit_f64<E: serde::de::Error>(
-                self,
-                v: f64,
-            ) -> std::result::Result<DisplayBlack, E> {
-                Ok(DisplayBlack::StopsBelowMid(v as f32))
-            }
-            fn visit_i64<E: serde::de::Error>(
-                self,
-                v: i64,
-            ) -> std::result::Result<DisplayBlack, E> {
-                Ok(DisplayBlack::StopsBelowMid(v as f32))
-            }
-            fn visit_u64<E: serde::de::Error>(
-                self,
-                v: u64,
-            ) -> std::result::Result<DisplayBlack, E> {
-                Ok(DisplayBlack::StopsBelowMid(v as f32))
+            DarkEnd::Off => None,
+            DarkEnd::Floor(stops) | DarkEnd::Black(stops) => {
+                Some(MID_GREY * (-f64::from(stops)).exp2())
             }
         }
-        d.deserialize_any(Visitor)
     }
 }
 
@@ -280,12 +248,15 @@ pub struct FitRangeParams {
     pub headroom_stops: f32,
     /// The display's peak.
     pub peak: DisplayPeak,
-    /// Where the film base renders on the display.
-    pub display_black: DisplayBlack,
+    /// Where the dark end renders on the display.
+    pub dark_end: DarkEnd,
     /// The film base's **graded** ACEScg luminance — the decoded base run through the
     /// frame's own scene correction and look, which `chain::render` does. Display
-    /// black's reference, and with it off `pipeline::black_endpoint`'s.
+    /// black's reference, and otherwise `pipeline::black_endpoint`'s.
     pub film_base: f32,
+    /// The frame's measured dark end, graded the same way (`chain::graded_tone`): the
+    /// floor's reference. `None` without measured tones.
+    pub frame_dark: Option<f32>,
 }
 
 impl FitRangeParams {
@@ -300,8 +271,8 @@ impl FitRangeParams {
         let white_point = self.white_point();
         FitRange {
             // Reinhard's own identity test, so the report never names an operator that
-            // moved no pixel. `apply` skips the pixels only when display black is off
-            // too; [`FitRange::applied`] joins the two for the stage list.
+            // moved no pixel. `apply` skips the pixels only when the dark end moves
+            // none either; [`FitRange::applied`] joins the two for the stage list.
             operator: if white_point == 1.0 {
                 IDENTITY
             } else {
@@ -310,58 +281,78 @@ impl FitRangeParams {
             headroom_stops: self.headroom_stops,
             white_point,
             display_peak: self.peak,
-            display_black: self.black().0,
+            dark_end: self.dark_end().0,
         }
     }
 
-    /// Display black, resolved against where the film base renders without it: the
+    /// The dark end, resolved against where its reference renders without it: the
     /// report's account, and the shift `apply` runs (`None` when off or left alone).
-    fn black(&self) -> (ResolvedBlack, Option<Shift>) {
+    fn dark_end(&self) -> (ResolvedDarkEnd, Option<Shift>) {
         let white_point = self.white_point();
-        let base = reinhard(
-            self.film_base,
-            white_point,
-            mid_grey_preserving_gain(white_point),
-        );
-        let base = f64::from(base);
-        let shift = self
-            .display_black
-            .target()
-            .filter(|&target| base > target && base < MID_GREY)
-            .map(|target| (target / base).log2())
-            .map(|stops| Shift {
-                stops,
-                whole: stops.exp2(),
-                base: base.log2(),
-                knee: MID_GREY.log2(),
-            });
-        let resolved = ResolvedBlack {
-            setting: self.display_black,
+        let gain = mid_grey_preserving_gain(white_point);
+        let render = |y: f32| f64::from(reinhard(y, white_point, gain));
+        let frame_dark = self
+            .frame_dark
+            .filter(|y| y.is_finite() && *y > 0.0)
+            .map(render);
+        // The reference and the shift in stops at it: black pushes the base down, the
+        // floor lifts the frame's dark end, each only toward its target.
+        let shift = match self.dark_end {
+            DarkEnd::Off => None,
+            DarkEnd::Black(_) => {
+                let base = render(self.film_base);
+                self.dark_end
+                    .target()
+                    .filter(|&target| base > target && base < MID_GREY)
+                    .map(|target| (base, (target / base).log2()))
+            }
+            DarkEnd::Floor(_) => frame_dark
+                .zip(self.dark_end.target())
+                .filter(|&(dark, target)| dark < target)
+                .map(|(dark, target)| {
+                    let span = (MID_GREY / dark).log2();
+                    (dark, (target / dark).log2().min(span * MAX_LIFT_SHARE))
+                }),
+        }
+        .map(|(reference, stops)| Shift {
+            stops,
+            whole: stops.exp2(),
+            base: reference.log2(),
+            knee: MID_GREY.log2(),
+        });
+        let resolved = ResolvedDarkEnd {
+            setting: self.dark_end,
             curve: if shift.is_some() {
-                BLACK_CURVE
+                DARK_END_CURVE
             } else {
                 IDENTITY
             },
             film_base_stops: -display_stops(self.headroom_stops, self.film_base),
+            frame_dark_stops: frame_dark.map(|y| (MID_GREY / y).log2() as f32),
             shift_stops: shift.map_or(0.0, |s| s.stops as f32),
         };
         (resolved, shift)
     }
 }
 
-/// What display black did to a frame, for the report.
+/// What the dark end did to a frame, for the report.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct ResolvedBlack {
-    /// The knob as set: stops below mid-grey, or `"off"`.
-    pub setting: DisplayBlack,
-    /// [`BLACK_CURVE`], or `"identity"` when black is off, the base already renders at
-    /// or below the target (left alone), or the base renders at or above mid-grey,
-    /// where a shift that holds mid-grey cannot reach it ([`ResolvedBlack::warning`]).
+pub struct ResolvedDarkEnd {
+    /// The knob as set.
+    pub setting: DarkEnd,
+    /// [`DARK_END_CURVE`], or `"identity"` when it is off, its reference already renders
+    /// on the target's side (left alone), the floor has no measured dark end, or display
+    /// black's base renders at or above mid-grey, where a shift that holds mid-grey
+    /// cannot reach it ([`ResolvedDarkEnd::warning`]).
     pub curve: &'static str,
-    /// Where the film base renders without display black, in stops below mid-grey on
-    /// the display.
+    /// Where the film base renders without the dark end placed, in stops below mid-grey
+    /// on the display.
     pub film_base_stops: f32,
-    /// The shift applied at the base, in stops (negative darkens); `0` when left alone.
+    /// Where the frame's measured dark end renders without it, likewise; `null`
+    /// without measured tones.
+    pub frame_dark_stops: Option<f32>,
+    /// The shift applied at the reference, in stops (negative darkens); `0` when left
+    /// alone.
     pub shift_stops: f32,
 }
 
@@ -370,15 +361,31 @@ pub struct ResolvedBlack {
 /// packs the whole shift into a narrow band — at 2 stops under and a 6-stop target,
 /// a 4-stop shift over 2 stops steepens the band's middle 4× — and at mid-grey or
 /// above black cannot run at all. Only a strong exposure gets a base here (the numbers
-/// for the default contrast: `docs/using-nc.md`, "Display black").
+/// for the default contrast: `docs/using-nc.md`, "The dark end").
 pub const MIN_FILM_BASE_STOPS: f32 = 2.0;
 
-impl ResolvedBlack {
+impl ResolvedDarkEnd {
     /// A warning when display black is on but the film base renders less than
     /// [`MIN_FILM_BASE_STOPS`] under mid-grey — crushed into a narrow band below it,
-    /// or (at or above mid-grey) not placed at all. `None` otherwise.
+    /// or (at or above mid-grey) not placed at all — or when the floor's cap
+    /// ([`MAX_LIFT_SHARE`]) leaves the frame's dark end under it. `None` otherwise.
     pub fn warning(&self) -> Option<String> {
-        if self.setting == DisplayBlack::Off || self.film_base_stops >= MIN_FILM_BASE_STOPS {
+        if let (DarkEnd::Floor(floor), Some(dark)) = (self.setting, self.frame_dark_stops) {
+            let lands = dark - self.shift_stops;
+            // A rounding's worth past the floor is the floor reached.
+            return (lands > floor + 1e-3).then(|| {
+                format!(
+                    "the frame's darkest 1 % renders {dark:.2} stops under mid-grey, so far \
+                     that the dark floor's lift stops at its cap (a third of the way to \
+                     mid-grey, so the shadows keep at least half their contrast): it lands \
+                     {lands:.2} stops under, below the floor's {floor}. The frame is very \
+                     steep or very dark: lower `--contrast` (recipe `look.contrast`) or raise \
+                     `--exposure` (recipe `scene_correction.exposure`)"
+                )
+            });
+        }
+        if !matches!(self.setting, DarkEnd::Black(_)) || self.film_base_stops >= MIN_FILM_BASE_STOPS
+        {
             return None;
         }
         let (depth, what) = if self.curve == IDENTITY {
@@ -397,14 +404,19 @@ impl ResolvedBlack {
             "the film base renders {depth} mid-grey, closer than the {MIN_FILM_BASE_STOPS} \
              stops under it display black needs: {what}. The frame is placed very bright: \
              lower `--exposure` (recipe `scene_correction.exposure`), or pass \
-             `--display-black off` (recipe `fit_range.display_black`) to leave black where \
-             the grade puts it"
+             `--display-black off` (recipe `fit_range.dark_end` \"off\") to leave black \
+             where the grade puts it"
         ))
+    }
+
+    /// Whether the floor is set but the frame has no measured dark end to hold.
+    pub fn floor_unread(&self) -> bool {
+        matches!(self.setting, DarkEnd::Floor(_)) && self.frame_dark_stops.is_none()
     }
 }
 
-/// Where reinhard puts a graded luminance with display black off, in stops from mid-grey
-/// (negative below): every peak agrees below diffuse white, so no peak is taken.
+/// Where reinhard puts a graded luminance with the dark end left alone, in stops from
+/// mid-grey (negative below): every peak agrees below diffuse white, so no peak is taken.
 pub fn display_stops(headroom_stops: f32, luminance: f32) -> f32 {
     let white_point = headroom_white_point(headroom_stops);
     let y = reinhard(
@@ -425,22 +437,19 @@ pub struct FitRange {
     pub white_point: f32,
     /// The display's peak, as a multiple of diffuse white.
     pub display_peak: DisplayPeak,
-    /// Where the film base landed on the display.
-    pub display_black: ResolvedBlack,
+    /// Where the dark end landed on the display.
+    pub dark_end: ResolvedDarkEnd,
 }
 
 impl FitRange {
     /// The stage's entry in the report's list, and the tone curve an HDR destination
-    /// names: what ran, joined by `+` in the order it ran — reinhard, then display
-    /// black — or `"identity"` when neither moves a pixel (the tests `apply` skips on).
+    /// names: what ran, joined by `+` in the order it ran — reinhard, then the dark
+    /// end — or `"identity"` when neither moves a pixel (the tests `apply` skips on).
     pub fn applied(&self) -> &'static str {
-        match (
-            self.operator != IDENTITY,
-            self.display_black.curve != IDENTITY,
-        ) {
-            (true, true) => OPERATOR_AND_BLACK,
+        match (self.operator != IDENTITY, self.dark_end.curve != IDENTITY) {
+            (true, true) => OPERATOR_AND_DARK_END,
             (true, false) => self.operator,
-            (false, true) => self.display_black.curve,
+            (false, true) => self.dark_end.curve,
             (false, false) => IDENTITY,
         }
     }
@@ -493,7 +502,7 @@ pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedI
     }
     // Only read when display black is on, so only refused then: turning black off must
     // not leave a failure over a value the render never uses.
-    if params.display_black != DisplayBlack::Off
+    if matches!(params.dark_end, DarkEnd::Black(_))
         && !(params.film_base.is_finite() && params.film_base > 0.0)
     {
         return Err(NcError::Other(format!(
@@ -504,9 +513,9 @@ pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedI
     }
     let mut buffer = image.into_buffer();
     let white_point = params.white_point();
-    let black = params.black().1;
-    let identity = white_point == 1.0 && black.is_none();
-    let operator = Operator::new(white_point, params.headroom_stops, params.peak, black);
+    let dark_end = params.dark_end().1;
+    let identity = white_point == 1.0 && dark_end.is_none();
+    let operator = Operator::new(white_point, params.headroom_stops, params.peak, dark_end);
     pixels::try_map_in_place(buffer.rgb_mut(), |index, px| {
         if !px.iter().all(|v| v.is_finite()) {
             return Err(NcError::Other(format!(
@@ -544,32 +553,37 @@ struct Operator {
     /// recomputed, so the lift's end costs no libm call.
     top_stops: f32,
     peak: f32,
-    black: Option<Shift>,
+    dark_end: Option<Shift>,
 }
 
 impl Operator {
-    fn new(white_point: f32, headroom_stops: f32, peak: DisplayPeak, black: Option<Shift>) -> Self {
+    fn new(
+        white_point: f32,
+        headroom_stops: f32,
+        peak: DisplayPeak,
+        dark_end: Option<Shift>,
+    ) -> Self {
         Self {
             white_point,
             gain: mid_grey_preserving_gain(white_point),
             bottom_stops: DIFFUSE_WHITE.log2(),
             top_stops: headroom_stops,
             peak: peak.value(),
-            black,
+            dark_end,
         }
     }
 
     /// The factor a pixel of this luminance is scaled by: `f(Y)/Y`.
     ///
     /// **At `Y ≤ 0` it is the curve's limit at black, the mid-grey gain** — not `1` —
-    /// times display black's whole shift. `f` is a pure gain near zero (`f(Y)/Y → gain`,
+    /// times the dark end's whole shift. `f` is a pure gain near zero (`f(Y)/Y → gain`,
     /// ≈1.22 at six stops, and the shift is a constant factor below the base), so
     /// leaving those pixels unscaled would step every channel where a saturated
     /// colour's luminance crosses zero. The limit keeps the scale continuous, and still
     /// clamps nothing.
     fn scale(self, luminance: f32) -> f32 {
         if luminance <= 0.0 {
-            let whole = self.black.map_or(1.0, |s| s.whole);
+            let whole = self.dark_end.map_or(1.0, |s| s.whole);
             return (self.gain * whole) as f32;
         }
         self.apply(luminance) / luminance
@@ -578,7 +592,7 @@ impl Operator {
     /// `r(v) · (1 + (P − 1)·s(v))` for a positive luminance.
     fn apply(self, value: f32) -> f32 {
         let base = reinhard(value, self.white_point, self.gain);
-        let base = match self.black {
+        let base = match self.dark_end {
             Some(shift) => shift.apply(base),
             None => base,
         };
@@ -604,9 +618,9 @@ impl Operator {
     }
 }
 
-/// Display black's shift, resolved once per frame: `stops` at and below `base`, fading
-/// with a smoothstep in `log2` to nothing at `knee`, mid-grey. `base` and `knee` are
-/// `log2` of display luminance.
+/// The dark end's shift, resolved once per frame: `stops` at and below `base` (the
+/// reference), fading with a smoothstep in `log2` to nothing at `knee`, mid-grey. `base`
+/// and `knee` are `log2` of display luminance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Shift {
     stops: f64,
@@ -819,33 +833,48 @@ mod tests {
         assert_eq!(headroom_fault(25.0), Some(HeadroomFault::TooLarge(25.0)));
     }
 
-    /// Fit range at the default headroom with display black set, for a film base whose
-    /// graded luminance is `film_base`.
-    fn with_black(display_black: DisplayBlack, film_base: f32, peak: f32) -> FitRangeParams {
+    /// Fit range at the default headroom with the dark end set, for a film base whose
+    /// graded luminance is `film_base` and no measured dark end.
+    fn with_black(dark_end: DarkEnd, film_base: f32, peak: f32) -> FitRangeParams {
         FitRangeParams {
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             peak: DisplayPeak::new(peak).unwrap(),
-            display_black,
+            dark_end,
             film_base,
+            frame_dark: None,
+        }
+    }
+
+    /// The floor at `stops`, for a frame whose graded dark end is `frame_dark`.
+    fn with_floor(stops: f32, frame_dark: Option<f32>, peak: f32) -> FitRangeParams {
+        FitRangeParams {
+            frame_dark,
+            ..with_black(DarkEnd::Floor(stops), CAPPED_BASE, peak)
         }
     }
 
     fn operator(p: &FitRangeParams) -> Operator {
-        Operator::new(p.white_point(), p.headroom_stops, p.peak, p.black().1)
+        Operator::new(p.white_point(), p.headroom_stops, p.peak, p.dark_end().1)
     }
+
+    const BLACK: DarkEnd = DarkEnd::Black(REVIEWED_DISPLAY_BLACK_STOPS);
 
     /// A capped roll's film base: it renders ≈ 4.4 stops under mid-grey without black.
     const CAPPED_BASE: f32 = 0.0075;
 
+    /// A steep frame's darkest 1 %: it renders ≈ 5.2 stops under mid-grey, under the
+    /// default floor.
+    const STEEP_DARK: f32 = 0.004;
+
     #[test]
     fn display_black_lands_the_film_base_on_its_target() {
         for stops in [4.5_f32, 6.0, 7.5] {
-            let p = with_black(DisplayBlack::StopsBelowMid(stops), CAPPED_BASE, 1.0);
+            let p = with_black(DarkEnd::Black(stops), CAPPED_BASE, 1.0);
             let got = f64::from(operator(&p).apply(CAPPED_BASE));
             let want = MID_GREY * (-f64::from(stops)).exp2();
             assert!((got / want - 1.0).abs() < 1e-5, "{stops}: {got} vs {want}");
-            let r = p.resolved().display_black;
-            assert_eq!(r.curve, BLACK_CURVE);
+            let r = p.resolved().dark_end;
+            assert_eq!(r.curve, DARK_END_CURVE);
             // The shift darkens, so the base ends up `film_base_stops − shift_stops` below mid.
             assert!(
                 (r.film_base_stops - r.shift_stops - stops).abs() < 1e-4,
@@ -855,53 +884,148 @@ mod tests {
     }
 
     #[test]
-    fn display_black_leaves_mid_grey_and_everything_above_it_untouched() {
-        let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
-        let black = operator(&with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            1.0,
-        ));
-        // Reinhard maps mid-grey to itself, so every input from 0.18 up renders at or
-        // above the knee.
-        for v in sweep().filter(|v| *v >= 0.18) {
-            assert_eq!(black.apply(v).to_bits(), plain.apply(v).to_bits(), "at {v}");
+    fn the_floor_lifts_the_frame_s_dark_end_to_its_target() {
+        for stops in [4.0_f32, DEFAULT_DARK_FLOOR_STOPS, 5.0] {
+            let p = with_floor(stops, Some(STEEP_DARK), 1.0);
+            let got = f64::from(operator(&p).apply(STEEP_DARK));
+            let want = MID_GREY * (-f64::from(stops)).exp2();
+            assert!((got / want - 1.0).abs() < 1e-5, "{stops}: {got} vs {want}");
+            let r = p.resolved().dark_end;
+            assert_eq!(r.curve, DARK_END_CURVE);
+            let dark = r.frame_dark_stops.expect("measured");
+            assert!(r.shift_stops > 0.0, "a lift: {r:?}");
+            assert!((dark - r.shift_stops - stops).abs() < 1e-4, "{r:?}");
+            // The film base is reported, not moved toward anything.
+            assert!((r.film_base_stops - 4.4).abs() < 0.1, "{r:?}");
         }
-        assert!(black.apply(0.1) < plain.apply(0.1), "a shadow darkens");
     }
 
     #[test]
-    fn display_black_keeps_slope_one_below_the_film_base() {
+    fn the_floor_leaves_a_dark_end_on_or_above_it_alone() {
         let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
-        let black = operator(&with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            1.0,
-        ));
-        let ratio = |v: f32| black.apply(v) / plain.apply(v);
-        let at_base = ratio(CAPPED_BASE);
-        for v in [CAPPED_BASE / 2.0, 1e-4, 1e-6] {
-            assert!((ratio(v) / at_base - 1.0).abs() < 1e-5, "at {v}");
-        }
-        // And the scale's limit at Y ≤ 0 is that same factor on reinhard's gain.
-        assert!((black.scale(0.0) / black.scale(1e-9) - 1.0).abs() < 1e-5);
-        assert!((black.scale(-0.01) / black.scale(1e-9) - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn display_black_is_monotonic_and_finite() {
-        for base in [0.001_f32, CAPPED_BASE, 0.05, 0.17] {
-            let black = operator(&with_black(DisplayBlack::StopsBelowMid(12.0), base, 1.0));
-            let mut last = 0.0;
+        // 0.0075 renders ≈ 4.4 stops under mid-grey: above a 4.5-stop floor.
+        for p in [
+            with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0),
+            with_floor(DEFAULT_DARK_FLOOR_STOPS, None, 1.0),
+        ] {
+            let r = p.resolved().dark_end;
+            assert_eq!(r.curve, IDENTITY, "{r:?}");
+            assert_eq!(r.shift_stops, 0.0, "{r:?}");
             for v in sweep() {
-                let y = black.apply(v);
-                assert!(
-                    y.is_finite() && y >= last,
-                    "base {base}: not monotonic at {v}"
-                );
-                last = y;
+                assert_eq!(operator(&p).apply(v).to_bits(), plain.apply(v).to_bits());
             }
         }
+        // Without measured tones the floor has nothing to hold, and says so.
+        let unread = with_floor(DEFAULT_DARK_FLOOR_STOPS, None, 1.0)
+            .resolved()
+            .dark_end;
+        assert!(unread.floor_unread() && unread.frame_dark_stops.is_none());
+        let read = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0)
+            .resolved()
+            .dark_end;
+        assert!(!read.floor_unread());
+        assert!(
+            !with_black(BLACK, CAPPED_BASE, 1.0)
+                .resolved()
+                .dark_end
+                .floor_unread()
+        );
+    }
+
+    #[test]
+    fn the_dark_end_leaves_mid_grey_and_everything_above_it_untouched() {
+        let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
+        for (p, darker) in [
+            (with_black(BLACK, CAPPED_BASE, 1.0), true),
+            (
+                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                false,
+            ),
+        ] {
+            let o = operator(&p);
+            // Reinhard maps mid-grey to itself, so every input from 0.18 up renders at or
+            // above the knee.
+            for v in sweep().filter(|v| *v >= 0.18) {
+                assert_eq!(o.apply(v).to_bits(), plain.apply(v).to_bits(), "at {v}");
+            }
+            assert_eq!(o.apply(0.1) < plain.apply(0.1), darker, "a shadow moves");
+        }
+    }
+
+    #[test]
+    fn the_dark_end_keeps_slope_one_below_its_reference() {
+        let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
+        for (p, reference) in [
+            (with_black(BLACK, CAPPED_BASE, 1.0), CAPPED_BASE),
+            (
+                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                STEEP_DARK,
+            ),
+        ] {
+            let o = operator(&p);
+            let ratio = |v: f32| o.apply(v) / plain.apply(v);
+            let at_reference = ratio(reference);
+            for v in [reference / 2.0, 1e-4, 1e-6] {
+                assert!((ratio(v) / at_reference - 1.0).abs() < 1e-5, "at {v}");
+            }
+            // And the scale's limit at Y ≤ 0 is that same factor on reinhard's gain.
+            assert!((o.scale(0.0) / o.scale(1e-9) - 1.0).abs() < 1e-5);
+            assert!((o.scale(-0.01) / o.scale(1e-9) - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn the_dark_end_is_monotonic_and_finite() {
+        let check = |p: FitRangeParams, what: String| {
+            let o = operator(&p);
+            let mut last = 0.0;
+            for v in sweep() {
+                let y = o.apply(v);
+                assert!(y.is_finite() && y >= last, "{what}: not monotonic at {v}");
+                last = y;
+            }
+        };
+        for base in [0.001_f32, CAPPED_BASE, 0.05, 0.17] {
+            check(
+                with_black(DarkEnd::Black(12.0), base, 1.0),
+                format!("base {base}"),
+            );
+        }
+        // The floor at its deepest reach: a reference far under it would fold the curve
+        // over without the cap.
+        for dark in [1e-9_f32, 1e-6, 1e-4, STEEP_DARK, 0.01] {
+            for stops in [0.5_f32, DEFAULT_DARK_FLOOR_STOPS, MAX_DARK_END_STOPS] {
+                check(
+                    with_floor(stops, Some(dark), 1.0),
+                    format!("dark {dark}, floor {stops}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_floor_s_lift_is_capped_so_the_curve_stays_at_half_slope() {
+        // ≈ 12 stops under mid-grey: the 4.5-stop floor would ask a 7.5-stop lift.
+        let deep = 0.18 * 2f32.powi(-12) / 1.2194;
+        let p = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(deep), 1.0);
+        let r = p.resolved().dark_end;
+        let dark = r.frame_dark_stops.unwrap();
+        assert!(
+            (r.shift_stops / dark - MAX_LIFT_SHARE as f32).abs() < 1e-5,
+            "{r:?}"
+        );
+        // Held short, and said so; a floor reached is not.
+        let w = r.warning().expect("warned");
+        assert!(w.contains("cap") && w.contains("--contrast"), "{w}");
+        let reached = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0).resolved();
+        assert_eq!(reached.dark_end.warning(), None);
+        let o = operator(&p);
+        let slope = |v: f32| (o.apply(v * 1.001) / o.apply(v)).ln() / 1.001f32.ln();
+        let flattest = sweep()
+            .filter(|&v| v > deep && v < 0.17)
+            .map(slope)
+            .fold(f32::INFINITY, f32::min);
+        assert!(flattest > 0.49, "{flattest}");
     }
 
     #[test]
@@ -909,8 +1033,8 @@ mod tests {
         let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
         // 0.0025 renders ≈ 6.0 stops under mid-grey: below a 5-stop target, above 7.
         for (stops, left_alone) in [(5.0, true), (7.0, false)] {
-            let p = with_black(DisplayBlack::StopsBelowMid(stops), 0.0025, 1.0);
-            let r = p.resolved().display_black;
+            let p = with_black(DarkEnd::Black(stops), 0.0025, 1.0);
+            let r = p.resolved().dark_end;
             assert_eq!(r.curve == IDENTITY, left_alone, "{stops}: {r:?}");
             assert_eq!(r.shift_stops == 0.0, left_alone, "{stops}: {r:?}");
             if left_alone {
@@ -919,25 +1043,27 @@ mod tests {
                 }
             }
         }
-        let off = with_black(DisplayBlack::Off, CAPPED_BASE, 1.0).resolved();
-        assert_eq!(off.display_black.curve, IDENTITY);
-        assert_eq!(off.display_black.shift_stops, 0.0);
+        let off = with_black(DarkEnd::Off, CAPPED_BASE, 1.0).resolved();
+        assert_eq!(off.dark_end.curve, IDENTITY);
+        assert_eq!(off.dark_end.shift_stops, 0.0);
     }
 
     #[test]
-    fn display_black_agrees_across_peaks_below_white() {
-        let sdr = operator(&with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            1.0,
-        ));
-        let hdr = operator(&with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            HDR_PEAK,
-        ));
-        for v in sweep().filter(|v| *v <= DIFFUSE_WHITE) {
-            assert_eq!(sdr.apply(v).to_bits(), hdr.apply(v).to_bits(), "at {v}");
+    fn the_dark_end_agrees_across_peaks_below_white() {
+        for (sdr, hdr) in [
+            (
+                with_black(BLACK, CAPPED_BASE, 1.0),
+                with_black(BLACK, CAPPED_BASE, HDR_PEAK),
+            ),
+            (
+                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), HDR_PEAK),
+            ),
+        ] {
+            let (sdr, hdr) = (operator(&sdr), operator(&hdr));
+            for v in sweep().filter(|v| *v <= DIFFUSE_WHITE) {
+                assert_eq!(sdr.apply(v).to_bits(), hdr.apply(v).to_bits(), "at {v}");
+            }
         }
     }
 
@@ -945,96 +1071,82 @@ mod tests {
     fn a_film_base_near_or_above_mid_grey_is_warned_about() {
         // 1.9 stops under: black runs, squeezed into the band — warned.
         let near = 0.18 * 2f32.powf(-1.9) / 1.2194;
-        let r = with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            near,
-            1.0,
-        )
-        .resolved()
-        .display_black;
-        assert_eq!(r.curve, BLACK_CURVE, "{r:?}");
+        let r = with_black(BLACK, near, 1.0).resolved().dark_end;
+        assert_eq!(r.curve, DARK_END_CURVE, "{r:?}");
         let w = r.warning().expect("warned");
         assert!(w.contains("crushing") && w.contains("--exposure"), "{w}");
         assert!(w.contains("--display-black off"), "{w}");
         // At mid-grey and above: skipped — warned, not silent.
         for base in [0.18_f32, 0.5] {
-            let r = with_black(
-                DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-                base,
-                1.0,
-            )
-            .resolved()
-            .display_black;
+            let r = with_black(BLACK, base, 1.0).resolved().dark_end;
             assert_eq!(r.curve, IDENTITY, "{r:?}");
             assert!(r.warning().expect("warned").contains("skipped"));
         }
-        // A normal base, and black off, are not.
-        let r = with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            1.0,
-        )
-        .resolved()
-        .display_black;
+        // A normal base, black off, and the floor (which never reads the base), are not.
+        let r = with_black(BLACK, CAPPED_BASE, 1.0).resolved().dark_end;
         assert_eq!(r.warning(), None);
-        let r = with_black(DisplayBlack::Off, 0.5, 1.0)
-            .resolved()
-            .display_black;
-        assert_eq!(r.warning(), None);
+        for setting in [DarkEnd::Off, DarkEnd::default()] {
+            let r = with_black(setting, 0.5, 1.0).resolved().dark_end;
+            assert_eq!(r.warning(), None);
+        }
     }
 
     #[test]
-    fn the_report_names_display_black_when_only_it_runs() {
-        assert_eq!(OPERATOR_AND_BLACK, format!("{OPERATOR}+{BLACK_CURVE}"));
-        let mut p = with_black(
-            DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS),
-            CAPPED_BASE,
-            1.0,
+    fn the_report_names_the_dark_end_when_only_it_runs() {
+        assert_eq!(
+            OPERATOR_AND_DARK_END,
+            format!("{OPERATOR}+{DARK_END_CURVE}")
         );
-        assert_eq!(p.resolved().applied(), OPERATOR_AND_BLACK);
-        p.display_black = DisplayBlack::Off;
+        let mut p = with_black(BLACK, CAPPED_BASE, 1.0);
+        assert_eq!(p.resolved().applied(), OPERATOR_AND_DARK_END);
+        p.dark_end = DarkEnd::Off;
         assert_eq!(p.resolved().applied(), OPERATOR);
-        p.display_black = DisplayBlack::StopsBelowMid(REVIEWED_DISPLAY_BLACK_STOPS);
+        p.dark_end = BLACK;
         p.headroom_stops = 0.0;
-        assert_eq!(p.resolved().applied(), BLACK_CURVE);
-        p.display_black = DisplayBlack::Off;
+        assert_eq!(p.resolved().applied(), DARK_END_CURVE);
+        p.dark_end = DarkEnd::Off;
         assert_eq!(p.resolved().applied(), IDENTITY);
     }
 
     #[test]
-    fn display_black_reads_stops_or_off() {
-        assert_eq!(
-            "6".parse::<DisplayBlack>(),
-            Ok(DisplayBlack::StopsBelowMid(6.0))
-        );
-        assert_eq!("off".parse::<DisplayBlack>(), Ok(DisplayBlack::Off));
-        assert!("none".parse::<DisplayBlack>().is_err());
+    fn the_dark_end_reads_its_spellings() {
+        assert_eq!(DarkEnd::parse_floor("4.5"), Ok(DarkEnd::Floor(4.5)));
+        assert_eq!(DarkEnd::parse_black("6"), Ok(DarkEnd::Black(6.0)));
+        assert_eq!(DarkEnd::parse_floor("off"), Ok(DarkEnd::Off));
+        assert_eq!(DarkEnd::parse_black("off"), Ok(DarkEnd::Off));
+        assert!(DarkEnd::parse_floor("none").is_err());
         for (json, value) in [
-            ("6.5", DisplayBlack::StopsBelowMid(6.5)),
-            ("6", DisplayBlack::StopsBelowMid(6.0)),
-            ("\"off\"", DisplayBlack::Off),
+            (r#"{"floor": 4.5}"#, DarkEnd::Floor(4.5)),
+            (r#"{"black": 6}"#, DarkEnd::Black(6.0)),
+            (r#""off""#, DarkEnd::Off),
         ] {
-            let back: DisplayBlack = serde_json::from_str(json).unwrap();
+            let back: DarkEnd = serde_json::from_str(json).unwrap();
             assert_eq!(back, value);
             assert_eq!(
-                serde_json::from_str::<DisplayBlack>(&serde_json::to_string(&value).unwrap())
-                    .unwrap(),
+                serde_json::from_str::<DarkEnd>(&serde_json::to_string(&value).unwrap()).unwrap(),
                 value
             );
         }
-        assert!(serde_json::from_str::<DisplayBlack>("\"none\"").is_err());
-        assert!(serde_json::from_str::<DisplayBlack>("true").is_err());
-        for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
-            let Err(DisplayBlackFault(v)) = DisplayBlack::StopsBelowMid(bad).check() else {
-                panic!("{bad} accepted");
-            };
-            assert_eq!(v.to_bits(), bad.to_bits());
+        for bad in [
+            r#""none""#,
+            "true",
+            "6",
+            r#"{"floor": 4, "black": 6}"#,
+            r#"{"floor": "off"}"#,
+        ] {
+            assert!(serde_json::from_str::<DarkEnd>(bad).is_err(), "{bad}");
         }
-        assert_eq!(
-            DisplayBlack::StopsBelowMid(MAX_DISPLAY_BLACK_STOPS).check(),
-            Ok(())
-        );
-        assert_eq!(DisplayBlack::Off.check(), Ok(()));
+        for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
+            for setting in [DarkEnd::Floor(bad), DarkEnd::Black(bad)] {
+                let Err(DarkEndFault(v)) = setting.check() else {
+                    panic!("{setting:?} accepted");
+                };
+                assert_eq!(v.to_bits(), bad.to_bits());
+            }
+        }
+        assert_eq!(DarkEnd::Black(MAX_DARK_END_STOPS).check(), Ok(()));
+        assert_eq!(DarkEnd::Off.check(), Ok(()));
+        assert_eq!(DarkEnd::default(), DarkEnd::Floor(DEFAULT_DARK_FLOOR_STOPS));
     }
 
     #[test]
@@ -1042,8 +1154,9 @@ mod tests {
         let params = |stops| FitRangeParams {
             headroom_stops: stops,
             peak: DisplayPeak::SDR,
-            display_black: DisplayBlack::Off,
+            dark_end: DarkEnd::Off,
             film_base: 0.0138,
+            frame_dark: None,
         };
         let r = params(DEFAULT_HEADROOM_STOPS).resolved();
         assert_eq!(r.operator, OPERATOR);

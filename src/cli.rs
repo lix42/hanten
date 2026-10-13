@@ -1207,19 +1207,36 @@ pub struct DisplayOverrides {
         allow_hyphen_values = true
     )]
     pub display_tone_headroom: Option<f32>,
+    /// The dark floor: the frame's darkest 1 % (its measured dark end, from `hanten
+    /// measure-roll`) renders no deeper than this many stops below mid-grey on the
+    /// display, or `off` (recipe key `fit_range.dark_end`, `{"floor": STOPS}`; the
+    /// `default` rendering's, at 4.5, about L* 7; `direct` has display black instead). A
+    /// frame whose dark end renders deeper is lifted, the lift fading to nothing at
+    /// mid-grey and capped at a third of the way there (the report warns when the cap
+    /// holds it short); a lighter one is left alone. It holds the shadows of a steep
+    /// `--contrast`. Without a measured dark end it does nothing. Mid-grey and everything
+    /// above it do not move.
+    #[arg(
+        long = "dark-floor",
+        value_name = "STOPS|off",
+        allow_hyphen_values = true,
+        value_parser = crate::pipeline::fit_range::DarkEnd::parse_floor,
+        conflicts_with = "display_black"
+    )]
+    pub dark_floor: Option<crate::pipeline::fit_range::DarkEnd>,
     /// Display black: where the film base — the darkest thing on the film — renders,
-    /// in stops below mid-grey on the display, or `off` (recipe key
-    /// `fit_range.display_black`, default `off`; 6 is about L* 2.5). Fewer stops give lighter
-    /// shadows with more detail, more stops a deeper black. Display stops, not scene
-    /// stops: where the base lands before this is set by the look's slope, and a
-    /// base already that deep is left alone. Mid-grey and everything above it do not
-    /// move.
+    /// in stops below mid-grey on the display, or `off` (recipe key `fit_range.dark_end`,
+    /// `{"black": STOPS}`; `--rendering direct` pins 6, about L* 2.5). It replaces the
+    /// dark floor: the two set one key. Fewer stops give lighter shadows with more
+    /// detail, more stops a deeper black. A base already that deep is left alone.
+    /// Mid-grey and everything above it do not move.
     #[arg(
         long = "display-black",
         value_name = "STOPS|off",
-        allow_hyphen_values = true
+        allow_hyphen_values = true,
+        value_parser = crate::pipeline::fit_range::DarkEnd::parse_black
     )]
-    pub display_black: Option<crate::pipeline::fit_range::DisplayBlack>,
+    pub display_black: Option<crate::pipeline::fit_range::DarkEnd>,
 }
 
 /// The removed chain's print controls (`nf-core/default-flip`), and the two display
@@ -2103,6 +2120,28 @@ fn reject_a_line_without_its_gains(args: &ConversionFlags, r: &Recipe) -> Result
         "--midtone-neutral on asks for the roll's midtone line, which is measured after its \
          white balance and goes off with it under {off}: {remedy}"
     )))
+}
+
+/// `--dark-floor STOPS` under `direct`: the floor holds a frame's measured dark end, and
+/// `direct` leaves the roll's measurements out, so it could never act. Its `off` is spared:
+/// it turns off `direct`'s display black. A film master is left to its own refusal, whose
+/// remedy works where `--rendering default` alone would not.
+fn reject_a_floor_nothing_measures(args: &ConversionFlags, r: &Recipe) -> Result<()> {
+    if r.rendering != crate::rendering::Rendering::Direct
+        || r.output == OutputSection::FilmMaster
+        || !matches!(
+            args.display.dark_floor,
+            Some(crate::pipeline::fit_range::DarkEnd::Floor(_))
+        )
+    {
+        return Ok(());
+    }
+    Err(NcError::Usage(
+        "--dark-floor holds a frame's measured dark end, but the rendering is `direct` \
+         (--rendering, recipe `rendering`), which leaves the roll's measurements out, so it \
+         has none to hold. Either drop --dark-floor, or pass --rendering default"
+            .into(),
+    ))
 }
 
 /// Refuse typed roll flags when nothing will apply them: a recipe's film master (a typed
@@ -3084,7 +3123,7 @@ fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool, on_roll: bool)
         (
             "--clip-low",
             args.simple.clip_low.is_some(),
-            "--display-black (recipe `fit_range.display_black`), which places black",
+            "--display-black (recipe `fit_range.dark_end`), which places black",
         ),
         (
             "--clip-high",
@@ -3178,7 +3217,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
         return Some(
             "--black-point was removed with the print stage: it was one linear subtraction \
              on film RGB. Where black renders is now display black, `--display-black` \
-             (recipe `fit_range.display_black`), which places the film base in stops below \
+             (recipe `fit_range.dark_end`), which places the film base in stops below \
              mid-grey. There is no alias."
                 .into(),
         );
@@ -3196,7 +3235,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
         return Some(
             "--linear-range was removed with the print stage: the levels remap retired, \
              since its gain is `--exposure` (recipe `scene_correction.exposure`) and its \
-             black is `--display-black` (recipe `fit_range.display_black`). There is no \
+             black is `--display-black` (recipe `fit_range.dark_end`). There is no \
              alias."
                 .into(),
         );
@@ -4076,7 +4115,8 @@ enum DestinationPixels {
         map: gain_encode::GainMapImage,
         headroom: f32,
         clamp: hdr::PeakClamp,
-        report: GainMapResult,
+        /// Boxed: its gain range and fit-range account dwarf the other arms.
+        report: Box<GainMapResult>,
     },
 }
 
@@ -4135,7 +4175,7 @@ impl DestinationRender {
             Self::Rendered {
                 pixels: DestinationPixels::GainMap { report, .. },
                 ..
-            } => Some(*report),
+            } => Some(**report),
             Self::Rendered { .. } | Self::FilmMaster { .. } => None,
         }
     }
@@ -4348,7 +4388,7 @@ fn render_gain_map(
             map,
             headroom: peak.value(),
             clamp,
-            report,
+            report: Box::new(report),
         },
     };
     Ok((render, staged))
@@ -4536,11 +4576,40 @@ fn render_frame(
         DestinationRender::Rendered { rendered, .. } => Some(rendered),
         DestinationRender::FilmMaster { .. } => None,
     };
-    if let Some(message) = rendered.and_then(|r| r.fit_range.display_black.warning()) {
+    if let Some(message) = rendered.and_then(|r| r.fit_range.dark_end.warning()) {
         push_warning_buf(warnings, log, message);
     }
+    // Only a floor the user stated is owed a word: the default's is silent where a frame
+    // has no measured dark end, as on any unmeasured roll.
+    if rendered.is_some_and(|r| r.fit_range.dark_end.floor_unread())
+        && matches!(
+            recipe.fit_range.dark_end,
+            Some(fit_range::DarkEnd::Floor(_))
+        )
+    {
+        let measured = recipe.roll.white_stops.is_some() || !recipe.roll.frames.is_empty();
+        let remedy = if !recipe.base().applies_roll {
+            "the `direct` rendering leaves the roll's measurements out; render with \
+             `--rendering default` and the roll's recipe"
+        } else if measured {
+            "the roll is measured, but no tones reach this frame: its `roll.frames` entry \
+             (keyed by file name) is missing or has no `tones` — a renamed file, one \
+             `hanten measure-roll` was not given, or an entry written before tones — or the \
+             roll was typed without `--roll-frame-tones`; measure it with its roll"
+        } else {
+            "measure the roll with `hanten measure-roll` and render with its recipe"
+        };
+        push_warning_buf(
+            warnings,
+            log,
+            format!(
+                "the dark floor (`--dark-floor`, recipe `fit_range.dark_end`) was set, but \
+                 this frame has no measured dark end to hold, so it did nothing: {remedy}"
+            ),
+        );
+    }
     if let Some(r) =
-        rendered.filter(|r| r.fit_range.display_black.setting == fit_range::DisplayBlack::Off)
+        rendered.filter(|r| !matches!(r.fit_range.dark_end.setting, fit_range::DarkEnd::Black(_)))
     {
         let slope = recipe.resolved_slope();
         let inputs = black_endpoint::Inputs {
@@ -4555,7 +4624,7 @@ fn render_frame(
                     recipe.scene_correction.white_balance;
                 gains
             },
-            film_base_stops: r.fit_range.display_black.film_base_stops,
+            film_base_stops: r.fit_range.dark_end.film_base_stops,
             headroom_stops: r.fit_range.headroom_stops,
             contrast: slope.contrast,
             base_slope: slope.base_slope,
@@ -4810,6 +4879,7 @@ fn convert_attempt(
     // Flag-presence rules, ahead of every value rule that could refuse first.
     reject_a_line_without_its_gains(&args.knobs, &recipe)?;
     reject_roll_flags_nothing_applies(&args.knobs, &recipe)?;
+    reject_a_floor_nothing_measures(&args.knobs, &recipe)?;
     let typed = &args.knobs.roll;
     if typed.roll_frame_tones.is_none()
         && let Some(lift) = [
@@ -6488,6 +6558,7 @@ fn measure_for_roll(
     reject_roll_unsupported_input(&shared)?;
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
+    reject_a_floor_nothing_measures(&args.knobs, &shared)?;
     recipe::validate(&shared, KnobNames::FlagAndKey)?;
     validate_shared_stated(&shared)?;
     let inputs = roll_inputs(&args.inputs)?;
@@ -6738,6 +6809,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
+    reject_a_floor_nothing_measures(&args.knobs, &shared)?;
     reject_a_lift_for_every_frame(&args.knobs, &shared, args.measures())?;
 
     // Validated once up front so a broken recipe fails loudly before any frame is

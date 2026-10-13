@@ -258,8 +258,9 @@ mod tests {
         let params = FitRangeParams {
             headroom_stops: 0.0,
             peak,
-            display_black: fit_range::DisplayBlack::Off,
+            dark_end: fit_range::DarkEnd::Off,
             film_base: 1.0,
+            frame_dark: None,
         };
         (fit_range::apply(graded, &params).unwrap(), input)
     }

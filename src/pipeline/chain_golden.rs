@@ -62,7 +62,7 @@ use crate::algo::fixed::{self, DENSITY_OFFSET, DecodeParams, SCAN_FLOOR};
 use crate::pipeline::chain::{self, ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitRangeParams};
+use crate::pipeline::fit_range::{self, DarkEnd, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
 use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::scene_correction::{
@@ -651,14 +651,15 @@ fn golden_midtone_neutral_is_correct_within_its_libm_window() {
 
 /// Fit range at `headroom_stops` against `peak`.
 ///
-/// Display black off: reinhard alone is IEEE arithmetic and pinned bit for bit here;
-/// display black calls `log2` and `exp2`, and has its own windowed golden.
+/// The dark end off: reinhard alone is IEEE arithmetic and pinned bit for bit here;
+/// the dark end calls `log2` and `exp2`, and each setting has its own windowed golden.
 fn fit_range_params(headroom_stops: f32, peak: DisplayPeak) -> FitRangeParams {
     FitRangeParams {
         headroom_stops,
         peak,
-        display_black: DisplayBlack::Off,
+        dark_end: DarkEnd::Off,
         film_base: FILM_BASE,
+        frame_dark: None,
     }
 }
 
@@ -849,7 +850,7 @@ const FIT_RANGE_BLACK: [u32; 21] = [
 #[test]
 fn golden_display_black_is_correct_within_its_libm_window() {
     let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
-    params.display_black = DisplayBlack::StopsBelowMid(fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+    params.dark_end = DarkEnd::Black(fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
     params.film_base = BLACK_FILM_BASE;
     let out = through_fit_range(&params).into_buffer().into_linear().rgb;
     let input = finite_aces().rgb().to_vec();
@@ -896,6 +897,123 @@ fn golden_display_black_is_correct_within_its_libm_window() {
             &out[p * 3..p * 3 + 3],
             &FIT_RANGE_SDR[p * 3..p * 3 + 3],
         );
+    }
+}
+
+/// The floor's golden frame dark end, graded: it renders ≈ 5.1 stops under mid-grey, so
+/// the default 4.5-stop floor lifts it by ≈ 0.6, under the cap.
+const FLOOR_FRAME_DARK: f32 = 0.0042;
+
+/// Fit range at the default SDR headroom with the default floor, one pixel written out
+/// independently of the stage, as [`black_fit_range_pixel`]. The libm results: the
+/// frame's `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), the pixel's `log2(y)` (3)
+/// and `exp2` (4), then the frame's `2^−4.5` (5), not a whole stop. The cap does not
+/// bind on [`FLOOR_FRAME_DARK`] (the test asserts it), so its `log2` is left out.
+fn floor_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32; 3] {
+    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+    let k = 1.0 - 0.18;
+    let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
+    let reinhard = |v: f32| {
+        let u = f64::from(v) * gain;
+        (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32
+    };
+    let b = f64::from(reinhard(FLOOR_FRAME_DARK));
+    let target = 0.18 * libm(5, (-f64::from(fit_range::DEFAULT_DARK_FLOOR_STOPS)).exp2());
+    let stops = libm(0, (target / b).log2());
+    let base = libm(1, b.log2());
+    let knee = libm(2, 0.18f64.log2());
+    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let scale = if y <= 0.0 {
+        (gain * libm(4, stops.exp2())) as f32
+    } else {
+        let r = reinhard(y);
+        let v = f64::from(r);
+        let shifted = if v >= 0.18 {
+            r
+        } else {
+            let u = ((libm(3, v.log2()) - base) / (knee - base)).clamp(0.0, 1.0);
+            (v * libm(4, (stops * (1.0 - u * u * (3.0 - 2.0 * u))).exp2())) as f32
+        };
+        shifted / y
+    };
+    px.map(|c| c * scale)
+}
+
+/// [`finite_aces`] through fit range at the default SDR headroom with the default floor
+/// and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of [`FIT_RANGE_BLACK`],
+/// lifted where display black darkened. Captured 2026-10-12 when the floor landed
+/// (`nf-display-stages/midtone-contrast-toe`).
+const FIT_RANGE_FLOOR: [u32; 21] = [
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d607ed9, 0x3c9dfab3, 0x3f730441, 0x3f0b3c44, 0x3d864902,
+    0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
+    0x00000000, 0x00000000, 0x3bcc75bd, 0x3bf2642d, 0x3b8b19d5,
+];
+
+#[test]
+fn golden_dark_floor_is_correct_within_its_libm_window() {
+    let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
+    params.dark_end = DarkEnd::default();
+    params.frame_dark = Some(FLOOR_FRAME_DARK);
+    // The cap stays out of the oracle: it must not bind here.
+    let floor = params.resolved().dark_end;
+    let dark = floor.frame_dark_stops.unwrap();
+    assert!(
+        floor.shift_stops < dark * fit_range::MAX_LIFT_SHARE as f32 / 2.0,
+        "{floor:?}"
+    );
+    let out = through_fit_range(&params).into_buffer().into_linear().rgb;
+    let input = finite_aces().rgb().to_vec();
+    let host = |_: usize, v: f64| v;
+    let mut widest = 0;
+    for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
+        let centre = floor_fit_range_pixel(*px, &host);
+        // Every combination of the six libm results at this host's value and two f64
+        // ULPs either side, as display black's.
+        let offsets = (0..5_u32.pow(6)).map(|n| {
+            let mut ks = [0_i32; 6];
+            for (call, k) in ks.iter_mut().enumerate() {
+                *k = (n / 5_u32.pow(call as u32) % 5) as i32 - 2;
+            }
+            ks
+        });
+        let reachable: Vec<[f32; 3]> = offsets
+            .map(|ks| floor_fit_range_pixel(*px, &move |n: usize, v: f64| perturbed(v, ks[n])))
+            .collect();
+        for (c, &centre_c) in centre.iter().enumerate() {
+            let i = p * 3 + c;
+            let want = FIT_RANGE_FLOOR[i];
+            assert_eq!(
+                centre_c.to_bits(),
+                want,
+                "sample {i}: capture integrity ({:08x})",
+                centre_c.to_bits()
+            );
+            let window = reachable
+                .iter()
+                .map(|r| ulps_between(r[c], centre_c))
+                .max()
+                .unwrap();
+            widest = widest.max(window);
+            let drift = ulps_between(out[i], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `fit-range (dark floor)` sample {i}: {drift} ULP from the capture, \
+                 outside the {window} ULP a conforming libm can reach"
+            );
+        }
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+    // Mid-grey and everything above it are bit-identical to reinhard alone, and the
+    // shadows are lifted, never darkened.
+    for p in [0, 2, 3, 4] {
+        assert_stage_bits(
+            "fit-range (dark floor, at or above mid-grey)",
+            &out[p * 3..p * 3 + 3],
+            &FIT_RANGE_SDR[p * 3..p * 3 + 3],
+        );
+    }
+    for i in [3, 4, 5, 18, 19, 20] {
+        assert!(out[i] > f32::from_bits(FIT_RANGE_SDR[i]), "sample {i}");
     }
 }
 
@@ -1399,7 +1517,8 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
             midtone: None,
             look: LookParams::off(),
             headroom_stops: DEFAULT_HEADROOM_STOPS,
-            display_black: DisplayBlack::Off,
+            dark_end: DarkEnd::Off,
+            frame_dark_stops: None,
         },
         target: SDR_P3,
     }
@@ -1450,18 +1569,18 @@ fn golden_the_chain_threaded_is_bit_identical() {
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             white_point: 64.0,
             display_peak: DisplayPeak::SDR,
-            display_black: rendered.fit_range.display_black,
+            dark_end: rendered.fit_range.dark_end,
         },
         "chain (threaded): the fit range the render reports"
     );
     assert_eq!(
         (
-            rendered.fit_range.display_black.setting,
-            rendered.fit_range.display_black.curve,
-            rendered.fit_range.display_black.shift_stops,
+            rendered.fit_range.dark_end.setting,
+            rendered.fit_range.dark_end.curve,
+            rendered.fit_range.dark_end.shift_stops,
         ),
-        (DisplayBlack::Off, fit_range::IDENTITY, 0.0),
-        "chain (threaded): display black, off"
+        (DarkEnd::Off, fit_range::IDENTITY, 0.0),
+        "chain (threaded): the dark end, off"
     );
     let (out, gamut) = rendered.image.into_parts();
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
@@ -1494,7 +1613,8 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
             midtone: None,
             look,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
-            display_black: DisplayBlack::Off,
+            dark_end: DarkEnd::Off,
+            frame_dark_stops: None,
         },
         target: SDR_P3,
     };

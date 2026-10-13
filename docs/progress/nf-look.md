@@ -127,10 +127,10 @@ luminance only; saturation is its own slope.** Contrast scales the pixel whole b
 `Y′ / Y`; saturation stretches log channel ratios (`(x_c / max_c)^s`, luminance restored).
 The saturation slope is the colour's base slope × the rendering's saturation
 (`look::DEFAULT_SATURATION` 1.15 under `default`, chosen by review; 1 under `direct`) ×
-`look.saturation` / `--saturation` (default 1). A thin frame's slope never reaches colour:
-its colour base is the roll white's, else the fallback (`chain.look.saturation_base_from`).
-For `envelope-hybrid-placement`: a per-frame slope stays out of colour only if it arrives
-as `roll.thin_slope` does. No flag gives an identity look under `default` any more.
+`look.saturation` / `--saturation` (default 1). A placed frame's slope (the hybrid's or
+`frame`'s) and a thin frame's never reach colour: its colour base is the roll's slope, else
+the fallback (`chain.look.saturation_base_from`). No flag gives an identity look under
+`default` any more.
 
 **`look-presets` is done (2026-09-25): there are no look presets.** Nothing in the look
 is coupled the way the old bundles were, and a named look is a `--params` layer

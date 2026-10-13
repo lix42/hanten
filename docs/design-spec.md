@@ -324,7 +324,7 @@ decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 →
 | **NC film RGB v1** | the pinned 3×3 into linear ACEScg; `AcesCgImage` (§7.5) | `pipeline::working_space` |
 | **scene correction** | photographic corrections toward what the scene was: the roll's midtone neutral, white balance, exposure. Scene-referred, linear | `pipeline::scene_correction` |
 | **look** | creative and optional: contrast, saturation, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
-| **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place display black (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
+| **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place the dark end (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
 | **fit gamut** | change primaries into the destination's gamut and move out-of-gamut colour to its boundary, keeping hue | `pipeline::fit_gamut` |
 | **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere | `pipeline::color`, `io::encode`, `io::jpeg` |
 | **package** | container, ICC profile or CICP, metadata; for the gain map, the map itself | `io::*`, `pipeline::gain_ratio`, `pipeline::gain_encode`, `io::iso_gain_map` |
@@ -405,18 +405,29 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   mid-grey, the rendered white and the peak pinned, any smooth shoulder stays within
   about 0.15 stop of reinhard, and a brighter white lost in review
   (`nf-display-stages/parametric-shoulder`). Below mid-grey reinhard is nearly a gain,
-  so it leaves the dark end to **display black**: a shift in stops on luminance, whole
-  at the film base and below and fading to nothing at mid-grey, keyed on where the
-  decoded film base renders after the frame's grade. It is neither a subtraction
-  (which crushed frames to code 0) nor a toe inside the operator (which lost on colour
-  and shadow contrast) (`nf-display-stages/parametric-operator`). **Off under
-  `default`**: it was on (6 stops) while the roll's slope came from its white alone and
-  left the base pale; the slope from the roll's span and the hybrid placement now place
-  the dark end, and with it on, low-key frames were darkened throughout
-  (`nf-calibration/envelope-hybrid-placement`). With it off, a frame too washed out
-  to approach black warns (`pipeline::black_endpoint`): a look slope under any
-  placement's, or a frame placed too bright — its measured middle and dark end, or
-  without them its film base (a roll's exposure alone exempt).
+  so the stage places **the dark end** itself (`fit_range.dark_end`): a shift in stops
+  on luminance, whole at a reference and below and fading to nothing at mid-grey. It
+  is neither a subtraction (which crushed frames to code 0) nor a toe inside the
+  operator (which pushed black down and lost on colour and shadow contrast;
+  `nf-display-stages/parametric-operator`). Two settings of one key, since they pull
+  the same stops opposite ways:
+  - **The floor, `default`'s** (`nf-display-stages/midtone-contrast-toe`): the
+    frame's measured darkest 1 % (`roll.frames` entry `tones.dark_stops`), graded by
+    its own slope and exposure, is **lifted** to no deeper than 4.5 stops below
+    mid-grey (L\* ≈ 7), never pushed down. At the default slope the hybrid leaves no
+    reviewed frame under it; it holds the dark end of a steeper `look.contrast` (the
+    opt-in 1.3) and of a frame wider than the placement fits. Without measured tones
+    it cannot act.
+  - **Display black, `direct`'s**: the decoded film base, graded with the frame, is
+    **pushed down** to its target (6 stops), never lifted. It was `default`'s while the
+    roll's slope came from its white alone and left the base pale; with the slope from
+    the roll's span and the hybrid placement, it darkened low-key frames throughout
+    (`nf-calibration/envelope-hybrid-placement`).
+
+  Without display black, a frame too washed out to approach black warns
+  (`pipeline::black_endpoint`): a look slope under any placement's, or a frame placed
+  too bright — its measured middle and dark end, or without them its film base (a
+  roll's exposure alone exempt).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
   On the current chain it is nearly inert on HDR (one marked white changes). On SDR it moves 28–69 % of the brightest
@@ -453,7 +464,7 @@ knob starts from, and each has one principle (`crate::rendering`):
 | base slope (`look.contrast` and `look.saturation` multiply it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
 | saturation over the base slope's colour (`look.saturation` multiplies it) | 1, pinned | 1.15 |
 | highlight desaturation | off | 0.8 |
-| display black | 6 stops below mid-grey, pinned | off |
+| dark end | display black, 6 stops below mid-grey, pinned | the floor, 4.5 stops below mid-grey |
 | fit range | reinhard at 6 stops of headroom, pinned | 6 stops |
 | unset destination axes | HDR, `linear`, Adobe RGB, TIFF, container first (§5) | SDR, `native`, Display P3, TIFF |
 
@@ -891,7 +902,7 @@ top level, one section per stage in chain order, the destination last:
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": null, "start_stops": null, "band": null}
   },
-  "fit_range": {"headroom_stops": null, "display_black": null},
+  "fit_range": {"headroom_stops": null, "dark_end": null},
   "fit_gamut": {},
   "output": {"display": {"gamut": "adobe-rgb"}}
 }
@@ -1003,8 +1014,9 @@ re-derives it from the recipe:
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
     "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
                    "display_peak": 1.0,
-                   "display_black": { "setting": "off", "curve": "identity",
-                                      "film_base_stops": 4.96, "shift_stops": 0.0 } },
+                   "dark_end": { "setting": { "floor": 4.5 }, "curve": "identity",
+                                 "film_base_stops": 4.96, "frame_dark_stops": null,
+                                 "shift_stops": 0.0 } },
     "destination": { "display": { "range": "sdr", "transfer": "native", "gamut": "display-p3",
                                   "container": "tiff" } }
   }
@@ -1803,24 +1815,36 @@ by the curve's limit at black, so the scale is continuous there.
   (a value rule, so `roll` and per-frame overrides refuse it before any frame is
   decoded), unset `6` (`W = 64`); `0` is the identity. Beyond ~8 stops the operator
   converges on plain reinhard and extra headroom buys nothing.
-- `--display-black <stops|off>` ⇒ `fit_range.display_black`
-  (`nf-display-stages/parametric-operator`) — where the film base renders, in stops
-  below mid-grey on the display, `(0, 16]` or `"off"`, unset `6`. On reinhard's output
-  `y`, before the peak's lift: `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running
-  over `log2 y` from the base's rendered level `b` to mid-grey,
-  `shift = log2(0.18 · 2^−stops / b)`. `b` is the decoded film base
-  (`algo::fixed::decode_film_base`) graded with the frame (`chain::render`), so it
-  follows each frame's contrast and nothing is measured from the image. Mid-grey and
-  above are untouched, the slope is 1 below the base, a base already at or below the
-  target is left alone, and the channels scale together. A base rendering less than 2
-  stops under mid-grey (only a strong exposure reaches it) is warned about: the shift
-  crushes the narrow band there, and at or above mid-grey it is skipped.
+- `fit_range.dark_end` — `{"floor": stops}` (`--dark-floor`), `{"black": stops}`
+  (`--display-black`), or `"off"` (either flag's `off`); stops `(0, 16]` below
+  mid-grey on the display; unset, the rendering's (`default` the floor at 4.5, `direct`
+  black at 6). The two flags set one key, so they are refused together;
+  `fit_range.display_black` retired into it (refused naming `{"black": …}`, its `null`
+  read as unset). One curve on reinhard's output `y`, before the peak's lift:
+  `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running over `log2 y` from the
+  reference's rendered level `b` to mid-grey, `shift = log2(0.18 · 2^−stops / b)`.
+  Mid-grey and above are untouched, the slope is 1 below `b`, and the channels scale
+  together; nothing is measured from the image.
+  - **The floor** (`nf-display-stages/midtone-contrast-toe`): `b` is the frame's
+    measured darkest 1 % (`roll_white::FrameStops::dark_stops`) through the frame's
+    exposure, white balance and slope (`chain::graded_tone`, the placement's model).
+    Only a lift (`b` under the target); capped at a third of the stops from `b` to
+    mid-grey, which keeps the slope at or above one half; a frame the cap holds short is
+    warned about. Without measured tones (no measured roll, or `direct`) it does
+    nothing; stated then, the report warns, and a typed `--dark-floor STOPS` under
+    `direct` is refused before the decode.
+  - **Display black** (`nf-display-stages/parametric-operator`): `b` is the decoded
+    film base (`algo::fixed::decode_film_base`) graded with the frame
+    (`chain::render`). Only a push down; a base already at or below the target is left
+    alone. A base rendering less than 2 stops under mid-grey (only a strong exposure
+    reaches it) is warned about: the shift crushes the narrow band there, and at or
+    above mid-grey it is skipped.
 
 The report's `chain.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
 `identity` at zero headroom) with its headroom, white point and display peak, and
-`display_black` with its setting, curve (`log-shift-to-mid-grey-v1` or `identity`),
-where the base rendered without it (`film_base_stops`) and the shift applied
-(`shift_stops`).
+`dark_end` with its setting, curve (`log-shift-to-mid-grey-v1` or `identity`), where
+the film base and the frame's darkest 1 % render without it (`film_base_stops`,
+`frame_dark_stops`, `null` without tones) and the shift applied (`shift_stops`).
 
 ### Fit gamut (`fit_gamut`)
 No knob; the section is empty. It changes primaries into the destination's gamut
@@ -2209,8 +2233,8 @@ src/
     ├── midtone_neutral.rs  # the roll's midtone line: measured, and removed per pixel
     ├── correction_confidence.rs  # measure-roll: how far to trust the white balance and line
     ├── look.rs             # contrast, saturation, per-channel grade, highlight desaturation
-    ├── fit_range.rs        # reinhard to the display's peak, display black
-    ├── black_endpoint.rs   # the washed-out-black warning, with display black off
+    ├── fit_range.rs        # reinhard to the display's peak, the dark end
+    ├── black_endpoint.rs   # the washed-out-black warning, without display black
     ├── fit_gamut.rs        # into the destination's gamut, radial to its boundary
     ├── hdr.rs              # the HDR hand-off: peak clamp, PQ/HLG transfer
     ├── gain_ratio.rs       # per-channel gain between a gain map's renditions
@@ -2461,6 +2485,6 @@ Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for 
 film master (§6); the recipe travels in the report, not the image container (§5);
 reinhard over a parametric shoulder (§6); a separate contrast and per-channel grade
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
-(§6); one black point, fit range's display black (§6); the fallback slope without a
+(§6); one dark end, fit range's floor or display black (§6); the fallback slope without a
 roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
 stands (`nf-calibration/white-rule-hdr`).
