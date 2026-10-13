@@ -175,15 +175,16 @@ pub const DENSITY_SCALE: [f32; 3] = [1.0, 0.84, 0.73];
 pub const DENSITY_OFFSET: [f32; 3] = [0.0; 3];
 
 /// Floor applied to the scan transmission before the `log10`, so a dead pixel
-/// becomes a very high but finite density rather than `-inf`/`NaN`. `1e-6` ≈ −20
-/// stops below unity: darker than any real detail, with headroom before the curve
-/// can overflow f32.
+/// becomes a very high but finite density rather than `-inf`/`NaN`. One 16-bit step,
+/// the smallest non-zero sample the decoder accepts: a zero (the holder) reads as the
+/// densest value the scanner records. Lower costs the look its overflow headroom
+/// (`recipe::validate_render`) for detail no scan holds.
 ///
 /// It floors every **finite** sample below it — non-positive, denormal and ordinary
-/// normal positives alike (`1e-6` is itself normal in f32). A **non-finite** sample is
+/// normal positives alike. A **non-finite** sample is
 /// not floored: it propagates as `NaN`, so `io::encode`'s non-finite counter still
 /// surfaces corrupt input rather than seeing a plausible pixel.
-pub(crate) const SCAN_FLOOR: f32 = 1e-6;
+pub(crate) const SCAN_FLOOR: f32 = 1.0 / u16::MAX as f32;
 
 /// Which tone the decode pins, and at what density.
 ///

@@ -490,26 +490,6 @@ impl RollSection {
         self.thin_slope = None;
         self.thin_exposure = None;
     }
-
-    /// Undo what [`Recipe::for_frame`] moved in from `entry`, back to the `stated`
-    /// section's values; a value a later layer beat stays.
-    fn undo_entry(&mut self, entry: &FrameRoll, stated: &RollSection) {
-        if entry.white_stops.is_some() && entry.white_stops == self.white_stops {
-            self.white_stops = stated.white_stops;
-        }
-        if entry.exposure.is_some() && entry.exposure == self.frame_exposure {
-            self.frame_exposure = stated.frame_exposure;
-        }
-        if entry.thin_slope.is_some() && entry.thin_slope == self.thin_slope {
-            self.thin_slope = stated.thin_slope;
-        }
-        if entry.thin_exposure.is_some() && entry.thin_exposure == self.thin_exposure {
-            self.thin_exposure = stated.thin_exposure;
-        }
-        if entry.tones.is_some() && entry.tones == self.frame_tones {
-            self.frame_tones = stated.frame_tones;
-        }
-    }
 }
 
 /// The recipe's `look` keys: the stage's [`LookSection`] with the rendering-dependent
@@ -2086,9 +2066,9 @@ pub fn validate_roll_frames(
 /// through the decode, scene correction and the look, and the film base grades to a
 /// positive luminance for display black. Fit range refuses either as a wiring bug.
 /// Run by `convert` and `roll` (not `measure-roll`, which renders nothing) after
-/// `cli::validate_shared`, for `r` and each `roll.frames` entry. `own` names `r`'s frame
-/// and its roll section before [`Recipe::for_frame`]: a fault the frame's entry causes is
-/// named as the entry, and the other entries are probed without what it moved in.
+/// `cli::validate_shared`, on the recipe a frame renders: another frame's `roll.frames`
+/// entry is that frame's to refuse. `own` names `r`'s frame and its roll section before
+/// [`Recipe::for_frame`], so a fault the frame's entry causes is named as the entry.
 ///
 /// **A probe, not a bound per knob** — legal values can multiply to zero or overflow:
 /// the film base and the corners of the reachable scan range (each channel at the scan
@@ -2103,18 +2083,16 @@ pub fn validate_render(
         return Ok(());
     }
     let own_entry = own.and_then(|(name, stated)| Some((name, stated.frames.get(name)?)));
-    // The recipe without this frame's entry: what dropping an entry's value renders.
-    let mut others = r.clone();
-    if let (Some((_, entry)), Some((_, stated))) = (own_entry, own) {
-        others.roll.undo_entry(entry, stated);
-    }
-    let roll_white = others.roll.white_stops;
-    render_fault_message(r, own_entry, None, roll_white, names)?;
-    for (name, entry) in &r.roll.frames {
-        let frame = others.clone().for_frame(Path::new(name));
-        render_fault_message(&frame, Some((name, entry)), Some(name), roll_white, names)?;
-    }
-    Ok(())
+    // The roll's white without this frame's entry: what dropping the entry's renders.
+    let roll_white = match (own_entry, own) {
+        (Some((_, e)), Some((_, stated)))
+            if e.white_stops.is_some() && e.white_stops == r.roll.white_stops =>
+        {
+            stated.white_stops
+        }
+        _ => r.roll.white_stops,
+    };
+    render_fault_message(r, own_entry, roll_white, names)
 }
 
 /// What stops a recipe rendering ([`validate_render`]).
@@ -2303,7 +2281,6 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
 fn render_fault_message(
     r: &Recipe,
     own: Option<(&str, &FrameRoll)>,
-    entry: Option<&str>,
     roll_white: Option<f32>,
     names: KnobNames,
 ) -> Result<()> {
@@ -2406,7 +2383,6 @@ fn render_fault_message(
                 .join(", ")
         ),
     };
-    let frame = entry.map_or(String::new(), |e| format!("recipe `roll.frames.\"{e}\"`: "));
     let fault = match fault {
         RenderFault::Base(luminance) => format!(
             "the film base renders to luminance {} after the decode, scene correction and \
@@ -2427,7 +2403,7 @@ fn render_fault_message(
             }
         ),
     };
-    Err(NcError::Usage(format!("{frame}{fault}{remedy}")))
+    Err(NcError::Usage(format!("{fault}{remedy}")))
 }
 
 /// Scene correction's value rules ([`SceneCorrectionParams::check`]), rendered as a
@@ -6154,7 +6130,7 @@ mod tests {
     fn a_dropped_entry_white_is_probed_at_the_rolls_own() {
         // Both the entry's slope and the roll's fault at this contrast; only the fallback,
         // which dropping the entry does not reach, renders. So the entry is no remedy.
-        let json = r#"{"recipe_version": 3, "look": {"contrast": 2},
+        let json = r#"{"recipe_version": 3, "look": {"contrast": 2.4},
             "roll": {"white_stops": 2.5, "dark_stops": -1, "exposure": 0,
                 "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
@@ -6176,34 +6152,26 @@ mod tests {
     fn a_roll_entry_is_named_as_itself() {
         // The entry's span slope is held at the maximum, which a contrast the roll's own
         // slope takes renders past; the roll's does not.
-        let json = r#"{"recipe_version": 3, "look": {"contrast": 1.5},
+        let json = r#"{"recipe_version": 3, "look": {"contrast": 1.9},
             "roll": {"white_stops": 2.5, "dark_stops": -1, "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
-        let err = render_err(json, &[]).unwrap();
-        assert!(
-            err.starts_with(r#"recipe `roll.frames."b.tif"`: "#),
-            "{err}"
-        );
-        // Dropping the entry's white alone is the remedy: the frame then takes the roll's
-        // pair, so the dark end is not named with it.
-        assert!(
-            err.ends_with(r#"recipe `roll.frames."b.tif".white_stops` at its default"#),
-            "{err}"
-        );
-        assert!(
-            !err.contains("--roll-white") && !err.contains("dark_stops"),
-            "{err}"
-        );
+        // The entry is its frame's to refuse, not the roll's.
+        assert_eq!(render_err(json, &[]), None);
         // `convert` of that frame: the entry moved into `roll.white_stops`, and is still
         // named as the entry; a flag that beats it is named as the flag.
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
         let own = Some(("b.tif", &stated.roll));
         let frame = stated.clone().for_frame(Path::new("b.tif"));
         let err = validate_render(&frame, own, KnobNames::FlagAndKey).unwrap_err();
+        // Dropping the entry's white alone is the remedy: the frame then takes the roll's
+        // pair, so the dark end is not named with it.
+        let msg = err.message();
         assert!(
-            err.message()
-                .contains(r#"recipe `roll.frames."b.tif".white_stops`"#),
-            "{}",
-            err.message()
+            msg.ends_with(r#"recipe `roll.frames."b.tif".white_stops` at its default"#),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("--roll-white") && !msg.contains("dark_stops"),
+            "{msg}"
         );
         // A typed white is the roll's, dropped with its dark end.
         let mut beaten = frame;
@@ -6290,17 +6258,16 @@ mod tests {
     }
 
     #[test]
-    fn another_entry_is_probed_without_this_frames_values() {
-        // `a.tif`'s steep thin slope and `b.tif`'s exposure each render; only together would
-        // the densest sample overflow, and no frame renders both.
-        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "frames": {
-            "a.tif": {"thin_slope": 3.09}, "b.tif": {"exposure": 16}}}}"#;
+    fn another_frames_entry_does_not_refuse_this_one() {
+        // `b.tif`'s entry overflows the densest sample; `a.tif` renders without it.
+        let json = r#"{"recipe_version": 3, "look": {"contrast": 1.9},
+            "roll": {"white_stops": 2.5, "dark_stops": -1, "frames": {"b.tif": {"white_stops": 0.001}}}}"#;
         let stated = merged(json, &["--film-base", "0.9,0.55,0.42"]);
-        let frame = stated.clone().for_frame(Path::new("a.tif"));
-        let mut both = frame.clone();
-        // A thin slope takes its own exposure in place of the small lift.
-        both.roll.thin_exposure = Some(16.0);
-        assert!(render_fault(&both).unwrap().is_some(), "not vacuous");
-        validate_render(&frame, Some(("a.tif", &stated.roll)), KnobNames::FlagAndKey).unwrap();
+        let probe = |name: &str| {
+            let frame = stated.clone().for_frame(Path::new(name));
+            validate_render(&frame, Some((name, &stated.roll)), KnobNames::FlagAndKey)
+        };
+        assert!(probe("b.tif").is_err(), "not vacuous");
+        probe("a.tif").unwrap();
     }
 }

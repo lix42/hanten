@@ -2407,6 +2407,78 @@ fn roll_rejects_colorimetric_shared_recipe_before_decode() {
     );
 }
 
+#[test]
+fn an_overflowing_entry_refuses_its_own_frame_only() {
+    // `hdri-64bit.tif`'s entry overflows the densest sample at this contrast; the roll's
+    // own slope does not.
+    let tmp = TempDir::new("overflow-entry");
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "look": {"contrast": 1.9},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.5, "dark_stops": -1,
+                "frames": {"hdri-64bit.tif": {"white_stops": 0.001}}}}"#,
+    );
+    let params = recipe.to_str().unwrap();
+    let out = tmp.path("hdr.tiff");
+    let (code, _, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--params",
+        params,
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "a neighbour's entry must not refuse this frame: {err}"
+    );
+
+    let out_dir = tmp.path("out");
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        fixture("hdri-64bit.tif").to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        params,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("hdri-64bit.tif: the densest sample")
+            && err.contains(r#"recipe `roll.frames."hdri-64bit.tif".white_stops`"#),
+        "{err}"
+    );
+    assert!(!out_dir.exists(), "refused before any frame is rendered");
+
+    // A manifest override beats every flag, so its refusal names the key alone.
+    let hdr = fixture("hdr-48bit.tif");
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [{{ "input": {:?}, "params": {{ "recipe_version": 3, "look": {{ "contrast": 60 }} }} }}] }}"#,
+            hdr.to_str().unwrap()
+        ),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        params,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("the densest sample")
+            && err.contains("`look.contrast`")
+            && !err.contains("--contrast"),
+        "{err}"
+    );
+}
+
 // --- XMP-based SilverFast provenance gate (adversarial-review hardening) ------
 
 /// Attribute list for a genuine raw negative scan.
@@ -16665,7 +16737,7 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
         &recipe,
         r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
-            "look": {"contrast": 1.5},
+            "look": {"contrast": 1.9},
             "roll": {"white_stops": 2.5, "dark_stops": -1, "exposure": 0,
                 "frames": {"hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
     )

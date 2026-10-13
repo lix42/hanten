@@ -142,6 +142,13 @@ Frame whites sit 0.4–2.3 stops above diffuse white, low on the 6-stop ramp tha
 HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 and 09-14
 (`docs/reports/gamut-map-share.md`'s dated note).
 
+**`overflow-probe-scope` is done (2026-10-13): the scan floor is one 16-bit step**
+(`SCAN_FLOOR` = 1/65535, was 1e-6; only exact zeros move, none on the archive, so no
+`pipeline_version` bump), which lifts the densest-sample probe's slope limit from ~4.4 to
+~5.4–5.9; and the probe checks only the recipe a frame renders, so one frame's
+`roll.frames` entry no longer refuses its neighbours. `--placement frame --contrast 1.3`
+renders 09-18 and 09-29 whole.
+
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
 slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
@@ -2076,8 +2083,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## overflow-probe-scope
 
-**Status:** not started
-**Updated:** 2026-10-12
+**Status:** done
+**Updated:** 2026-10-13
 
 - 2026-10-12: filed (user) from `nf-display-stages/midtone-contrast-toe` step 4: under
   `--placement frame --contrast 1.3`, `recipe::validate_render`'s densest-sample probe (a
@@ -2086,3 +2093,40 @@ frames; the look's default contrast is `no-roll-defaults`'.
   `roll.frames` entry is checked, the measured recipe refuses both whole rolls. On 1789 the
   limit is between slope 4.33 and 4.50; the pre-toe binary refuses the same. Set:
   `../temp/midtone-contrast-toe-placement/`.
+- 2026-10-12: **implemented (user chose both fixes).**
+  - **The scan floor is one 16-bit step** (`SCAN_FLOOR` = 1/65535, was 1e-6). The decoder
+    takes only 16-bit samples, so 1e-6 sat 15× under anything a scanner records; the probe
+    reads the same constant, so the decode and the probe move together. The densest sample
+    loses 1.18 density (~7 stops). On `../nc-assets` (13 roll folders, 184 scans) **no scan holds a
+    zero sample**, holder included, so no real frame's pixels move: the drift gate stays
+    green, and no `pipeline_version` bump. The decode golden's three floored samples were
+    recaptured.
+  - **The probe checks the recipe a frame renders** (`recipe::validate_render`). `convert`
+    probes its own frame; `roll` probes every frame it plans, including those its manifest
+    leaves alone, all before any decode, so a frame that overflows still refuses the run.
+  - Under `--placement frame --contrast 1.3` with the whole-roll recipes, all 11 frames now
+    render (slope up to 4.55, exposure up to +2.24 EV). The new limit is between slope 5.42
+    (×1.55, renders) and 5.95 (×1.7, refused, naming `--contrast`).
+- 2026-10-13: **`/code-review` round** (10 findings; 6 fixed). The render probe moved out of
+  `validate_roll_recipe` and `resolve_frames` to one place, `cli::probe_planned_frames`,
+  after the post-measurement plan and the placement rules: measure mode no longer probes
+  before its base and whites exist, the roll's own recipe (which a frame with an entry
+  does not render) is no longer probed, and every refusal is prefixed `frame <path>:`
+  (an override frame's was attributed to its `params`). Only a usage error is
+  re-prefixed. `RollSection::undo_entry` is gone (the probe reads the white alone).
+  Design-spec §4 no longer ties the floor to `D < 0`. Declined (user): a
+  `pipeline_version` bump for the floor. For `/ship`: TASKS.md's entry.
+- 2026-10-13: **ship review** (Codex: nothing; `ship:diff-reviewer`: 1 fixed). A frame with a
+  manifest `params` override names keys alone in a probe refusal: the override beats every
+  flag, so a flag is no remedy (it named `--contrast`). Correction to the entries above:
+  under measure mode the probe runs after the measurement has decoded the scans (as the
+  shared probe did); before any frame is converted holds everywhere.
+- 2026-10-13: **done.** Landed: `SCAN_FLOOR` = 1/65535 (was 1e-6; no `pipeline_version`
+  bump, user — no archive scan holds a zero sample), and `recipe::validate_render` probes
+  only the recipe a frame renders: `convert` its own, `roll` each planned frame in
+  `cli::probe_planned_frames` after the plan. Verified: the 11 frames render under
+  `frame` ×1.3 with the whole-roll recipes; `--contrast 1.7` is still refused before any
+  frame converts, naming `--contrast`; CI gates green. **For dependents:** the overflow
+  limit is about slope 5.4–5.9 at the reviewed exposures (was ~4.4), so
+  `short-span-protection` can weigh a maximum above 3.5 × 1.3 without meeting the probe;
+  a value that overflows still refuses only the frames that render it.

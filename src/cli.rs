@@ -5487,12 +5487,9 @@ fn reject_roll_unsupported_input(r: &Recipe) -> Result<()> {
 /// shared sections, whose missing-base rule is the least specific diagnosis there is.
 /// A frame's `context` prefixes a stage rule's message and it names the key alone, since
 /// the fault is in its manifest entry; the roll's recipe (`None`) names flag and key
-/// unprefixed, as on `convert`. `own` is [`recipe::validate_render`]'s.
-fn validate_roll_recipe(
-    r: &Recipe,
-    frame_context: Option<&str>,
-    own: Option<(&str, &recipe::RollSection)>,
-) -> Result<()> {
+/// unprefixed, as on `convert`. The render probe is not here: it runs on each planned
+/// frame's final recipe ([`probe_planned_frames`]).
+fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
     // No destination list here: every destination is roll-capable, since a derived name
     // takes its frame's suffix and a manifest path goes through `resolve_output_path`.
     reject_roll_unsupported_input(r)?;
@@ -5507,8 +5504,30 @@ fn validate_roll_recipe(
         })
     };
     recipe::validate(r, names).map_err(in_context)?;
-    validate_shared(r)?;
-    recipe::validate_render(r, own, names).map_err(in_context)
+    validate_shared(r)
+}
+
+/// [`recipe::validate_render`] on the recipe each planned frame renders, with its own
+/// `roll.frames` entry from `stated`, before any frame is converted. A refusal names the
+/// frame, and a frame with a manifest `params` override names keys alone: the override
+/// beats every flag, so no flag is a remedy.
+fn probe_planned_frames(planned: &[PlannedFrame], stated: &recipe::RollSection) -> Result<()> {
+    for frame in planned {
+        let name = frame.input.file_name().and_then(|n| n.to_str());
+        let names = match frame.overrides {
+            Some(_) => KnobNames::KeyOnly,
+            None => KnobNames::FlagAndKey,
+        };
+        recipe::validate_render(&frame.recipe, name.map(|n| (n, stated)), names).map_err(|e| {
+            match e {
+                NcError::Usage(m) => {
+                    NcError::Usage(format!("frame {}: {m}", frame.input.display()))
+                }
+                e => e,
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// A value every frame of a roll shares ([`ROLL_WIDE`]).
@@ -5851,8 +5870,7 @@ fn resolve_frames(
                                 ThinLiftNames::KEYS,
                             )?;
                         }
-                        let name = mf.input.file_name().and_then(|n| n.to_str());
-                        validate_roll_recipe(&r, Some(&context), name.map(|n| (n, &stated.roll)))?;
+                        validate_roll_recipe(&r, Some(&context))?;
                         for msg in roll_wide_breaks(&mf.input, &r, shared)? {
                             log.warn(&msg);
                             roll_warnings.push(msg);
@@ -6817,7 +6835,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // (`validate_roll_recipe`): a recipe that is both baseless and roll-invalid should
     // surface the roll problem first, or the user adds a base only to meet a second
     // error.
-    validate_roll_recipe(&shared, None, None)?;
+    validate_roll_recipe(&shared, None)?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
     // every frame. Only an *explicit* base delivers that: a region re-reads `Dmin`
@@ -6892,6 +6910,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &format!("frame {}: ", pf.input.display()),
         )?;
     }
+    // Last of the value rules, on what each frame renders (after any measurement).
+    probe_planned_frames(&planned, &stated.roll)?;
     // The frames `auto` found are read too, though not converted.
     let mut reads = args.references();
     if let Some(m) = &measurement {

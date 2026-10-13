@@ -209,15 +209,17 @@ const PROBE_OFFSET: [f32; 3] = [-0.05, 0.02, 0.07];
 /// The captured decode at the shipped defaults, and at [`PROBE_OFFSET`]. Recaptured
 /// 2026-09-24 when the default slope became the linearization alone, 1.8
 /// (`nf-reconstruction/gamma-split`); before it the decode ran at the bundled 2.0.
+/// Samples 18–20 (floored) recaptured 2026-10-12 when the scan floor rose to one
+/// 16-bit step (`nf-calibration/overflow-probe-scope`).
 const DECODE_DEFAULT: [u32; 24] = [
     0x3c7a401a, 0x3c826425, 0x3c80c234, 0x3dcbe6ce, 0x3d98c6f9, 0x3d92638a, 0x41508878, 0x408f42e1,
     0x40099236, 0x3c61c89a, 0x3c61c89a, 0x3c61c89a, 0x3c4cd871, 0x3c45f341, 0x3c4e371b, 0x3d2299d4,
-    0x3d0d241d, 0x3d15a226, 0x4e2b7e76, 0x4ac90670, 0x48a4c66f, NAN, NAN, NAN,
+    0x3d0d241d, 0x3d15a226, 0x4aa2989b, 0x47d0e66f, 0x4612dad7, NAN, NAN, NAN,
 ];
 const DECODE_PROBE_OFFSET: [u32; 24] = [
     0x3c4b6944, 0x3c8da90b, 0x3cac1927, 0x3da5bcca, 0x3da5fb2d, 0x3dc3a99d, 0x41298088, 0x409ba486,
     0x4037e083, 0x3c37861a, 0x3c754c0e, 0x3c96e404, 0x3c268133, 0x3c570eed, 0x3c89d02e, 0x3d042abe,
-    0x3d1956da, 0x3d47ffd5, 0x4e0b653f, 0x4ada6624, 0x48dc3cd7, NAN, NAN, NAN,
+    0x3d1956da, 0x3d47ffd5, 0x4a8429bd, 0x47e2f45f, 0x46444908, NAN, NAN, NAN,
 ];
 
 /// The anchor the defaults resolve (`MID_ABOVE_BASE + 0.745 / LINEARIZATION`).
