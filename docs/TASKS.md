@@ -2327,10 +2327,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   guard, fixed or keyed on the frame's span or noise
 - [ ] [The hybrid's span target with a toe](tasks/nf-calibration/hybrid-span-target.md) —
   whether a toe lets the hybrid's R (7) rise
-- [ ] [A steep frame refused by a sample no picture
-  holds](tasks/nf-calibration/overflow-probe-scope.md) — the densest-sample probe refuses
-  `--placement frame --contrast 1.3` on 11 frames of 09-18 and 09-29, and since every
-  `roll.frames` entry is checked, whole rolls
+- [x] [A steep frame refused by a sample no picture
+  holds](tasks/nf-calibration/overflow-probe-scope.md) — **done 2026-10-13**: the scan
+  floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the
+  probe checks only the recipe each frame renders; `--placement frame --contrast 1.3`
+  renders 09-18 and 09-29 whole
 - [x] [Where white lands on the display](tasks/nf-calibration/display-white.md) —
   **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps
   the roll's white to the target, so the two are chosen together

@@ -192,7 +192,7 @@ it depicts scene black. *Brightest in the scan = darkest in the positive.*
 **`Dmin`** is the film base **transmission** — the divisor the conversion anchors
 on. It is the per-channel *relative* maximum (no **genuine picture** pixel
 out-transmits it — dust, specular highlights, hot pixels, or noise can, which is
-why `D` can dip `< 0` and why the decode floors the scan at `SCAN_FLOOR`),
+why `D` can dip `< 0`),
 **not** a value near 1: the orange mask and scanner gain pull channels down (real
 Ektar base ≈ `[0.53, 0.26, 0.16]`, blue near the bottom). Named for minimum
 *density* but stored as a transmission.
@@ -644,7 +644,7 @@ returns the typed `FilmRgbImage`. **Nothing is lost by construction**: every ste
 strictly increasing and unclamped in f32, so no choice of `scale`, `offset`, the
 linearization or the anchor destroys information — each is undoable downstream. That
 is why these settings are conventions and calibrations rather than accuracy
-questions. The exceptions are a dead-pixel floor on the scan (`SCAN_FLOOR`) and
+questions. The exceptions are a dead-pixel floor on the scan (`SCAN_FLOOR`, one 16-bit step) and
 non-finite samples, passed through for the encoder to count.
 
 **Polarity.** `D ≥ 0` grows with the film's optical density: the unexposed base
@@ -1700,8 +1700,8 @@ missing-exposure warning.
 The report's `chain.decode` states every resolved parameter and the derived `anchor`.
 
 **Whether the values combine into a render** is one more value rule
-(`recipe::validate_render`, on `convert` and `roll`, every `roll.frames` entry
-included), since legal values can multiply to zero or overflow. The film base and the
+(`recipe::validate_render`, on `convert` and `roll`, for the recipe each frame
+renders: its own `roll.frames` entry, never another frame's), since legal values can multiply to zero or overflow. The film base and the
 corners of the reachable scan range (each channel at the scan floor or at 1) run through
 the decode, scene correction and the look; a sample that overflows f32, or (with
 display black on) a base that grades to a luminance display black cannot place black

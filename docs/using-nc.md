@@ -1213,8 +1213,7 @@ grade is off.
   (from 12) and a third of frames under L\* 5; with the floor, the frames it sank are
   lifted back to about L\* 7–8. Reviewed under `--placement roll` and `frame` too, and
   acceptable under both: under `frame` it renders bright, its whites past `frame`'s L\* 93
-  (the brightest 1 % near L\* 97), and a frame with a short span can be refused (a
-  steep slope × 1.3 overflows the densest-sample check; `--contrast` 1.25 renders).
+  (the brightest 1 % near L\* 97).
 - **Saturation is the colour's slope**: each pixel's ratios between channels are raised
   to the power `saturation slope` (a channel twice green's becomes 2^s times it) and its
   luminance is kept, so neutrals and the tone scale do not move. The saturation slope is
@@ -2508,8 +2507,8 @@ Your rectangle mixes unexposed film with image content. Check the coordinates, o
 The stated values do not combine into a render, though each is legal alone: with
 display black on (`--display-black`, or `direct`), the film base would grade to nothing
 it can place black against, or the densest sample a scan can hold (a zero sample) would
-overflow. Checked before anything is decoded, on `convert` and `roll`, every
-`roll.frames` entry included. The message ends with each knob whose default alone would
+overflow. Checked before anything is decoded, on `convert` and on each frame of a `roll`,
+with that frame's own `roll.frames` entry: another frame's entry never refuses it. The message ends with each knob whose default alone would
 render — `--display-black` among them when its default, the floor, would:
 
 ```console
