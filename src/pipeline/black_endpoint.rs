@@ -23,7 +23,8 @@
 //! pins it to the stages. The base is the real grade's
 //! (`fit_range::ResolvedDarkEnd::film_base_stops`). Display black places the base itself
 //! and has its own warning (`ResolvedDarkEnd::warning`), so this check is skipped there;
-//! the floor lifts only the darkest stops, so it runs beside it.
+//! the floor and the dark target move only the darkest stops, and neither fixes a frame
+//! placed too bright, so it runs beside them on the tones as placed.
 
 use crate::pipeline::chain::graded_tone;
 use crate::pipeline::colorimetry::dot;
@@ -150,15 +151,14 @@ impl Fault {
             } => format!(
                 "the look's slope is {slope:.3} (`--contrast` {contrast:.3} times \
                  {base_from} {base_slope:.3}), flatter than the {MIN_SLOPE:.3} any \
-                 placement sets, so the frame's shadows are lifted toward mid-grey and its \
-                 black lands paler than a placed frame's: raise `--contrast` (recipe \
-                 `look.contrast`)"
+                 placement sets, so the frame's shadows are lifted toward mid-grey: raise \
+                 `--contrast` (recipe `look.contrast`)"
             ),
             Fault::Pushed { middle, dark } => format!(
                 "the frame is placed so bright its black cannot approach black: the curve \
-                 puts its middle {} and its dark end (luma p1) {}. This is \
-                 where the curve places the frame's measured tones, with display black \
-                 off: {LOWER_EXPOSURE}",
+                 puts its middle {} and its dark end (luma p1) {}, before the dark end is \
+                 moved. This is where the look places the frame's measured tones, with \
+                 display black off: {LOWER_EXPOSURE}",
                 from_mid(middle),
                 from_mid(dark),
             ),

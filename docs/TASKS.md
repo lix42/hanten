@@ -397,6 +397,7 @@ graph TD
     nf-display-stages/gamut-map-share
     nf-display-stages/midtone-contrast-probe
     nf-display-stages/midtone-contrast-toe
+    nf-display-stages/frame-dark-target
   end
   subgraph nf-destinations
     nf-destinations/preset-set
@@ -733,6 +734,7 @@ graph TD
   nf-calibration/envelope-hybrid-placement --> nf-calibration/envelope-dark-end
   nf-calibration/hybrid-span-target --> nf-calibration/envelope-dark-end
   nf-display-stages/midtone-contrast-toe --> nf-look/midtone-contrast-colour
+  nf-display-stages/midtone-contrast-toe --> nf-display-stages/frame-dark-target
   nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
   nf-calibration/level-target-zero --> nf-calibration/display-white
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
@@ -1243,6 +1245,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   — filed 2026-10-11: steepens the slope `hybrid-slope-bounds` bounds, so its maximum is
   the baseline and is re-checked after; narrowed to the toe 2026-10-11; the probe kept the
   default slope, so the toe holds the opt-in `--contrast 1.3` and the default's tails
+- `nf-display-stages/frame-dark-target` (new flow): `nf-display-stages/midtone-contrast-toe`
+  — filed 2026-10-14: the floor only lifts, so a frame's black sits where the placement
+  leaves it (4.26 stops under under `frame`); a target moves it either way
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
   — the destinations and their suffix rules
 - `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`, `nf-calibration/roll-section`
@@ -2236,6 +2241,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   1 % to no deeper than 4.5 stops below mid-grey (none at ×1, most at ×1.3); display black
   became the other setting of the one key, `fit_range.dark_end`. `--contrast 1.3` with it
   is acceptable under `roll` and `frame` (bright under `frame`), opt-in only
+- [x] [A dark target: each frame's darkest 1 % placed at one
+  depth](tasks/nf-display-stages/frame-dark-target.md) — **done 2026-10-14**
+  (`pipeline_version` 17): the dark target, `default`'s in place of the floor, places a
+  frame's measured darkest 1 % 5.5 stops below mid-grey, lifted or pushed (a push capped at
+  two thirds of the way to mid-grey). Chosen over 5 and 6 under `--placement frame`, kept
+  under the hybrid. Whether `--dark-floor` retires is open
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the two renderings (`direct` and

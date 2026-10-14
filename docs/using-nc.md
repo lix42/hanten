@@ -77,7 +77,12 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > Ektar 100 roll.
 > At `nf-scene-correction/two-point-tilt` (`pipeline_version` 16 unchanged) §4's
 > `roll.json` (on its real roll) and §5's default recipe, §7's stage list and roll report
-> were re-run, and the tilt's rows, refusal and paragraph added from the binary. The staleness
+> were re-run, and the tilt's rows, refusal and paragraph added from the binary.
+> At `pipeline_version` 17 (`nf-display-stages/frame-dark-target`, the dark target at 5.5
+> in place of the floor) §5's recipe `meta`, §7's fit-range table, report and dark-end
+> section were re-run against the binary (the floor's example now states
+> `--dark-floor 4.5`); the target's figures are from its review of the 2026-10-12
+> Gold200 roll. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -261,7 +266,7 @@ abridged):
 
 ```json
 {
-  "meta": { "nc_version": "0.1.0", "pipeline_version": 16, … },
+  "meta": { "nc_version": "0.1.0", "pipeline_version": 17, … },
   "params": {
     "recipe_version": 3,
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
@@ -663,7 +668,7 @@ and the measuring commands write parts of it):
 ```json
 {
   "meta": { "nc_version": "0.1.0", "git_commit": "…", "git_dirty": false,
-            "pipeline_version": 16, "target": "aarch64-apple-darwin" },
+            "pipeline_version": 17, "target": "aarch64-apple-darwin" },
   "params": {
     "recipe_version": 3,
     "input":       { "transfer": "auto", "meaning": "auto",
@@ -714,7 +719,7 @@ what `hanten measure-roll` measured — nothing by default (§7). `reconstructio
 fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, headroom
-and the dark end are 0.8, 6 and the floor at 4.5 stops under `default`. The look's `contrast` is a
+and the dark end are 0.8, 6 and the target at 5.5 stops under `default`. The look's `contrast` is a
 multiplier, so its default `1.0` keeps the base slope: the frame's placed slope (the hybrid's or `frame`'s), else a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
 by default: every axis is derived.
@@ -1151,7 +1156,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | white balance / base slope | the roll's; without them neutral / ≈1.414, and a warning | neutral / ≈1.414, pinned |
 | saturation over the base slope's colour | 1.15 | 1, pinned |
 | highlight desaturation | 0.8 | off |
-| dark end / headroom | the floor at 4.5 / 6 | display black at 6 / 6, pinned |
+| dark end / headroom | the target at 5.5 / 6 | display black at 6 / 6, pinned |
 | destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
 
 `default` is Hanten's picture from what was measured; `direct` loses as little as it
@@ -1315,9 +1320,10 @@ grade is off.
   the reconstructed scene.
 - **For a contrastier look, `--contrast 1.3`.** Reviewed against the default under the
   hybrid placement: the midtones get 30 % more contrast, mid-grey stays put, and the ends
-  move apart: the highlights go further into fit range's shoulder, and the dark floor
-  (below) holds the dark end. Alone, ×1.3 sinks a frame's darkest 1 % about a stop; the
-  floor lifts the frames it sank back to about L\* 7–8. Reviewed under `--placement roll` and `frame` too, and
+  move apart: the highlights go further into fit range's shoulder, and the dark target
+  (below) places the dark end. Alone, ×1.3 sinks a frame's darkest 1 % about a stop; the
+  target puts it back at 5.5 stops under mid-grey. Reviewed (with the 4.5 floor, before
+  the target) under `--placement roll` and `frame` too, and
   acceptable under both: under `frame` it renders bright, its whites past `frame`'s L\* 93
   (the brightest 1 % near L\* 97).
 - **Saturation is the colour's slope**: each pixel's ratios between channels are raised
@@ -1372,10 +1378,11 @@ mid-grey stays where the decode put it. It also places the dark end (below). Its
 | Flag | Recipe key | |
 |---|---|---|
 | `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` is the identity |
-| `--dark-floor STOPS\|off` | `fit_range.dark_end` = `{"floor": STOPS}` | the floor: the frame's measured darkest 1 % no deeper than this, in stops below mid-grey on the display, `(0, 16]`; unstated under `default`, `4.5` |
+| `--dark-floor STOPS\|off` | `fit_range.dark_end` = `{"floor": STOPS}` | the floor: the frame's measured darkest 1 % no deeper than this, in stops below mid-grey on the display, `(0, 16]` |
+| `--dark-target STOPS\|off` | `fit_range.dark_end` = `{"target": STOPS}` | the target: the frame's measured darkest 1 % at this depth, lifted or pushed down, `(0, 16]`; unstated under `default`, `5.5` |
 | `--display-black STOPS\|off` | `fit_range.dark_end` = `{"black": STOPS}` | display black: the film base at this depth, `(0, 16]`; unstated under `direct`, `6` |
 
-The two set one key, so they are refused together; either's `off` (`"off"`) leaves the
+The three set one key, so they are refused together; any one's `off` (`"off"`) leaves the
 dark end where the grade puts it. `fit_range.display_black` retired into this key: a
 recipe stating it is refused, naming `{"black": …}`, and its old `null` is read as
 unstated.
@@ -1393,7 +1400,7 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
   "display_peak": 1.0,
   "dark_end": {
     "setting": {
-      "floor": 4.5
+      "target": 5.5
     },
     "curve": "identity",
     "film_base_stops": 4.9630156,
@@ -1417,13 +1424,13 @@ on a representative frame.
 #### The dark end
 
 Reinhard barely touches the shadows, so without help the dark end lands wherever the
-slope and exposure leave it. `fit_range.dark_end` moves it, one of two ways, with one
+slope and exposure leave it. `fit_range.dark_end` moves it, one of three ways, with one
 curve: a shift in stops, whole at a reference and below, fading to nothing at
 mid-grey. Mid-grey, the highlights and white never move, and all three channels scale
 together, so colour is kept. Nothing is measured from the rendered image: the reference
 is graded with the frame's own white balance, exposure and slope.
 
-**The floor** (`--dark-floor`, the default at 4.5 stops, about L\* 7) holds a frame's
+**The floor** (`--dark-floor`; 4.5 stops, about L\* 7, was the default) holds a frame's
 darkest 1 % — its `dark_stops`, which `hanten measure-roll` measures — no deeper than
 that. A frame whose darkest 1 % renders deeper is lifted to it; a lighter one is left
 alone. Below its darkest 1 % the shadows rise by the same factor, so their texture is
@@ -1432,7 +1439,7 @@ the floor lifts almost nothing (2 of 226 measured frames, by 0.05 stop); it acts
 frame wider than the placement can fit, and under a steeper `--contrast`:
 
 ```console
-$ hanten convert 1774.tif -o out … --contrast 1.3 | jq -c '.chain.fit_range.dark_end'
+$ hanten convert 1774.tif -o out … --contrast 1.3 --dark-floor 4.5 | jq -c '.chain.fit_range.dark_end'
 {"setting":{"floor":4.5},"curve":"log-shift-to-mid-grey-v1","film_base_stops":5.0270963,"frame_dark_stops":5.1680937,"shift_stops":0.6680935}
 ```
 
@@ -1449,7 +1456,34 @@ L\* 7–8 on the reviewed rolls.
   so the shadows never flatten below half their contrast; a frame sunk that far stays
   under the floor, and the report warns, naming `--contrast` and `--exposure`.
 - **Fewer stops, a lighter floor.** `off` turns it off. Chosen by review on whole rolls
-  (`nf-display-stages/midtone-contrast-toe`).
+  (`nf-display-stages/midtone-contrast-toe`); the target replaced it as the default.
+
+**The target** (`--dark-target`, the default at 5.5 stops, about L\* 3.6) reads the
+same darkest 1 % as the floor but moves it **either way** onto its depth: lifted when
+deeper, as the floor lifts, and pushed down when lighter. Under `--placement frame`
+every ordinary frame's darkest 1 % would render about 4.26 stops under mid-grey (about
+L\* 8.5), above the floor, so the floor left it there; the target takes each frame to
+the same black:
+
+```console
+$ hanten convert 2100.tif -o out --params roll.json --placement frame --dark-target 6 | jq -c '.chain.fit_range.dark_end'
+{"setting":{"target":6.0},"curve":"log-shift-to-mid-grey-v1","film_base_stops":4.7087197,"frame_dark_stops":4.2664075,"shift_stops":-1.7335927}
+```
+
+`4.27 + 1.73 = 6`. 5 stops is about L\* 5, 5.5 about L\* 3.6, 6 about L\* 2.5.
+
+- **A push steepens the shadows**, so it is capped at two thirds of the stops between
+  the darkest 1 % and mid-grey (the shadows' contrast at most doubles). A high-key frame
+  whose darkest 1 % sits near mid-grey is pushed only that far and keeps its light
+  shadows, without a warning; one at or above mid-grey is left alone.
+  On that roll the default (hybrid) placement renders the darkest 1 % about 2.0 stops
+  under mid-grey, so the cap stops it at about 3.4.
+- **A lift is capped and warned about** as the floor's is; without a measured dark end
+  it does nothing and, stated, warns; under `direct` a typed `--dark-target STOPS` is
+  refused, as `--dark-floor` is.
+- **Unlike display black it follows the picture, not the film base**, which renders at
+  a different depth on each frame (4.0–4.7 stops on one Gold200 roll), so display black
+  moves frames unevenly.
 
 **Display black** (`--display-black`, `direct`'s pinned 6, about L\* 2.5) instead places
 the film base — the darkest thing on the film, since nothing below its threshold is
@@ -1478,6 +1512,8 @@ $ hanten convert … --display-black 0
 usage: --display-black (recipe `fit_range.dark_end`) must be stops below mid-grey within (0, 16], or `off`, got 0
 $ hanten convert … --dark-floor 4 --display-black 6
 error: the argument '--dark-floor <STOPS|off>' cannot be used with '--display-black <STOPS|off>'
+$ hanten convert … --dark-target 5 --dark-floor 4
+error: the argument '--dark-target <STOPS|off>' cannot be used with '--dark-floor <STOPS|off>'
 ```
 
 ### Fit gamut
@@ -1999,8 +2035,8 @@ usage: --film-master (recipe `output`: `"film-master"`) writes the fixed decode'
 
 Each stage's default and its identity are accepted, since neither asks for anything —
 `--exposure 0 --white-balance 1,1,1`, the look's `--contrast 1 --saturation 1
---channel-grade 1,1 --highlight-desaturation 0`, and `--display-tone-headroom 0 --dark-floor off` (or
-their defaults) — which is how a flag clears a recipe's stage for a master. The film
+--channel-grade 1,1 --highlight-desaturation 0`, and `--display-tone-headroom 0` with the
+dark end's `off` (`--dark-target off`, or that of the flag that set it; or their defaults) — which is how a flag clears a recipe's stage for a master. The film
 master and a destination axis are one choice, refused at the parser.
 
 **`--export-film-rgb PATH`** (beside any destination) also writes the
@@ -2459,7 +2495,7 @@ When only some channels collapse, the remedy names their `--white-balance` gains
 instead; when all three do, it is the exposure, even if the warning above named some.
 
 A black that cannot approach black is out of the loss counters' sight too, so without
-display black (the default's floor included) the report warns when a frame is washed out. Three
+display black (the default's target included) the report warns when a frame is washed out. Three
 cases, each with its own remedy; none fires on any frame of the full archive at its
 measured default:
 
@@ -2469,13 +2505,13 @@ measured default:
 
   ```
   the look's slope is 0.990 (`--contrast` 0.700 times the fallback slope 1.414), flatter
-  than the 1.237 any placement sets, so the frame's shadows are lifted toward mid-grey
-  and its black lands paler than a placed frame's: raise `--contrast` (recipe
-  `look.contrast`)
+  than the 1.237 any placement sets, so the frame's shadows are lifted toward mid-grey:
+  raise `--contrast` (recipe `look.contrast`)
   ```
 
 - **Pushed up**, on a frame `measure-roll` measured (its `tones`): its middle lands more
-  than 1.5 stops above mid-grey *and* its dark end (luma p1) less than 1.5 under it. A
+  than 1.5 stops above mid-grey *and* its dark end (luma p1) less than 1.5 under it,
+  before the dark end is moved. A
   flat frame centred at mid-grey never trips this, and a one-stop `--exposure` lift
   warns on about a quarter of real frames. Lower `--exposure`.
 - **The film base near mid-grey**, on a frame without tones: the base renders less than
@@ -2655,7 +2691,7 @@ display black on (`--display-black`, or `direct`), the film base would grade to 
 it can place black against, or the densest sample a scan can hold (a zero sample) would
 overflow. Checked before anything is decoded, on `convert` and on each frame of a `roll`,
 with that frame's own `roll.frames` entry: another frame's entry never refuses it. The message ends with each knob whose default alone would
-render — `--display-black` among them when its default, the floor, would:
+render — `--display-black` among them when its default, the target, would:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --display-black 6 --density-offset=-30,-30,-30

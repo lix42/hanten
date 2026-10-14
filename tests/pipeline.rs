@@ -8054,12 +8054,12 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         clipped(&report)
     );
 
-    // The dark end: the floor by default, which a frame with no measured dark end
+    // The dark end: the target by default, which a frame with no measured dark end
     // leaves alone; display black on, and deeper, each render differently.
     let dark_end = &report_default_dark_end;
     assert_eq!(
         dark_end["setting"],
-        serde_json::json!({"floor": 4.5}),
+        serde_json::json!({"target": 5.5}),
         "{dark_end}"
     );
     assert_eq!(dark_end["curve"], "identity");
@@ -8132,8 +8132,8 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
 fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
     // `nf-display-stages/midtone-contrast-toe` through the binary: 09-18 Gold200 1774's
     // tones under the hybrid, at a contrast steep enough to sink its darkest 1 % under
-    // the default floor, which lifts it there. A floor stated where no frame was
-    // measured does nothing, and says so; the default's is silent.
+    // a 4.5-stop floor, which lifts it there. A floor stated where no frame was measured
+    // does nothing, and says so; the default target's is silent.
     let tmp = TempDir::new("dark-floor");
     let input = fixture("hdr-48bit.tif").display().to_string();
     let convert = |name: &str, extra: &[&str]| {
@@ -8164,7 +8164,10 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
         "--contrast",
         "1.6",
     ];
-    let (lifted, report) = convert("lifted.tiff", &hybrid);
+    let (lifted, report) = convert(
+        "lifted.tiff",
+        &[&hybrid[..], &["--dark-floor", "4.5"]].concat(),
+    );
     let d = &report["chain"]["fit_range"]["dark_end"];
     assert_eq!(d["setting"], serde_json::json!({"floor": 4.5}), "{d}");
     assert_eq!(d["curve"], "log-shift-to-mid-grey-v1", "{d}");
@@ -8266,6 +8269,72 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
     assert!(
         report.to_string().contains("--rendering default"),
         "{report}"
+    );
+}
+
+#[test]
+fn the_dark_target_pushes_a_measured_frame_s_dark_end_down_to_it() {
+    // The floor's frame at the default contrast, whose darkest 1 % renders above 6 stops:
+    // the target pushes it there, where the floor would leave it. It shares the floor's
+    // key, so the two flags conflict, and `direct` refuses it as it does the floor.
+    let tmp = TempDir::new("dark-target");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let run_with = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--range",
+            "sdr",
+        ];
+        argv.extend_from_slice(extra);
+        run(&argv)
+    };
+    let measured = [
+        "--roll-white-balance",
+        "1,1,1",
+        "--roll-white",
+        "1.5",
+        "--roll-dark=-3.73",
+        "--roll-exposure",
+        "1.25",
+        "--roll-envelope=-3.78,2.09",
+        "--roll-frame-tones=0.46,-1.96,-3.76",
+    ];
+    let (code, stdout, err) = run_with(
+        "pushed.tiff",
+        &[&measured[..], &["--dark-target", "6"]].concat(),
+    );
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let d = &report["chain"]["fit_range"]["dark_end"];
+    assert_eq!(d["setting"], serde_json::json!({"target": 6.0}), "{d}");
+    assert_eq!(d["curve"], "log-shift-to-mid-grey-v1", "{d}");
+    let (dark, shift) = (
+        d["frame_dark_stops"].as_f64().unwrap(),
+        d["shift_stops"].as_f64().unwrap(),
+    );
+    assert!(dark < 6.0 && shift < 0.0, "{d}");
+    assert!((dark - shift - 6.0).abs() < 1e-3, "{d}");
+
+    let (code, _, err) = run_with("never.tiff", &["--dark-target", "5", "--dark-floor", "4"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--dark-target") && err.contains("--dark-floor"),
+        "{err}"
+    );
+    let (code, _, err) = run_with(
+        "never.tiff",
+        &["--rendering", "direct", "--dark-target", "5"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--dark-target holds") && err.contains("--rendering default"),
+        "{err}"
     );
 }
 
@@ -8465,13 +8534,13 @@ fn the_default_destination_renders_a_display_p3_tiff() {
         assert_eq!(fr["headroom_stops"], 6.0);
         assert_eq!(fr["white_point"], 64.0);
         assert_eq!(fr["display_peak"], 1.0);
-        // The dark end is the floor by default, and an unmeasured frame has nothing for
-        // it to hold: at the fallback slope (a white 1.75 stops up) the base stays where
+        // The dark end is the target by default, and an unmeasured frame has nothing for
+        // it to place: at the fallback slope (a white 1.75 stops up) the base stays where
         // the grade puts it, ≈ 5.0 stops under mid-grey.
         let dark_end = &fr["dark_end"];
         assert_eq!(
             dark_end["setting"],
-            serde_json::json!({"floor": 4.5}),
+            serde_json::json!({"target": 5.5}),
             "{stdout}"
         );
         assert_eq!(dark_end["curve"], "identity");
@@ -12992,10 +13061,11 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         ),
         "{err}"
     );
+    // The entry keeps its measured tones, which the default dark target reads.
     let mut renamed = old["params"].clone();
-    renamed["roll"]["frames"]["thin.tif"] = serde_json::json!(
-        {"thin_exposure": entry["thin_exposure"], "thin_slope": entry["thin_slope"]}
-    );
+    let thin_entry = &mut renamed["roll"]["frames"]["thin.tif"];
+    thin_entry["thin_exposure"] = entry["thin_exposure"].clone();
+    thin_entry["thin_slope"] = entry["thin_slope"].clone();
     let renamed = write_file(&tmp.path("renamed.json"), &renamed.to_string());
     let (render, _) = convert("renamed.tiff", &["--params", &s(&renamed)]);
     assert_eq!(render, steep, "the rename replays the thin lift");
@@ -15336,6 +15406,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         (&["--display-tone-headroom", "3"][..], "fit range"),
         (&["--display-black", "5"][..], "fit range"),
         (&["--dark-floor", "5"][..], "fit range"),
+        (&["--dark-target", "5"][..], "fit range"),
         (&["--contrast", "1.3"][..], "the look"),
     ]
     .into_iter()
@@ -15346,6 +15417,31 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         assert_eq!(code, 2, "{extra:?}: {err}");
         assert!(err.contains(stage), "{extra:?}: {err}");
         assert!(err.contains("choose a rendered destination"), "{err}");
+        // A dark end's remedy is its own flag's `off`, which the parser accepts beside it.
+        if extra[0].starts_with("--dark") || extra[0] == "--display-black" {
+            let off = format!("{} off", extra[0]);
+            assert!(err.contains(&off), "{extra:?}: {err}");
+            let (code, _, err) = convert_48bit(
+                &tmp.path(&format!("off{i}")),
+                &["--film-master", extra[0], "off"],
+            );
+            assert_eq!(code, 0, "{off}: {err}");
+        }
+    }
+    // A typed dark end at `off` asks for nothing: the remedy names only the headroom, and
+    // following it beside that flag converts.
+    for flag in ["--dark-target", "--display-black", "--dark-floor"] {
+        let (code, _, err) = convert_48bit(
+            &tmp.path("off-headroom"),
+            &["--film-master", "--display-tone-headroom", "3", flag, "off"],
+        );
+        assert_eq!(code, 2, "{flag}: {err}");
+        assert!(err.contains("(--display-tone-headroom 0)"), "{flag}: {err}");
+        let (code, _, err) = convert_48bit(
+            &tmp.path("off-headroom-ok"),
+            &["--film-master", "--display-tone-headroom", "0", flag, "off"],
+        );
+        assert_eq!(code, 0, "{flag}: {err}");
     }
     // Every stage asked for is named at once, in chain order.
     let (code, _, err) = convert_48bit(
@@ -15376,7 +15472,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         &["--display-tone-headroom", "6"][..],
         &["--display-black", "off"][..],
         &["--dark-floor", "off"][..],
-        &["--dark-floor", "4.5"][..],
+        &["--dark-target", "5.5"][..],
     ]
     .into_iter()
     .enumerate()

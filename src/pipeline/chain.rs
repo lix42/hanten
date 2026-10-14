@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn the_floor_holds_the_frame_s_measured_dark_end_at_its_target() {
-        use crate::pipeline::fit_range::DEFAULT_DARK_FLOOR_STOPS;
+        use crate::pipeline::fit_range::REVIEWED_DARK_FLOOR_STOPS;
         // A neutral at the frame's measured dark end renders at the floor, whatever the
         // slope and exposure that would have sunk it: the reference is graded with the
         // frame. Each dark end is graded to about 5.2 stops down: under the floor, and
@@ -1085,7 +1085,7 @@ mod tests {
             let mut p = shipped_params();
             p.shared.look.section.slope = slope;
             p.shared.scene_correction.exposure = exposure;
-            p.shared.dark_end = DarkEnd::default();
+            p.shared.dark_end = DarkEnd::Floor(REVIEWED_DARK_FLOOR_STOPS);
             p.shared.frame_dark_stops = Some(dark);
             let rendered = render(
                 aces_from(1, 1, &[0.18 * dark.exp2(); 3]),
@@ -1098,7 +1098,7 @@ mod tests {
             assert!(floor.shift_stops > 0.0, "slope {slope}: {floor:?}");
             let (out, _) = rendered.image.into_parts();
             let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
-            let want = 0.18 * (-DEFAULT_DARK_FLOOR_STOPS).exp2();
+            let want = 0.18 * (-REVIEWED_DARK_FLOOR_STOPS).exp2();
             assert!(
                 (y / want - 1.0).abs() < 3e-3,
                 "slope {slope}, exposure {exposure}: {y} vs {want}"
@@ -1177,8 +1177,8 @@ mod tests {
     fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
         // At the shipped headroom, and at zero, where reinhard is the identity and
         // pixels reach fit gamut at luminance near white. The dark end acts in every
-        // case — display black, and the floor lifting a dark end 7 scene stops down —
-        // so the contract is checked with it in the chain.
+        // case — display black, and the default target lifting a dark end 7 scene stops
+        // down and pushing one 3 down — so the contract is checked with it in the chain.
         for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
             for (dark_end, frame_dark_stops) in [
                 (
@@ -1186,6 +1186,7 @@ mod tests {
                     None,
                 ),
                 (DarkEnd::default(), Some(-7.0)),
+                (DarkEnd::default(), Some(-3.0)),
             ] {
                 let mut shared = shared_acting();
                 shared.headroom_stops = stops;

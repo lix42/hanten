@@ -60,7 +60,7 @@ const DEFAULT: Base = Base {
     saturation: DEFAULT_SATURATION,
     highlight_desaturation: HighlightDesaturation::DEFAULT,
     headroom_stops: DEFAULT_HEADROOM_STOPS,
-    dark_end: DarkEnd::Floor(crate::pipeline::fit_range::DEFAULT_DARK_FLOOR_STOPS),
+    dark_end: DarkEnd::Target(crate::pipeline::fit_range::DEFAULT_DARK_TARGET_STOPS),
     axes: Defaults::STANDARD,
 };
 

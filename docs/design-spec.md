@@ -409,15 +409,15 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   on luminance, whole at a reference and below and fading to nothing at mid-grey. It
   is neither a subtraction (which crushed frames to code 0) nor a toe inside the
   operator (which pushed black down and lost on colour and shadow contrast;
-  `nf-display-stages/parametric-operator`). Two settings of one key, since they pull
-  the same stops opposite ways:
-  - **The floor, `default`'s** (`nf-display-stages/midtone-contrast-toe`): the
-    frame's measured darkest 1 % (`roll.frames` entry `tones.dark_stops`), graded by
-    its own slope and exposure, is **lifted** to no deeper than 4.5 stops below
-    mid-grey (L\* ≈ 7), never pushed down. At the default slope the roll's envelope
-    keeps nearly every frame above it; it holds the dark end of a steeper `look.contrast` (the
-    opt-in 1.3) and of a frame wider than the placement fits. Without measured tones
-    it cannot act.
+  `nf-display-stages/parametric-operator`). Three settings of one key, since they move
+  the same stops:
+  - **The target, `default`'s** (`nf-display-stages/frame-dark-target`): the frame's
+    measured darkest 1 % (`roll.frames` entry `tones.dark_stops`), graded by its own
+    slope and exposure, is **placed** 5.5 stops below mid-grey (L\* ≈ 3.6), lifted or
+    pushed down. A push is capped at two thirds of the way to mid-grey, so a high-key
+    frame keeps its light shadows. Without measured tones it cannot act.
+  - **The floor** (`nf-display-stages/midtone-contrast-toe`, `default`'s before the
+    target): the same reference, only **lifted**, to no deeper than 4.5 stops (L\* ≈ 7).
   - **Display black, `direct`'s**: the decoded film base, graded with the frame, is
     **pushed down** to its target (6 stops), never lifted. It was `default`'s while the
     roll's slope came from its white alone and left the base pale; with the slope from
@@ -464,7 +464,7 @@ knob starts from, and each has one principle (`crate::rendering`):
 | base slope (`look.contrast` and `look.saturation` multiply it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
 | saturation over the base slope's colour (`look.saturation` multiplies it) | 1, pinned | 1.15 |
 | highlight desaturation | off | 0.8 |
-| dark end | display black, 6 stops below mid-grey, pinned | the floor, 4.5 stops below mid-grey |
+| dark end | display black, 6 stops below mid-grey, pinned | the target, 5.5 stops below mid-grey |
 | fit range | reinhard at 6 stops of headroom, pinned | 6 stops |
 | unset destination axes | HDR, `linear`, Adobe RGB, TIFF, container first (§5) | SDR, `native`, Display P3, TIFF |
 
@@ -1015,7 +1015,7 @@ re-derives it from the recipe:
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
     "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
                    "display_peak": 1.0,
-                   "dark_end": { "setting": { "floor": 4.5 }, "curve": "identity",
+                   "dark_end": { "setting": { "target": 5.5 }, "curve": "identity",
                                  "film_base_stops": 4.96, "frame_dark_stops": null,
                                  "shift_stops": 0.0 } },
     "destination": { "display": { "range": "sdr", "transfer": "native", "gamut": "display-p3",
@@ -1843,10 +1843,11 @@ by the curve's limit at black, so the scale is continuous there.
   (a value rule, so `roll` and per-frame overrides refuse it before any frame is
   decoded), unset `6` (`W = 64`); `0` is the identity. Beyond ~8 stops the operator
   converges on plain reinhard and extra headroom buys nothing.
-- `fit_range.dark_end` — `{"floor": stops}` (`--dark-floor`), `{"black": stops}`
-  (`--display-black`), or `"off"` (either flag's `off`); stops `(0, 16]` below
-  mid-grey on the display; unset, the rendering's (`default` the floor at 4.5, `direct`
-  black at 6). The two flags set one key, so they are refused together;
+- `fit_range.dark_end` — `{"target": stops}` (`--dark-target`), `{"floor": stops}`
+  (`--dark-floor`), `{"black": stops}` (`--display-black`), or `"off"` (any flag's
+  `off`); stops `(0, 16]` below mid-grey on the display; unset, the rendering's
+  (`default` the target at 5.5, `direct` black at 6). The three flags set one key, so
+  they are refused together;
   `fit_range.display_black` retired into it (refused naming `{"black": …}`, its `null`
   read as unset). One curve on reinhard's output `y`, before the peak's lift:
   `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running over `log2 y` from the
@@ -1861,6 +1862,11 @@ by the curve's limit at black, so the scale is continuous there.
     warned about. Without measured tones (no measured roll, or `direct`) it does
     nothing; stated then, the report warns, and a typed `--dark-floor STOPS` under
     `direct` is refused before the decode.
+  - **The target** (`nf-display-stages/frame-dark-target`): the floor's `b`, moved
+    either way. A lift is capped and warned about as the floor's; a push is capped at
+    two thirds of the stops from `b` to mid-grey, which keeps the slope at or below 2,
+    and is not warned about. A `b` at or above mid-grey is left alone. Unmeasured and
+    under `direct` as the floor (`--dark-target`).
   - **Display black** (`nf-display-stages/parametric-operator`): `b` is the decoded
     film base (`algo::fixed::decode_film_base`) graded with the frame
     (`chain::render`). Only a push down; a base already at or below the target is left
@@ -2515,6 +2521,6 @@ Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for 
 film master (§6); the recipe travels in the report, not the image container (§5);
 reinhard over a parametric shoulder (§6); a separate contrast and per-channel grade
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
-(§6); one dark end, fit range's floor or display black (§6); the fallback slope without a
+(§6); one dark end, fit range's target, floor or display black (§6); the fallback slope without a
 roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
 stands (`nf-calibration/white-rule-hdr`).

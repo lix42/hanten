@@ -58,20 +58,25 @@
 //! `--black-point`) amplifies whatever tint the shadows carry. `fit_range.dark_end` picks
 //! the reference and the direction ([`DarkEnd`]):
 //!
-//! - **The floor** (the default, `nf-display-stages/midtone-contrast-toe`): `b` is the
+//! - **The floor** (`--dark-floor`, `nf-display-stages/midtone-contrast-toe`): `b` is the
 //!   frame's measured dark end — its darkest 1 % (`roll_white::FrameStops::dark_stops`)
 //!   graded by the frame's own slope and exposure — **lifted** to `T` when it renders
 //!   below it, never pushed down. It holds the shadows of a steep slope (`--contrast
-//!   1.3`) and of a frame wider than the placement can fit; at the default slope it
-//!   leaves the reviewed rolls alone. Without measured tones it cannot act. The lift is
-//!   capped at [`MAX_LIFT_SHARE`] of the stops between `b` and mid-grey, which keeps
-//!   the curve's slope at or above one half (`1 − 1.5 · shift / span` at its flattest).
+//!   1.3`) and of a frame wider than the placement can fit. Without measured tones it
+//!   cannot act. The lift is capped at [`MAX_LIFT_SHARE`] of the stops between `b` and
+//!   mid-grey, which keeps the curve's slope at or above one half (`1 − 1.5 · shift /
+//!   span` at its flattest).
+//! - **The target** (the default, `nf-display-stages/frame-dark-target`): the floor's
+//!   reference, moved to `T` **either way** — lifted as the floor lifts, or pushed down
+//!   when it renders above `T`. A push steepens the shadows; it is capped at [`MAX_PUSH_SHARE`] of the stops
+//!   between `b` and mid-grey, which keeps the curve's slope at or below 2, so a
+//!   high-key frame whose dark end sits near mid-grey keeps its light shadows.
 //! - **Display black**: `b` is the film base, where the frame's grade renders it
 //!   (`chain::render`), **pushed down** to `T` when it renders above it, never lifted
 //!   (`nf-display-stages/parametric-operator`). `direct`'s pinned dark end. A base close
 //!   under mid-grey squeezes the shift into a narrow band ([`ResolvedDarkEnd::warning`]).
 //!
-//! The two are one setting because they pull the same stops opposite ways. There is no
+//! The three are one setting because they move the same stops. There is no
 //! scene-side flare/fog subtraction (`nf-scene-correction/flare-removal`, closed as not
 //! needed).
 //!
@@ -115,8 +120,12 @@ pub const DARK_END_CURVE: &str = "log-shift-to-mid-grey-v1";
 pub const OPERATOR_AND_DARK_END: &str = "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1";
 
 /// The floor review chose: a frame's darkest 1 % no deeper than 4.5 stops below
-/// mid-grey (L\* ≈ 7; `nf-display-stages/midtone-contrast-toe`).
-pub const DEFAULT_DARK_FLOOR_STOPS: f32 = 4.5;
+/// mid-grey (L\* ≈ 7; `nf-display-stages/midtone-contrast-toe`). `--dark-floor`'s example.
+pub const REVIEWED_DARK_FLOOR_STOPS: f32 = 4.5;
+
+/// The target review chose: a frame's darkest 1 % at 5.5 stops below mid-grey
+/// (L\* ≈ 3.6; `nf-display-stages/frame-dark-target`).
+pub const DEFAULT_DARK_TARGET_STOPS: f32 = 5.5;
 
 /// The depth review chose while display black was on by default: the film base 6 stops
 /// below mid-grey (L\* ≈ 2.5; `nf-display-stages/parametric-operator`). `direct`'s.
@@ -126,13 +135,18 @@ pub const REVIEWED_DISPLAY_BLACK_STOPS: f32 = 6.0;
 /// `0.18 · 2^−16`, under a 16-bit encode's first code value.
 pub const MAX_DARK_END_STOPS: f32 = 16.0;
 
+/// The most the target pushes down, as a share of the stops between its reference and
+/// mid-grey: two thirds keeps the curve's log-log slope at or below 2, the mirror of
+/// [`MAX_LIFT_SHARE`].
+pub const MAX_PUSH_SHARE: f64 = 2.0 / 3.0;
+
 /// The most the floor lifts, as a share of the stops between its reference and
 /// mid-grey: a third keeps the curve's log-log slope at or above one half.
 pub const MAX_LIFT_SHARE: f64 = 1.0 / 3.0;
 
 /// Where the dark end renders on the display — the recipe's `fit_range.dark_end`, set by
-/// `--dark-floor` or `--display-black`: `"off"`, `{"floor": stops}` or
-/// `{"black": stops}`, stops below mid-grey.
+/// `--dark-floor`, `--dark-target` or `--display-black`: `"off"`, `{"floor": stops}`,
+/// `{"target": stops}` or `{"black": stops}`, stops below mid-grey.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DarkEnd {
@@ -140,14 +154,16 @@ pub enum DarkEnd {
     Off,
     /// The frame's measured dark end lifted to no deeper than `0.18 · 2^−stops`.
     Floor(f32),
+    /// The frame's measured dark end placed at `0.18 · 2^−stops`, lifted or pushed down.
+    Target(f32),
     /// The film base pushed down to `0.18 · 2^−stops`.
     Black(f32),
 }
 
-/// The floor at its reviewed depth.
+/// The target at its reviewed depth.
 impl Default for DarkEnd {
     fn default() -> Self {
-        DarkEnd::Floor(DEFAULT_DARK_FLOOR_STOPS)
+        DarkEnd::Target(DEFAULT_DARK_TARGET_STOPS)
     }
 }
 
@@ -162,7 +178,9 @@ impl DarkEnd {
     /// The value rule, rendered by the recipe gate as a usage error.
     pub fn check(self) -> std::result::Result<(), DarkEndFault> {
         match self {
-            DarkEnd::Floor(v) | DarkEnd::Black(v) if !(v > 0.0 && v <= MAX_DARK_END_STOPS) => {
+            DarkEnd::Floor(v) | DarkEnd::Target(v) | DarkEnd::Black(v)
+                if !(v > 0.0 && v <= MAX_DARK_END_STOPS) =>
+            {
                 Err(DarkEndFault(v))
             }
             _ => Ok(()),
@@ -172,7 +190,27 @@ impl DarkEnd {
     /// `--dark-floor`'s spelling: stops below mid-grey, or `off`. The range is the
     /// recipe gate's, so the flag and the key share one message.
     pub fn parse_floor(s: &str) -> std::result::Result<Self, String> {
-        Self::parse(s, DarkEnd::Floor, DEFAULT_DARK_FLOOR_STOPS)
+        Self::parse(s, DarkEnd::Floor, REVIEWED_DARK_FLOOR_STOPS)
+    }
+
+    /// `--dark-target`'s spelling, as [`DarkEnd::parse_floor`].
+    pub fn parse_target(s: &str) -> std::result::Result<Self, String> {
+        Self::parse(s, DarkEnd::Target, DEFAULT_DARK_TARGET_STOPS)
+    }
+
+    /// The flag that sets this, and its name in prose; `None` for `off`.
+    pub fn names(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            DarkEnd::Off => None,
+            DarkEnd::Floor(_) => Some(("--dark-floor", "dark floor")),
+            DarkEnd::Target(_) => Some(("--dark-target", "dark target")),
+            DarkEnd::Black(_) => Some(("--display-black", "display black")),
+        }
+    }
+
+    /// Whether this setting reads the frame's measured dark end (the floor, the target).
+    pub fn reads_frame_dark(self) -> bool {
+        matches!(self, DarkEnd::Floor(_) | DarkEnd::Target(_))
     }
 
     /// `--display-black`'s spelling, as [`DarkEnd::parse_floor`].
@@ -193,7 +231,7 @@ impl DarkEnd {
     fn target(self) -> Option<f64> {
         match self {
             DarkEnd::Off => None,
-            DarkEnd::Floor(stops) | DarkEnd::Black(stops) => {
+            DarkEnd::Floor(stops) | DarkEnd::Target(stops) | DarkEnd::Black(stops) => {
                 Some(MID_GREY * (-f64::from(stops)).exp2())
             }
         }
@@ -296,7 +334,7 @@ impl FitRangeParams {
             .filter(|y| y.is_finite() && *y > 0.0)
             .map(render);
         // The reference and the shift in stops at it: black pushes the base down, the
-        // floor lifts the frame's dark end, each only toward its target.
+        // floor lifts the frame's dark end, the target moves it either way.
         let shift = match self.dark_end {
             DarkEnd::Off => None,
             DarkEnd::Black(_) => {
@@ -312,6 +350,17 @@ impl FitRangeParams {
                 .map(|(dark, target)| {
                     let span = (MID_GREY / dark).log2();
                     (dark, (target / dark).log2().min(span * MAX_LIFT_SHARE))
+                }),
+            DarkEnd::Target(_) => frame_dark
+                .zip(self.dark_end.target())
+                .filter(|&(dark, target)| dark != target && dark < MID_GREY)
+                .map(|(dark, target)| {
+                    let span = (MID_GREY / dark).log2();
+                    let stops = (target / dark).log2();
+                    (
+                        dark,
+                        stops.clamp(-span * MAX_PUSH_SHARE, span * MAX_LIFT_SHARE),
+                    )
                 }),
         }
         .map(|(reference, stops)| Shift {
@@ -341,7 +390,7 @@ pub struct ResolvedDarkEnd {
     /// The knob as set.
     pub setting: DarkEnd,
     /// [`DARK_END_CURVE`], or `"identity"` when it is off, its reference already renders
-    /// on the target's side (left alone), the floor has no measured dark end, or display
+    /// on the target's side (left alone), the frame has no measured dark end, or display
     /// black's base renders at or above mid-grey, where a shift that holds mid-grey
     /// cannot reach it ([`ResolvedDarkEnd::warning`]).
     pub curve: &'static str,
@@ -367,18 +416,22 @@ pub const MIN_FILM_BASE_STOPS: f32 = 2.0;
 impl ResolvedDarkEnd {
     /// A warning when display black is on but the film base renders less than
     /// [`MIN_FILM_BASE_STOPS`] under mid-grey — crushed into a narrow band below it,
-    /// or (at or above mid-grey) not placed at all — or when the floor's cap
+    /// or (at or above mid-grey) not placed at all — or when the lift's cap
     /// ([`MAX_LIFT_SHARE`]) leaves the frame's dark end under it. `None` otherwise.
     pub fn warning(&self) -> Option<String> {
-        if let (DarkEnd::Floor(floor), Some(dark)) = (self.setting, self.frame_dark_stops) {
+        if let (DarkEnd::Floor(floor) | DarkEnd::Target(floor), Some(dark)) =
+            (self.setting, self.frame_dark_stops)
+            && let Some((_, what)) = self.setting.names()
+        {
             let lands = dark - self.shift_stops;
-            // A rounding's worth past the floor is the floor reached.
+            // A rounding's worth past the floor is the floor reached. Only a capped lift
+            // lands deeper; a capped push leaves a high-key frame's shadows light.
             return (lands > floor + 1e-3).then(|| {
                 format!(
                     "the frame's darkest 1 % renders {dark:.2} stops under mid-grey, so far \
-                     that the dark floor's lift stops at its cap (a third of the way to \
+                     that the {what}'s lift stops at its cap (a third of the way to \
                      mid-grey, so the shadows keep at least half their contrast): it lands \
-                     {lands:.2} stops under, below the floor's {floor}. The frame is very \
+                     {lands:.2} stops under, below the {what}'s {floor}. The frame is very \
                      steep or very dark: lower `--contrast` (recipe `look.contrast`) or raise \
                      `--exposure` (recipe `scene_correction.exposure`)"
                 )
@@ -409,9 +462,10 @@ impl ResolvedDarkEnd {
         ))
     }
 
-    /// Whether the floor is set but the frame has no measured dark end to hold.
-    pub fn floor_unread(&self) -> bool {
-        matches!(self.setting, DarkEnd::Floor(_)) && self.frame_dark_stops.is_none()
+    /// Whether the floor or the target is set but the frame has no measured dark end to
+    /// hold.
+    pub fn dark_unread(&self) -> bool {
+        self.setting.reads_frame_dark() && self.frame_dark_stops.is_none()
     }
 }
 
@@ -863,7 +917,7 @@ mod tests {
     const CAPPED_BASE: f32 = 0.0075;
 
     /// A steep frame's darkest 1 %: it renders ≈ 5.2 stops under mid-grey, under the
-    /// default floor.
+    /// 4.5-stop floor.
     const STEEP_DARK: f32 = 0.004;
 
     #[test]
@@ -885,7 +939,7 @@ mod tests {
 
     #[test]
     fn the_floor_lifts_the_frame_s_dark_end_to_its_target() {
-        for stops in [4.0_f32, DEFAULT_DARK_FLOOR_STOPS, 5.0] {
+        for stops in [4.0_f32, REVIEWED_DARK_FLOOR_STOPS, 5.0] {
             let p = with_floor(stops, Some(STEEP_DARK), 1.0);
             let got = f64::from(operator(&p).apply(STEEP_DARK));
             let want = MID_GREY * (-f64::from(stops)).exp2();
@@ -905,8 +959,8 @@ mod tests {
         let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
         // 0.0075 renders ≈ 4.4 stops under mid-grey: above a 4.5-stop floor.
         for p in [
-            with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0),
-            with_floor(DEFAULT_DARK_FLOOR_STOPS, None, 1.0),
+            with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0),
+            with_floor(REVIEWED_DARK_FLOOR_STOPS, None, 1.0),
         ] {
             let r = p.resolved().dark_end;
             assert_eq!(r.curve, IDENTITY, "{r:?}");
@@ -916,20 +970,86 @@ mod tests {
             }
         }
         // Without measured tones the floor has nothing to hold, and says so.
-        let unread = with_floor(DEFAULT_DARK_FLOOR_STOPS, None, 1.0)
+        let unread = with_floor(REVIEWED_DARK_FLOOR_STOPS, None, 1.0)
             .resolved()
             .dark_end;
-        assert!(unread.floor_unread() && unread.frame_dark_stops.is_none());
-        let read = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0)
+        assert!(unread.dark_unread() && unread.frame_dark_stops.is_none());
+        let read = with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(CAPPED_BASE), 1.0)
             .resolved()
             .dark_end;
-        assert!(!read.floor_unread());
+        assert!(!read.dark_unread());
         assert!(
             !with_black(BLACK, CAPPED_BASE, 1.0)
                 .resolved()
                 .dark_end
-                .floor_unread()
+                .dark_unread()
         );
+    }
+
+    /// The target at `stops`, for a frame whose graded dark end is `frame_dark`.
+    fn with_target(stops: f32, frame_dark: f32) -> FitRangeParams {
+        FitRangeParams {
+            frame_dark: Some(frame_dark),
+            ..with_black(DarkEnd::Target(stops), CAPPED_BASE, 1.0)
+        }
+    }
+
+    #[test]
+    fn the_target_moves_the_frame_s_dark_end_either_way_onto_it() {
+        // CAPPED_BASE renders ≈ 4.4 stops under (pushed), STEEP_DARK ≈ 5.2 (lifted at 5,
+        // pushed at 6).
+        for (dark, stops) in [
+            (CAPPED_BASE, 5.0_f32),
+            (CAPPED_BASE, 6.0),
+            (STEEP_DARK, 5.0),
+            (STEEP_DARK, 6.0),
+        ] {
+            let p = with_target(stops, dark);
+            let got = f64::from(operator(&p).apply(dark));
+            let want = MID_GREY * (-f64::from(stops)).exp2();
+            assert!(
+                (got / want - 1.0).abs() < 1e-5,
+                "{dark} at {stops}: {got} vs {want}"
+            );
+            let r = p.resolved().dark_end;
+            assert_eq!(r.curve, DARK_END_CURVE);
+            assert!(r.warning().is_none(), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn the_target_caps_its_push_at_two_thirds_of_the_way_to_mid_grey() {
+        // 0.09 renders ≈ 1.2 stops under mid-grey: a 6-stop target would need ≈ 4.8.
+        let p = with_target(6.0, 0.09);
+        let r = p.resolved().dark_end;
+        let dark = f64::from(r.frame_dark_stops.expect("measured"));
+        let shift = f64::from(r.shift_stops);
+        assert!((shift + dark * MAX_PUSH_SHARE).abs() < 1e-4, "{r:?}");
+        // Capped short of the target, and lighter than it: no warning.
+        assert!(r.warning().is_none(), "{r:?}");
+        // The curve's log-log slope stays at or under 2 across the shift's band.
+        let o = operator(&p);
+        let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
+        let samples: Vec<f64> = (0..=200)
+            .map(|i| 0.01 * (18.0_f64).powf(f64::from(i) / 200.0))
+            .collect();
+        for w in samples.windows(2) {
+            let (a, b) = (w[0] as f32, w[1] as f32);
+            let out = f64::from(o.apply(b)).log2() - f64::from(o.apply(a)).log2();
+            let input = f64::from(plain.apply(b)).log2() - f64::from(plain.apply(a)).log2();
+            assert!(out / input <= 2.0 + 1e-3, "at {a}: {}", out / input);
+        }
+    }
+
+    #[test]
+    fn the_target_leaves_a_dark_end_at_or_above_mid_grey_alone() {
+        let plain = op(DEFAULT_HEADROOM_STOPS, 1.0);
+        let p = with_target(6.0, 0.25);
+        let r = p.resolved().dark_end;
+        assert_eq!((r.curve, r.shift_stops), (IDENTITY, 0.0), "{r:?}");
+        for v in sweep() {
+            assert_eq!(operator(&p).apply(v).to_bits(), plain.apply(v).to_bits());
+        }
     }
 
     #[test]
@@ -938,9 +1058,10 @@ mod tests {
         for (p, darker) in [
             (with_black(BLACK, CAPPED_BASE, 1.0), true),
             (
-                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
                 false,
             ),
+            (with_target(6.0, CAPPED_BASE), true),
         ] {
             let o = operator(&p);
             // Reinhard maps mid-grey to itself, so every input from 0.18 up renders at or
@@ -958,7 +1079,7 @@ mod tests {
         for (p, reference) in [
             (with_black(BLACK, CAPPED_BASE, 1.0), CAPPED_BASE),
             (
-                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
                 STEEP_DARK,
             ),
         ] {
@@ -994,7 +1115,7 @@ mod tests {
         // The floor at its deepest reach: a reference far under it would fold the curve
         // over without the cap.
         for dark in [1e-9_f32, 1e-6, 1e-4, STEEP_DARK, 0.01] {
-            for stops in [0.5_f32, DEFAULT_DARK_FLOOR_STOPS, MAX_DARK_END_STOPS] {
+            for stops in [0.5_f32, REVIEWED_DARK_FLOOR_STOPS, MAX_DARK_END_STOPS] {
                 check(
                     with_floor(stops, Some(dark), 1.0),
                     format!("dark {dark}, floor {stops}"),
@@ -1007,7 +1128,7 @@ mod tests {
     fn the_floor_s_lift_is_capped_so_the_curve_stays_at_half_slope() {
         // ≈ 12 stops under mid-grey: the 4.5-stop floor would ask a 7.5-stop lift.
         let deep = 0.18 * 2f32.powi(-12) / 1.2194;
-        let p = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(deep), 1.0);
+        let p = with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(deep), 1.0);
         let r = p.resolved().dark_end;
         let dark = r.frame_dark_stops.unwrap();
         assert!(
@@ -1017,8 +1138,16 @@ mod tests {
         // Held short, and said so; a floor reached is not.
         let w = r.warning().expect("warned");
         assert!(w.contains("cap") && w.contains("--contrast"), "{w}");
-        let reached = with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0).resolved();
+        let reached = with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0).resolved();
         assert_eq!(reached.dark_end.warning(), None);
+        // The default target's lift is capped and warned about the same way, naming it.
+        let t = with_target(DEFAULT_DARK_TARGET_STOPS, deep)
+            .resolved()
+            .dark_end;
+        assert!((t.shift_stops - r.shift_stops).abs() < 1e-6, "{t:?}");
+        let w = t.warning().expect("warned");
+        assert!(w.contains("dark target's lift stops at its cap"), "{w}");
+        assert!(w.contains("below the dark target's 5.5"), "{w}");
         let o = operator(&p);
         let slope = |v: f32| (o.apply(v * 1.001) / o.apply(v)).ln() / 1.001f32.ln();
         let flattest = sweep()
@@ -1056,8 +1185,8 @@ mod tests {
                 with_black(BLACK, CAPPED_BASE, HDR_PEAK),
             ),
             (
-                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
-                with_floor(DEFAULT_DARK_FLOOR_STOPS, Some(STEEP_DARK), HDR_PEAK),
+                with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(STEEP_DARK), 1.0),
+                with_floor(REVIEWED_DARK_FLOOR_STOPS, Some(STEEP_DARK), HDR_PEAK),
             ),
         ] {
             let (sdr, hdr) = (operator(&sdr), operator(&hdr));
@@ -1082,10 +1211,15 @@ mod tests {
             assert_eq!(r.curve, IDENTITY, "{r:?}");
             assert!(r.warning().expect("warned").contains("skipped"));
         }
-        // A normal base, black off, and the floor (which never reads the base), are not.
+        // A normal base, black off, and the floor and target (which never read the base),
+        // are not.
         let r = with_black(BLACK, CAPPED_BASE, 1.0).resolved().dark_end;
         assert_eq!(r.warning(), None);
-        for setting in [DarkEnd::Off, DarkEnd::default()] {
+        for setting in [
+            DarkEnd::Off,
+            DarkEnd::Floor(REVIEWED_DARK_FLOOR_STOPS),
+            DarkEnd::default(),
+        ] {
             let r = with_black(setting, 0.5, 1.0).resolved().dark_end;
             assert_eq!(r.warning(), None);
         }
@@ -1112,12 +1246,15 @@ mod tests {
     fn the_dark_end_reads_its_spellings() {
         assert_eq!(DarkEnd::parse_floor("4.5"), Ok(DarkEnd::Floor(4.5)));
         assert_eq!(DarkEnd::parse_black("6"), Ok(DarkEnd::Black(6.0)));
+        assert_eq!(DarkEnd::parse_target("5.5"), Ok(DarkEnd::Target(5.5)));
         assert_eq!(DarkEnd::parse_floor("off"), Ok(DarkEnd::Off));
+        assert_eq!(DarkEnd::parse_target("off"), Ok(DarkEnd::Off));
         assert_eq!(DarkEnd::parse_black("off"), Ok(DarkEnd::Off));
         assert!(DarkEnd::parse_floor("none").is_err());
         for (json, value) in [
             (r#"{"floor": 4.5}"#, DarkEnd::Floor(4.5)),
             (r#"{"black": 6}"#, DarkEnd::Black(6.0)),
+            (r#"{"target": 5.5}"#, DarkEnd::Target(5.5)),
             (r#""off""#, DarkEnd::Off),
         ] {
             let back: DarkEnd = serde_json::from_str(json).unwrap();
@@ -1137,7 +1274,11 @@ mod tests {
             assert!(serde_json::from_str::<DarkEnd>(bad).is_err(), "{bad}");
         }
         for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
-            for setting in [DarkEnd::Floor(bad), DarkEnd::Black(bad)] {
+            for setting in [
+                DarkEnd::Floor(bad),
+                DarkEnd::Target(bad),
+                DarkEnd::Black(bad),
+            ] {
                 let Err(DarkEndFault(v)) = setting.check() else {
                     panic!("{setting:?} accepted");
                 };
@@ -1146,7 +1287,10 @@ mod tests {
         }
         assert_eq!(DarkEnd::Black(MAX_DARK_END_STOPS).check(), Ok(()));
         assert_eq!(DarkEnd::Off.check(), Ok(()));
-        assert_eq!(DarkEnd::default(), DarkEnd::Floor(DEFAULT_DARK_FLOOR_STOPS));
+        assert_eq!(
+            DarkEnd::default(),
+            DarkEnd::Target(DEFAULT_DARK_TARGET_STOPS)
+        );
     }
 
     #[test]

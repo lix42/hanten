@@ -1262,25 +1262,41 @@ pub struct DisplayOverrides {
     pub display_tone_headroom: Option<f32>,
     /// The dark floor: the frame's darkest 1 % (its measured dark end, from `hanten
     /// measure-roll`) renders no deeper than this many stops below mid-grey on the
-    /// display, or `off` (recipe key `fit_range.dark_end`, `{"floor": STOPS}`; the
-    /// `default` rendering's, at 4.5, about L* 7; `direct` has display black instead). A
-    /// frame whose dark end renders deeper is lifted, the lift fading to nothing at
-    /// mid-grey and capped at a third of the way there (the report warns when the cap
-    /// holds it short); a lighter one is left alone. It holds the shadows of a steep
-    /// `--contrast`. Without a measured dark end it does nothing. Mid-grey and everything
-    /// above it do not move.
+    /// display, or `off` (recipe key `fit_range.dark_end`, `{"floor": STOPS}`; 4.5, about
+    /// L* 7, was the `default` rendering's). A frame whose dark end renders deeper is
+    /// lifted, the lift fading to nothing at mid-grey and capped at a third of the way
+    /// there (the report warns when the cap holds it short); a lighter one is left alone.
+    /// It holds the shadows of a steep `--contrast`. Without a measured dark end it does
+    /// nothing. Mid-grey and everything above it do not move.
     #[arg(
         long = "dark-floor",
         value_name = "STOPS|off",
         allow_hyphen_values = true,
         value_parser = crate::pipeline::fit_range::DarkEnd::parse_floor,
-        conflicts_with = "display_black"
+        conflicts_with_all = ["display_black", "dark_target"]
     )]
     pub dark_floor: Option<crate::pipeline::fit_range::DarkEnd>,
+    /// The dark target: the frame's darkest 1 % (its measured dark end, from `hanten
+    /// measure-roll`) renders this many stops below mid-grey on the display, or `off`
+    /// (recipe key `fit_range.dark_end`, `{"target": STOPS}`; the `default` rendering's, at
+    /// 5.5, about L* 3.6; `direct` has display black instead). It replaces the dark floor
+    /// and display black: the three set one key. Unlike the floor it moves the dark end **either way** — a
+    /// lighter dark end is pushed down, a deeper one lifted — fading to nothing at
+    /// mid-grey. A push is capped at two thirds of the way to mid-grey, so a high-key
+    /// frame keeps its light shadows; a lift is capped as the floor's. Without a measured
+    /// dark end it does nothing. Mid-grey and everything above it do not move.
+    #[arg(
+        long = "dark-target",
+        value_name = "STOPS|off",
+        allow_hyphen_values = true,
+        value_parser = crate::pipeline::fit_range::DarkEnd::parse_target,
+        conflicts_with = "display_black"
+    )]
+    pub dark_target: Option<crate::pipeline::fit_range::DarkEnd>,
     /// Display black: where the film base — the darkest thing on the film — renders,
     /// in stops below mid-grey on the display, or `off` (recipe key `fit_range.dark_end`,
     /// `{"black": STOPS}`; `--rendering direct` pins 6, about L* 2.5). It replaces the
-    /// dark floor: the two set one key. Fewer stops give lighter shadows with more
+    /// dark target: the three set one key. Fewer stops give lighter shadows with more
     /// detail, more stops a deeper black. A base already that deep is left alone.
     /// Mid-grey and everything above it do not move.
     #[arg(
@@ -2259,26 +2275,24 @@ fn reject_a_tilt_without_its_gains(
     )))
 }
 
-/// `--dark-floor STOPS` under `direct`: the floor holds a frame's measured dark end, and
-/// `direct` leaves the roll's measurements out, so it could never act. Its `off` is spared:
-/// it turns off `direct`'s display black. A film master is left to its own refusal, whose
+/// `--dark-floor STOPS` or `--dark-target STOPS` under `direct`: each holds a frame's
+/// measured dark end, and `direct` leaves the roll's measurements out, so it could never
+/// act. Their `off` is spared: it turns off `direct`'s display black. A film master is left to its own refusal, whose
 /// remedy works where `--rendering default` alone would not.
 fn reject_a_floor_nothing_measures(args: &ConversionFlags, r: &Recipe) -> Result<()> {
-    if r.rendering != crate::rendering::Rendering::Direct
-        || r.output == OutputSection::FilmMaster
-        || !matches!(
-            args.display.dark_floor,
-            Some(crate::pipeline::fit_range::DarkEnd::Floor(_))
-        )
-    {
+    if r.rendering != crate::rendering::Rendering::Direct || r.output == OutputSection::FilmMaster {
         return Ok(());
     }
-    Err(NcError::Usage(
-        "--dark-floor holds a frame's measured dark end, but the rendering is `direct` \
+    let flag = match (args.display.dark_floor, args.display.dark_target) {
+        (Some(d), _) if d.reads_frame_dark() => "--dark-floor",
+        (_, Some(d)) if d.reads_frame_dark() => "--dark-target",
+        _ => return Ok(()),
+    };
+    Err(NcError::Usage(format!(
+        "{flag} holds a frame's measured dark end, but the rendering is `direct` \
          (--rendering, recipe `rendering`), which leaves the roll's measurements out, so it \
-         has none to hold. Either drop --dark-floor, or pass --rendering default"
-            .into(),
-    ))
+         has none to hold. Either drop {flag}, or pass --rendering default"
+    )))
 }
 
 /// Refuse typed roll flags when nothing will apply them: a recipe's film master (a typed
@@ -4770,13 +4784,12 @@ fn render_frame(
     if let Some(message) = rendered.and_then(|r| r.fit_range.dark_end.warning()) {
         push_warning_buf(warnings, log, message);
     }
-    // Only a floor the user stated is owed a word: the default's is silent where a frame
-    // has no measured dark end, as on any unmeasured roll.
-    if rendered.is_some_and(|r| r.fit_range.dark_end.floor_unread())
-        && matches!(
-            recipe.fit_range.dark_end,
-            Some(fit_range::DarkEnd::Floor(_))
-        )
+    // Only a floor or target the user stated is owed a word: the default's is silent where
+    // a frame has no measured dark end, as on any unmeasured roll.
+    if rendered.is_some_and(|r| r.fit_range.dark_end.dark_unread())
+        && let Some(stated) = recipe.fit_range.dark_end
+        && stated.reads_frame_dark()
+        && let Some((flag, what)) = stated.names()
     {
         let measured = recipe.roll.white_stops.is_some() || !recipe.roll.frames.is_empty();
         let remedy = if !recipe.base().applies_roll {
@@ -4794,8 +4807,8 @@ fn render_frame(
             warnings,
             log,
             format!(
-                "the dark floor (`--dark-floor`, recipe `fit_range.dark_end`) was set, but \
-                 this frame has no measured dark end to hold, so it did nothing: {remedy}"
+                "the {what} (`{flag}`, recipe `fit_range.dark_end`) was set, but this frame has no \
+                 measured dark end to hold, so it did nothing: {remedy}"
             ),
         );
     }
