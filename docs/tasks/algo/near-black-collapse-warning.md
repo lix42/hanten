@@ -1,5 +1,8 @@
 # Near-black collapse warning
 
+> **Done 2026-10-13.** `pipeline::near_black` measures; `cli::near_black_warning` warns.
+> The open questions are answered below; the evidence is in `docs/progress/algo.md`.
+
 ## Goal
 
 Warn when a render collapses to near-black without any channel reaching exactly 0:
@@ -25,10 +28,21 @@ parts 1 and 2 landed (2026-10-01) because it alone needs real scans.
 
 - The measure: dynamic range, a near-black fraction, the maximum against the
   destination's reference white, or a mix — and per destination or on the
-  display-referred buffer before the encode.
+  display-referred buffer before the encode. **Each channel's p99.9 on the
+  display-referred buffer before the encode** (`pipeline::near_black`), where diffuse
+  white is 1 for every destination. A percentile, not the maximum, so a glint cannot hide
+  a collapse. Per channel, like part 2.
 - The threshold, set so every real frame in `../nc-assets`, the darkest included,
-  stays silent.
-- Whether it should replace part 2's exact rule or sit beside it.
+  stays silent. **10 stops below diffuse white.** The darkest of 246 real frames sits
+  0.83 stops below under its roll's recipe, and 5.68 stops below with only the film base
+  stated (the thin roll, uncorrected). That leaves a 4.3-stop margin.
+- Whether it should replace part 2's exact rule or sit beside it. **Beside it.** Part 2
+  needs no threshold and covers the film master, which has no display white. A channel
+  part 2 names is not named again.
+
+> **2026-10-13:** on today's chain `--exposure=-20` quantizes to all zero in SDR and
+> part 2 catches it. The cases part 2 misses are now `--exposure=-10` and `-14` on SDR,
+> PQ, linear float and gain map, and `-100` on linear float.
 
 ## How to Verify
 

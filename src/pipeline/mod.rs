@@ -35,6 +35,7 @@ pub mod input_semantics;
 pub mod look;
 pub mod memory;
 pub mod midtone_neutral;
+pub mod near_black;
 pub mod pixels;
 pub mod reference_frames;
 pub mod roll_balance;
