@@ -40,6 +40,7 @@ use crate::pipeline::input_semantics::{
 };
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::midtone_neutral::MidtoneLine;
+use crate::pipeline::near_black::{self, BrightEnd};
 use crate::pipeline::roll_balance::{RollBalance, WhiteBalanceForm};
 use crate::pipeline::roll_white::FrameStops;
 use crate::pipeline::working_space::AcesCgImage;
@@ -4019,6 +4020,51 @@ fn convert_frame(
 
 const CHANNEL_NAMES: [&str; 3] = ["red", "green", "blue"];
 
+/// `channels` named for a warning: "red channel", "red and blue channels", ….
+fn channel_list(channels: &[usize]) -> String {
+    match channels {
+        [c] => format!("{} channel", CHANNEL_NAMES[*c]),
+        [a, b] => format!("{} and {} channels", CHANNEL_NAMES[*a], CHANNEL_NAMES[*b]),
+        [_, _, _] => "red, green and blue channels".into(),
+        _ => unreachable!("one to three channels, got {channels:?}"),
+    }
+}
+
+/// The near-black warning: channels whose bright end collapsed, less those the
+/// black-channel warning already named (`stats`). The remedy is chosen over every
+/// collapsed channel, named or not: the exposure when all three are, else their white
+/// balance gains.
+fn near_black_warning(bright_end: &BrightEnd, stats: &OutputStats) -> Option<String> {
+    let all = bright_end.collapsed();
+    let black = stats.black_channels();
+    let named: Vec<usize> = all.iter().copied().filter(|c| !black.contains(c)).collect();
+    if named.is_empty() {
+        return None;
+    }
+    let remedy = if all.len() == 3 {
+        "raise `--exposure` (recipe `scene_correction.exposure`)"
+    } else {
+        "raise their gains in `--white-balance` (recipe `scene_correction.white_balance`)"
+    };
+    // The least dark named channel bounds them all; whole stops, as the bin is 0.17 wide.
+    let least_dark = named
+        .iter()
+        .map(|&c| bright_end.stops(c))
+        .fold(f32::NEG_INFINITY, f32::max);
+    let level = if least_dark.is_finite() {
+        format!("about {:.0} stops or more below diffuse white", -least_dark)
+    } else {
+        "at 0".into()
+    };
+    Some(format!(
+        "{:.1} % of the samples in the {} sit {level}, past the {}-stop near-black \
+         threshold: the frame renders near-black there; {remedy}",
+        near_black::PERCENTILE * 100.0,
+        channel_list(&named),
+        near_black::COLLAPSE_STOPS,
+    ))
+}
+
 /// Fold an encode's loss and output statistics into the report, warning on any
 /// loss. Shared by both flows' encode sites so the loss is described one way.
 fn report_encode_outcome(
@@ -4049,11 +4095,7 @@ fn report_encode_outcome(
     // A channel at 0 everywhere is in range, so no loss counter sees it.
     let black = outcome.stats.black_channels();
     if loss.total_samples > 0 && !black.is_empty() {
-        let channels = match black.as_slice() {
-            [c] => format!("{} channel", CHANNEL_NAMES[*c]),
-            [a, b] => format!("{} and {} channels", CHANNEL_NAMES[*a], CHANNEL_NAMES[*b]),
-            _ => "red, green and blue channels".into(),
-        };
+        let channels = channel_list(&black);
         push_warning_buf(
             warnings,
             log,
@@ -4230,6 +4272,9 @@ struct ChainAccount {
     scene_correction: scene_correction::SceneCorrection,
     look: look::LookSection,
     fit_range: fit_range::FitRange,
+    /// The display-referred buffer's bright end, the near-black warning's input; for a
+    /// gain map, the SDR base's.
+    bright_end: BrightEnd,
 }
 
 /// A rendered destination's pixels, in its encoder's input type. One arm per
@@ -4436,13 +4481,15 @@ fn render_one(
         fit_range,
     } = chain::render(aces, film_base, &params, clock)?;
     let (linear, gamut) = image.into_parts();
-    let pixels = clock.time(StageKind::Destination, || {
-        encode(OneRendition {
+    let (bright_end, pixels) = clock.time(StageKind::Destination, || {
+        let bright_end = near_black::measure(&linear.rgb);
+        let pixels = encode(OneRendition {
             linear,
             gamut,
             tone_curve: fit_range.applied(),
             gamut_mapping: applied[3].1,
-        })
+        })?;
+        Ok::<_, NcError>((bright_end, pixels))
     })?;
     Ok(DestinationRender::Rendered {
         rendered: Box::new(ChainAccount {
@@ -4450,6 +4497,7 @@ fn render_one(
             scene_correction,
             look,
             fit_range,
+            bright_end,
         }),
         pixels,
     })
@@ -4485,41 +4533,44 @@ fn render_gain_map(
     let base_fit_range = sdr.fit_range;
     let (sdr_linear, gamut) = sdr.image.into_parts();
     let (mut hdr_linear, _) = hdr.image.into_parts();
-    let (base, icc, map, clamp, report, staged) = clock.time(StageKind::Destination, || {
-        let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
-        let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
-        let map = gain_encode::encode(&ratios)?;
-        let staged = export_pages(
-            export,
-            &[
-                PreEncodePage::f32("sdr-linear", gamut.name(), &sdr_linear),
-                PreEncodePage::f32("hdr-linear", gamut.name(), &hdr_linear),
-                PreEncodePage {
-                    buffer: "gain-map-codes",
-                    space: "log2-gain-window",
-                    width: map.width,
-                    height: map.height,
-                    samples: PreEncodeSamples::U8(&map.rgb),
-                },
-            ],
-        )?;
-        drop(hdr_linear);
-        let report = GainMapResult {
-            range: ratios.range(),
-            width: map.width,
-            height: map.height,
-            base_fit_range,
-        };
-        drop(ratios);
-        let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
-        Ok::<_, NcError>((base, icc, map, clamp, report, staged))
-    })?;
+    let (base, icc, map, clamp, report, staged, bright_end) =
+        clock.time(StageKind::Destination, || {
+            let bright_end = near_black::measure(&sdr_linear.rgb);
+            let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
+            let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
+            let map = gain_encode::encode(&ratios)?;
+            let staged = export_pages(
+                export,
+                &[
+                    PreEncodePage::f32("sdr-linear", gamut.name(), &sdr_linear),
+                    PreEncodePage::f32("hdr-linear", gamut.name(), &hdr_linear),
+                    PreEncodePage {
+                        buffer: "gain-map-codes",
+                        space: "log2-gain-window",
+                        width: map.width,
+                        height: map.height,
+                        samples: PreEncodeSamples::U8(&map.rgb),
+                    },
+                ],
+            )?;
+            drop(hdr_linear);
+            let report = GainMapResult {
+                range: ratios.range(),
+                width: map.width,
+                height: map.height,
+                base_fit_range,
+            };
+            drop(ratios);
+            let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
+            Ok::<_, NcError>((base, icc, map, clamp, report, staged, bright_end))
+        })?;
     let render = DestinationRender::Rendered {
         rendered: Box::new(ChainAccount {
             applied: hdr.applied,
             scene_correction: hdr.scene_correction,
             look: hdr.look,
             fit_range: hdr.fit_range,
+            bright_end,
         }),
         pixels: DestinationPixels::GainMap {
             base,
@@ -4715,6 +4766,7 @@ fn render_frame(
         DestinationRender::Rendered { rendered, .. } => Some(rendered),
         DestinationRender::FilmMaster { .. } => None,
     };
+    let bright_end = rendered.map(|r| r.bright_end);
     if let Some(message) = rendered.and_then(|r| r.fit_range.dark_end.warning()) {
         push_warning_buf(warnings, log, message);
     }
@@ -4817,6 +4869,9 @@ fn render_frame(
         outcome.loss.total_samples += second_rendition_samples;
     }
     report_encode_outcome(&mut report, &outcome, log, warnings);
+    if let Some(message) = bright_end.and_then(|b| near_black_warning(&b, &outcome.stats)) {
+        push_warning_buf(warnings, log, message);
+    }
 
     // The primary goes last: its presence is what reads as success.
     pending.push(primary);
@@ -10134,6 +10189,51 @@ fn elapsed_ms(started: Instant) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_near_black_warning_names_what_part_2_did_not_and_a_remedy_that_reaches_it() {
+        let stats = |max: [f64; 3]| OutputStats {
+            mean: [0.0; 3],
+            max,
+        };
+        let deep = 2f32.powi(-14);
+        let all = near_black_warning(&BrightEnd([deep; 3]), &stats([1e-4; 3])).unwrap();
+        assert!(
+            all.contains("in the red, green and blue channels sit about 14 stops or more below"),
+            "{all}"
+        );
+        assert!(all.contains("`--exposure`"), "{all}");
+
+        let two =
+            near_black_warning(&BrightEnd([deep, deep, 0.5]), &stats([1e-4, 1e-4, 1.0])).unwrap();
+        assert!(two.contains("in the red and green channels sit"), "{two}");
+        assert!(
+            two.contains("`--white-balance`") && !two.contains("--exposure"),
+            "{two}"
+        );
+
+        // Blue written as 0 is part 2's to name, but all three collapsed, so the remedy
+        // is still the exposure; red reads 0 at its percentile, green bounds the level.
+        let rest =
+            near_black_warning(&BrightEnd([0.0, deep, 0.0]), &stats([1e-4, 1e-4, 0.0])).unwrap();
+        assert!(
+            rest.contains("in the red and green channels sit about 14 stops"),
+            "{rest}"
+        );
+        assert!(rest.contains("`--exposure`"), "{rest}");
+
+        let only_zero = BrightEnd([0.0, 1.0, 1.0]);
+        let zero = near_black_warning(&only_zero, &stats([1e-4, 1.0, 1.0])).unwrap();
+        assert!(zero.contains("in the red channel sit at 0,"), "{zero}");
+        assert_eq!(
+            near_black_warning(&only_zero, &stats([0.0, 1.0, 1.0])),
+            None
+        );
+        assert_eq!(
+            near_black_warning(&BrightEnd([1.0; 3]), &stats([1.0; 3])),
+            None
+        );
+    }
 
     #[test]
     fn the_confidence_advice_names_only_what_is_in_doubt_with_its_own_count() {

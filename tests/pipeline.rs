@@ -17338,6 +17338,106 @@ fn a_channel_rendered_black_everywhere_warns() {
     );
 }
 
+/// A render whose brightest content sits far below diffuse white warns on every rendered
+/// destination, though no channel reaches exactly 0, and `--strict` promotes it; a channel
+/// the black-channel warning names is not named again.
+#[test]
+fn a_near_black_render_warns() {
+    const MARKER: &str = "near-black threshold";
+    let tmp = TempDir::new("near-black");
+    let input = fixture("hdr-48bit.tif");
+    // The black-channel test's measured roll.
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--roll-white",
+            "2.5",
+            "--roll-dark",
+            "-20",
+            "--roll-white-balance",
+            "1,1,1",
+            "--roll-exposure",
+            "0",
+        ];
+        argv.extend_from_slice(extra);
+        run(&argv)
+    };
+    let warnings = |stdout: &str| -> Vec<String> {
+        json(stdout)["warnings"]
+            .as_array()
+            .map(|a| a.iter().map(|w| w.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    };
+    let near_black = |stdout: &str| warnings(stdout).into_iter().find(|w| w.contains(MARKER));
+
+    let (code, stdout, err) = convert("normal", &[]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(near_black(&stdout), None, "{stdout}");
+
+    // The gain map's 8-bit base writes 0 from about 12.7 stops down.
+    for (name, argv) in [
+        ("sdr", &["--exposure=-14"][..]),
+        ("pq", &["--exposure=-14", "--transfer", "pq"][..]),
+        (
+            "linear",
+            &[
+                "--exposure=-14",
+                "--transfer",
+                "linear",
+                "--gamut",
+                "bt2020",
+            ][..],
+        ),
+        ("gain-map", &["--exposure=-11", "--range", "hdr"][..]),
+    ] {
+        let (code, stdout, err) = convert(name, argv);
+        assert_eq!(code, 0, "{name}: {err}");
+        let warning = near_black(&stdout).unwrap_or_else(|| panic!("{name}: {stdout}"));
+        assert!(
+            warning.contains("of the samples in the red, green and blue channels sit about 1")
+                && warning.contains("raise `--exposure`"),
+            "{name}: {warning}"
+        );
+    }
+    let (code, _, err) = convert("strict", &["--exposure=-14", "--strict"]);
+    assert_ne!(code, 0, "--strict must refuse: {err}");
+
+    // Float HDR keeps what a 16-bit code rounds to 0: only this warning sees it.
+    let linear = [
+        "--exposure=-100",
+        "--transfer",
+        "linear",
+        "--gamut",
+        "bt2020",
+    ];
+    let (code, stdout, err) = convert("float", &linear);
+    assert_eq!(code, 0, "{err}");
+    assert!(near_black(&stdout).is_some(), "{stdout}");
+    assert!(
+        !warnings(&stdout)
+            .iter()
+            .any(|w| w.contains("no written sample is above 0")),
+        "{stdout}"
+    );
+
+    // Written as 0: the black-channel warning names it, and this one stays silent.
+    let (code, stdout, err) = convert("black", &["--exposure=-100"]);
+    assert_eq!(code, 0, "{err}");
+    let all = warnings(&stdout);
+    assert!(
+        all.iter()
+            .any(|w| w.contains("no written sample is above 0")),
+        "{stdout}"
+    );
+    assert_eq!(near_black(&stdout), None, "{stdout}");
+}
+
 /// `roll`'s measure mode's synthetic roll: an unexposed frame, a leader, and twelve picture
 /// frames — ten ramps, so the midtone line has votes, and a dim and a bright frame, the
 /// bright one clamped — with the recipe stating the scans' input semantics.

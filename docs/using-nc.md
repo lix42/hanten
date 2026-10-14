@@ -2444,6 +2444,19 @@ its own (`--exposure=-100` on a fixture, with the roll stated):
 ["no written sample is above 0 in the red, green and blue channels: the frame renders black there"]
 ```
 
+A render that is black in practice can still keep a few low codes, tiny float values,
+or PQ's floor. So every rendered destination also measures, per channel and before the
+encode, the level 99.9 % of the samples sit at or below. It warns when that level is more
+than 10 stops below diffuse white, so a few bright specks cannot hide a black frame. A channel the warning above already names is not named again. The
+film master has no display white and is not measured. `--exposure=-14` on the same fixture:
+
+```json
+["99.9 % of the samples in the red, green and blue channels sit about 15 stops or more below diffuse white, past the 10-stop near-black threshold: the frame renders near-black there; raise `--exposure` (recipe `scene_correction.exposure`)"]
+```
+
+When only some channels collapse, the remedy names their `--white-balance` gains
+instead; when all three do, it is the exposure, even if the warning above named some.
+
 A black that cannot approach black is out of the loss counters' sight too, so without
 display black (the default's floor included) the report warns when a frame is washed out. Three
 cases, each with its own remedy; none fires on any frame of the full archive at its
