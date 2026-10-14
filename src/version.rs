@@ -64,7 +64,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 13 | a frame's own exposure sits within ±1 EV of the roll's, for every placement (2026-10-10, `nf-calibration/per-frame-placement`; was −1.5 / +0.5), so a measured roll's hybrid frames move (on 09-29 its darkest frames lift up to +0.47 EV). Adds the opt-in `--placement frame` (each frame from its own span, its white at L\* 93). `render`, `base` and `recipe` are unmoved — the limits act after the gate — so the row was added by hand. |
 /// | 14 | a hybrid frame the ±1 EV limit holds flattens until its ends stay inside the roll's envelope (2026-10-11, `nf-calibration/hybrid-slope-bounds`); no archive frame is held, so no measured archive render moves. `render`, `base` and `recipe` are unmoved — the guard acts after the gate — so the row was added by hand. |
 /// | 15 | the dark floor is on by default (2026-10-12, `nf-display-stages/midtone-contrast-toe`): a frame whose measured darkest 1 % (its `roll.frames` entry `tones`) renders deeper than 4.5 stops below mid-grey is lifted there, the lift fading to nothing at mid-grey. Display black became the other setting of the same key, `fit_range.dark_end` (`fit_range.display_black` retired; `direct` keeps its pinned black 6). At the default slope no reviewed frame is lifted; frames wider than the placement fits, and `--contrast 1.3`, are. `render` and `base` are unmoved; `recipe` moved with the key and the `default` rendering's base. |
-/// | 16 | **current** — the hybrid's span target R 7 → **8** look stops (2026-10-13, `nf-calibration/hybrid-span-target`): a measured roll's hybrid frames steepen inside the envelope (192 of 226 archive frames; by 8/7 where the span already set the slope), so on a thin roll they brighten rather than deepen. `render`, `base` and `recipe` are unmoved — R acts after the gate — so the row was added by hand. |
+/// | 16 | **current** — the hybrid's span target R 7 → **8** look stops (2026-10-13, `nf-calibration/hybrid-span-target`): a measured roll's hybrid frames steepen inside the envelope (192 of 226 archive frames; by 8/7 where the span already set the slope), so on a thin roll they brighten rather than deepen. `render` and `base` are unmoved — R acts after the gate — so the row was added by hand; `recipe` was refreshed in place for the opt-in `roll.white_balance_form` and `roll.white_balance_stops`. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -534,12 +534,13 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
     },
     // v16 — the hybrid's span target R 7 → 8 (2026-10-13,
     // `nf-calibration/hybrid-span-target`). No fingerprint moved: R acts after the gate, so
-    // the bump is by hand.
+    // the bump is by hand. `recipe` refreshed in place by `nf-scene-correction/two-point-tilt`
+    // for its opt-in keys (`roll.white_balance_form`, `roll.white_balance_stops`).
     PipelineFingerprint {
         pipeline_version: 16,
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
-        recipe: "34c2341db63d13ae",
+        recipe: "2fd4ff2e479ca60d",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

@@ -64,9 +64,7 @@ use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, DisplayReferredImage, FitGamutParams};
 use crate::pipeline::fit_range::{self, DarkEnd, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
-use crate::pipeline::scene_correction::{
-    self, MidtoneCorrection, SceneCorrection, SceneCorrectionParams,
-};
+use crate::pipeline::scene_correction::{self, RollColour, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::stage::{StageClock, StageKind, Untimed};
 use crate::types::{LinearImage, NcError, Result};
@@ -81,8 +79,8 @@ use crate::types::{LinearImage, NcError, Result};
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedParams {
     pub scene_correction: SceneCorrectionParams,
-    /// The roll's midtone line, from the recipe's `roll` section.
-    pub midtone: Option<MidtoneCorrection>,
+    /// The roll's midtone line and tilt, from the recipe's `roll` section.
+    pub roll_colour: Option<RollColour>,
     pub look: LookParams,
     /// Fit range's headroom in stops (the recipe's `fit_range.headroom_stops`).
     pub headroom_stops: f32,
@@ -271,7 +269,7 @@ fn grade(
     clock: &mut impl StageClock,
 ) -> Result<(GradedImage, SceneCorrection)> {
     let (corrected, scene_correction) = clock.time(StageKind::SceneCorrection, || {
-        scene_correction::apply(image, &shared.scene_correction, shared.midtone.as_ref())
+        scene_correction::apply(image, &shared.scene_correction, shared.roll_colour.as_ref())
     })?;
     let graded = clock.time(StageKind::Look, || look::apply(corrected, &shared.look))?;
     Ok((graded, scene_correction))
@@ -438,7 +436,7 @@ mod tests {
         ChainParams {
             shared: SharedParams {
                 scene_correction: SceneCorrectionParams::default(),
-                midtone: None,
+                roll_colour: None,
                 look: LookParams::off(),
                 headroom_stops: 0.0,
                 dark_end: DarkEnd::Off,
@@ -495,10 +493,13 @@ mod tests {
     /// The chain up to fit range with every stage at its identity.
     fn through_fit_range(image: AcesCgImage) -> RangeFittedImage {
         let p = params();
-        let corrected =
-            scene_correction::apply(image, &p.shared.scene_correction, p.shared.midtone.as_ref())
-                .unwrap()
-                .0;
+        let corrected = scene_correction::apply(
+            image,
+            &p.shared.scene_correction,
+            p.shared.roll_colour.as_ref(),
+        )
+        .unwrap()
+        .0;
         let graded = look::apply(corrected, &p.shared.look).unwrap();
         fit_range::apply(graded, &fit_range_params(&p)).unwrap()
     }
@@ -656,10 +657,13 @@ mod tests {
         let aces = aces_from(3, 1, &[0.18, 0.18, 0.18, 4.0, 4.0, 4.0, 3.0, 1.5, 0.5]);
         let input = aces.rgb().to_vec();
         let p = shipped_params();
-        let corrected =
-            scene_correction::apply(aces, &p.shared.scene_correction, p.shared.midtone.as_ref())
-                .unwrap()
-                .0;
+        let corrected = scene_correction::apply(
+            aces,
+            &p.shared.scene_correction,
+            p.shared.roll_colour.as_ref(),
+        )
+        .unwrap()
+        .0;
         let graded = look::apply(corrected, &p.shared.look).unwrap();
         let out = fit_range::apply(graded, &fit_range_params(&p))
             .unwrap()
@@ -888,10 +892,13 @@ mod tests {
         let aces = aces_from(1, 1, &[0.2, 0.4, 0.6]);
         let p = params();
 
-        let corrected =
-            scene_correction::apply(aces, &p.shared.scene_correction, p.shared.midtone.as_ref())
-                .unwrap()
-                .0;
+        let corrected = scene_correction::apply(
+            aces,
+            &p.shared.scene_correction,
+            p.shared.roll_colour.as_ref(),
+        )
+        .unwrap()
+        .0;
         let graded = look::apply(corrected, &p.shared.look).unwrap();
         let fitted = fit_range::apply(graded, &fit_range_params(&p)).unwrap();
         let out: DisplayReferredImage = fit_gamut::apply(
@@ -1129,7 +1136,7 @@ mod tests {
                 white_balance: WhiteBalance::Explicit([1.1, 1.0, 0.9]),
                 exposure: 0.25,
             },
-            midtone: None,
+            roll_colour: None,
             look: LookParams {
                 // Pinned, so moving the fallback slope does not move the contract
                 // tests' grid onto the HDR cube's faces.

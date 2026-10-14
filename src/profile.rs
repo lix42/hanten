@@ -195,6 +195,8 @@ pub const REFUSED_FLAGS: &[(&str, &str)] = &[
     ("roll", "--roll-midtone-line"),
     ("roll", "--midtone-neutral"),
     ("roll", "--neutral-balance"),
+    ("roll", "--white-balance-form"),
+    ("roll", "--roll-white-balance-stops"),
     ("scene_correction", "--white-balance"),
     ("scene_correction", "--exposure"),
 ];
@@ -265,6 +267,7 @@ const ROLL_SWITCHES: &[(&str, &str)] = &[
     ("--hybrid-level-keep", "hybrid_level_keep"),
     ("--midtone-neutral", "midtone_neutral"),
     ("--neutral-balance", "neutral_balance"),
+    ("--white-balance-form", "white_balance_form"),
 ];
 
 /// Whether `flag`, one of [`REFUSED_FLAGS`], is on the command line.
@@ -290,6 +293,8 @@ fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
         "--roll-midtone-line" => roll.roll_midtone_line.is_some(),
         "--midtone-neutral" => roll.midtone_neutral.is_some(),
         "--neutral-balance" => roll.neutral_balance.is_some(),
+        "--white-balance-form" => roll.white_balance_form.is_some(),
+        "--roll-white-balance-stops" => roll.roll_white_balance_stops.is_some(),
         "--white-balance" => scene.white_balance.is_some(),
         "--exposure" => scene.exposure.is_some(),
         _ => false,
@@ -774,6 +779,7 @@ mod tests {
             "--roll-midtone-line" => "1,0,1,0,-1,1,2",
             "--small-lift" | "--thin-lift" | "--midtone-neutral" | "--neutral-balance" => "off",
             "--placement" => "roll",
+            "--white-balance-form" => "tilt",
             "--roll-envelope" => "-4,2",
             "--roll-frame-tones" => "1,0,-4",
             "--film-base" | "--roll-white-balance" | "--white-balance" => "0.9,0.5,0.4",

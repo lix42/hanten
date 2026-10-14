@@ -56,9 +56,10 @@ use crate::pipeline::look::{
     LookParams, LookSection, MAX_START_STOPS,
 };
 use crate::pipeline::midtone_neutral::MidtoneLine;
+use crate::pipeline::roll_balance::{RollBalance, Tilt, WhiteBalanceForm};
 use crate::pipeline::roll_white::{self, FrameStops};
 use crate::pipeline::scene_correction::{
-    MidtoneCorrection, SceneCorrectionParams, SceneFault, WhiteBalance,
+    RollColour, SceneCorrectionParams, SceneFault, WhiteBalance,
 };
 use crate::pipeline::working_space::map_nc_film_rgb_v1;
 use crate::rendering::{Base, Rendering};
@@ -218,6 +219,13 @@ pub struct RollSection {
     /// Whether `white_balance` applies; off takes the midtone line with it, which is
     /// measured after the gains. Unset (`null`) is on, like the lifts' switches.
     pub neutral_balance: Option<Switch>,
+    /// How the gains apply (`pipeline::roll_balance`): `gain` (unset) at every tone, or a
+    /// `tilt` from the identity at the film base to the gains at `white_balance_stops`.
+    /// `measure-roll` measures the whites and the line after the form it was given.
+    pub white_balance_form: Option<WhiteBalanceForm>,
+    /// Green's level at the white the gains equalize, in scene stops: where a tilt
+    /// reaches the full gains.
+    pub white_balance_stops: Option<f32>,
     /// The roll's white, in scene stops above mid-grey — the measurement, not the
     /// slope derived from it ([`RollSection::span_slope`]), so a measured value is never
     /// mistaken for a chosen one.
@@ -519,6 +527,11 @@ impl RollSection {
             .filter(|_| self.neutral_balance != Some(Switch::Off))
     }
 
+    /// How the gains apply; unset is [`WhiteBalanceForm::Gain`].
+    pub fn white_balance_form(&self) -> WhiteBalanceForm {
+        self.white_balance_form.unwrap_or_default()
+    }
+
     /// The midtone line as it applies, with only its kept terms ([`MidtoneTerms::apply`]):
     /// `None` under `--midtone-neutral off`, or with the gains it was measured after.
     pub fn applied_midtone_line(&self) -> Option<MidtoneLine> {
@@ -762,6 +775,10 @@ pub struct RollReport {
     /// Whether the gains reached scene correction (not under `direct`, the film master or
     /// `--neutral-balance off`).
     pub white_balance_applied: bool,
+    /// How the gains apply (`roll.white_balance_form`).
+    pub white_balance_form: WhiteBalanceForm,
+    /// Where a tilt reaches the gains (`roll.white_balance_stops`).
+    pub white_balance_stops: Option<f32>,
     /// Whether the look's base slope is the roll's.
     pub slope_applied: bool,
     /// Whether the exposure reached scene correction.
@@ -1471,6 +1488,12 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(switch) = args.roll.neutral_balance {
         r.roll.neutral_balance = Some(switch);
     }
+    if let Some(form) = args.roll.white_balance_form {
+        r.roll.white_balance_form = Some(form);
+    }
+    if let Some(stops) = args.roll.roll_white_balance_stops {
+        r.roll.white_balance_stops = Some(stops);
+    }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
     if let Some(gains) = args.scene.white_balance {
@@ -1556,6 +1579,7 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             // The roll's own values first: each is also a factor in what the stages
             // below receive, so a bad one must be named as itself.
             validate_roll(&r.roll, r.applies_roll_to_scene_correction(), names)?;
+            validate_tilt(r, names)?;
             validate_roll_frames(
                 &r.roll,
                 d.linearization,
@@ -1957,10 +1981,64 @@ fn validate_roll(p: &RollSection, applies: bool, names: KnobNames) -> Result<()>
             )));
         }
     }
+    if let Some(stops) = p.white_balance_stops
+        && !stops.is_finite()
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite, got {stops}",
+            knob_name(
+                names,
+                "roll",
+                "--roll-white-balance-stops",
+                "white_balance_stops"
+            )
+        )));
+    }
+    if p.white_balance_form() != WhiteBalanceForm::Gain
+        && applies
+        && p.applied_white_balance().is_some()
+        && p.white_balance_stops.is_none()
+    {
+        return Err(NcError::Usage(format!(
+            "{} `tilt` reaches the roll's gains at the roll's white, so it needs that white: \
+             state {} (`hanten measure-roll` writes it), or use `gain`",
+            knob_name(names, "roll", "--white-balance-form", "white_balance_form"),
+            knob_name(
+                names,
+                "roll",
+                "--roll-white-balance-stops",
+                "white_balance_stops"
+            )
+        )));
+    }
     // A `"midtone_neutral"` other than "off" beside `"neutral_balance": "off"` is spared: the
     // line goes off with the gains as it does unset. Only a typed `--midtone-neutral` asking
     // for terms is refused (`cli::reject_a_line_without_its_gains`).
     Ok(())
+}
+
+/// The applied tilt's span rule ([`Tilt::check`]), over the decoded film base: a white at
+/// or under the base is a usage error naming the stops, before the stage meets it.
+fn validate_tilt(r: &Recipe, names: KnobNames) -> Result<()> {
+    if !r.applies_roll_to_scene_correction() {
+        return Ok(());
+    }
+    let Some(RollBalance::Tilt(t)) = r.roll_balance(&r.applied_roll()) else {
+        return Ok(());
+    };
+    t.check().map_err(|e| {
+        NcError::Usage(format!(
+            "{}: {e}. Re-measure the roll with `hanten measure-roll --white-balance-form \
+             tilt`, which writes it, or set {} to `gain`",
+            knob_name(
+                names,
+                "roll",
+                "--roll-white-balance-stops",
+                "white_balance_stops"
+            ),
+            knob_name(names, "roll", "--white-balance-form", "white_balance_form")
+        ))
+    })
 }
 
 /// A stated frame slope `slope`, named `name`: finite and positive.
@@ -2879,7 +2957,7 @@ impl Recipe {
         let (headroom_stops, dark_end) = self.resolved_fit_range();
         SharedParams {
             scene_correction: self.resolved_scene_correction(),
-            midtone: self.resolved_midtone(),
+            roll_colour: self.resolved_roll_colour(),
             look: LookParams {
                 section: self.resolved_look(),
                 linearization: self.reconstruction.linearization,
@@ -2948,7 +3026,11 @@ impl Recipe {
             exposure,
         } = self.scene_correction;
         let roll = self.applied_roll();
-        let white_balance = match roll.applied_white_balance() {
+        // A tilt is not a gain: scene correction applies it on its own (`resolved_roll_colour`).
+        let folded = roll
+            .applied_white_balance()
+            .filter(|_| roll.white_balance_form() == WhiteBalanceForm::Gain);
+        let white_balance = match folded {
             Some(gains) => std::array::from_fn(|c| gains[c] * stated[c]),
             None => stated,
         };
@@ -2961,12 +3043,45 @@ impl Recipe {
         }
     }
 
-    /// The applied roll's line, keyed on its gains; none when either is off or unset.
-    pub fn resolved_midtone(&self) -> Option<MidtoneCorrection> {
+    /// The applied roll's colour correction: its line, keyed on its white balance, and a
+    /// tilt; none when there is neither (the gain form folds into scene correction's gains).
+    pub fn resolved_roll_colour(&self) -> Option<RollColour> {
         let roll = self.applied_roll();
-        roll.applied_midtone_line()
-            .zip(roll.applied_white_balance())
-            .map(|(line, roll_gains)| MidtoneCorrection { line, roll_gains })
+        let balance = self.roll_balance(&roll)?;
+        let line = roll.applied_midtone_line();
+        (line.is_some() || matches!(balance, RollBalance::Tilt(_)))
+            .then_some(RollColour { line, balance })
+    }
+
+    /// The applied roll's white balance in its form, for scene correction and
+    /// `measure-roll`; `None` without applied gains.
+    pub fn roll_balance(&self, roll: &RollSection) -> Option<RollBalance> {
+        let gains = roll.applied_white_balance()?;
+        Some(match roll.white_balance_form() {
+            WhiteBalanceForm::Gain => RollBalance::Gain(gains),
+            WhiteBalanceForm::Tilt => RollBalance::Tilt(Tilt::new(
+                gains,
+                self.decoded_base(),
+                // Validation refuses a tilt without it; NaN fails the stage's own check.
+                roll.white_balance_stops.unwrap_or(f32::NAN),
+            )),
+        })
+    }
+
+    /// The film base as the decode renders it, in linear ACEScg: the same for every roll,
+    /// since the decode measures density from the base (`algo::fixed::decode_film_base`).
+    /// NaN when the decode's parameters are unusable, which validation refuses first.
+    pub fn decoded_base(&self) -> [f32; 3] {
+        let unit = FilmBase {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+        };
+        fixed::decode_film_base(&unit, &self.reconstruction)
+            .map(map_nc_film_rgb_v1)
+            .ok()
+            .and_then(|b| <[f32; 3]>::try_from(b.rgb()).ok())
+            .unwrap_or([f32::NAN; 3])
     }
 
     /// The look's slopes and their parts: the base — the frame's own slope, else the
@@ -3066,6 +3181,8 @@ impl Recipe {
             placement: r.placement(),
             frame_placement: r.frame_placement().filter(|_| applies),
             white_balance_applied: applies && r.applied_white_balance().is_some(),
+            white_balance_form: r.white_balance_form(),
+            white_balance_stops: r.white_balance_stops,
             slope_applied: applies
                 && matches!(
                     self.resolved_slope().base_from,
@@ -3621,6 +3738,7 @@ mod tests {
         assert_eq!(
             json["roll"],
             serde_json::json!({"white_balance": null, "neutral_balance": null,
+                "white_balance_form": null, "white_balance_stops": null,
                 "white_stops": null, "dark_stops": null, "envelope_stops": null,
                 "exposure": null, "frame_tones": null,
                 "frame_exposure": null, "small_lift": null, "thin_slope": null,
@@ -5990,6 +6108,16 @@ mod tests {
             ("--neutral-balance", &["--neutral-balance", "off"], |r| {
                 r.roll.neutral_balance == Some(Switch::Off)
             }),
+            (
+                "--white-balance-form",
+                &["--white-balance-form", "tilt"],
+                |r| r.roll.white_balance_form == Some(WhiteBalanceForm::Tilt),
+            ),
+            (
+                "--roll-white-balance-stops",
+                &["--roll-white-balance-stops", "1.25"],
+                |r| r.roll.white_balance_stops == Some(1.25),
+            ),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3
             }),

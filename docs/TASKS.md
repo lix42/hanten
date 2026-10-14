@@ -2077,10 +2077,12 @@ the design now in `docs/design-spec.md` (§6–§7):
   and the midtone line's blue term add it, both misled by a warm roll; one roll-level
   correction is enough (oracle gains), the estimate is what fails. Follow-ups
   `two-point-tilt` and `midtone-line-terms`
-- [ ] [The roll white as a tilt pinned at
+- [x] [The roll white as a tilt pinned at
   black](tasks/nf-scene-correction/two-point-tilt.md) — the two-point slope as a
   scene-correction grade: a neutral film base where today's gains tint it; one of the two
-  changes in the Lomography 100 "TR" arm
+  changes in the Lomography 100 "TR" arm. **Done 2026-10-13**: opt-in
+  (`--white-balance-form tilt`); black neutral on 9 of 10 rolls, a small preference on
+  low-key frames, the gain stays the default
 - [x] [Each term of the midtone line on its
   own](tasks/nf-scene-correction/midtone-line-terms.md) — turn the red or blue term off
   by hand (`--midtone-neutral red|blue`); the other change in "TR". **Done 2026-10-13**:
