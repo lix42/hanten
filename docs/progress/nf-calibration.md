@@ -156,6 +156,13 @@ R: the envelope keeps each frame's dark end at or above the roll's darkest frame
 the floor on every roll. On a thin roll it holds the dark end, so a higher R brightens
 instead. Shadow noise rises with R (09-20 median 2.5 → 2.8× the scan's at 8).
 
+**`short-span-protection` is done (2026-10-13): the maximum slope stays 3.5, on the
+placement's slope**, a guard with no switch; `look.contrast`, a taste, multiplies past it.
+By review of 22 capped and thin frames against caps on the final slope (placement ×
+contrast) at 3.0, 3.5 and 4.0: 4.0 raised grain on some frames, and nothing else was bad. Within a frame grain follows the
+slope (+0.8–1.5× the scan's per +1), but nothing `measure-roll` stores predicts it, and the
+grainiest frames are long-span ones no cap reaches. No code change.
+
 **`no-roll-defaults` is done (2026-09-30, `pipeline_version` 9): without a roll white the
 look's slope is placed as if the white were +1.75 scene stops** (`FALLBACK_WHITE_STOPS`;
 slope 1.413675, whole contrast 2.54, where it was 2.0), chosen by review over 2.0 and the
@@ -2067,14 +2074,49 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## short-span-protection
 
-**Status:** not started
-**Updated:** 2026-10-11
+**Status:** done
+**Updated:** 2026-10-13
 
 - 2026-10-11: filed (user), split from `hybrid-slope-bounds`: the maximum slope is a noise
   guard for short-span frames, not a bounds question, and a guard rather than a knob. Its
   baseline is that task's noise sweep (`../temp/hybrid-slope-bounds/sweep.log`); it waits
   on `nf-display-stages/midtone-contrast-toe`, whose toe changes the shadows where thin
   frames' grain shows.
+- 2026-10-13: **started; decided (user)**: the guard bounds the **final** slope (the
+  placement's × `look.contrast`), not only the placement's, and reports when it binds; a
+  noise-keyed guard only if a stored measure predicts grain.
+- 2026-10-13: **sweep** (`../temp/short-span-protection/`; throwaway binary `hanten-sweep`,
+  v16 R 8, floor on, the cap from an environment variable; twelve rolls re-measured, 246
+  frames). Grain is the shadow measure (under L\* 30) as a multiple of the scan's own.
+  - **Where 3.5 binds**: at ×1, 5 hybrid frames and 19 `frame` frames; on the final slope at
+    ×1.3, 47 and 75.
+  - **Within a frame, grain follows the slope** (+0.8× per +1 under the hybrid, +1.5× under
+    `frame`); over all renders a gentle knee near 3.0 (median 2.5× under 3.0, 2.8× at
+    3.0–3.5, 3.0× at 3.5–4.0, 3.2× at 4.0–4.5).
+  - **Across frames the slope explains little** (rank correlation +0.2–0.3): several of the
+    grainiest frames are long-span and gently placed (09-20 1874 at slope 1.7, 09-14 1736,
+    09-28 1986), where no cap reaches.
+  - **Nothing `measure-roll` stores predicts grain** (|ρ| ≤ 0.29: base share, thin, span,
+    dark end, level, the scan's floor), so no noise-keyed arm.
+  - Capping the final slope at 3.5 under ×1.3 lowers the held frames' median grain 3.4× →
+    3.1× (hybrid) and not at all under `frame` (3.0×).
+- 2026-10-13: **review set** (`review/review.json`, per cell `review-<placement>-x<contrast>.json`,
+  `review/summary.txt`): 22 frames (the 19 `frame` holds at ×1, the thin ones) × hybrid /
+  `frame` × ×1 / ×1.3; arms today (3.5 on the placement) / final ≤ 3.5 / final ≤ 3.0 / final
+  ≤ 4.0, SDR, floor on. Medians, shadow grain: hybrid ×1.3 3.39 / 2.77 / 2.35 / 3.15, `frame`
+  ×1 2.97 / 2.97 / 2.35 / 3.07, `frame` ×1.3 3.25 / 2.99 / 2.35 / 3.13. Verdict pending.
+- 2026-10-13: **verdict (user, part of the set): the maximum stays 3.5, on the placement's
+  slope only**, reversing the "final slope" decision above. No arm was bad; the
+  differences are taste. The cap is a quality baseline, what the default may lose: at 4.0
+  grain rose visibly on some frames, so it does not rise. `--contrast` is itself a taste,
+  so it may pass the cap. Comparing contrasts and where the cap sits duplicates that
+  question. No code or render change: today's rule is the decision; `MAX_SLOPE`'s comment,
+  design-spec §6's guard table and `using-nc.md` say so.
+- 2026-10-13: **done.** **For dependents:** the maximum slope is a reviewed guard (3.5, a
+  constant, no switch) on every placement's slope; `look.contrast` multiplies past it, and
+  the densest-sample probe still refuses a slope that overflows (~5.4–5.9). Grain is not
+  predicted by anything `measure-roll` stores, so a frame-keyed guard would need a new
+  measurement; the grainiest frames on the archive are long-span ones no cap reaches.
 
 ## hybrid-span-target
 

@@ -209,7 +209,7 @@ pub const ROLL_DARK_PERCENTILE: f32 = 0.1;
 pub const SPAN_LOOK_STOPS: f32 = 9.049;
 
 /// The steepest slope any placement sets: a guard against stretching a short span into
-/// grain. Its value is `nf-calibration/short-span-protection`'s.
+/// grain (`nf-calibration/short-span-protection`). `look.contrast` multiplies past it.
 pub const MAX_SLOPE: f32 = 3.5;
 
 /// The fewest look stops a hybrid frame's span renders over ([`hybrid_placement`]): R in
