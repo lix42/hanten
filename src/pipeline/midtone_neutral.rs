@@ -11,8 +11,8 @@
 //! `docs/spike/poor-development.md` ("As reviewed").
 //!
 //! At render ([`MidtoneLine::correct`]) the line applies in full up to [`FADE_STOPS`]
-//! below the roll's white, fades to zero at it, and is flat outside the voted bands;
-//! luminance is restored per pixel. A **tint gate** spares strongly coloured light
+//! below the roll's white, fades to zero at it, and is flat outside the voted bands, except
+//! under a tilt, where it ramps to zero at the film base; luminance is restored per pixel. A **tint gate** spares strongly coloured light
 //! (a sunset-lit cloud): the correction fades out as a pixel's colour moves
 //! [`GATE_LOG2`] from the line's cast at its stop.
 //!
@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
+use crate::pipeline::roll_balance::RollBalance;
 use crate::pipeline::roll_white::scene_stops;
 
 /// The lowest band edge, in scene stops (log2 of ACEScg luma over mid-grey).
@@ -108,8 +109,10 @@ impl MidtoneLine {
         Ok(())
     }
 
-    /// The `[red, blue]` cast at scene stop `s`, fade included.
-    fn cast(&self, s: f32) -> [f32; 2] {
+    /// The `[red, blue]` cast at scene stop `s`, fade included. With a `floor` (the film
+    /// base's scene stop, under a tilt) it also ramps to zero from the lowest band down to
+    /// the floor, so the line keeps the tilt's neutral base.
+    fn cast(&self, s: f32, floor: Option<f32>) -> [f32; 2] {
         let join = self.fade_end_stops - FADE_STOPS;
         let fade = if s > join {
             ((self.fade_end_stops - s) / FADE_STOPS).clamp(0.0, 1.0)
@@ -117,25 +120,67 @@ impl MidtoneLine {
             1.0
         };
         let at = s.min(join).clamp(self.bands[0], self.bands[1]);
-        [
+        let cast = [
             (self.red[0] * at + self.red[1]) * fade,
             (self.blue[0] * at + self.blue[1]) * fade,
-        ]
+        ];
+        match floor {
+            Some(base) if s < self.bands[0] => {
+                let up = if base < self.bands[0] {
+                    ((s - base) / (self.bands[0] - base)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                cast.map(|c| c * up)
+            }
+            _ => cast,
+        }
     }
 
-    /// Remove the cast from one linear ACEScg pixel, **before** the white balance:
-    /// `gains` are the roll's, which the line was measured after. Red and blue are
-    /// divided by the cast, then all three scaled back to the pixel's luminance. A pixel
-    /// with no finite positive luminance is left alone.
-    pub fn correct(&self, px: &mut [f32; 3], gains: [f32; 3]) {
+    /// Remove the cast from one linear ACEScg pixel, measured after `balance`. Under a gain,
+    /// before it: the gain commutes with the cast, so the caller applies it (folded into
+    /// the stated gains). Under a tilt, which does not commute, the tilt is applied here
+    /// first and the cast removed from the tilted pixel. Red and blue are divided by the
+    /// cast, then all three scaled back to the luminance they had. A pixel with no finite
+    /// positive luminance is left alone (tilted, under a tilt).
+    pub fn correct(&self, px: &mut [f32; 3], balance: &RollBalance) {
+        match balance {
+            RollBalance::Gain(_) => {
+                let balanced = balance.apply(*px);
+                self.remove(px, balanced, None);
+            }
+            RollBalance::Tilt(t) => {
+                *px = t.apply(*px);
+                self.remove(px, *px, Some(t.base_stops()));
+            }
+        }
+    }
+
+    /// The pixel `correct` leaves, with `balance` applied under a gain too.
+    pub fn balanced(line: Option<&Self>, mut px: [f32; 3], balance: &RollBalance) -> [f32; 3] {
+        match (line, balance) {
+            (Some(l), RollBalance::Tilt(_)) => {
+                l.correct(&mut px, balance);
+                px
+            }
+            (Some(l), RollBalance::Gain(_)) => {
+                l.correct(&mut px, balance);
+                balance.apply(px)
+            }
+            (None, _) => balance.apply(px),
+        }
+    }
+
+    /// `correct`'s arithmetic: the cast is keyed on, and gated by, `balanced`, and removed
+    /// from `px`.
+    fn remove(&self, px: &mut [f32; 3], balanced: [f32; 3], floor: Option<f32>) {
         let luma = |p: [f32; 3]| dot(p, ACESCG_LUMA);
-        let balanced = [px[0] * gains[0], px[1] * gains[1], px[2] * gains[2]];
         let y = luma(*px);
         let yw = luma(balanced);
         if !(y > 0.0 && yw > 0.0 && y.is_finite() && yw.is_finite()) {
             return;
         }
-        let [cr, cb] = self.cast(scene_stops(yw));
+        let [cr, cb] = self.cast(scene_stops(yw), floor);
         let off_cast = ((balanced[0] / balanced[1]).log2() - cr)
             .hypot((balanced[2] / balanced[1]).log2() - cb);
         // A channel at zero or below has no ratio; the spike corrected it in full.
@@ -205,14 +250,19 @@ pub enum OffBecause {
 }
 
 /// Measure the line over each frame's samples in linear ACEScg **before** the roll white
-/// balance (`gains`), fading to zero at `fade_end_stops`
+/// balance (`balance`), fading to zero at `fade_end_stops`
 /// (`roll_white::pooled_white_stops`). `floor` applies [`MIN_FRAMES`] (`auto`); the band
 /// floor always applies. Deterministic: each statistic reads its samples in order.
-pub fn measure(frames: &[&[f32]], gains: [f32; 3], fade_end_stops: f32, floor: bool) -> Measured {
+pub fn measure(
+    frames: &[&[f32]],
+    balance: &RollBalance,
+    fade_end_stops: f32,
+    floor: bool,
+) -> Measured {
     let contributing: Vec<&[f32]> = frames.iter().copied().filter(|f| !f.is_empty()).collect();
     let mut votes: Vec<Vec<[f64; 2]>> = vec![Vec::new(); BAND_COUNT];
     for frame in &contributing {
-        for (band, vote) in frame_votes(frame, gains).into_iter().enumerate() {
+        for (band, vote) in frame_votes(frame, balance).into_iter().enumerate() {
             votes[band].extend(vote);
         }
     }
@@ -252,13 +302,13 @@ fn band_centre(band: usize) -> f32 {
 }
 
 /// One frame's vote per band, if it has [`BAND_MIN_SHARE`] of its sample there: the centre
-/// of the densest cluster of `[log2 r/g, log2 b/g]` after `gains`.
-fn frame_votes(frame: &[f32], gains: [f32; 3]) -> Vec<Option<[f64; 2]>> {
+/// of the densest cluster of `[log2 r/g, log2 b/g]` after `balance`.
+fn frame_votes(frame: &[f32], balance: &RollBalance) -> Vec<Option<[f64; 2]>> {
     let floor = ((frame.len() / 3) as f64 * BAND_MIN_SHARE).ceil() as usize;
     let cluster_floor = (floor as f64 * CLUSTER_MIN_OF_FLOOR).ceil() as usize;
     let mut by_band: Vec<Vec<[f64; 2]>> = vec![Vec::new(); BAND_COUNT];
     for px in frame.as_chunks::<3>().0 {
-        let b = [px[0] * gains[0], px[1] * gains[1], px[2] * gains[2]];
+        let b = balance.apply(*px);
         if b.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
             continue;
         }
@@ -379,7 +429,7 @@ mod tests {
         let cast = |s: f64| [-0.06 * s + 0.04, -0.02 * s + 0.37];
         let f = frames(12, cast);
         let refs: Vec<&[f32]> = f.iter().map(Vec::as_slice).collect();
-        let m = measure(&refs, [1.0; 3], 1.9, true);
+        let m = measure(&refs, &RollBalance::Gain([1.0; 3]), 1.9, true);
         let l = m.line.expect("twelve frames and eleven bands");
         assert_eq!(m.bands.len(), BAND_COUNT);
         assert!(
@@ -398,17 +448,19 @@ mod tests {
     fn the_data_floor_and_the_band_floor_leave_it_off() {
         let f = frames(9, |_| [0.0, 0.2]);
         let refs: Vec<&[f32]> = f.iter().map(Vec::as_slice).collect();
-        let auto = measure(&refs, [1.0; 3], 1.0, true);
+        let auto = measure(&refs, &RollBalance::Gain([1.0; 3]), 1.0, true);
         assert_eq!(
             (auto.line, auto.off_because),
             (None, Some(OffBecause::TooFewFrames))
         );
         assert!(
-            measure(&refs, [1.0; 3], 1.0, false).line.is_some(),
+            measure(&refs, &RollBalance::Gain([1.0; 3]), 1.0, false)
+                .line
+                .is_some(),
             "`on` skips the frame floor"
         );
         // Two frames per band never count.
-        let two = measure(&refs[..2], [1.0; 3], 1.0, false);
+        let two = measure(&refs[..2], &RollBalance::Gain([1.0; 3]), 1.0, false);
         assert_eq!(two.off_because, Some(OffBecause::TooFewBands));
     }
 
@@ -416,9 +468,9 @@ mod tests {
     fn the_correction_neutralises_the_cast_and_keeps_luminance() {
         let l = line();
         for s in [-2.0, -0.5, 0.0, 0.6] {
-            let mut px = pixel(s, l.cast(s as f32).map(f64::from));
+            let mut px = pixel(s, l.cast(s as f32, None).map(f64::from));
             let y = ACESCG_LUMA.iter().zip(px).map(|(w, v)| w * v).sum::<f32>();
-            l.correct(&mut px, [1.0; 3]);
+            l.correct(&mut px, &RollBalance::Gain([1.0; 3]));
             let y2 = ACESCG_LUMA.iter().zip(px).map(|(w, v)| w * v).sum::<f32>();
             assert!(
                 (px[0] / px[1] - 1.0).abs() < 1e-5 && (px[2] / px[1] - 1.0).abs() < 1e-5,
@@ -434,16 +486,26 @@ mod tests {
         // Full below the join, half in the middle of the fade, none at and above white.
         let join = l.fade_end_stops - FADE_STOPS;
         assert_eq!(
-            l.cast(join),
+            l.cast(join, None),
             [l.red[0] * join + l.red[1], l.blue[0] * join + l.blue[1]]
         );
-        let half = l.cast(join + 0.5);
-        let full = l.cast(join);
+        let half = l.cast(join + 0.5, None);
+        let full = l.cast(join, None);
         assert!((half[1] - full[1] / 2.0).abs() < 1e-6);
-        assert_eq!(l.cast(l.fade_end_stops), [0.0, 0.0]);
-        assert_eq!(l.cast(4.0), [0.0, 0.0]);
+        assert_eq!(l.cast(l.fade_end_stops, None), [0.0, 0.0]);
+        assert_eq!(l.cast(4.0, None), [0.0, 0.0]);
         // Flat below the lowest band.
-        assert_eq!(l.cast(-6.0), l.cast(l.bands[0]));
+        assert_eq!(l.cast(-6.0, None), l.cast(l.bands[0], None));
+        // Under a tilt, it ramps from the lowest band to zero at the base, and stays zero.
+        let base = l.bands[0] - 1.0;
+        let low = l.cast(l.bands[0], None);
+        assert_eq!(l.cast(l.bands[0], Some(base)), low);
+        let half = l.cast(base + 0.5, Some(base));
+        assert!((half[0] - low[0] / 2.0).abs() < 1e-6 && (half[1] - low[1] / 2.0).abs() < 1e-6);
+        assert_eq!(l.cast(base, Some(base)), [0.0, 0.0]);
+        assert_eq!(l.cast(base - 1.0, Some(base)), [0.0, 0.0]);
+        // A base at or above the lowest band leaves nothing below that band.
+        assert_eq!(l.cast(l.bands[0] - 0.1, Some(l.bands[0])), [0.0, 0.0]);
     }
 
     #[test]
@@ -482,9 +544,9 @@ mod tests {
         };
         let low = l.bands[0];
         let at_low = [l.red[0] * low + l.red[1], l.blue[0] * low + l.blue[1]];
-        assert_eq!(l.cast(-4.0), at_low);
+        assert_eq!(l.cast(-4.0, None), at_low);
         let fade = (l.fade_end_stops - -2.5) / FADE_STOPS;
-        let c = l.cast(-2.5);
+        let c = l.cast(-2.5, None);
         assert!(
             (c[0] - at_low[0] * fade).abs() < 1e-6 && (c[1] - at_low[1] * fade).abs() < 1e-6,
             "{c:?}"
@@ -495,11 +557,11 @@ mod tests {
     fn the_tint_gate_spares_strongly_coloured_light() {
         let l = line();
         let s = 0.0_f64;
-        let cast = l.cast(s as f32).map(f64::from);
+        let cast = l.cast(s as f32, None).map(f64::from);
         let at = |d: f64| {
             let mut px = pixel(s, [cast[0] + d, cast[1]]);
             let before = px;
-            l.correct(&mut px, [1.0; 3]);
+            l.correct(&mut px, &RollBalance::Gain([1.0; 3]));
             (px[2] / px[1]).log2() - (before[2] / before[1]).log2()
         };
         let full = at(0.0);
@@ -524,7 +586,7 @@ mod tests {
             [0.1, 0.1, f32::NAN],
         ] {
             let mut out = px;
-            line().correct(&mut out, [1.0; 3]);
+            line().correct(&mut out, &RollBalance::Gain([1.0; 3]));
             assert_eq!(out.map(f32::to_bits), px.map(f32::to_bits));
         }
     }
@@ -548,5 +610,37 @@ mod tests {
             .check()
             .is_err()
         );
+    }
+
+    #[test]
+    fn under_a_tilt_a_cast_the_line_measured_is_removed_whole() {
+        use crate::pipeline::roll_balance::Tilt;
+        // Codex's case: a strong tilt, and a line whose constant cast is exactly the
+        // tilted pixel's colour, so it must come out neutral.
+        let tilt = Tilt::new([0.5, 1.0, 2.0], [0.004; 3], 2.0);
+        let balance = RollBalance::Tilt(tilt);
+        let raw = [0.12f32, 0.1, 0.08];
+        let tilted = tilt.apply(raw);
+        let rho = [
+            (tilted[0] / tilted[1]).log2(),
+            (tilted[2] / tilted[1]).log2(),
+        ];
+        let line = MidtoneLine {
+            red: [0.0, rho[0]],
+            blue: [0.0, rho[1]],
+            bands: [-6.0, 1.5],
+            fade_end_stops: 4.0,
+        };
+        let mut px = raw;
+        line.correct(&mut px, &balance);
+        for (c, want) in [(0, 1.0f32), (2, 1.0)] {
+            assert!((px[c] / px[1] - want).abs() < 1e-5, "{c}: {px:?}");
+        }
+        let y = |p: [f32; 3]| dot(p, ACESCG_LUMA);
+        assert!(
+            (y(px) / y(tilted) - 1.0).abs() < 1e-5,
+            "luminance kept: {px:?}"
+        );
+        assert_eq!(MidtoneLine::balanced(Some(&line), raw, &balance), px);
     }
 }

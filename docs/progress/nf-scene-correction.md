@@ -76,6 +76,16 @@ Across the archive the blue term is the one a roll of sea or warm light misleads
 development casts need both. The automatic rule is `midtone-term-signal`, waiting for the
 calibration rolls.
 
+**The roll's gains can apply as a tilt (`two-point-tilt`, 2026-10-13), opt-in.**
+`roll.white_balance_form` `tilt` (`--white-balance-form`, on `measure-roll` too) runs the
+gains per channel from the identity at the decoded film base to the full gains at
+`roll.white_balance_stops` (written by every `measure-roll`), in
+`pipeline::roll_balance`; the midtone line runs after it and fades to zero at the base.
+Black stays neutral, the darkest tones render ~1 L\* lighter; the gain stays the default.
+Read the balance through `RollBalance`, never the gains alone: under a tilt they are not
+folded into `scene_correction.white_balance`. A per-roll decode scale remains the
+alternative for the ColorChecker calibration work.
+
 ## stage
 
 **Status:** done
@@ -537,14 +547,85 @@ calibration rolls.
 
 ## two-point-tilt
 
-**Status:** not started
-**Updated:** 2026-10-12
+**Status:** done
+**Updated:** 2026-10-13
 
 - 2026-10-12: filed (user) from `lomo100-cast-vs-ccr`'s second review: TR (two-point tilt +
   the line's red term) was acceptable on every Lomography 100 frame but 2061. Numbers and
   arms in that section; open questions in the task file.
 - 2026-10-12: **narrowed (user)** to the tilt alone. TR's other change, dropping the line's
   blue term, is not specific to blue: it moved to `midtone-line-terms`.
+- 2026-10-13: **started; round 1** (`../temp/two-point-tilt/`, report Artifact
+  https://claude.ai/artifact/UHGEL8EPnfPNoDLtwCZVBh). A prototype on the branch: the roll's
+  gains as a selector `roll.white_balance_form` (`gain` | `tilt`, flag
+  `--white-balance-form`, on `measure-roll` too) and a measured `roll.white_balance_stops`
+  (green's level at the white the gains equalize, the guarded pool's p99). The tilt is
+  `v_c · g_c^t`, `t` running in log from 0 at the decoded film base to 1 at that white. The base
+  is derived from the decode's parameters, since every film base decodes to the same level.
+  Lomography 100, the line off in every arm, each its own `measure-roll`; distance from neutral
+  on lit cloth+wall / cloud: today's gains 5.9 / 13.6 (the earlier review's B, reproduced), the
+  decode scale T 5.6 / 11.4 (also reproduced), the grade per channel 6.0 / 11.5, keyed on
+  luminance 6.3 / 11.5. Near-neutrals by tone track T within ~0.5 a\*/b\* from the base to
+  mid-grey, the base neutral (+0.8, +1.2 vs today's −2.9, −2.2); above the roll's white
+  (+0.47 stops) the unclamped grades ran 0.5–1.6 greener than both.
+- 2026-10-13: **decisions (user).**
+  - **Grade, not decode.** The user's case for the decode: the fixed scale will be recalibrated
+    from ColorChecker frames anyway, a per-layer slope error belongs in density, and two decode
+    scales (a fixed calibration and a measured per-roll one) would be a clear architecture.
+    What decided it: the tilt and the gains share one selector and one stage, so the whites
+    and the line are measured after one stage whichever form applies; holding the gains above
+    the white would put a per-roll kink in a decode built as a straight line; and the grade
+    matched the decode form. A per-roll density scale and offset remain a candidate for the
+    calibration work once the ColorChecker frames exist; this grade would retire then.
+  - **Per channel**, the decode form's shape; the luminance key is dropped.
+  - **Held at the gains above the white**, and at the identity below the base: `t` is
+    clamped to `[0, 1]`, so the tilt never does more than the gains, or the opposite.
+- 2026-10-13: **across the archive** (`../temp/two-point-tilt/round2/`, report Artifact
+  https://claude.ai/artifact/SUNxGbexnh3VFPQnkPgHC3). Every roll with marked white/grey
+  patches (10 rolls, 150 patches), patched frames only, default placement, SDR sRGB; each arm
+  its own `measure-roll`. Patch distance from neutral, median over all patches: today 8.8,
+  today line off 9.1, tilt line off 8.1, tilt + its line 9.3. Near-neutral black (the darkest
+  scene band with data): the tilt alone is closer to neutral than today on 9 of 10 rolls
+  (Lomography 100 a\*, b\* +1.2, +0.7 vs −3.3, −10.0), but **the line put the cast back**: it is
+  flat below its lowest voted band, so the cast it votes in the midtones reaches the base
+  (tilt + line −1.8, −9.8 on Lomography 100).
+- 2026-10-13: **the line fades at the base under the tilt (user).** Under a tilt,
+  `MidtoneLine::correct` ramps the cast from the lowest band to zero at the decoded base's
+  scene stop; the gain form keeps the flat end (bit-identical). Black then matches the tilt
+  alone (closer to neutral than today on 9 of 10 rolls; Lomography 100 0.8 vs 10.5, 09-29
+  1.0 vs 4.1); the patches, near the white, do not move (9.3 vs today 8.8, almost all of it
+  09-18 Gold: 9.3 vs 8.2, where the tilt alone scores 6.2; not explained yet).
+- 2026-10-13: **whole-roll review** (`../temp/two-point-tilt/review/`, notes in `notes/`):
+  Lomography 100 and 09-29 Ektar, every frame, today against the tilt with its faded line,
+  beside CCR, default placement, SDR sRGB. The user: "the diff is small. 2 has a little
+  benefits at the low key frames." Tilt better / today better / tie: Lomography 11 / 13 / 13,
+  09-29 13 / 3 / 13. The tilt's wins are the darker frames (median L\* 45 vs 51 on Lomography,
+  47 vs 65 on 09-29). On Lomography today's wins are the frames with most shadow, and the tilt
+  sits ~1 L\* lighter at the darkest 2–10 % of every frame checked ("its dark side can get
+  deeper", 2057): with no correction at the base, the gains' slight darkening of black goes
+  with the base's tint.
+- 2026-10-13: **opt-in (user).** `gain` stays the default; the tilt is `--white-balance-form
+  tilt` on `measure-roll` (or `convert` with `--roll-white-balance-stops`). No default pixel
+  moves, so no drift-gate row: v16's `recipe` hash is refreshed in place for the new keys.
+- 2026-10-13: **review-fix loop** (nc-reviewer only: Codex was out of credits). `measure-roll`
+  now takes its form from the `--params` layers when the flag is unset and always writes it,
+  `"gain"` included, since a `null` would let a layered tilt render whites measured under
+  gain. A white at or under the decoded base is a usage error (exit 2); typed tilt flags with
+  no applied gains are refused; the stops are a measured key under `roll --measure-roll`.
+  Left as low: a typed `--roll-white-balance-stops` under `gain` does nothing, silently.
+- 2026-10-13: **the line runs after the tilt** (Codex, at ship). The line is measured on
+  tilted pixels but was removed before the tilt, which does not commute with it the way a
+  gain does, so an exactly measured cast stayed partly in (R/G 0.98 on a strong tilt). Under
+  a tilt the cast is now removed from the tilted pixel; the gain path is unchanged. The
+  reviewed tilt renders and round 2's GF numbers predate this.
+- 2026-10-13: **done.** Landed opt-in: `roll.white_balance_form` (`gain` default | `tilt`) and
+  the measured `roll.white_balance_stops`, `pipeline::roll_balance`, the line's base fade,
+  and validation (a white at or under the base, typed tilt flags with no applied gains).
+  Verified: patch casts and near-neutral black across the 10 patched rolls (round 2), the
+  whole-roll review on Lomography 100 and 09-29 beside CCR, and every CI gate. No default
+  pixel moved, so no drift-gate row. Not done: a cross-platform golden for the tilt's
+  `log2`/`powf` path (opt-in); the warm-white estimate `lomo100-cast-vs-ccr` found is
+  unchanged, since the tilt aims at the same white.
 
 ## midtone-line-terms
 

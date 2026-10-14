@@ -40,6 +40,7 @@ use crate::pipeline::input_semantics::{
 };
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::midtone_neutral::MidtoneLine;
+use crate::pipeline::roll_balance::{RollBalance, WhiteBalanceForm};
 use crate::pipeline::roll_white::FrameStops;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
@@ -182,6 +183,8 @@ pub enum TelemetryCommand {
 #[command(mut_arg("roll_midtone_line", |a| a.hide(true)))]
 #[command(mut_arg("midtone_neutral", |a| a.hide(true)))]
 #[command(mut_arg("neutral_balance", |a| a.hide(true)))]
+#[command(mut_arg("white_balance_form", |a| a.hide(true)))]
+#[command(mut_arg("roll_white_balance_stops", |a| a.hide(true)))]
 #[command(mut_arg("white_balance", |a| a.hide(true)))]
 #[command(mut_arg("exposure", |a| a.hide(true)))]
 pub struct ProfileArgs {
@@ -426,6 +429,12 @@ pub struct MeasureRollArgs {
         value_name = "AUTO|ON|OFF"
     )]
     pub midtone_neutral: MidtoneMode,
+    /// How the roll's gains apply: `gain` at every tone, `tilt` from the identity at the
+    /// film base to the gains at the roll's white. Unset, the `--params` recipe's
+    /// `roll.white_balance_form`, else `gain`. The midtone line and the whites are
+    /// measured after it, and `--out` writes it as `roll.white_balance_form`.
+    #[arg(long, value_enum, ignore_case = true, value_name = "GAIN|TILT")]
+    pub white_balance_form: Option<WhiteBalanceForm>,
     /// Removed: it left out both lifts. Hidden, kept only for its migration error.
     #[arg(long = "no-frame-lift", hide = true)]
     pub removed_no_frame_lift: bool,
@@ -719,8 +728,8 @@ pub struct DestinationOverrides {
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
     /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-dark`, `--roll-exposure`,
     /// `--roll-frame-exposure`, `--roll-thin-slope`, `--roll-thin-exposure`,
-    /// `--roll-midtone-line`, `--small-lift on`, `--thin-lift on`, `--midtone-neutral on|red|blue`,
-    /// `--neutral-balance on`), which only a rendering applies — refused under a recipe's film master too. A
+    /// `--roll-midtone-line`, `--roll-white-balance-stops`, `--small-lift on`, `--thin-lift on`,
+    /// `--midtone-neutral on|red|blue`, `--neutral-balance on`, `--white-balance-form tilt`), which only a rendering applies — refused under a recipe's film master too. A
     /// recipe's `roll` section is spared, since a measurement is not a stage asked for,
     /// and so is a switch turned off.
     #[arg(
@@ -728,7 +737,7 @@ pub struct DestinationOverrides {
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
             "roll_dark", "roll_exposure", "roll_frame_exposure", "roll_thin_slope", "roll_thin_exposure",
-            "roll_envelope", "roll_frame_tones", "roll_midtone_line",
+            "roll_envelope", "roll_frame_tones", "roll_midtone_line", "roll_white_balance_stops",
             "hybrid_span", "hybrid_level_keep",
         ]
     )]
@@ -1054,6 +1063,17 @@ pub struct RollOverrides {
     /// roll dominated by one scene colour can mislead it.
     #[arg(long, value_enum, ignore_case = true, value_name = "ON|OFF")]
     pub neutral_balance: Option<recipe::Switch>,
+    /// How the roll's gains apply (recipe key `roll.white_balance_form`): `gain` (the
+    /// default) at every tone, or `tilt`, from the identity at the film base to the gains
+    /// at `--roll-white-balance-stops`. The whites and the line stay as measured: measure
+    /// with `hanten measure-roll --white-balance-form` to measure them after it.
+    #[arg(long, value_enum, ignore_case = true, value_name = "GAIN|TILT")]
+    pub white_balance_form: Option<WhiteBalanceForm>,
+    /// Green's level at the white the roll's gains equalize, in scene stops, as `hanten
+    /// measure-roll` measured it (recipe key `roll.white_balance_stops`): where a tilt
+    /// reaches the full gains.
+    #[arg(long, value_name = "STOPS", allow_hyphen_values = true)]
+    pub roll_white_balance_stops: Option<f32>,
 }
 
 impl RollOverrides {
@@ -1095,6 +1115,14 @@ impl RollOverrides {
                 "--neutral-balance on",
                 self.neutral_balance == Some(recipe::Switch::On),
             ),
+            (
+                "--white-balance-form tilt",
+                self.white_balance_form == Some(WhiteBalanceForm::Tilt),
+            ),
+            (
+                "--roll-white-balance-stops",
+                self.roll_white_balance_stops.is_some(),
+            ),
         ]
         .into_iter()
         .filter_map(|(flag, typed)| typed.then_some(flag))
@@ -1117,6 +1145,10 @@ impl RollOverrides {
             ("--roll-exposure", self.roll_exposure.is_some()),
             ("--roll-envelope", self.roll_envelope.is_some()),
             ("--roll-midtone-line", self.roll_midtone_line.is_some()),
+            (
+                "--roll-white-balance-stops",
+                self.roll_white_balance_stops.is_some(),
+            ),
         ]
         .into_iter()
         .filter_map(|(flag, typed)| typed.then_some(flag))
@@ -2150,6 +2182,82 @@ fn reject_a_line_without_its_gains(args: &ConversionFlags, r: &Recipe) -> Result
     )))
 }
 
+/// Refuse a typed `--white-balance-form tilt` or `--roll-white-balance-stops` when no roll
+/// gains apply (none stated, or `--neutral-balance off`): each shapes how the gains apply,
+/// so would change nothing. A recipe's form is spared. `measuring` counts the gains a
+/// measurement is about to write. Like [`reject_a_line_without_its_gains`], it runs before
+/// [`reject_roll_flags_nothing_applies`], so where nothing applies the roll only dropping
+/// the flag is offered.
+fn reject_a_tilt_without_its_gains(
+    args: &ConversionFlags,
+    r: &Recipe,
+    measuring: bool,
+) -> Result<()> {
+    use recipe::Switch::Off;
+    let roll = &args.roll;
+    let typed: Vec<&str> = [
+        (
+            "--white-balance-form tilt",
+            roll.white_balance_form == Some(WhiteBalanceForm::Tilt),
+        ),
+        (
+            "--roll-white-balance-stops",
+            roll.roll_white_balance_stops.is_some(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(flag, typed)| typed.then_some(flag))
+    .collect();
+    let stated = measuring || r.roll.white_balance.is_some();
+    let off = r.roll.neutral_balance == Some(Off);
+    if typed.is_empty() || (stated && !off) {
+        return Ok(());
+    }
+    let typed = typed.join(" and ");
+    let nothing_applies =
+        r.output == OutputSection::FilmMaster || r.rendering == crate::rendering::Rendering::Direct;
+    let (why, other) = if !stated {
+        // Under `off`, measured gains would still not apply: only dropping works.
+        let measure = "layer the recipe `hanten measure-roll --white-balance-form tilt --out \
+                       roll.json` writes (`--params roll.json`)";
+        (
+            "and none are stated (`roll.white_balance`)".to_string(),
+            (!off).then(|| measure.to_string()),
+        )
+    } else {
+        let (under, on) = if roll.neutral_balance == Some(Off) {
+            ("--neutral-balance off", "drop --neutral-balance off")
+        } else {
+            (
+                "the recipe's `roll.neutral_balance` \"off\"",
+                "pass --neutral-balance on",
+            )
+        };
+        // Turned on, a tilt with no white would meet the stops rule next.
+        let stops = if !measuring
+            && r.roll.white_balance_form() == WhiteBalanceForm::Tilt
+            && r.roll.white_balance_stops.is_none()
+        {
+            " and state --roll-white-balance-stops (`hanten measure-roll --white-balance-form \
+             tilt` writes it)"
+        } else {
+            ""
+        };
+        (
+            format!("which are off under {under}"),
+            Some(format!("{on}{stops}")),
+        )
+    };
+    let remedy = match other.filter(|_| !nothing_applies) {
+        Some(other) => format!("drop {typed}, or {other}"),
+        None => format!("drop {typed}"),
+    };
+    Err(NcError::Usage(format!(
+        "{typed} shapes how the roll's white-balance gains apply, {why}, so it would change \
+         nothing: {remedy}"
+    )))
+}
+
 /// `--dark-floor STOPS` under `direct`: the floor holds a frame's measured dark end, and
 /// `direct` leaves the roll's measurements out, so it could never act. Its `off` is spared:
 /// it turns off `direct`'s display black. A film master is left to its own refusal, whose
@@ -2197,7 +2305,8 @@ fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Resu
     let message = if r.output == OutputSection::FilmMaster {
         // Under `direct` too, either remedy alone would meet the film master + `direct`
         // refusal next, so each carries `--rendering default`. Only a switch asking for
-        // something reaches here beside a typed `--film-master`; the other roll flags conflict.
+        // something (or `--white-balance-form tilt`) reaches here beside a typed
+        // `--film-master`; the other roll flags conflict.
         let (master, choose) = if args.destination.film_master {
             ("--film-master writes", "drop --film-master")
         } else {
@@ -4908,6 +5017,7 @@ fn convert_attempt(
     let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), &args.knobs);
     // Flag-presence rules, ahead of every value rule that could refuse first.
     reject_a_line_without_its_gains(&args.knobs, &recipe)?;
+    reject_a_tilt_without_its_gains(&args.knobs, &recipe, false)?;
     reject_roll_flags_nothing_applies(&args.knobs, &recipe)?;
     reject_a_floor_nothing_measures(&args.knobs, &recipe)?;
     let typed = &args.knobs.roll;
@@ -5623,6 +5733,35 @@ const ROLL_WIDE: &[RollWide] = &[
                 return Ok(None);
             }
             changed(&f.roll.white_balance, &r.roll.white_balance)
+        },
+    },
+    RollWide {
+        key: "roll.white_balance_form",
+        breaks: "this frame's gains apply in another form than the roll's, which its whites \
+                 and midtone line were measured after",
+        compare: |f, r| {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+                || f.roll.applied_white_balance().is_none()
+            {
+                return Ok(None);
+            }
+            changed(&f.roll.white_balance_form(), &r.roll.white_balance_form())
+        },
+    },
+    RollWide {
+        key: "roll.white_balance_stops",
+        breaks: "this frame's tilt reaches the roll's gains at another white than the roll's",
+        compare: |f, r| {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+                || f.roll.applied_white_balance().is_none()
+                // Under the gain form on both, the stops change nothing.
+                || [f, r]
+                    .iter()
+                    .all(|x| x.roll.white_balance_form() == WhiteBalanceForm::Gain)
+            {
+                return Ok(None);
+            }
+            changed(&f.roll.white_balance_stops, &r.roll.white_balance_stops)
         },
     },
     RollWide {
@@ -6462,6 +6601,7 @@ fn reject_a_lift_for_every_frame(
 /// holds the split).
 const MEASURED_ROLL_KEYS: &[&str] = &[
     "white_balance",
+    "white_balance_stops",
     "white_stops",
     "dark_stops",
     "envelope_stops",
@@ -6614,6 +6754,7 @@ fn measure_for_roll(
     // checked by the measurement's own rules below.
     reject_roll_unsupported_input(&shared)?;
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
+    reject_a_tilt_without_its_gains(&args.knobs, &shared, true)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
     reject_a_floor_nothing_measures(&args.knobs, &shared)?;
     recipe::validate(&shared, KnobNames::FlagAndKey)?;
@@ -6642,6 +6783,7 @@ fn measure_for_roll(
         inputs: &inputs,
         leader: args.leader.as_ref(),
         base: args.measured_base(),
+        form: shared.roll.white_balance_form(),
         recipe: shared,
         midtone: MidtoneMode::Auto,
         lifts: Lifts {
@@ -6865,6 +7007,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let stated = compose_layers(&layers.bodies)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
+    reject_a_tilt_without_its_gains(&args.knobs, &shared, false)?;
     reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
     reject_a_floor_nothing_measures(&args.knobs, &shared)?;
     reject_a_lift_for_every_frame(&args.knobs, &shared, args.measures())?;
@@ -7953,6 +8096,8 @@ struct MeasuredRollExposure {
 #[derive(Clone, Copy)]
 struct RollColour {
     gains: [f32; 3],
+    form: WhiteBalanceForm,
+    balance_stops: f32,
     line: Option<MidtoneLine>,
 }
 
@@ -7976,6 +8121,14 @@ fn reuse_flag(
     // Only beside tones: alone, the envelope places nothing and the frame warns.
     if let (Some([darkest, brightest]), Some(_)) = (envelope, written.tones) {
         flag += &format!(" --roll-envelope {darkest},{brightest}");
+    }
+    if colour.form != WhiteBalanceForm::Gain {
+        let form = clap::ValueEnum::to_possible_value(&colour.form).expect("no variant is skipped");
+        flag += &format!(
+            " --white-balance-form {} --roll-white-balance-stops {}",
+            form.get_name(),
+            colour.balance_stops
+        );
     }
     if let Some(l) = colour.line {
         flag += &format!(
@@ -8719,12 +8872,17 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if let Some(f) = args.measure.measure_inset {
         recipe.measure.inset = f;
     }
+    // Read before `check` clears the recipe's roll section.
+    let form = args
+        .white_balance_form
+        .unwrap_or_else(|| recipe.roll.white_balance_form());
     let mut req = RollMeasureRequest {
         inputs: &args.inputs,
         leader: args.leader.as_ref(),
         base: measured_base(args.unexposed.as_ref(), args.base_content),
         recipe,
         midtone: args.midtone_neutral,
+        form,
         lifts: Lifts {
             small: !args.no_small_lift,
             thin: !args.no_thin_lift,
@@ -8854,6 +9012,8 @@ struct RollMeasureRequest<'a> {
     /// The recipe the frames are measured under: the layers, and the base and inset flags.
     recipe: Recipe,
     midtone: MidtoneMode,
+    /// How the gains apply, which the line and the whites are measured after.
+    form: WhiteBalanceForm,
     lifts: Lifts,
     strict: bool,
     /// Whether the measured recipe is kept, so the frames key `roll.frames` and may not
@@ -9370,10 +9530,28 @@ fn measure_roll(
         decode.get_or_insert(decoded);
     }
     let gains = roll_white::roll_gains(&pool)?;
+    let balance_stops = roll_white::roll_white_balance_stops(&pool);
     // Freed before the midtone line's ACEScg copy of the samples is made.
     let pooled = pool.len() / 3;
     drop(pool);
     log.info(format_args!("roll white balance {gains:?}"));
+    let balance = recipe
+        .roll_balance(&recipe::RollSection {
+            white_balance: Some(gains),
+            white_balance_form: Some(req.form),
+            white_balance_stops: Some(balance_stops),
+            ..recipe::RollSection::default()
+        })
+        .expect("the gains are stated and applied");
+    // Refused here rather than written into a recipe `convert` would refuse.
+    if let RollBalance::Tilt(t) = &balance {
+        t.check().map_err(|e| {
+            NcError::Other(format!(
+                "roll white balance: --white-balance-form tilt cannot apply to this roll: \
+                 {e}. Measure it with --white-balance-form gain"
+            ))
+        })?;
+    }
     // Unguarded, as reviewed: only the gains take the leader guard. A frame the pool kept
     // nothing of is not picture, as for the exposure.
     let picture = film_samples
@@ -9387,8 +9565,8 @@ fn measure_roll(
         let picture: Vec<Vec<f32>> = picture.map(|s| roll_white::acescg_sample(s)).collect();
         midtone_neutral::measure(
             &picture.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-            gains,
-            roll_white::pooled_white_stops(&picture, gains),
+            &balance,
+            roll_white::pooled_white_stops(&picture, &balance),
             req.midtone == MidtoneMode::Auto,
         )
     };
@@ -9407,11 +9585,13 @@ fn measure_roll(
     }
     let colour = RollColour {
         gains,
+        form: req.form,
+        balance_stops,
         line: midtone.line,
     };
     // The second pass: each frame's white after the roll's colour correction.
     for (f, sample) in frames.iter_mut().zip(&film_samples) {
-        f.white_stops = roll_white::corrected_white(sample, gains, colour.line.as_ref())
+        f.white_stops = roll_white::corrected_white(sample, &balance, colour.line.as_ref())
             .map(roll_white::scene_stops);
     }
     drop(film_samples);
@@ -9571,6 +9751,10 @@ fn measure_roll(
         },
         roll: Some(recipe::RollSection {
             white_balance: Some(gains),
+            // Always stated, so no layer under this recipe can change the form its whites
+            // and line were measured after.
+            white_balance_form: Some(req.form),
+            white_balance_stops: Some(balance_stops),
             midtone_line: midtone.line,
             white_stops: Some(white.stops),
             dark_stops: Some(white.dark_stops),
@@ -11517,6 +11701,7 @@ mod tests {
             "hybrid_level_keep",
             "midtone_neutral",
             "neutral_balance",
+            "white_balance_form",
         ];
         let section = serde_json::to_value(recipe::RollSection::default()).unwrap();
         let keys: Vec<&str> = section
@@ -11576,6 +11761,10 @@ mod tests {
             "on",
             "--neutral-balance",
             "on",
+            "--white-balance-form",
+            "tilt",
+            "--roll-white-balance-stops",
+            "1.5",
         ])
         .unwrap();
         let Command::Roll(args) = cli.command else {
@@ -11592,6 +11781,7 @@ mod tests {
             "--roll-frame-tones",
             "--midtone-neutral on",
             "--neutral-balance on",
+            "--white-balance-form tilt",
             "--roll-frame-exposure",
             "--roll-thin-slope",
             "--roll-thin-exposure",
@@ -11824,13 +12014,22 @@ mod tests {
         let mut shared = base_recipe();
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
+        // Under the tilt, so its stops apply.
+        shared.roll.white_balance_form = Some(WhiteBalanceForm::Tilt);
+        shared.roll.white_balance_stops = Some(1.25);
         type Change = (&'static str, fn(&mut Recipe));
-        let changes: [Change; 12] = [
+        let changes: [Change; 14] = [
             ("calibration.film_base", |r| {
                 r.calibration.film_base = Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4]))
             }),
             ("roll.white_balance", |r| {
                 r.roll.white_balance = Some([1.1, 1.0, 0.9])
+            }),
+            ("roll.white_balance_form", |r| {
+                r.roll.white_balance_form = Some(WhiteBalanceForm::Gain)
+            }),
+            ("roll.white_balance_stops", |r| {
+                r.roll.white_balance_stops = Some(1.5)
             }),
             ("roll.midtone_line", |r| {
                 r.roll.midtone_line = Some(MidtoneLine {
@@ -11874,6 +12073,16 @@ mod tests {
                 w[0]
             );
         }
+        // Under the gain form on both, the stops change nothing, so do not warn.
+        let mut gain = shared.clone();
+        gain.roll.white_balance_form = None;
+        let mut frame = gain.clone();
+        frame.roll.white_balance_stops = Some(1.5);
+        assert!(
+            roll_wide_breaks(Path::new("a.tif"), &frame, &gain)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

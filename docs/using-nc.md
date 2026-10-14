@@ -74,7 +74,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > film-master refusals and midtone-line section were re-run against the binary. At
 > `film-base/content-fallback` (`--base-content`, `pipeline_version` 16 unchanged) §4's
 > no-base refusals were re-run, and its `--base-content` section on the real 2026-07-15
-> Ektar 100 roll. The staleness
+> Ektar 100 roll.
+> At `nf-scene-correction/two-point-tilt` (`pipeline_version` 16 unchanged) §4's
+> `roll.json` (on its real roll) and §5's default recipe, §7's stage list and roll report
+> were re-run, and the tilt's rows, refusal and paragraph added from the binary. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -265,6 +268,8 @@ abridged):
     "roll": {
       "white_balance": [0.886392, 1.0, 1.188019],
       "neutral_balance": null,
+      "white_balance_form": "gain",
+      "white_balance_stops": 1.5175661,
       "white_stops": 1.7573359,
       "dark_stops": -3.6460953,
       "envelope_stops": [-3.6460953, 2.3384407],
@@ -303,7 +308,8 @@ every measured frame's `tones` (its white, level and dark end, from which `conve
 it), the cap as the white of a frame above it, the small lift of a low-key frame
 (`"exposure"`; none on this roll), and the `"thin_slope"` and `"thin_exposure"` of a thin
 frame beside it (§7). `roll.envelope_stops` is the roll's darkest dark end and brightest
-white. `roll.midtone_line` is `null` here because a three-frame roll is too short to
+white; `roll.white_balance_stops` the level of the white the gains equalize, which only the
+opt-in tilt reads (`--white-balance-form tilt`, §7). `roll.midtone_line` is `null` here because a three-frame roll is too short to
 measure it (§7). `reconstruction` is the decode the gains were measured through, written
 even at its defaults, because the gains hold only under it. If your `--params` recipe
 stated `input` or `measure` keys, the file carries them too.
@@ -664,6 +670,7 @@ and the measuring commands write parts of it):
                      "film_type": "unknown" },
     "calibration": { "film_base": null },
     "roll":        { "white_balance": null, "neutral_balance": null,
+                     "white_balance_form": null, "white_balance_stops": null,
                      "white_stops": null, "dark_stops": null, "envelope_stops": null,
                      "exposure": null, "frame_tones": null,
                      "frame_exposure": null, "small_lift": null,
@@ -961,7 +968,8 @@ completed, so `"output": "b-brighter"` writes `b-brighter.tiff` on a default rol
 
 A frame renders exactly as `convert --params` would with the shared recipe and its
 override merged. Some keys describe the *roll*, not the frame:
-`calibration.film_base`, `roll.white_balance`, `roll.midtone_line`, `roll.dark_stops`, `roll.exposure`,
+`calibration.film_base`, `roll.white_balance`, `roll.white_balance_form`,
+`roll.white_balance_stops`, `roll.midtone_line`, `roll.dark_stops`, `roll.exposure`,
 `reconstruction` (every key), `rendering` and `output`. (A frame may turn the midtone
 line off, `"roll": {"midtone_neutral": "off"}`, keep one of its terms (`"red"` or
 `"blue"`), or turn the white balance off with it,
@@ -1117,7 +1125,7 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stag
 ```
 
 Scene correction reports what ran joined by `+`, in order — `midtone-neutral`,
-`white-balance`, `exposure` (e.g. `"midtone-neutral+white-balance+exposure"`) — or
+`tilt`, `white-balance`, `exposure` (e.g. `"midtone-neutral+white-balance+exposure"`) — or
 `"identity"`; the look the controls that ran joined by `+`, or
 `"identity"`; fit range its operator and the dark end's curve; fit gamut the change of
 primaries and the gamut map, named for the destination's gamut. `--film-master` runs
@@ -1562,6 +1570,8 @@ measured value is never mistaken for a chosen one:
 | Flag | Recipe key | |
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
+| `--white-balance-form gain\|tilt` | `roll.white_balance_form` | how the roll's gains apply: `gain` (unset, the default) at every tone, or `tilt` (below); a typed `tilt` with no roll gains applied is refused (exit 2) |
+| `--roll-white-balance-stops STOPS` | `roll.white_balance_stops` | the level, in scene stops, of the white the gains equalize, where the tilt reaches them; a tilt with gains but no stops, or stops at or under the decoded film base, is refused (exit 2), and so is the typed flag with no roll gains applied |
 | `--roll-white STOPS` | `roll.white_stops` | the roll's white, in scene stops above mid-grey |
 | `--roll-dark STOPS` | `roll.dark_stops` | the roll's dark end, in scene stops from mid-grey. With the white it sets the roll's slope, which spreads the span between them over 9.049 stops (below) and is the look's base where no placed or thin frame's slope comes first (§5), and `--contrast` multiplies; the colour's base slope too, which `--saturation` multiplies. The two are stated together: one without the other is refused (exit 2) wherever the roll applies. Either, typed or in a `roll` manifest's `params`, drops a frame's thin lift (slope and exposure) and keeps its small lift; a later `--params` layer's does not |
 | `--roll-exposure EV` | `roll.exposure` | the roll's exposure, a neutral gain of `2^EV`; `--exposure` adds to it |
@@ -1627,7 +1637,7 @@ Each is optional. The report says what applied:
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-dark -3.75 --roll-exposure 0.4 \
     --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","frame_placement":null,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"midtone_terms_applied":[],"taste_applied":[]}
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"dark_stops":-3.75,"slope":1.660367,"exposure":0.4,"frame_exposure":null,"thin_slope":null,"thin_exposure":null,"envelope_stops":null,"frame_tones":null,"placement":"hybrid","frame_placement":null,"white_balance_applied":true,"white_balance_form":"gain","white_balance_stops":null,"slope_applied":true,"exposure_applied":true,"frame_exposure_applied":false,"thin_lift_applied":false,"midtone_line":null,"midtone_neutral_applied":false,"midtone_terms_applied":[],"taste_applied":[]}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
@@ -1636,6 +1646,19 @@ With `--roll-midtone-line` too, `chain.roll` states the line with
 `chain.scene_correction` carries it as `midtone_line`, and the stage list reads
 `midtone-neutral+white-balance+exposure`. Under `--midtone-neutral blue` the terms read
 `["blue"]` and `chain.scene_correction.midtone_line` carries red as `[0.0,0.0]`.
+
+**The tilt.** The gains equalize the roll's white, but applied at every tone they also tint
+the film base, and so the deepest shadows, by the white's cast. `--white-balance-form tilt`
+(on `measure-roll`, which writes it with the roll's measurement; unset there, the `--params`
+recipe's form) applies them per channel
+from nothing at the film base to the full gains at the roll's white
+(`roll.white_balance_stops`), held there above it; the midtone line is measured after it and
+fades to nothing at the base too. Black stays neutral, and the darkest tones render a little
+lighter than under the gains, which darkened them slightly. On the reviewed rolls the
+difference was small and favoured the tilt mostly on low-key frames, so it is opt-in. The
+report names it: `chain.roll.white_balance_form`, `chain.scene_correction.roll_tilt` (the
+gains it tilts to, which the stated `white_balance` no longer folds in), and `tilt` in the
+stage list (`tilt+white-balance+exposure`).
 
 `slope_applied` stays `true` with `--contrast` stated: the contrast multiplies the
 roll's slope (`chain.look.base_from` is `roll`). The film master and `direct` apply
@@ -1682,7 +1705,7 @@ green-anchored.
 brightness. Per half-stop band, each frame votes the most common colour of its pixels
 there; the roll's value per band is the median vote, and a line through the bands
 weighted by frames voting gives red and blue a correction. At render it applies in full
-up to a stop below `fade_end_stops`, fades to nothing there, stays flat outside `bands`,
+up to a stop below `fade_end_stops`, fades to nothing there, stays flat outside `bands` (under the tilt, above, it fades to nothing at the film base),
 and spares strongly coloured light (a pixel 0.6 → 0.9 log2 off the line's cast, such as
 a sunset-lit cloud) — the **tint gate**. On a roll from an exhausted developer it is
 the difference between violet midtones and neutral ones; on a well-developed roll it is

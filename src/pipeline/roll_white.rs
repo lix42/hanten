@@ -94,6 +94,7 @@ use serde::{Deserialize, Serialize};
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::midtone_neutral::MidtoneLine;
+use crate::pipeline::roll_balance::RollBalance;
 use crate::pipeline::white_balance::{
     green_anchored_gains, nearest_rank_index, percentile_levels, percentile_levels_of,
     sample_region,
@@ -407,23 +408,27 @@ fn frame_white(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f32>>
 
 /// A frame's white **after the roll's colour correction**: each film-RGB pixel of
 /// `sample` mapped to ACEScg, corrected by the midtone `line` (if any) and the roll's
-/// `gains`, and mapped back, so the rule keeps the domain it was reviewed in.
+/// `balance`, and mapped back, so the rule keeps the domain it was reviewed in.
 ///
 /// Measured before correction, any colour correction moved every frame's white, hence
 /// the roll's slope (`docs/spike/poor-development.md`, "Measurement order"). No loop:
 /// the look's slope is channel-equal and pivoted at mid-grey, so a neutral white stays
 /// neutral.
-pub fn corrected_white(sample: &[f32], gains: [f32; 3], line: Option<&MidtoneLine>) -> Option<f32> {
+pub fn corrected_white(
+    sample: &[f32],
+    balance: &RollBalance,
+    line: Option<&MidtoneLine>,
+) -> Option<f32> {
     let corrected: Vec<f32> = sample
         .as_chunks::<3>()
         .0
         .iter()
         .flat_map(|px| {
-            let mut aces = film_rgb_to_acescg(*px);
-            if let Some(line) = line {
-                line.correct(&mut aces, gains);
-            }
-            acescg_to_film_rgb(std::array::from_fn(|c| aces[c] * gains[c]))
+            acescg_to_film_rgb(MidtoneLine::balanced(
+                line,
+                film_rgb_to_acescg(*px),
+                balance,
+            ))
         })
         .collect();
     sample_white(&corrected)
@@ -1003,21 +1008,30 @@ pub fn roll_gains(pool: &[f32]) -> Result<[f32; 3]> {
 }
 
 /// Where the midtone line fades to zero: the scene stop of the luma of the roll's pooled
-/// per-channel [`PERCENTILE`] after `gains`, over every frame's ACEScg sample
+/// per-channel [`PERCENTILE`] after `balance`, over every frame's ACEScg sample
 /// ([`acescg_sample`]).
 ///
 /// **No leader guard**, as reviewed: the guard drops a poorly developed roll's real
 /// highlights near the leader, and on 09-29 Ektar put this 0.23 stop under the reviewed
 /// value. Not the gains' own p99, which is guarded.
-pub fn pooled_white_stops(samples: &[Vec<f32>], gains: [f32; 3]) -> f32 {
+pub fn pooled_white_stops(samples: &[Vec<f32>], balance: &RollBalance) -> f32 {
     let usable = samples
         .iter()
         .flat_map(|s| s.as_chunks::<3>().0.iter())
         .filter(|px| !unusable(px));
     let cap = samples.iter().map(|s| s.len() / 3).sum();
     let p = percentile_levels_of(usable, cap, PERCENTILE);
-    let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum();
+    let luma: f32 = match balance {
+        RollBalance::Gain(gains) => (0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum(),
+        RollBalance::Tilt(t) => luma(&t.apply(p)),
+    };
     scene_stops(luma)
+}
+
+/// Green's level at the white [`roll_gains`] equalizes, in scene stops: where a tilt
+/// reaches the full gains (`pipeline::roll_balance`). Same pool, same percentile.
+pub fn roll_white_balance_stops(pool: &[f32]) -> f32 {
+    scene_stops(percentile_levels(pool, PERCENTILE)[1])
 }
 
 #[cfg(test)]
@@ -1656,7 +1670,7 @@ mod tests {
         let s = ramp([1.0, 0.8, 0.6]);
         let (w, c) = (
             sample_white(&s).unwrap(),
-            corrected_white(&s, [1.0; 3], None).unwrap(),
+            corrected_white(&s, &RollBalance::Gain([1.0; 3]), None).unwrap(),
         );
         // Only the 3×3 round trip's f32 roundings separate them.
         assert!((c / w - 1.0).abs() < 1e-5, "{w} {c}");
@@ -1667,14 +1681,14 @@ mod tests {
         let grey = ramp([1.0; 3]);
         let w = sample_white(&grey).unwrap();
         // Equal gains scale every channel: the white moves by log2 of the gain.
-        let c = corrected_white(&grey, [1.5; 3], None).unwrap();
+        let c = corrected_white(&grey, &RollBalance::Gain([1.5; 3]), None).unwrap();
         assert!((scene_stops(c) - scene_stops(w) - 1.5f32.log2()).abs() < 1e-5);
         // Unequal gains act in ACEScg: the white is the brightest film channel of the
         // corrected p97 pixel, mapped back.
         let gains = [1.3, 1.0, 0.8];
         let aces = film_rgb_to_acescg([w; 3]);
         let back = acescg_to_film_rgb(std::array::from_fn(|c| aces[c] * gains[c]));
-        let c = corrected_white(&grey, gains, None).unwrap();
+        let c = corrected_white(&grey, &RollBalance::Gain(gains), None).unwrap();
         assert!(
             (c / back[0].max(back[1]).max(back[2]) - 1.0).abs() < 1e-5,
             "{c} {back:?}"
@@ -1687,7 +1701,7 @@ mod tests {
         let gains = [0.8, 1.0, 1.4];
         let samples = vec![field(px, 50), field(px, 30)];
         let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c] * gains[c]).sum();
-        let w = pooled_white_stops(&samples, gains);
+        let w = pooled_white_stops(&samples, &RollBalance::Gain(gains));
         assert!((w - scene_stops(luma)).abs() < 1e-6, "{w}");
         // Read without a flattened copy, bit for bit as the copy read.
         let samples = vec![
@@ -1705,7 +1719,7 @@ mod tests {
         let p = percentile_levels(&flat, PERCENTILE);
         let want = scene_stops((0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum());
         assert_eq!(
-            pooled_white_stops(&samples, gains).to_bits(),
+            pooled_white_stops(&samples, &RollBalance::Gain(gains)).to_bits(),
             want.to_bits()
         );
     }

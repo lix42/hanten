@@ -5,9 +5,11 @@
 //! measured film base, lens glare is part of the photograph, and placing black is fit
 //! range's display black (`nf-scene-correction/flare-removal`, closed). Scene-referred
 //! and linear: white balance and exposure are per-channel gains on linear ACEScg, so the
-//! two fold into one multiply and nothing is clamped. The midtone neutral
-//! ([`crate::pipeline::midtone_neutral`]) runs first, per pixel, keyed on the roll's own
-//! gains, which it was measured after: a stated white balance does not move it.
+//! two fold into one multiply and nothing is clamped. The roll's gains are folded in too,
+//! unless they apply as a tilt ([`crate::pipeline::roll_balance`]), which runs per pixel
+//! before the multiply. The midtone neutral ([`crate::pipeline::midtone_neutral`]) runs
+//! first (after the tilt, which does not commute with it), keyed on the roll's balance,
+//! which it was measured after: a stated white balance does not move it.
 //!
 //! Written fresh, per CLAUDE.md's migration rule, rather than from the removed chain's
 //! `render_split::apply_shared_controls`, which fused the same arithmetic with the
@@ -31,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::pixels;
+use crate::pipeline::roll_balance::{RollBalance, Tilt};
 use crate::pipeline::working_image::WorkingBuffer;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::{NcError, Result};
@@ -89,13 +92,27 @@ impl Default for SceneCorrectionParams {
     }
 }
 
-/// The roll's midtone line as the stage applies it: the line, and the roll's
-/// white-balance gains it was measured after (`roll.white_balance`). Not a recipe key of
-/// `scene_correction`: it comes from the recipe's `roll` section.
+/// The roll's colour correction as the stage applies it: its midtone line, if any, and
+/// its white balance ([`RollBalance`]), which the line was measured after. Not a recipe
+/// key of `scene_correction`: it comes from the recipe's `roll` section.
+///
+/// The roll's **gains** are also folded into [`SceneCorrectionParams::white_balance`]
+/// (`crate::recipe::Recipe::resolved_scene_correction`), one multiply with the stated
+/// gains, so here they only key the line. A **tilt** cannot fold, so the stage applies it
+/// itself, after the line and before the folded gains.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MidtoneCorrection {
-    pub line: MidtoneLine,
-    pub roll_gains: [f32; 3],
+pub struct RollColour {
+    pub line: Option<MidtoneLine>,
+    pub balance: RollBalance,
+}
+
+impl RollColour {
+    fn tilt(&self) -> Option<&Tilt> {
+        match &self.balance {
+            RollBalance::Tilt(t) => Some(t),
+            RollBalance::Gain(_) => None,
+        }
+    }
 }
 
 /// A value [`SceneCorrectionParams::check`] refuses, carried as data so each caller
@@ -185,6 +202,10 @@ pub struct SceneCorrection {
     /// The roll's midtone line, when it applied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub midtone_line: Option<MidtoneLine>,
+    /// The roll's gains at its white, when they applied as a tilt (`white_balance` then
+    /// holds only the stated gains).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll_tilt: Option<[f32; 3]>,
 }
 
 impl SceneCorrection {
@@ -198,16 +219,32 @@ impl SceneCorrection {
         let gains = self.white_balance.map(|wb| wb * exposure_gain) != [1.0, 1.0, 1.0];
         let white_balance = gains && self.white_balance != [1.0, 1.0, 1.0];
         let exposure = gains && exposure_gain != 1.0;
-        match (self.midtone_line.is_some(), white_balance, exposure) {
-            (false, false, false) => "identity",
-            (false, true, false) => "white-balance",
-            (false, false, true) => "exposure",
-            (false, true, true) => "white-balance+exposure",
-            (true, false, false) => "midtone-neutral",
-            (true, true, false) => "midtone-neutral+white-balance",
-            (true, false, true) => "midtone-neutral+exposure",
-            (true, true, true) => "midtone-neutral+white-balance+exposure",
-        }
+        // Indexed by the four bits, in the order the names join.
+        const NAMES: [&str; 16] = [
+            "identity",
+            "midtone-neutral",
+            "tilt",
+            "midtone-neutral+tilt",
+            "white-balance",
+            "midtone-neutral+white-balance",
+            "tilt+white-balance",
+            "midtone-neutral+tilt+white-balance",
+            "exposure",
+            "midtone-neutral+exposure",
+            "tilt+exposure",
+            "midtone-neutral+tilt+exposure",
+            "white-balance+exposure",
+            "midtone-neutral+white-balance+exposure",
+            "tilt+white-balance+exposure",
+            "midtone-neutral+tilt+white-balance+exposure",
+        ];
+        let bits = [
+            self.midtone_line.is_some(),
+            self.roll_tilt.is_some(),
+            white_balance,
+            exposure,
+        ];
+        NAMES[(0..4).filter(|&k| bits[k]).map(|k| 1 << k).sum::<usize>()]
     }
 }
 
@@ -233,8 +270,8 @@ impl fmt::Debug for SceneReferredImage {
     }
 }
 
-/// Apply scene correction: the `midtone` line if any ([`MidtoneLine::correct`]), then
-/// `v_c ← v_c · wb_c · 2^exposure` per channel.
+/// Apply scene correction: the roll's midtone line if any ([`MidtoneLine::correct`]), its
+/// tilt if any ([`Tilt::apply`]), then `v_c ← v_c · wb_c · 2^exposure` per channel.
 ///
 /// The identity configuration returns the buffer untouched, bit for bit. Otherwise
 /// nothing is clamped (clamping happens only at the encoder) and a non-finite sample
@@ -243,7 +280,7 @@ impl fmt::Debug for SceneReferredImage {
 pub fn apply(
     image: AcesCgImage,
     params: &SceneCorrectionParams,
-    midtone: Option<&MidtoneCorrection>,
+    roll: Option<&RollColour>,
 ) -> Result<(SceneReferredImage, SceneCorrection)> {
     let WhiteBalance::Explicit(white_balance) = params.white_balance;
     let gains = params.gains().map_err(|_| {
@@ -255,22 +292,33 @@ pub fn apply(
         ))
     })?;
 
-    if let Some(m) = midtone {
-        m.line.check().map_err(|e| {
-            NcError::Other(format!(
-                "scene correction cannot apply the midtone line: {e}. The recipe's \
-                 validation refuses it first, so reaching here is a wiring fault"
-            ))
-        })?;
+    let line = roll.and_then(|r| r.line);
+    let tilt = roll.and_then(RollColour::tilt);
+    let wiring = |what: &str, e: String| {
+        NcError::Other(format!(
+            "scene correction cannot apply the {what}: {e}. The recipe's validation \
+             refuses it first, so reaching here is a wiring fault"
+        ))
+    };
+    if let Some(l) = &line {
+        l.check().map_err(|e| wiring("midtone line", e))?;
+    }
+    if let Some(t) = tilt {
+        t.check().map_err(|e| wiring("roll's tilt", e))?;
     }
 
     let mut buffer = WorkingBuffer::from_aces(image);
     let scale = gains != [1.0, 1.0, 1.0];
-    if midtone.is_some() || scale {
-        // One pass: the line, then the gains.
+    if line.is_some() || tilt.is_some() || scale {
+        // One pass: the line and the tilt (which `correct` applies first), then the gains.
         pixels::map_in_place(buffer.rgb_mut(), |px| {
-            if let Some(m) = midtone {
-                m.line.correct(px, m.roll_gains);
+            match (&line, roll) {
+                (Some(l), Some(r)) => l.correct(px, &r.balance),
+                _ => {
+                    if let Some(t) = tilt {
+                        *px = t.apply(*px);
+                    }
+                }
             }
             if scale {
                 for c in 0..3 {
@@ -282,7 +330,8 @@ pub fn apply(
     let resolved = SceneCorrection {
         white_balance,
         exposure: params.exposure,
-        midtone_line: midtone.map(|m| m.line),
+        midtone_line: line,
+        roll_tilt: tilt.map(|t| t.gains),
     };
     Ok((SceneReferredImage(buffer), resolved))
 }
@@ -397,9 +446,9 @@ mod tests {
             bands: [-2.75, 1.75],
             fade_end_stops: 1.87,
         };
-        let midtone = MidtoneCorrection {
-            line,
-            roll_gains: [1.21, 1.0, 1.15],
+        let midtone = RollColour {
+            line: Some(line),
+            balance: RollBalance::Gain([1.21, 1.0, 1.15]),
         };
         let rgb = [0.11, 0.12, 0.135, 0.3, 0.2, 0.2, 0.0, 0.0, 0.0];
         // The folded gains carry a stated white balance too; the line must not see it.
@@ -413,7 +462,7 @@ mod tests {
         let mapped = aces_from(3, 1, &rgb);
         for (i, px) in mapped.rgb().as_chunks::<3>().0.iter().enumerate() {
             let mut want = *px;
-            line.correct(&mut want, midtone.roll_gains);
+            line.correct(&mut want, &midtone.balance);
             let want: Vec<u32> = (0..3).map(|c| (want[c] * gains[c]).to_bits()).collect();
             assert_eq!(bits(&out[i * 3..i * 3 + 3]), want, "pixel {i}");
         }
@@ -482,5 +531,46 @@ mod tests {
         assert!(
             serde_json::from_str::<SceneCorrectionParams>(r#"{"white_balance":[1,1,1]}"#).is_err()
         );
+    }
+
+    #[test]
+    fn a_tilt_runs_after_the_line_and_before_the_stated_gains_and_says_so() {
+        let line = MidtoneLine {
+            red: [-0.06, 0.04],
+            blue: [-0.02, 0.37],
+            bands: [-2.75, 1.75],
+            fade_end_stops: 1.87,
+        };
+        let tilt = Tilt::new([0.85, 1.0, 1.06], [0.004; 3], 0.5);
+        let roll = RollColour {
+            line: Some(line),
+            balance: RollBalance::Tilt(tilt),
+        };
+        let rgb = [0.11, 0.12, 0.135, 0.3, 0.2, 0.2, 0.01, 0.02, 0.03];
+        let params = SceneCorrectionParams {
+            white_balance: WhiteBalance::Explicit([1.1, 1.0, 1.0]),
+            exposure: 0.0,
+        };
+        let gains = params.gains().unwrap();
+        let (out, resolved) = apply(aces_from(3, 1, &rgb), &params, Some(&roll)).unwrap();
+        let out = out.into_buffer().into_linear().rgb;
+        let mapped = aces_from(3, 1, &rgb);
+        for (i, px) in mapped.rgb().as_chunks::<3>().0.iter().enumerate() {
+            let mut want = *px;
+            line.correct(&mut want, &roll.balance);
+            let want: Vec<u32> = (0..3).map(|c| (want[c] * gains[c]).to_bits()).collect();
+            assert_eq!(bits(&out[i * 3..i * 3 + 3]), want, "pixel {i}");
+        }
+        assert_eq!(resolved.applied(), "midtone-neutral+tilt+white-balance");
+        assert_eq!(resolved.roll_tilt, Some(tilt.gains));
+        // Alone, the tilt still runs: it is not folded into the gains.
+        let alone = RollColour { line: None, ..roll };
+        let (_, r) = apply(
+            aces_from(3, 1, &rgb),
+            &SceneCorrectionParams::default(),
+            Some(&alone),
+        )
+        .unwrap();
+        assert_eq!(r.applied(), "tilt");
     }
 }
