@@ -44,7 +44,8 @@ Agreed with the user 2026-09-08, ahead of exposing a set. This is the canonical 
 `io/scanner-density-calibration` points here rather than restating it, and keeps only a
 short note on why each requirement exists for the fit it performs.
 
-- **Target:** an X-Rite ColorChecker Classic. The six-patch neutral row fits the
+- **Target:** an X-Rite ColorChecker Classic (since 2026-10-12 the ColorChecker
+  Passport Photo 2, which also has a Creative Enhancement target — see Registration). The six-patch neutral row fits the
   matrix diagonal and the offsets; only the coloured patches can constrain the
   **off-diagonal** terms, since cross-channel contamination is a property of the dye
   spectra. A plain grey card is a genuine first step for the diagonal alone.
@@ -90,6 +91,16 @@ short note on why each requirement exists for the fit it performs.
   picture frames; not yet developed. Portra400 and UltraMax400 planned, other stocks
   possibly later. +3/+4 not shot yet: add them on the coming rolls (and on Gold200 if a
   roll is shot again), since `saturation-margin` needs them.
+- 2026-10-12/13 (scanned): **`2026-10-12-Gold200`** — the 10-07 Gold200 roll, with +3/+4
+  shot after that entry: 29 pictures plus a bracket −2 … +4 (2127–2133). Target a ColorChecker Passport Photo 2 (both targets in frame, vertical,
+  Creative Enhancement above Classic); overcast; incident reading (Sekonic L-308X-U) at the
+  card; Leica M6 TTL, Voigtländer APO-Ultron 90mm f/2 VM, tripod, f/8 with the shutter
+  varied until 1 s, then the aperture opened (+3 at f/5.6, +4 at f/4); no 180° frame. Self-developed, CineStill Cs41
+  liquid kit, one of its first two rolls. Same scan session as the pictures, the chart
+  frames cropped (1237×1676), SilverFast's automatic adjustments locked. Shutter speeds
+  not recorded. The manifest note holds the rest.
+- 2026-10-14 (user): Ektar100 (the 10-07 roll) and an UltraMax400 roll expected ready
+  around 2026-10-21.
 
 ## Scope
 
@@ -101,14 +112,32 @@ Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode
 (`film-base/dmax-per-channel-reduction`), and any default move
 (`nf-calibration/neutrality-gate`). This task produces evidence; those consume it.
 
+## Registration (agreed with the user 2026-10-14)
+
+- **Role and chart are separate questions.** `role` says only whether a frame votes as a
+  picture. A frame whose subject is the chart gets a new role, `chart` (not `calibration`,
+  which marks a non-picture such as 09-11's half-base 1639). Picture frames with a passport
+  in them — planned from now on — stay `real` and carry chart entries.
+- **One chart entry per target, many per frame**: the target, the passport it belongs to,
+  and its four corners in the target's own orientation. Each target has its own corners
+  because the passport's pages are not coplanar, and the card is not parallel to the lens.
+- **Per-frame shot facts** (bracket offset, bracket id, how metered) and **per-roll
+  conditions** (light, camera and lens, development, scan session) are recorded, not
+  left to notes.
+- **Both Passport targets are used**: the Classic's 24 (published reference values) and
+  the Creative Enhancement target's 28, whose bottom row is a neutral series in ⅓-stop
+  steps — relative exposures known by construction in every chart frame. Patch geometry is
+  per-patch rectangles in target coordinates, since the Creative target's middle rows are
+  irregular.
+- **Labelling and extraction are their own tasks**: `chart-labeling-tool` (corners per
+  target, the projected grid, a placement check) and `chart-extraction` (one per-patch
+  table every consumer reads). This task keeps the role, the shot facts and the roll
+  conditions, and takes the first neutrality number from the table.
+
 ## Open questions
 
-- **What "role" a calibration frame gets in the manifest.** The existing roles
-  describe a roll's frames (leader, unexposed, picture); a bracketed target frame is
-  a fourth kind and needs its exposure offset and lighting recorded alongside it.
-  A new role goes in `nctool.manifest.ROLES` and `shadow_metrics.rs`'s match.
-- **Whether one measurement command serves every consumer**, or each wants its
-  own read of the same frames. Worth resolving before writing any of them.
+- The Creative target's reference values: Calibrite publishes none; only its neutral
+  steps are relied on until measured otherwise.
 - **How much scatter survives the protocol.** The bracket removes exposure ambiguity
   by construction, but ~11 frames of one condition were needed to resolve a 0.3
   stops/density difference on ordinary pictures. Whether a controlled target needs
@@ -129,3 +158,5 @@ Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode
 ## Dependencies
 
 - [Asset manifest](asset-manifest.md) — the inventory the frames are registered in
+- [Extract the chart patches](chart-extraction.md) — the table the first neutrality
+  measurement reads

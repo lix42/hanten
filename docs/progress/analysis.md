@@ -893,7 +893,7 @@ What other epics need to know about `analysis`:
 ## calibration-frame-capture
 
 **Status:** in progress
-**Updated:** 2026-10-07
+**Updated:** 2026-10-14
 
 - Goal: shoot, develop, scan and register the ColorChecker bracket rolls three other tasks
   name as a precondition, and take a first neutrality measurement against them.
@@ -922,6 +922,29 @@ What other epics need to know about `analysis`:
   `nf-scene-correction/midtone-neutral-fit` (from `docs/spike/poor-development.md`) now depend on this task. Protocol
   additions: at least ten picture frames per chart roll, so the roll's midtone line can be
   checked against its chart; one Ektar100 roll.
+- 2026-10-13: **first chart roll archived**, `2026-10-12-Gold200` (29 pictures, bracket −2 … +4 on
+  a ColorChecker Passport Photo 2; conditions in the task file). Converted with NLP, SilverFast,
+  CCR and Hanten; review set `../temp/gold200-1012-roll-review/`. Hanten measured the roll over
+  the 29 pictures only and grafted the chart frames' tones from a 36-frame run, so the charts do
+  not move the roll; rendered `--placement frame` after the hybrid pushed the roll up (filed
+  `nf-calibration/envelope-dark-end`). The chart frames carry role `calibration` provisionally.
+  +3/+4 render too bright under the ±1 EV limit (6% and 21% clipped): their exposure is the
+  bracket's, so analysis reads the scan, not a render.
+- 2026-10-14: **registration agreed** (user): see the task file's "Registration" section — a
+  `chart` role, per-target chart entries with four corners, per-frame shot facts, per-roll
+  conditions, both Passport targets, a separate labelling tool with a placement check, one
+  extraction table.
+- 2026-10-14: **manifest side landed** (schema 3): a `chart` role in `nctool.manifest.ROLES` and
+  `shadow_metrics`' non-picture arm; per-frame `shot` and per-roll `conditions`, checked by
+  `nctool/conditions.py` and preserved like `patches`; `generate`'s drop refusal now covers
+  every hand annotation (`--drop-annotations`, was `--drop-patches`). The bump makes a v2
+  `nctool` refuse the archive manifest rather than regenerate it without the new fields —
+  **a worktree without this change cannot read the archive manifest at all** (`manifest`,
+  `nctool roll`, `patches import`, the real-scan harness) until it rebases. The archive is v3: 2127–2133 are `chart` with offsets and apertures, the roll
+  carries its conditions, and `manifest roles` emits the 29 pictures.
+- 2026-10-14: `2026-10-12-Gold200` is the 10-07 Gold200 roll (+3/+4 added after that note);
+  SilverFast's automatic adjustments were locked for its scan. The Ektar100 roll and an
+  UltraMax400 roll are expected around 2026-10-21; the Ektar roll is the protocol's second.
 
 ## review-reference-cells
 
@@ -1374,3 +1397,19 @@ What other epics need to know about `analysis`:
 
 - 2026-10-04: Split out of `viewer-interoperability` (user: low priority, no device).
   Does Android 15+ display the ISO-only, three-channel gain-map JPEG as HDR?
+
+## chart-labeling-tool
+
+**Status:** not started
+**Updated:** 2026-10-14
+
+- 2026-10-14: filed (user), split from `calibration-frame-capture` with the registration
+  design agreed that day; the task file holds the decisions.
+
+## chart-extraction
+
+**Status:** not started
+**Updated:** 2026-10-14
+
+- 2026-10-14: filed (user), split from `calibration-frame-capture`: one per-patch table
+  every calibration consumer reads.

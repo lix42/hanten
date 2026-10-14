@@ -326,6 +326,8 @@ graph TD
     analysis/metrics-visualization
     analysis/harness-regression-tests
     analysis/calibration-frame-capture
+    analysis/chart-labeling-tool
+    analysis/chart-extraction
     analysis/review-reference-cells
     analysis/review-build-axis
     analysis/probe-fixture-roll-names
@@ -424,6 +426,7 @@ graph TD
     nf-calibration/hybrid-slope-bounds
     nf-calibration/short-span-protection
     nf-calibration/hybrid-span-target
+    nf-calibration/envelope-dark-end
     nf-calibration/overflow-probe-scope
     nf-calibration/display-white
     nf-calibration/scale-ladder
@@ -632,6 +635,9 @@ graph TD
   analysis/asset-manifest --> analysis/manifest-seed-roles
   analysis/asset-manifest --> analysis/calibration-role-consumers
   analysis/asset-manifest --> analysis/calibration-frame-capture
+  analysis/asset-manifest --> analysis/chart-labeling-tool
+  analysis/chart-labeling-tool --> analysis/chart-extraction
+  analysis/chart-extraction --> analysis/calibration-frame-capture
   core/roll-conversion --> core/auto-calibration
   film-base/auto-base-redesign --> core/auto-calibration
   film-base/ir-holder-detection --> core/auto-calibration
@@ -724,6 +730,8 @@ graph TD
   nf-calibration/hybrid-slope-bounds --> nf-calibration/short-span-protection
   nf-display-stages/midtone-contrast-toe --> nf-calibration/short-span-protection
   nf-display-stages/midtone-contrast-toe --> nf-calibration/hybrid-span-target
+  nf-calibration/envelope-hybrid-placement --> nf-calibration/envelope-dark-end
+  nf-calibration/hybrid-span-target --> nf-calibration/envelope-dark-end
   nf-display-stages/midtone-contrast-toe --> nf-look/midtone-contrast-colour
   nf-calibration/envelope-hybrid-placement --> nf-calibration/display-white
   nf-calibration/level-target-zero --> nf-calibration/display-white
@@ -1095,7 +1103,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote
   `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the
   stage printed success). The harness has no automated coverage at all
-- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`
+- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`, `analysis/chart-extraction`
   — filed 2026-09-12. Several tasks named these frames as a precondition in their own words
   and none owned producing them, so the graph reported work executable when the thing
   blocking it was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
@@ -1109,6 +1117,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — filed 2026-09-24: no `SEED_ROLES` entry matches a date-named roll, so a from-scratch generation marks reference frames `real`
 - `analysis/calibration-role-consumers` (post-MVP): `analysis/asset-manifest`
   — filed 2026-10-01: `manifest roles` and `shadow_metrics` count a `calibration` frame as `real`, and `nctool roll` refuses its roll
+- `analysis/chart-labeling-tool` (post-MVP): `analysis/asset-manifest`
+  — filed 2026-10-14 (split from `calibration-frame-capture`): mark each target's corners
+  in a frame, check the projected grid, write chart entries to the manifest
+- `analysis/chart-extraction` (post-MVP): `analysis/chart-labeling-tool`
+  — filed 2026-10-14 (split from `calibration-frame-capture`): one per-patch table from
+  the scans that every calibration consumer reads
 - `analysis/review-test-local-binary` (post-MVP): none
   — filed 2026-09-25: the `nctool` gate fails locally whenever a release binary is built,
   which every review set does
@@ -1429,6 +1443,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   noise guard; a toe changes the shadows where thin frames' grain shows
 - `nf-calibration/hybrid-span-target` (new flow): `nf-display-stages/midtone-contrast-toe`
   — split from `midtone-contrast-toe` 2026-10-11: the hybrid's R, reviewed with a toe
+- `nf-calibration/envelope-dark-end` (new flow): `nf-calibration/envelope-hybrid-placement`, `nf-calibration/hybrid-span-target`
+  — filed 2026-10-13 from the `2026-10-12-Gold200` review: one dark frame's low dark end
+  pushes the whole roll up under the hybrid
 - `nf-calibration/overflow-probe-scope` (new flow): none
   — filed 2026-10-12 from `midtone-contrast-toe` step 4: the densest-sample probe refuses
   `--placement frame --contrast 1.3` on 11 frames, and every entry is checked, so whole rolls;
@@ -1888,9 +1905,16 @@ the design now in `docs/design-spec.md` (§6–§7):
   **Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to
   the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first
   neutrality measurement. **Shooting (2026-10-07)**: Gold200 and Ektar100 shot, −2 … +2;
-  Portra400 and UltraMax400 planned; +3/+4 still to add. Gates
+  Portra400 and UltraMax400 planned. **2026-10-13**: `2026-10-12-Gold200` archived (bracket
+  −2 … +4 on a Passport Photo 2); registration agreed 2026-10-14, labelling and extraction
+  split out. Gates
   `nf-calibration/neutrality-gate`, `saturation-margin`, `offset-question`,
   `nf-scene-correction/midtone-neutral-fit` and `io/scanner-density-calibration`
+- [ ] [Label the charts in a frame](tasks/analysis/chart-labeling-tool.md) — a tool to
+  mark each target's four corners, check the projected patch grid, and write chart
+  entries to `manifest.json`
+- [ ] [Extract the chart patches](tasks/analysis/chart-extraction.md) — one per-patch
+  table from the scans, read by every calibration consumer
 - [x] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc
   review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer**
   shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on
@@ -2346,6 +2370,9 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [The hybrid's span target](tasks/nf-calibration/hybrid-span-target.md) — **done
   2026-10-13** (`pipeline_version` 16): R 7 → 8 by review (09-20, 09-28); the envelope, not
   the dark floor, holds the dark end, so on a thin roll a higher R brightens
+- [ ] [One dark frame brightens the whole roll](tasks/nf-calibration/envelope-dark-end.md) —
+  filed 2026-10-13: on `2026-10-12-Gold200` the hybrid's envelope, its dark end set by the
+  darkest frames, rendered the roll pushed up; reviewed `--placement frame` instead
 - [x] [A steep frame refused by a sample no picture
   holds](tasks/nf-calibration/overflow-probe-scope.md) — **done 2026-10-13**: the scan
   floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the

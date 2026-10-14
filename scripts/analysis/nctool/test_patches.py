@@ -154,7 +154,7 @@ class TestImport(unittest.TestCase):
     def test_imports_and_replaces_only_the_same_source(self):
         rc, m, err = self.run_import(COPY_ALL.replace("## F2", "## r-1982"))
         self.assertEqual(rc, 0, err)
-        self.assertEqual(m["schema_version"], 2)
+        self.assertEqual(m["schema_version"], 3)
         f1, f2 = m["rolls"]["R"]["frames"]
         self.assertEqual([p["source"] for p in f1["patches"]], ["old", "this", "this"])
         self.assertEqual(f1["patches"][1]["label"], "White pillow")

@@ -42,7 +42,7 @@ wrong one costs a full re-render:
 ## 1. The image set
 
 `../nc-assets/manifest.json` is the inventory. Keep `role: "real"` frames —
-`unexposed` / `leader` / `calibration` are reference frames, not pictures. Frame counts go
+`unexposed` / `leader` / `calibration` / `chart` are reference frames, not pictures. Frame counts go
 stale fast, so derive them at run time rather than trusting any written-down number.
 
 Narrow the set with the matrix's `frames` list, or `--frames a,b,c` on the command line.

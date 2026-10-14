@@ -65,10 +65,9 @@ is a thin backward-compat shim that forwards to the same code (needs no
   `manifest.json` in place. `--dry-run` prints the summary without writing.
 
 The generator is **idempotent and update-aware**: it loads any existing
-`manifest.json` and preserves human-maintained fields — roll frame `role` and
-`patches`, roll
-`stock`/`note`, sample `kind`/`note`, per-output `note`, and each converted
-bucket's `regenerable`/`nc_version`/`recipe_dir`/`note`. Preserved fields survive
+`manifest.json` and preserves human-maintained fields — roll frame `role`,
+`patches` and `shot`, roll `stock`/`note`/`conditions`, sample `kind`/`note`,
+per-output `note`, and each converted bucket's `regenerable`/`nc_version`/`recipe_dir`/`note`. Preserved fields survive
 an asset **rename** by matching sha256 identity — but only when the old path is
 gone (a *copy* keeps its own default, so a calibration role isn't cloned).
 Checksums are **recomputed every run** by default (source-of-truth integrity);
@@ -80,7 +79,7 @@ warm updates, but a same-size edit would go undetected).
 ```
 <asset-root>/
   manifest.json
-  rolls/<roll>/<frame>.tif          # roles: unexposed | leader | calibration | real
+  rolls/<roll>/<frame>.tif          # roles: unexposed | leader | calibration | chart | real
   samples/<file>.tif  samples/<sub>/<file>.tif   # standalone fixtures
   converted/<producer>/<version>/[<roll>/]<file> # producer: nc | nlp
 ```
@@ -94,7 +93,9 @@ warm updates, but a same-size edit would go undetected).
   can do it, because a half-leader/half-base frame has the *largest* density span on
   its roll — what it lacks is scene content. Give such a frame a non-`real` role.
   Use a role from `nctool.manifest.ROLES`: `validate` flags any other spelling, and
-  most consumers count it as `real`.
+  most consumers count it as `real`. `chart` is a frame whose subject is a colour
+  target (a bracket); `calibration` any other non-picture. A picture with a target in
+  it stays `real`.
 - `converted/nc/*` buckets default `regenerable: true` (sha256 skipped, since the
   harness reproduces them) except `V0`; `nlp/*` and everything else are hashed.
 - `source_frame` for a converted output is resolved by matching its filename stem
@@ -133,10 +134,25 @@ label prefixed `W:` / `G:` / `C:` sets that patch's kind; `--kind` covers the re
 Each listed frame's patches from the same `--source` are replaced; others stay.
 Hand edits are kept like roles.
 
-**`generate` refuses to drop patches**: when a frame that carries them is gone from
-disk it writes nothing (exit 2) until `--drop-patches` says to. A frame whose bytes
-changed at the same path keeps its patches with a warning — check they still sit on
-their subject.
+**`generate` refuses to drop annotations** (`patches`, `shot`, a roll's
+`conditions`): when a frame that carries them is gone from disk, or a roll with
+conditions is, it writes nothing (exit 2) until `--drop-annotations` says to. A roll
+renamed whole keeps its conditions, stock and note (its frames are matched by
+checksum); a roll split or merged does not — rename its key in `manifest.json` by
+hand, or copy its `conditions` into the entry it merged into. A frame whose bytes
+changed at the same path keeps its patches with a warning — check they still sit on their subject.
+
+## Shot facts and roll conditions
+
+Schema 3 records what a scan cannot tell a calibration consumer. A frame's `shot`:
+`exposure_ev` (offset from the metered reading — a bracket's −2 … +4), `bracket`,
+`aperture` (f-number), `shutter_s`, `metered`, `light`, `note`. A roll's `conditions`:
+`light`, `meter`, `camera`, `lens`, `support`, `development`, `scan`, `note`. `light`
+is `overcast` / `sun` / `shade` (a patch's `light` too); the rest is text, and an
+empty `shot` or `conditions` is refused. Enter them by editing
+`manifest.json`; the rules are `nctool/conditions.py`, and `validate` reports a
+field that breaks them. The bump to 3 keeps an older `nctool` from regenerating the
+manifest and dropping them.
 
 ## Where the assets live
 
@@ -148,8 +164,8 @@ it directly.
 `/Volumes/blackbox/full-assets` (slow external drive, same layout) is a **cold
 backup**, not kept in sync. To recover a file, copy it back to the same path, then
 `generate --carry-from /Volumes/blackbox/full-assets/manifest.json`, which takes
-its role and patches from the backup's manifest (matched by checksum). Without it
-the restored frame comes back as `real` with no patches.
+its role and annotations from the backup's manifest (matched by checksum). Without
+it the restored frame comes back as `real` with no patches.
 
 ## Metadata source & fallback
 
