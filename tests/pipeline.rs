@@ -11273,6 +11273,343 @@ fn midtone_neutral_red_or_blue_keeps_one_term_of_the_line() {
 }
 
 #[test]
+fn measure_roll_writes_a_tilt_that_convert_applies_and_switches() {
+    let tmp = TempDir::new("measure-roll-tilt");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frames: Vec<PathBuf> = (0..3)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.2 + 0.05 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    let measure = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &["measure-roll", "--params", input.to_str().unwrap()][..],
+            &names[..],
+            extra,
+            &["--out", out.to_str().unwrap()],
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), written_recipe(&out), out)
+    };
+    let (gain_report, gain_written, gain_recipe) = measure("gain.json", &[]);
+    let (report, written, recipe) = measure("tilt.json", &["--white-balance-form", "tilt"]);
+    // The same pool, so the same gains and white; only the form differs.
+    assert_eq!(written["roll"]["white_balance_form"], "tilt", "{written}");
+    // Stated even as `gain`, so no layer under it changes the form it measured after.
+    assert_eq!(
+        gain_written["roll"]["white_balance_form"], "gain",
+        "{gain_written}"
+    );
+    assert_eq!(
+        written["roll"]["white_balance"],
+        gain_written["roll"]["white_balance"]
+    );
+    let stops = &written["roll"]["white_balance_stops"];
+    assert!(stops.is_number(), "{written}");
+    assert_eq!(*stops, gain_written["roll"]["white_balance_stops"]);
+    let flag = report["reuse"]["flag"].as_str().unwrap();
+    assert!(
+        flag.contains("--white-balance-form tilt --roll-white-balance-stops "),
+        "{flag}"
+    );
+    let gain_flag = gain_report["reuse"]["flag"].as_str().unwrap();
+    assert!(!gain_flag.contains("--white-balance-form"), "{gain_flag}");
+
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                names[0],
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                input.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (json(&stdout), std::fs::read(out).unwrap())
+    };
+    let (by_recipe, tilt_px) = convert("tilt.tiff", &["--params", recipe.to_str().unwrap()]);
+    let sc = &by_recipe["chain"]["scene_correction"];
+    assert_eq!(
+        sc["roll_tilt"], written["roll"]["white_balance"],
+        "{by_recipe}"
+    );
+    // The tilt is not folded into the flat gains.
+    assert_eq!(
+        sc["white_balance"],
+        serde_json::json!([1.0, 1.0, 1.0]),
+        "{by_recipe}"
+    );
+    assert_eq!(by_recipe["chain"]["roll"]["white_balance_form"], "tilt");
+    let own = report["frames"][0]["flag"].as_str().unwrap_or(flag);
+    let own: Vec<&str> = own.split_whitespace().collect();
+    let (_, flag_px) = convert("flag.tiff", &own);
+    assert_eq!(
+        tilt_px, flag_px,
+        "the flag's text round-trips the tilt exactly"
+    );
+    let (_, gain_px) = convert("gain.tiff", &["--params", gain_recipe.to_str().unwrap()]);
+    assert_ne!(
+        tilt_px, gain_px,
+        "not vacuous: the tilt renders apart from the gains"
+    );
+
+    // Off at render takes the tilt with the gains: either form then renders the same.
+    let tilt = recipe.to_str().unwrap();
+    let (off_report, off_px) = convert("off.tiff", &["--params", tilt, "--neutral-balance", "off"]);
+    assert!(
+        off_report["chain"]["scene_correction"]
+            .get("roll_tilt")
+            .is_none(),
+        "{off_report}"
+    );
+    let (_, gain_off_px) = convert(
+        "gain-off.tiff",
+        &[
+            "--params",
+            tilt,
+            "--white-balance-form",
+            "gain",
+            "--neutral-balance",
+            "off",
+        ],
+    );
+    assert_eq!(off_px, gain_off_px);
+    assert_ne!(off_px, tilt_px, "not vacuous: the tilt moved pixels");
+
+    // A tilt needs the white it reaches the gains at.
+    let (code, _, err) = run(&[
+        "convert",
+        names[0],
+        "--film-base",
+        "0.9,0.55,0.42",
+        "-o",
+        tmp.path("bare.tiff").to_str().unwrap(),
+        "--roll-white-balance",
+        "0.9,1,1.1",
+        "--white-balance-form",
+        "tilt",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--white-balance-form (recipe `roll.white_balance_form`) `tilt` reaches")
+            && err.contains("--roll-white-balance-stops (recipe `roll.white_balance_stops`)"),
+        "{err}"
+    );
+}
+
+#[test]
+fn measure_roll_takes_its_form_from_the_layers_and_states_it() {
+    let tmp = TempDir::new("measure-roll-tilt-layers");
+    let base = [0.9f32, 0.55, 0.42];
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let tilt_layer = write_file(
+        &tmp.path("tilt-layer.json"),
+        r#"{ "recipe_version": 3, "roll": { "white_balance_form": "tilt" } }"#,
+    );
+    let frames: Vec<PathBuf> = (0..3)
+        .map(|i| {
+            let p = tmp.path(&format!("f{i}.tif"));
+            write_ramp_density(&p, base, 0.2 + 0.05 * i as f32, 1.35);
+            p
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|p| p.to_str().unwrap()).collect();
+    let measure = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let (code, _, err) = run(&[
+            &["measure-roll", "--params", input.to_str().unwrap()][..],
+            &names[..],
+            extra,
+            &["--out", out.to_str().unwrap()],
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (written_recipe(&out), out)
+    };
+    let layer = tilt_layer.to_str().unwrap();
+    let (by_flag, _) = measure("flag.json", &["--white-balance-form", "tilt"]);
+    let (by_layer, _) = measure("layer.json", &["--params", layer]);
+    assert_eq!(by_layer["roll"]["white_balance_form"], "tilt", "{by_layer}");
+    assert_eq!(
+        by_layer["roll"], by_flag["roll"],
+        "a layer's form measures as the flag does"
+    );
+    // The flag wins over the layer, and its `gain` is written, so a tilt layered under the
+    // measurement cannot render a tilt over whites measured under the gain.
+    let (gain, gain_out) = measure(
+        "gain.json",
+        &["--params", layer, "--white-balance-form", "gain"],
+    );
+    assert_eq!(gain["roll"]["white_balance_form"], "gain", "{gain}");
+    let (code, stdout, err) = run(&[
+        "convert",
+        names[0],
+        "--params",
+        layer,
+        "--params",
+        gain_out.to_str().unwrap(),
+        "-o",
+        tmp.path("gain.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["chain"]["roll"]["white_balance_form"], "gain",
+        "{report}"
+    );
+    assert!(
+        report["chain"]["scene_correction"]
+            .get("roll_tilt")
+            .is_none(),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_tilt_white_at_the_base_is_a_usage_error_naming_the_stops() {
+    let tmp = TempDir::new("tilt-under-base");
+    let (code, _, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "--film-base",
+        "0.9,0.6,0.4",
+        "--roll-white-balance",
+        "1.1,1,0.9",
+        "--white-balance-form",
+        "tilt",
+        "--roll-white-balance-stops",
+        "-12",
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "--roll-white-balance-stops (recipe `roll.white_balance_stops`): the roll's white \
+             (-12 scene stops) must sit above the decoded film base"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("wiring fault"), "{err}");
+}
+
+#[test]
+fn a_tilt_with_no_gains_applied_is_refused_only_when_typed() {
+    let tmp = TempDir::new("tilt-no-gains");
+    let out = tmp.path("out.tiff");
+    let convert = |extra: &[&str]| {
+        run(&[
+            &[
+                "convert",
+                "tests/fixtures/hdr-48bit.tif",
+                "--film-base",
+                "0.9,0.6,0.4",
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat())
+    };
+    // The control: the same run without the form.
+    let (code, _, err) = convert(&[]);
+    assert_eq!(code, 0, "{err}");
+    // No gains at all: the typed form and stops ask for nothing.
+    for (flag, name) in [
+        (
+            &["--white-balance-form", "tilt"][..],
+            "--white-balance-form tilt",
+        ),
+        (
+            &["--roll-white-balance-stops", "1.5"],
+            "--roll-white-balance-stops",
+        ),
+    ] {
+        let (code, _, err) = convert(flag);
+        assert_eq!(code, 2, "{name}: {err}");
+        assert!(
+            err.contains(&format!(
+                "{name} shapes how the roll's white-balance gains apply, and none are stated"
+            )),
+            "{err}"
+        );
+    }
+    // Gains turned off: the presence rule wins over the missing-stops rule, and its remedy
+    // names the stops the turned-on tilt needs.
+    let (code, _, err) = convert(&[
+        "--roll-white-balance",
+        "1.1,1,0.9",
+        "--neutral-balance",
+        "off",
+        "--white-balance-form",
+        "tilt",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("which are off under --neutral-balance off")
+            && err.contains("drop --neutral-balance off and state --roll-white-balance-stops"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("reaches the roll's gains at the roll's white"),
+        "{err}"
+    );
+    // Under `direct`, only dropping it works.
+    let (code, _, err) = convert(&["--rendering", "direct", "--white-balance-form", "tilt"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.trim_end()
+            .ends_with("would change nothing: drop --white-balance-form tilt"),
+        "{err}"
+    );
+    // A recipe's tilt beside gains that are off asks for nothing, and is spared.
+    let off = write_file(
+        &tmp.path("off.json"),
+        r#"{ "recipe_version": 3, "roll": { "white_balance": [1.1, 1.0, 0.9],
+             "neutral_balance": "off", "white_balance_form": "tilt" } }"#,
+    );
+    let (code, _, err) = convert(&["--params", off.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn measure_mode_refuses_typed_tilt_stops() {
+    let tmp = TempDir::new("roll-measure-tilt-stops");
+    let (code, _, err) = run(&[
+        "roll",
+        "--measure-roll",
+        "a.tif",
+        "b.tif",
+        "--film-base",
+        "0.9,0.6,0.4",
+        "--white-balance-form",
+        "tilt",
+        "--roll-white-balance-stops",
+        "-3",
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--roll-white-balance-stops states a roll value, and --measure-roll measures"),
+        "{err}"
+    );
+}
+
+#[test]
 fn measure_roll_runs_the_polarity_check_on_picture_frames_only() {
     // A leader can show backlight past the strip's end; the check's thresholds were
     // measured on picture frames, so the leader is spared. The same scan as a picture

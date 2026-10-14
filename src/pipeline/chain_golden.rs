@@ -65,6 +65,7 @@ use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{self, DarkEnd, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
 use crate::pipeline::midtone_neutral::MidtoneLine;
+use crate::pipeline::roll_balance::RollBalance;
 use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
@@ -613,7 +614,7 @@ fn golden_midtone_neutral_is_correct_within_its_libm_window() {
     let mut widest = 0;
     for (p, &px) in MIDTONE_IN.iter().enumerate() {
         let mut got = px;
-        MIDTONE_LINE.correct(&mut got, MIDTONE_GAINS);
+        MIDTONE_LINE.correct(&mut got, &RollBalance::Gain(MIDTONE_GAINS));
         let centre = midtone_pixel(px, [0; 6]);
         for c in 0..3 {
             let (i, want) = (p * 3 + c, MIDTONE_OUT[p * 3 + c]);
@@ -640,7 +641,7 @@ fn golden_midtone_neutral_is_correct_within_its_libm_window() {
     // Beyond the gate, above the fade end and black: untouched, bit for bit.
     for p in [3, 5, 6] {
         let mut got = MIDTONE_IN[p];
-        MIDTONE_LINE.correct(&mut got, MIDTONE_GAINS);
+        MIDTONE_LINE.correct(&mut got, &RollBalance::Gain(MIDTONE_GAINS));
         assert_stage_bits(
             "scene-correction (midtone, untouched)",
             &got,
@@ -1516,7 +1517,7 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
                 white_balance,
                 exposure: -1.0,
             },
-            midtone: None,
+            roll_colour: None,
             look: LookParams::off(),
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             dark_end: DarkEnd::Off,
@@ -1561,6 +1562,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
             white_balance: [1.25, 1.0, 0.5],
             exposure: -1.0,
             midtone_line: None,
+            roll_tilt: None,
         },
         "chain (threaded): the scene correction the render reports"
     );
@@ -1612,7 +1614,7 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
     let params = |look| ChainParams {
         shared: SharedParams {
             scene_correction: scene_correction.clone(),
-            midtone: None,
+            roll_colour: None,
             look,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             dark_end: DarkEnd::Off,
