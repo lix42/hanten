@@ -211,7 +211,7 @@ fn roles(assets: &Path, roll: &str) -> Roles {
         match f["role"].as_str().unwrap_or("real") {
             "leader" => out.leader.push(p),
             "unexposed" => out.unexposed.push(p),
-            "calibration" => {}
+            "calibration" | "chart" => {}
             _ => out.real.push(p),
         }
     }
@@ -541,13 +541,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roles_keep_a_calibration_frame_out_of_real_and_count_an_unknown_role_as_real() {
+    fn roles_keep_calibration_and_chart_frames_out_of_real_and_count_an_unknown_role_as_real() {
         let dir = std::env::temp_dir().join(format!("nc-shadow-roles-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let frame = |file: &str, role: &str| serde_json::json!({"file": file, "role": role});
         let manifest = serde_json::json!({"rolls": {"R": {"frames": [
             frame("u.tif", "unexposed"),
             frame("c.tif", "calibration"),
+            frame("k.tif", "chart"),
             frame("r.tif", "real"),
             frame("x.tif", "leadr"),
         ]}}});

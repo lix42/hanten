@@ -49,6 +49,8 @@ def fake_gamut(path):
 
 PATCH = {"label": "cloud", "rect": [0.1, 0.2, 0.05, 0.04], "kind": "white",
          "source": "test 2026-09-30"}
+SHOT = {"exposure_ev": -2, "bracket": "g200-a", "aperture": 8, "metered": "incident at the card"}
+CONDITIONS = {"light": "overcast", "camera": "Leica M6 TTL", "development": "home, Cs41"}
 
 
 class Base(unittest.TestCase):
@@ -81,7 +83,7 @@ class Base(unittest.TestCase):
         """`cmd_generate` with inspection stubbed; returns (rc, manifest-on-disk, stderr)."""
         args = argparse.Namespace(asset_root=self.A, nc="fake-nc", reuse_hash=False,
                                   dry_run=False, allow_exiftool_fallback=False,
-                                  drop_patches=False, carry_from=None)
+                                  drop_annotations=False, carry_from=None)
         for k, v in kw.items():
             setattr(args, k, v)
         out, err = io.StringIO(), io.StringIO()
@@ -203,6 +205,17 @@ class TestRoles(Base):
         self.assertEqual(err, "")
         self.assertEqual(out.strip(), "RollA|u.tif||r1.tif")
 
+    def test_a_chart_frame_is_not_real(self):
+        self.write_manifest({"schema_version": 3, "rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/u.tif", "role": "unexposed"},
+            {"file": "rolls/RollA/k.tif", "role": "chart"},
+            {"file": "rolls/RollA/r1.tif", "role": "real"},
+        ]}}})
+        rc, out, err = self.roles()
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertEqual(out.strip(), "RollA|u.tif||r1.tif")
+
     def test_no_manifest_is_operational_error(self):
         rc, _, err = self.roles()
         self.assertEqual(rc, 2)
@@ -308,19 +321,20 @@ class TestLoadManifest(Base):
             self.assertIsNotNone(err, payload)
             self.assertIn("not a JSON object", err)
 
-    def test_schema_v3_rejected(self):
+    def test_schema_v4_rejected(self):
         p = os.path.join(self.A, "manifest.json")
-        self.write_manifest({"schema_version": 3, "rolls": {}})
+        self.write_manifest({"schema_version": 4, "rolls": {}})
         data, err = manifest.load_manifest(p)
         self.assertEqual(data, {})
-        self.assertIn("unsupported schema_version 3", err)
+        self.assertIn("unsupported schema_version 4", err)
 
-    def test_schema_v2_read(self):
+    def test_schema_v2_and_v3_read(self):
         p = os.path.join(self.A, "manifest.json")
-        self.write_manifest({"schema_version": 2, "rolls": {}})
-        data, err = manifest.load_manifest(p)
-        self.assertIsNone(err)
-        self.assertEqual(data["schema_version"], 2)
+        for version in (2, 3):
+            self.write_manifest({"schema_version": version, "rolls": {}})
+            data, err = manifest.load_manifest(p)
+            self.assertIsNone(err)
+            self.assertEqual(data["schema_version"], version)
 
     def test_schema_v1_and_missing_ok(self):
         p = os.path.join(self.A, "manifest.json")
@@ -448,15 +462,15 @@ class TestBuild(Base):
         self.assertEqual(fr["file"], "rolls/RollA/renamed.tif")
         self.assertEqual(fr["role"], "leader")
 
-    def test_patches_preserved_by_path_and_written_as_v2(self):
+    def test_patches_preserved_by_path_and_written_as_v3(self):
         self.put("rolls/RollA/r1.tif")
         pts = [dict(PATCH)]
         prev = {"schema_version": 1, "rolls": {"RollA": {"frames": [
             {"file": "rolls/RollA/r1.tif", "role": "real", "patches": pts}]}}}
         m, diag = self.build(prev=prev)
-        self.assertEqual(m["schema_version"], 2)
+        self.assertEqual(m["schema_version"], 3)
         self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], pts)
-        self.assertEqual(diag["dropped_patches"], [])
+        self.assertEqual(diag["dropped_annotations"], [])
 
     def test_patches_preserved_across_rename_by_checksum(self):
         new = self.put("rolls/RollA/renamed.tif", data=b"framebytes")
@@ -465,7 +479,7 @@ class TestBuild(Base):
             "sha256": new["sha256"], "bytes": new["bytes"]}]}}}
         m, diag = self.build(prev=prev)
         self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], [PATCH])
-        self.assertEqual(diag["dropped_patches"], [])
+        self.assertEqual(diag["dropped_annotations"], [])
 
     def test_patches_of_a_frame_gone_from_disk_are_reported_dropped(self):
         self.put("rolls/RollA/kept.tif")
@@ -474,8 +488,120 @@ class TestBuild(Base):
             {"file": "rolls/RollA/gone.tif", "role": "real",
              "patches": [dict(PATCH), dict(PATCH)]}]}}}
         m, diag = self.build(prev=prev)
-        self.assertEqual(diag["dropped_patches"], [("rolls/RollA/gone.tif", 2)])
+        self.assertEqual(diag["dropped_annotations"], [("rolls/RollA/gone.tif", ["patches"])])
         self.assertNotIn("patches", m["rolls"]["RollA"]["frames"][0])
+
+    def test_shot_and_conditions_preserved_by_path(self):
+        self.put("rolls/RollA/k.tif")
+        prev = {"schema_version": 3, "rolls": {"RollA": {"conditions": dict(CONDITIONS),
+            "frames": [{"file": "rolls/RollA/k.tif", "role": "chart", "shot": dict(SHOT)}]}}}
+        m, diag = self.build(prev=prev)
+        roll = m["rolls"]["RollA"]
+        self.assertEqual(roll["conditions"], CONDITIONS)
+        self.assertEqual(roll["frames"][0]["role"], "chart")
+        self.assertEqual(roll["frames"][0]["shot"], SHOT)
+        self.assertEqual(diag["dropped_annotations"], [])
+
+    def test_conditions_of_a_roll_gone_from_disk_are_reported_dropped(self):
+        self.put("rolls/Renamed/k.tif")
+        prev = {"rolls": {"RollA": {"conditions": dict(CONDITIONS), "frames": []}}}
+        m, diag = self.build(prev=prev)
+        self.assertNotIn("conditions", m["rolls"]["Renamed"])
+        self.assertEqual(diag["dropped_conditions"], ["RollA"])
+        self.assertEqual(diag["dropped_annotations"], [])
+
+    def test_a_renamed_roll_keeps_its_conditions_stock_and_note(self):
+        a = self.put("rolls/Renamed/1.tif", data=b"one")
+        b = self.put("rolls/Renamed/2.tif", data=b"two")
+        prev = {"rolls": {"RollA": {"stock": "Kodak X", "note": "n",
+                                    "conditions": dict(CONDITIONS), "frames": [
+            dict(a, file="rolls/RollA/1.tif", role="real"),
+            dict(b, file="rolls/RollA/2.tif", role="chart", shot=dict(SHOT))]}}}
+        m, diag = self.build(prev=prev)
+        roll = m["rolls"]["Renamed"]
+        self.assertEqual((roll["stock"], roll["note"], roll["conditions"]),
+                         ("Kodak X", "n", CONDITIONS))
+        self.assertEqual(roll["frames"][1]["shot"], SHOT)
+        self.assertEqual((diag["dropped_annotations"], diag["dropped_conditions"]), ([], []))
+
+    def test_a_roll_split_across_two_rolls_keeps_no_conditions(self):
+        a = self.put("rolls/RollB/1.tif", data=b"one")
+        b = self.put("rolls/RollC/2.tif", data=b"two")
+        prev = {"rolls": {"RollA": {"conditions": dict(CONDITIONS), "frames": [
+            dict(a, file="rolls/RollA/1.tif", role="real"),
+            dict(b, file="rolls/RollA/2.tif", role="real")]}}}
+        m, diag = self.build(prev=prev)
+        self.assertNotIn("conditions", m["rolls"]["RollB"])
+        self.assertNotIn("conditions", m["rolls"]["RollC"])
+        self.assertEqual(diag["dropped_conditions"], ["RollA"])
+
+    def test_a_partly_moved_roll_keeps_no_conditions(self):
+        a = self.put("rolls/RollB/1.tif", data=b"one")
+        prev = {"rolls": {"RollA": {"conditions": dict(CONDITIONS), "frames": [
+            dict(a, file="rolls/RollA/1.tif", role="real"),
+            {"file": "rolls/RollA/2.tif", "role": "real", "sha256": "0" * 64}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertNotIn("conditions", m["rolls"]["RollB"])
+        self.assertEqual(diag["dropped_conditions"], ["RollA"])
+
+    def test_an_empty_shot_or_conditions_is_kept_for_validate(self):
+        self.put("rolls/RollA/k.tif")
+        prev = {"rolls": {"RollA": {"conditions": {}, "frames": [
+            {"file": "rolls/RollA/k.tif", "role": "chart", "shot": {}}]}}}
+        m, _ = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["conditions"], {})
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["shot"], {})
+
+    def test_an_empty_shot_on_a_frame_gone_from_disk_is_reported_dropped(self):
+        self.put("rolls/RollA/kept.tif")
+        prev = {"rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/kept.tif", "role": "real"},
+            {"file": "rolls/RollA/gone.tif", "role": "chart", "shot": {}}]}}}
+        _, diag = self.build(prev=prev)
+        self.assertEqual(diag["dropped_annotations"], [("rolls/RollA/gone.tif", ["shot"])])
+
+    def test_carry_from_fills_conditions_the_current_roll_entry_lacks(self):
+        self.put("rolls/RollA/k.tif")
+        prev = {"rolls": {"RollA": {"stock": "Kodak X", "frames": []}}}
+        archive = {"rolls": {"RollA": {"stock": "Kodak Y", "conditions": dict(CONDITIONS),
+                                       "frames": []}}}
+        m, _ = self.build(prev=prev, carry=archive)
+        self.assertEqual(m["rolls"]["RollA"]["conditions"], CONDITIONS)
+        self.assertEqual(m["rolls"]["RollA"]["stock"], "Kodak X")  # current wins
+
+    def test_carry_from_stock_beats_a_stored_unknown(self):
+        self.put("rolls/RollA/k.tif")
+        m, _ = self.build(prev={"rolls": {"RollA": {"stock": "unknown", "frames": []}}},
+                          carry={"rolls": {"RollA": {"stock": "Kodak Y", "frames": []}}})
+        self.assertEqual(m["rolls"]["RollA"]["stock"], "Kodak Y")
+
+    def test_shot_preserved_across_rename_by_checksum(self):
+        new = self.put("rolls/RollA/2130.tif", data=b"chartbytes")
+        prev = {"rolls": {"RollA": {"frames": [{
+            "file": "rolls/RollA/scan-2130.tif", "role": "chart", "shot": dict(SHOT),
+            "sha256": new["sha256"], "bytes": new["bytes"]}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["shot"], SHOT)
+        self.assertEqual(diag["dropped_annotations"], [])
+
+    def test_a_rescanned_frame_keeps_its_shot_without_a_rescan_warning(self):
+        self.put("rolls/RollA/k.tif", data=b"new scan")
+        prev = {"rolls": {"RollA": {"frames": [{
+            "file": "rolls/RollA/k.tif", "role": "chart", "shot": dict(SHOT),
+            "sha256": "0" * 64, "bytes": 3}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["shot"], SHOT)
+        self.assertEqual(diag["rescanned"], [])
+
+    def test_a_shot_of_a_frame_gone_from_disk_is_reported_dropped(self):
+        self.put("rolls/RollA/kept.tif")
+        prev = {"rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/kept.tif", "role": "real"},
+            {"file": "rolls/RollA/gone.tif", "role": "chart", "shot": dict(SHOT),
+             "patches": [dict(PATCH)]}]}}}
+        _, diag = self.build(prev=prev)
+        self.assertEqual(diag["dropped_annotations"],
+                         [("rolls/RollA/gone.tif", ["patches", "shot"])])
 
     def test_rescanned_frame_keeps_its_patches_and_is_reported(self):
         self.put("rolls/RollA/r1.tif", data=b"new scan")
@@ -490,19 +616,20 @@ class TestBuild(Base):
         back = self.put("rolls/RollA/c.tif", data=b"calibration")
         self.put("rolls/RollA/other.tif", data=b"edited since")
         archive = {"rolls": {"RollA": {"stock": "Kodak X", "note": "n", "frames": [
-            dict(back, role="calibration", patches=[dict(PATCH)]),
+            dict(back, role="calibration", patches=[dict(PATCH)], shot=dict(SHOT)),
             {"file": "rolls/RollA/other.tif", "role": "leader", "sha256": "0" * 64,
              "patches": [dict(PATCH)]}]}}}
         m, diag = self.build(prev={}, carry=archive)
         frames = {f["file"]: f for f in m["rolls"]["RollA"]["frames"]}
         self.assertEqual(frames["rolls/RollA/c.tif"]["role"], "calibration")
         self.assertEqual(frames["rolls/RollA/c.tif"]["patches"], [PATCH])
+        self.assertEqual(frames["rolls/RollA/c.tif"]["shot"], SHOT)
         # Different bytes: the archive entry describes another file.
         self.assertEqual(frames["rolls/RollA/other.tif"]["role"], "real")
         self.assertNotIn("patches", frames["rolls/RollA/other.tif"])
         self.assertEqual(m["rolls"]["RollA"]["stock"], "Kodak X")
         self.assertEqual(diag["restored"], ["rolls/RollA/c.tif"])
-        self.assertEqual(diag["dropped_patches"], [])
+        self.assertEqual(diag["dropped_annotations"], [])
 
     def test_role_not_cloned_to_copy_when_old_path_present(self):
         # A copy (old path still on disk) must NOT inherit the calibration role.
@@ -763,6 +890,41 @@ class TestValidate(Base):
         rc, out, _ = self.validate()
         self.assertEqual(rc, 0, out)
 
+    def test_a_chart_frame_with_shot_and_conditions_validates_clean(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["conditions"] = dict(CONDITIONS)
+        m["rolls"]["RollA"]["frames"][1].update(role="chart", shot=dict(SHOT, shutter_s=0.25))
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 0, out)
+
+    def test_a_malformed_shot_or_conditions_is_a_problem(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["conditions"] = dict(CONDITIONS, light="cloudy", film="?")
+        m["rolls"]["RollA"]["frames"][1]["shot"] = dict(SHOT, exposure_ev="-2", aperture=0)
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("BAD SHOT OR CONDITIONS (see nctool.conditions) (4)", out)
+        self.assertIn("RollA conditions: unknown key 'film'", out)
+        self.assertIn("RollA conditions: light 'cloudy' is not one of overcast, sun, shade", out)
+        self.assertIn("rolls/RollA/r1.tif shot: exposure_ev must be a number", out)
+        self.assertIn("rolls/RollA/r1.tif shot: aperture must be a positive number", out)
+
+    def test_an_empty_or_non_finite_shot_is_a_problem(self):
+        m = self._clean_manifest()
+        m["rolls"]["RollA"]["conditions"] = {}
+        m["rolls"]["RollA"]["frames"][0]["shot"] = {}
+        m["rolls"]["RollA"]["frames"][1]["shot"] = dict(SHOT, exposure_ev=float("nan"),
+                                                        shutter_s=float("inf"))
+        self.write_manifest(m)
+        rc, out, _ = self.validate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RollA conditions is empty", out)
+        self.assertIn("rolls/RollA/u.tif shot is empty", out)
+        self.assertIn("rolls/RollA/r1.tif shot: exposure_ev must be a number", out)
+        self.assertIn("rolls/RollA/r1.tif shot: shutter_s must be a positive number", out)
+
     def test_well_formed_patches_validate_clean(self):
         m = self._clean_manifest()
         m["rolls"]["RollA"]["frames"][1]["patches"] = [dict(PATCH, light="sun")]
@@ -790,7 +952,7 @@ class TestValidate(Base):
         self.assertIn("no manifest.json", err)
 
     def test_bad_schema_is_exit2(self):
-        self.write_manifest({"schema_version": 3, "rolls": {}})
+        self.write_manifest({"schema_version": 4, "rolls": {}})
         rc, _, err = self.validate()
         self.assertEqual(rc, 2)
         self.assertIn("unsupported schema_version", err)
@@ -853,21 +1015,33 @@ class TestGeneratePatches(Base):
     def test_dropping_patches_is_refused_and_writes_nothing(self):
         rc, on_disk, err = self.generate()
         self.assertEqual(rc, 2)
-        self.assertIn("rolls/RollA/gone.tif (1)", err)
-        self.assertIn("--drop-patches", err)
+        self.assertIn("rolls/RollA/gone.tif (patches)", err)
+        self.assertIn("--drop-annotations", err)
         self.assertEqual(on_disk, self.prior)
 
-    def test_a_dry_run_that_would_drop_patches_exits_2(self):
+    def test_a_dry_run_that_would_drop_annotations_exits_2(self):
         rc, on_disk, _ = self.generate(dry_run=True)
         self.assertEqual(rc, 2)
         self.assertEqual(on_disk, self.prior)
 
-    def test_drop_patches_writes_and_warns(self):
-        rc, on_disk, err = self.generate(drop_patches=True)
+    def test_drop_annotations_writes_and_warns(self):
+        rc, on_disk, err = self.generate(drop_annotations=True)
         self.assertEqual(rc, 0, err)
         self.assertIn("WARNING: 1 frame(s)", err)
         self.assertEqual([f["file"] for f in on_disk["rolls"]["RollA"]["frames"]],
                          ["rolls/RollA/kept.tif"])
+
+    def test_dropping_a_roll_s_conditions_names_the_roll_and_the_rename_remedy(self):
+        self.prior["rolls"]["Gone"] = {"conditions": dict(CONDITIONS), "frames": []}
+        self.prior["rolls"]["RollA"]["frames"].pop()
+        self.write_manifest(self.prior)
+        rc, on_disk, err = self.generate()
+        self.assertEqual(rc, 2)
+        self.assertIn("1 roll(s) no longer on disk carry conditions", err)
+        self.assertIn("rename its key", err)
+        self.assertNotIn("frame(s)", err)
+        self.assertNotIn("Restore the frames", err)
+        self.assertEqual(on_disk, self.prior)
 
     def test_carry_from_must_load(self):
         rc, on_disk, err = self.generate(carry_from=os.path.join(self.A, "nope.json"))

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "generated": "2026-07-24",
   "note": "SAMPLE / trimmed illustration of nc-assets/manifest.json (the live file lives at the assets root). Shows every schema shape; not exhaustive. Generate the real one with scripts/analysis/generate_manifest.py.",
   "rolls": {
@@ -95,8 +95,36 @@
           "bytes": 158474546,
           "sha256": "2107adc73cc5bcbb5a9dc21f8da8192747422ead852190daac31a7ef1124e3ee",
           "megapixels": 18.66
+        },
+        {
+          "file": "rolls/Ektar/20260714-nikon-1001.tif",
+          "role": "chart",
+          "width": 1237,
+          "height": 1676,
+          "channels": 3,
+          "bits": 16,
+          "format": "hdr",
+          "ir_present": false,
+          "bytes": 12606922,
+          "sha256": "2fbf42e22a27e144799e56d6834645cf7d7c56b06787ad74d1fe0e8c70f80f95",
+          "megapixels": 2.07,
+          "shot": {
+            "exposure_ev": 1,
+            "bracket": "ektar-a",
+            "aperture": 8,
+            "metered": "incident at the card"
+          }
         }
-      ]
+      ],
+      "conditions": {
+        "light": "overcast",
+        "meter": "incident reading at the card",
+        "camera": "35mm rangefinder",
+        "lens": "90mm",
+        "support": "tripod",
+        "development": "C-41 kit, first rolls through it",
+        "scan": "same session as the pictures"
+      }
     },
     "Portra160-2026-07-22": {
       "stock": "Kodak Portra 160",

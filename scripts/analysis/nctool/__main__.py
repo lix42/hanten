@@ -59,12 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="when the nc binary is not found, build a DEGRADED "
                           "exiftool-only manifest (format/ir_present become "
                           "placeholders) instead of failing loudly (exit 2)")
-    gen.add_argument("--drop-patches", action="store_true",
+    gen.add_argument("--drop-annotations", action="store_true",
                      help="write the manifest even though frames gone from disk take "
-                          "their patches with them (refused by default)")
+                          "their patches and shot facts, or rolls gone take their "
+                          "conditions (refused by default)")
     gen.add_argument("--carry-from", metavar="MANIFEST",
                      help="another manifest.json (the archive's) to take a frame's role "
-                          "and patches from when the existing manifest has no entry for "
+                          "and annotations from when the existing manifest has no entry for "
                           "it — a frame restored from the archive; same bytes only")
     gen.set_defaults(func=_manifest.cmd_generate)
 

@@ -19,7 +19,9 @@ Commands (dispatched from `python -m nctool manifest …`):
 - `patches import` — fold the review app's Copy all text into frames' `patches`
   (`nctool.patches`).
 
-Schema 2 added per-frame `patches`; a v1 manifest is read and rewritten as v2.
+Schema 2 added per-frame `patches`; schema 3 the `chart` role, per-frame `shot` and
+per-roll `conditions` (`nctool.conditions`). Older manifests are read and rewritten as
+v3; the bump keeps a v2 tool from regenerating a v3 manifest and dropping the fields.
 """
 from __future__ import annotations
 
@@ -33,14 +35,19 @@ import subprocess
 import sys
 import tempfile
 
+from . import conditions as _conditions
 from . import patches as _patches
 
-SCHEMA = 2
+SCHEMA = 3
 
 # Every frame role the manifest knows. Only `real` frames are pictures; every other role
 # is a reference a consumer keeps out of picture measurements. A new role goes here
-# (and in `shadow_metrics.rs`'s non-picture list).
-ROLES = ("unexposed", "leader", "calibration", "real")
+# (and in `shadow_metrics.rs`'s non-picture list). `chart` is a frame whose subject is a
+# colour target (a bracket); `calibration` any other non-picture (a half-base frame).
+# A picture with a target in it stays `real`.
+ROLES = ("unexposed", "leader", "calibration", "chart", "real")
+# Hand-entered per-frame facts: preserved like `role`, and never dropped silently.
+ANNOTATIONS = ("patches", "shot")
 
 # Seeds applied ONLY when neither the existing manifest nor a prior run supplies
 # the value: a frame or roll new to the manifest, or every one on a first-ever
@@ -437,9 +444,9 @@ def load_manifest(mpath: str) -> tuple[dict, str | None]:
         return {}, (f"{mpath} is not a JSON object "
                     f"(top-level {type(data).__name__})")
     ver = data.get("schema_version")
-    if ver not in (None, 1, SCHEMA):
+    if ver not in (None, 1, 2, SCHEMA):
         return {}, (f"{mpath} has unsupported schema_version {ver} "
-                    f"(this tool reads v1 and v{SCHEMA})")
+                    f"(this tool reads v1 to v{SCHEMA})")
     # The top-level object can still carry malformed nested collections (e.g.
     # `"rolls": []`); consumers iterate `rolls`/`converted` as dicts and `samples`
     # as a list, so a wrong-typed collection would raise mid-iteration (AttributeError
@@ -456,6 +463,20 @@ def load_manifest(mpath: str) -> tuple[dict, str | None]:
 
 # ------------------------------------------------------------------ build
 
+def _renamed_roll(prev: Prev, rename_map: dict[str, str], roll: str,
+                  roll_names: set[str]) -> dict | None:
+    """The prior entry of the one vanished roll whose every frame was renamed into `roll`."""
+    def roll_of(path: str) -> str:
+        return path.split("/")[1]
+    olds = {roll_of(o) for o, n in rename_map.items() if roll_of(n) == roll}
+    if len(olds) != 1 or (old := olds.pop()) in roll_names or old not in prev.roll:
+        return None
+    if any(f["file"] not in rename_map or roll_of(rename_map[f["file"]]) != roll
+           for f in prev.roll[old].get("frames", [])):
+        return None
+    return {**prev.roll[old], "name": old}
+
+
 def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                    prev_data: dict, carry_data: dict | None = None) -> tuple[dict, dict]:
     """Assemble the manifest dict from the asset tree. Returns (manifest,
@@ -467,7 +488,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
     # prior one has no entry for it — a frame restored from the archive.
     carry = Prev(carry_data or {})
     carried: list[str] = []  # files whose authoritative nc metadata was preserved
-    patched_from: set[str] = set()  # prior frame paths whose patches were carried
+    annotated_from: set[str] = set()  # prior frame paths whose annotations were carried
     restored: list[str] = []  # frames whose fields came from `carry`
     rescanned: list[str] = []  # patched frames whose bytes changed at the same path
 
@@ -542,7 +563,10 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
     # rolls/<roll>/<frame>.tif
     rolls_dir = os.path.join(A, "rolls")
     rename_map: dict[str, str] = {}  # old frame path -> new frame path (source_frame retarget)
-    for roll, frame_rels in walk_rolls(A):
+    disk_rolls = walk_rolls(A)
+    roll_names = {roll for roll, _ in disk_rolls}
+    inherited: set[str] = set()  # old rolls whose entry moved to a renamed roll
+    for roll, frame_rels in disk_rolls:
         frames = []
         for r in frame_rels:
             stem = os.path.splitext(os.path.basename(r))[0]
@@ -563,21 +587,34 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
             prevf = prevf or {}
             role = prevf.get("role") or SEED_ROLE_BY_STEM.get(stem) or "real"
             frame = {"file": r, "role": role, **fm}
-            if prevf.get("patches"):
-                frame["patches"] = prevf["patches"]
-                if prevf is not carry.file.get(r):
-                    patched_from.add(prevf["file"])
-                if prevf.get("sha256") and prevf["sha256"] != fm.get("sha256"):
-                    rescanned.append(r)
+            for key in ANNOTATIONS:
+                if key in prevf:  # even malformed: `validate` reports it
+                    frame[key] = prevf[key]
+                    if prevf is not carry.file.get(r):
+                        annotated_from.add(prevf["file"])
+            # A patch marks a place in the picture, so new bytes may have moved it.
+            if prevf.get("patches") and prevf.get("sha256") and prevf["sha256"] != fm.get("sha256"):
+                rescanned.append(r)
             frames.append(frame)
-        roll_prev = prev.roll.get(roll) or carry.roll.get(roll, {})
+        m["rolls"][roll] = {"frames": frames}
+    # Roll fields after every frame, so a whole-roll rename is known in full.
+    for roll in list(m["rolls"]):
+        roll_prev = prev.roll.get(roll) or _renamed_roll(prev, rename_map, roll, roll_names)
+        if roll not in prev.roll and roll_prev:
+            inherited.add(roll_prev["name"])
+        # Field by field, so --carry-from fills what the current entry lacks.
+        roll_prev = {k: v for src in (carry.roll.get(roll, {}), roll_prev or {})
+                     for k, v in src.items()
+                     if k == "conditions" or (v and v != "unknown")}
         stock = roll_prev.get("stock")
         if stock in (None, "", "unknown"):  # a stored miss retries the parse
             stock = seed_stock(roll)
-        entry = {"stock": stock, "frames": frames}
+        entry = {"stock": stock, "frames": m["rolls"][roll]["frames"]}
         note = roll_prev.get("note") or SEED_ROLL_NOTE.get(roll)
         if note:
             entry["note"] = note
+        if "conditions" in roll_prev:
+            entry["conditions"] = roll_prev["conditions"]
         m["rolls"][roll] = entry
 
     # samples/ (+ one level of subdirs, e.g. samples/icc)
@@ -676,11 +713,15 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
                   if "source_frame" in o and o["source_frame"] is None]
     n_ex = sum(1 for e in iter_meta(m) if e.get("metadata_source") == "exiftool")
     errs = [e for e in iter_meta(m) if "error" in e]
-    # A frame gone from disk takes its patches with it — said, never silent.
-    dropped = sorted((f, len(e["patches"])) for f, e in prev.file.items()
-                     if e.get("patches") and f not in patched_from)
+    # A frame gone from disk takes its annotations with it — said, never silent.
+    dropped = sorted((f, [k for k in ANNOTATIONS if k in e]) for f, e in prev.file.items()
+                     if any(k in e for k in ANNOTATIONS) and f not in annotated_from)
+    # A roll's conditions follow its name, or its frames when the whole roll was renamed.
+    dropped_rolls = sorted(roll for roll, r in prev.roll.items() if "conditions" in r
+                           and roll not in m["rolls"] and roll not in inherited)
     return m, {"carried": carried, "unresolved": unresolved,
-               "exiftool": n_ex, "errors": errs, "dropped_patches": dropped,
+               "exiftool": n_ex, "errors": errs, "dropped_annotations": dropped,
+               "dropped_conditions": dropped_rolls,
                "restored": restored, "rescanned": rescanned}
 
 
@@ -796,21 +837,31 @@ def cmd_generate(args) -> int:
         print(f"note: {diag['exiftool']} entr(ies) used the exiftool fallback; their "
               "format/ir_present are best-effort, not authoritative", file=sys.stderr)
     if diag["restored"]:
-        print(f"note: took role and patches for {len(diag['restored'])} frame(s) from "
+        print(f"note: took role and annotations for {len(diag['restored'])} frame(s) from "
               f"--carry-from: " + ", ".join(diag["restored"]), file=sys.stderr)
     if diag["rescanned"]:
         print(f"WARNING: {len(diag['rescanned'])} frame(s) with patches changed bytes at "
               "the same path; their patches were kept but may no longer sit on their "
               "subject — check them: " + ", ".join(diag["rescanned"]), file=sys.stderr)
-    dropping = diag["dropped_patches"] and not getattr(args, "drop_patches", False)
-    if diag["dropped_patches"]:
-        print(f"{'error' if dropping else 'WARNING'}: {len(diag['dropped_patches'])} "
-              "frame(s) no longer on disk carry patches this manifest would drop: "
-              + ", ".join(f"{f} ({n})" for f, n in diag["dropped_patches"]),
+    dropped, dropped_rolls = diag["dropped_annotations"], diag["dropped_conditions"]
+    dropping = (dropped or dropped_rolls) and not getattr(args, "drop_annotations", False)
+    level = "error" if dropping else "WARNING"
+    if dropped:
+        print(f"{level}: {len(dropped)} frame(s) no longer on disk carry annotations this "
+              "manifest would drop: "
+              + ", ".join(f"{f} ({', '.join(keys)})" for f, keys in dropped),
               file=sys.stderr)
+    if dropped_rolls:
+        print(f"{level}: {len(dropped_rolls)} roll(s) no longer on disk carry conditions "
+              "this manifest would drop: " + ", ".join(dropped_rolls), file=sys.stderr)
     if dropping:
-        print("       manifest.json was NOT written. Restore the frames, or copy the "
-              "manifest somewhere safe and re-run with --drop-patches.", file=sys.stderr)
+        if dropped:
+            print("       Restore the frames.", file=sys.stderr)
+        if dropped_rolls:
+            print("       A renamed roll: rename its key under \"rolls\" in manifest.json "
+                  "to the new directory name.", file=sys.stderr)
+        print("       manifest.json was NOT written. To drop them, copy the manifest "
+              "somewhere safe and re-run with --drop-annotations.", file=sys.stderr)
         return 2
     if diag["errors"]:
         print(f"WARNING: {len(diag['errors'])} file(s) failed all metadata inspection: "
@@ -851,11 +902,16 @@ def cmd_validate(args) -> int:
     recorded: dict[str, dict] = {}
     regenerable_files: set[str] = set()
     bad_patches: list[str] = []
+    bad_facts: list[str] = []
     bad_roles: list[str] = []
-    for r in data.get("rolls", {}).values():
+    for name, r in data.get("rolls", {}).items():
+        if "conditions" in r:
+            bad_facts += [f"{name} {e}" for e in _conditions.check_conditions(r["conditions"])]
         for fr in r.get("frames", []):
             recorded[fr["file"]] = fr
             bad_patches += [f"{fr['file']} {e}" for e in _patches.check_frame_patches(fr)]
+            if "shot" in fr:
+                bad_facts += [f"{fr['file']} {e}" for e in _conditions.check_shot(fr["shot"])]
             if fr.get("role", "real") not in ROLES:
                 bad_roles.append(f"{fr['file']} {fr['role']!r}")
     for s in data.get("samples", []):
@@ -926,13 +982,14 @@ def cmd_validate(args) -> int:
            no_checksum)
     report("UNREADABLE (could not hash)", read_errors)
     report("BAD PATCHES (break the patch schema — see nctool.patches)", bad_patches)
+    report("BAD SHOT OR CONDITIONS (see nctool.conditions)", bad_facts)
     report(f"UNKNOWN ROLES (expected {'|'.join(ROLES)})", bad_roles)
     if unchecked:
         print(f"\nunchecked: {len(unchecked)} regenerable output(s) without a recorded "
               "sha256 (drift not verifiable — regenerate to confirm)")
 
     problems = (drift or missing or orphans or errored or no_checksum or read_errors
-                or bad_patches or bad_roles)
+                or bad_patches or bad_facts or bad_roles)
     if not problems:
         print("\nOK — no drift, orphans, or missing files.")
         print("(This tool only REPORTS. It never deletes; act on the above yourself.)")

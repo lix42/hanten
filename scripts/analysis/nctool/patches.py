@@ -19,8 +19,9 @@ import os
 import re
 import sys
 
+from .conditions import LIGHTS, is_number, is_text
+
 KINDS = ("white", "grey", "colour", "unknown")
-LIGHTS = ("sun", "shade")
 FIELDS = {"label", "rect", "kind", "light", "source"}
 # Copy all prints 0.1 %, and x and w round independently, so an edge-clamped
 # rectangle can read up to 0.1 % past the frame.
@@ -38,9 +39,9 @@ def check_patch(p: object) -> list[str]:
     if not isinstance(p, dict):
         return [f"not an object ({type(p).__name__})"]
     errs = [f"unknown key {k!r}" for k in sorted(set(p) - FIELDS)]
-    if not isinstance(p.get("label"), str) or not p["label"].strip():
+    if not is_text(p.get("label")):
         errs.append("label must be a non-empty string")
-    if not isinstance(p.get("source"), str) or not p["source"].strip():
+    if not is_text(p.get("source")):
         errs.append("source must be a non-empty string")
     if p.get("kind") not in KINDS:
         errs.append(f"kind {p.get('kind')!r} is not one of {', '.join(KINDS)}")
@@ -48,7 +49,7 @@ def check_patch(p: object) -> list[str]:
         errs.append(f"light {p['light']!r} is not one of {', '.join(LIGHTS)}")
     r = p.get("rect")
     if not (isinstance(r, list) and len(r) == 4
-            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in r)):
+            and all(is_number(v) for v in r)):
         errs.append("rect must be four numbers [x, y, w, h]")
     else:
         x, y, w, h = r

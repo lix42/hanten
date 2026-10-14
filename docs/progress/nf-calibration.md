@@ -2217,3 +2217,14 @@ frames; the look's default contrast is `no-roll-defaults`'.
   limit is about slope 5.4–5.9 at the reviewed exposures (was ~4.4), so
   `short-span-protection` can weigh a maximum above 3.5 × 1.3 without meeting the probe;
   a value that overflows still refuses only the frames that render it.
+
+## envelope-dark-end
+
+**Status:** not started
+**Updated:** 2026-10-13
+
+- 2026-10-13: filed (user) from the first review of `2026-10-12-Gold200` (29 pictures plus a
+  ColorChecker bracket, `../temp/gold200-1012-roll-review/`, v16 `266d696`): the hybrid
+  gives each frame its own contrast inside the envelope, and one real dark frame put the
+  dark end so low that every frame was pushed up. The set's Hanten arm was re-rendered
+  `--placement frame`. Measurement and numbers in the task file.
