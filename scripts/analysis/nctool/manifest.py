@@ -465,13 +465,14 @@ def load_manifest(mpath: str) -> tuple[dict, str | None]:
 
 def _renamed_roll(prev: Prev, rename_map: dict[str, str], roll: str,
                   roll_names: set[str]) -> dict | None:
-    """The prior entry of the one vanished roll whose renamed frames all landed in `roll`."""
+    """The prior entry of the one vanished roll whose every frame was renamed into `roll`."""
     def roll_of(path: str) -> str:
         return path.split("/")[1]
     olds = {roll_of(o) for o, n in rename_map.items() if roll_of(n) == roll}
     if len(olds) != 1 or (old := olds.pop()) in roll_names or old not in prev.roll:
         return None
-    if any(roll_of(n) != roll for o, n in rename_map.items() if roll_of(o) == old):
+    if any(f["file"] not in rename_map or roll_of(rename_map[f["file"]]) != roll
+           for f in prev.roll[old].get("frames", [])):
         return None
     return {**prev.roll[old], "name": old}
 
@@ -587,7 +588,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
             role = prevf.get("role") or SEED_ROLE_BY_STEM.get(stem) or "real"
             frame = {"file": r, "role": role, **fm}
             for key in ANNOTATIONS:
-                if prevf.get(key):
+                if key in prevf:  # even malformed: `validate` reports it
                     frame[key] = prevf[key]
                     if prevf is not carry.file.get(r):
                         annotated_from.add(prevf["file"])
@@ -603,7 +604,8 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
             inherited.add(roll_prev["name"])
         # Field by field, so --carry-from fills what the current entry lacks.
         roll_prev = {k: v for src in (carry.roll.get(roll, {}), roll_prev or {})
-                     for k, v in src.items() if v and v != "unknown"}
+                     for k, v in src.items()
+                     if k == "conditions" or (v and v != "unknown")}
         stock = roll_prev.get("stock")
         if stock in (None, "", "unknown"):  # a stored miss retries the parse
             stock = seed_stock(roll)
@@ -611,7 +613,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
         note = roll_prev.get("note") or SEED_ROLL_NOTE.get(roll)
         if note:
             entry["note"] = note
-        if roll_prev.get("conditions"):
+        if "conditions" in roll_prev:
             entry["conditions"] = roll_prev["conditions"]
         m["rolls"][roll] = entry
 
@@ -712,10 +714,10 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
     n_ex = sum(1 for e in iter_meta(m) if e.get("metadata_source") == "exiftool")
     errs = [e for e in iter_meta(m) if "error" in e]
     # A frame gone from disk takes its annotations with it — said, never silent.
-    dropped = sorted((f, [k for k in ANNOTATIONS if e.get(k)]) for f, e in prev.file.items()
-                     if any(e.get(k) for k in ANNOTATIONS) and f not in annotated_from)
+    dropped = sorted((f, [k for k in ANNOTATIONS if k in e]) for f, e in prev.file.items()
+                     if any(k in e for k in ANNOTATIONS) and f not in annotated_from)
     # A roll's conditions follow its name, or its frames when the whole roll was renamed.
-    dropped_rolls = sorted(roll for roll, r in prev.roll.items() if r.get("conditions")
+    dropped_rolls = sorted(roll for roll, r in prev.roll.items() if "conditions" in r
                            and roll not in m["rolls"] and roll not in inherited)
     return m, {"carried": carried, "unresolved": unresolved,
                "exiftool": n_ex, "errors": errs, "dropped_annotations": dropped,

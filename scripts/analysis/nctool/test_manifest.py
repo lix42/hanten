@@ -535,6 +535,31 @@ class TestBuild(Base):
         self.assertNotIn("conditions", m["rolls"]["RollC"])
         self.assertEqual(diag["dropped_conditions"], ["RollA"])
 
+    def test_a_partly_moved_roll_keeps_no_conditions(self):
+        a = self.put("rolls/RollB/1.tif", data=b"one")
+        prev = {"rolls": {"RollA": {"conditions": dict(CONDITIONS), "frames": [
+            dict(a, file="rolls/RollA/1.tif", role="real"),
+            {"file": "rolls/RollA/2.tif", "role": "real", "sha256": "0" * 64}]}}}
+        m, diag = self.build(prev=prev)
+        self.assertNotIn("conditions", m["rolls"]["RollB"])
+        self.assertEqual(diag["dropped_conditions"], ["RollA"])
+
+    def test_an_empty_shot_or_conditions_is_kept_for_validate(self):
+        self.put("rolls/RollA/k.tif")
+        prev = {"rolls": {"RollA": {"conditions": {}, "frames": [
+            {"file": "rolls/RollA/k.tif", "role": "chart", "shot": {}}]}}}
+        m, _ = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["conditions"], {})
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["shot"], {})
+
+    def test_an_empty_shot_on_a_frame_gone_from_disk_is_reported_dropped(self):
+        self.put("rolls/RollA/kept.tif")
+        prev = {"rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/kept.tif", "role": "real"},
+            {"file": "rolls/RollA/gone.tif", "role": "chart", "shot": {}}]}}}
+        _, diag = self.build(prev=prev)
+        self.assertEqual(diag["dropped_annotations"], [("rolls/RollA/gone.tif", ["shot"])])
+
     def test_carry_from_fills_conditions_the_current_roll_entry_lacks(self):
         self.put("rolls/RollA/k.tif")
         prev = {"rolls": {"RollA": {"stock": "Kodak X", "frames": []}}}
