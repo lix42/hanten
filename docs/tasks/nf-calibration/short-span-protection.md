@@ -31,6 +31,9 @@ Open:
 - What a toe (`nf-display-stages/midtone-contrast-toe`) leaves to do: on thin frames 76–91 %
   of pixels render under L\* 30, the toe's region.
 
+Outcome (2026-10-13): fixed, hard, 3.5, on the placement's slope; `look.contrast` passes
+it. Nothing stored predicts grain, so no frame-keyed guard. Details in the progress log.
+
 ## How to Verify
 
 - A review on the thin and capped frames of the archive under `hybrid` and `frame`, judged

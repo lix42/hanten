@@ -2337,9 +2337,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   2026-10-11** (`pipeline_version` 14): a hybrid frame the ±1 EV limit holds flattens to stay
   inside the envelope; the dark target, the roll's p10 and per-roll's level measured and
   kept. The maximum stays 3.5, a guard; its value moved to `short-span-protection`
-- [ ] [Protect short-span frames from too much
-  contrast](tasks/nf-calibration/short-span-protection.md) — the maximum slope as a noise
-  guard, fixed or keyed on the frame's span or noise
+- [x] [Protect short-span frames from too much
+  contrast](tasks/nf-calibration/short-span-protection.md) — **done 2026-10-13**: the
+  maximum stays 3.5 on the placement's slope (4.0 showed more grain), `--contrast` passes
+  it; nothing stored predicts grain, so no frame-keyed guard. No code change
 - [x] [The hybrid's span target](tasks/nf-calibration/hybrid-span-target.md) — **done
   2026-10-13** (`pipeline_version` 16): R 7 → 8 by review (09-20, 09-28); the envelope, not
   the dark floor, holds the dark end, so on a thin roll a higher R brightens

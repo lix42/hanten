@@ -513,6 +513,7 @@ what does is whether the adjustment restores the roll or reacts to one frame.
 | roll exposure (`roll.exposure`) | correction | brings a thin or dense roll to a normal level with one gain, so frames keep their relative levels | — |
 | roll white and dark end (`roll.white_stops`, `roll.dark_stops`) | correction | spread the roll's measured span, highlights (after its colour correction) to its dark end, over a fixed range of the look's stops, mid-grey pinned | — |
 | the white's cap and floor; a frame clamped to the cap | guard | keep a blown frame from flattening the roll, and an underexposed roll from being stretched | — |
+| maximum slope (`roll_white::MAX_SLOPE`, 3.5) | guard | keeps a short span (thin, flat, hazy, night) from being stretched into grain; it bounds every placement's slope, and `look.contrast`, a taste, multiplies past it. 4.0 showed more grain on some frames (`nf-calibration/short-span-protection`) | — |
 | flat frame (`roll_white::FLAT_SPREAD_STOPS`) | guard | keeps both lifts off one surface filling the frame | — |
 | small lift (`roll.frame_exposure`) | preference | brightens a low-key frame by up to +0.3 EV; preferred on 72 of 103 frames, but leaving a dark frame dark is a choice | `--small-lift off`, `roll.small_lift` |
 | thin lift (`roll.thin_slope`, `roll.thin_exposure`) | preference | raises a thin frame's white about a stop with the film base held about where its small lift renders it; review found it brighter, not better | `--thin-lift off`, `roll.thin_lift` |
