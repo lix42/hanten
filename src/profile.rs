@@ -145,9 +145,10 @@ pub const NOTES: &[Note] = &[
     ),
     value(
         "fit_range.dark_end",
-        "--dark-floor",
-        "{\"floor\": S}, the frame's darkest 1 % no deeper than S display stops below \
-         mid-grey; {\"black\": S}, the film base at S (--display-black); or \"off\"",
+        "--dark-target",
+        "{\"target\": S}, the frame's darkest 1 % at S display stops below mid-grey, \
+         lifted or pushed down; {\"floor\": S}, it no deeper than S (--dark-floor); \
+         {\"black\": S}, the film base at S (--display-black); or \"off\"",
     ),
     section("fit_gamut", "no settings yet"),
     section(

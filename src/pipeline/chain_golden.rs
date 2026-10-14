@@ -903,16 +903,22 @@ fn golden_display_black_is_correct_within_its_libm_window() {
     }
 }
 
-/// The floor's golden frame dark end, graded: it renders ≈ 5.1 stops under mid-grey, so
-/// the default 4.5-stop floor lifts it by ≈ 0.6, under the cap.
+/// The floor's and the target's golden frame dark end, graded: it renders ≈ 5.1 stops
+/// under mid-grey, so the 4.5-stop floor lifts it by ≈ 0.6 and the default 5.5-stop
+/// target pushes it by ≈ 0.4, each under its cap.
 const FLOOR_FRAME_DARK: f32 = 0.0042;
 
-/// Fit range at the default SDR headroom with the default floor, one pixel written out
-/// independently of the stage, as [`black_fit_range_pixel`]. The libm results: the
-/// frame's `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), the pixel's `log2(y)` (3)
-/// and `exp2` (4), then the frame's `2^−4.5` (5), not a whole stop. The cap does not
-/// bind on [`FLOOR_FRAME_DARK`] (the test asserts it), so its `log2` is left out.
-fn floor_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32; 3] {
+/// Fit range at the default SDR headroom with the dark end at `stops` reading
+/// [`FLOOR_FRAME_DARK`], one pixel written out independently of the stage, as
+/// [`black_fit_range_pixel`]. The libm results: the frame's `log2(T / b)`, `log2(b)` and
+/// `log2(0.18)` (0–2), the pixel's `log2(y)` (3) and `exp2` (4), then the frame's
+/// `2^−stops` (5), not a whole stop. The cap does not bind (the test asserts it), so its
+/// `log2` is left out.
+fn dark_end_fit_range_pixel(
+    px: [f32; 3],
+    stops: f32,
+    libm: &dyn Fn(usize, f64) -> f64,
+) -> [f32; 3] {
     let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
     let k = 1.0 - 0.18;
     let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
@@ -921,7 +927,7 @@ fn floor_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
         (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32
     };
     let b = f64::from(reinhard(FLOOR_FRAME_DARK));
-    let target = 0.18 * libm(5, (-f64::from(fit_range::DEFAULT_DARK_FLOOR_STOPS)).exp2());
+    let target = 0.18 * libm(5, (-f64::from(stops)).exp2());
     let stops = libm(0, (target / b).log2());
     let base = libm(1, b.log2());
     let knee = libm(2, 0.18f64.log2());
@@ -942,7 +948,7 @@ fn floor_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
     px.map(|c| c * scale)
 }
 
-/// [`finite_aces`] through fit range at the default SDR headroom with the default floor
+/// [`finite_aces`] through fit range at the default SDR headroom with the 4.5-stop floor
 /// and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of [`FIT_RANGE_BLACK`],
 /// lifted where display black darkened. Captured 2026-10-12 when the floor landed
 /// (`nf-display-stages/midtone-contrast-toe`).
@@ -954,22 +960,56 @@ const FIT_RANGE_FLOOR: [u32; 21] = [
 
 #[test]
 fn golden_dark_floor_is_correct_within_its_libm_window() {
+    check_dark_end_golden(
+        DarkEnd::Floor(fit_range::REVIEWED_DARK_FLOOR_STOPS),
+        &FIT_RANGE_FLOOR,
+        "dark floor",
+    );
+}
+
+/// [`finite_aces`] through fit range at the default SDR headroom with the default target
+/// and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of [`FIT_RANGE_SDR`],
+/// pushed down below mid-grey. Captured 2026-10-14 when the target became the default
+/// (`nf-display-stages/frame-dark-target`).
+const FIT_RANGE_TARGET: [u32; 21] = [
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d494710, 0x3c8da402, 0x3f59e219, 0x3f0b3c44, 0x3d864902,
+    0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
+    0x00000000, 0x00000000, 0x3b4c75bd, 0x3b72642d, 0x3b0b19d5,
+];
+
+#[test]
+fn golden_dark_target_is_correct_within_its_libm_window() {
+    assert_eq!(
+        DarkEnd::default(),
+        DarkEnd::Target(fit_range::DEFAULT_DARK_TARGET_STOPS)
+    );
+    check_dark_end_golden(DarkEnd::default(), &FIT_RANGE_TARGET, "dark target");
+}
+
+/// The floor's and the target's golden: `setting` reading [`FLOOR_FRAME_DARK`], within
+/// the window a conforming libm can reach, bit-identical to reinhard alone from
+/// mid-grey up, and moved the setting's way below it.
+fn check_dark_end_golden(setting: DarkEnd, golden: &[u32; 21], stage: &str) {
+    let (DarkEnd::Floor(stops) | DarkEnd::Target(stops)) = setting else {
+        unreachable!("{setting:?}")
+    };
     let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
-    params.dark_end = DarkEnd::default();
+    params.dark_end = setting;
     params.frame_dark = Some(FLOOR_FRAME_DARK);
     // The cap stays out of the oracle: it must not bind here.
-    let floor = params.resolved().dark_end;
-    let dark = floor.frame_dark_stops.unwrap();
+    let resolved = params.resolved().dark_end;
+    let dark = resolved.frame_dark_stops.unwrap();
     assert!(
-        floor.shift_stops < dark * fit_range::MAX_LIFT_SHARE as f32 / 2.0,
-        "{floor:?}"
+        resolved.shift_stops.abs() < dark * fit_range::MAX_LIFT_SHARE as f32 / 2.0,
+        "{resolved:?}"
     );
+    let lifts = resolved.shift_stops > 0.0;
     let out = through_fit_range(&params).into_buffer().into_linear().rgb;
     let input = finite_aces().rgb().to_vec();
     let host = |_: usize, v: f64| v;
     let mut widest = 0;
     for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
-        let centre = floor_fit_range_pixel(*px, &host);
+        let centre = dark_end_fit_range_pixel(*px, stops, &host);
         // Every combination of the six libm results at this host's value and two f64
         // ULPs either side, as display black's.
         let offsets = (0..5_u32.pow(6)).map(|n| {
@@ -980,11 +1020,13 @@ fn golden_dark_floor_is_correct_within_its_libm_window() {
             ks
         });
         let reachable: Vec<[f32; 3]> = offsets
-            .map(|ks| floor_fit_range_pixel(*px, &move |n: usize, v: f64| perturbed(v, ks[n])))
+            .map(|ks| {
+                dark_end_fit_range_pixel(*px, stops, &move |n: usize, v: f64| perturbed(v, ks[n]))
+            })
             .collect();
         for (c, &centre_c) in centre.iter().enumerate() {
             let i = p * 3 + c;
-            let want = FIT_RANGE_FLOOR[i];
+            let want = golden[i];
             assert_eq!(
                 centre_c.to_bits(),
                 want,
@@ -1000,23 +1042,31 @@ fn golden_dark_floor_is_correct_within_its_libm_window() {
             let drift = ulps_between(out[i], f32::from_bits(want));
             assert!(
                 drift <= window,
-                "stage `fit-range (dark floor)` sample {i}: {drift} ULP from the capture, \
+                "stage `fit-range ({stage})` sample {i}: {drift} ULP from the capture, \
                  outside the {window} ULP a conforming libm can reach"
             );
         }
     }
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
     // Mid-grey and everything above it are bit-identical to reinhard alone, and the
-    // shadows are lifted, never darkened.
+    // shadows move the setting's way.
     for p in [0, 2, 3, 4] {
         assert_stage_bits(
-            "fit-range (dark floor, at or above mid-grey)",
+            &format!("fit-range ({stage}, at or above mid-grey)"),
             &out[p * 3..p * 3 + 3],
             &FIT_RANGE_SDR[p * 3..p * 3 + 3],
         );
     }
     for i in [3, 4, 5, 18, 19, 20] {
-        assert!(out[i] > f32::from_bits(FIT_RANGE_SDR[i]), "sample {i}");
+        let reinhard = f32::from_bits(FIT_RANGE_SDR[i]);
+        assert!(
+            if lifts {
+                out[i] > reinhard
+            } else {
+                out[i] < reinhard
+            },
+            "sample {i}"
+        );
     }
 }
 

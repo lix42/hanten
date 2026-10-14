@@ -46,9 +46,11 @@ untouched. Two settings of one key. **Display black** (`parametric-operator`, 20
 `--display-black`, `{"black": stops}`) pushes the decoded film base down to its target,
 never lifts it; it was the default (6, ≈ L\* 2.5) until the hybrid placement
 (`nf-calibration/envelope-hybrid-placement`, 2026-10-10), and stays `direct`'s.
-**The floor** (`midtone-contrast-toe`, 2026-10-12; `--dark-floor`, `{"floor": stops}`)
-is `default`'s: it lifts a frame's measured darkest 1 % to no deeper than 4.5 stops
-(≈ L\* 7), never pushes it down, and needs the frame's tones.
+**The target** (`frame-dark-target`, 2026-10-14; `--dark-target`, `{"target": stops}`)
+is `default`'s: it places a frame's measured darkest 1 % at 5.5 stops (≈ L\* 3.6), lifted
+or pushed down (the push capped at two thirds of the way to mid-grey), and needs the
+frame's tones. **The floor** (`midtone-contrast-toe`, 2026-10-12; `--dark-floor`) was
+`default`'s before it: the same reference, only lifted, to 4.5 stops (≈ L\* 7).
 
 **Reinhard stands** (`parametric-shoulder`, 2026-09-27). With mid-grey, the rendered
 white and the peak pinned, any smooth shoulder stays within about 0.15 stop of reinhard.
@@ -764,3 +766,44 @@ holds it, and with it the setting is acceptable under `--placement roll` and `fr
 - 2026-10-11: **done.** Spike: `docs/spike/midtone-contrast-probe.md`. **For dependents:**
   the toe holds the dark end of `--contrast 1.3` (darkest 1 % near L\* 6, 23 of 66 frames
   under L\* 5) and of the default's tails; it is no longer gated on a steeper default.
+
+## frame-dark-target
+
+- 2026-10-14: **filed and built opt-in.** The user saw a gap at the dark end of every
+  histogram on 2026-10-12 Gold200 (`--placement frame`, `pipeline_version` 16). Measured on
+  the 36 outputs: the darkest 1 % renders 4.23–4.27 stops under mid-grey on 30 frames
+  (L\* ≈ 8.5, 8-bit ≈ 24), the darkest 0.01 % 4.35–4.95; the six others are high-key or
+  thin, lighter still. Cause: the placement puts the dark end at 4.462 − 9.049 = −4.59
+  look stops, reinhard's near-black gain (≈ 1.22) lifts it 0.3, and the 4.5 floor only
+  lifts, so `shift_stops` is 0 on every frame. `--display-black 5 / 5.5 / 6` on 2100, 2107,
+  2117 reached deeper but unevenly (2100's base renders 4.71, its darkest 1 % 4.27, so it
+  moved ≈ 0.7 stop less).
+- Built `--dark-target STOPS` (`{"target": STOPS}`): the floor's reference moved either way,
+  the push capped at ⅔ of the stops to mid-grey (log-log slope ≤ 2, the mirror of the
+  lift's ⅓), a dark end at or above mid-grey left alone. Only a capped lift warns. On the
+  same three frames 5 / 5.5 / 6 land the darkest 1 % at 4.99–5.00 / 5.49–5.50 /
+  5.99–6.00; high-key 2132 (dark end 0.37 under) is pushed 0.24. No default moved.
+- 2026-10-14: **review set** `../temp/frame-dark-target/` (2026-10-12 Gold200, 36 frames,
+  `--placement frame`; floor / target 5 / 5.5 / 6 / CCR). Measured darkest 1 % over the 29
+  pictures, median: −4.28 / −5.00 / −5.48 / −6.05 stops; CCR −7.69 (−8.88…−2.83), deeper
+  than every arm — the "CCR at L\* 4.7–7.4" quoted from other rolls does not hold here.
+  The push cap held 2109 and 2131 at ≈ 4.3 at every depth, and 2130 at 5.6 under 6; the
+  chart frames 2132/2133 (+3/+4 EV) barely move. **The user chose 5.5.**
+- 2026-10-14: **the hybrid** (`../temp/hybrid-dark-target/`, same roll; hybrid today /
+  hybrid 5.5 / frame 5.5 / CCR). The hybrid renders this roll's darkest 1 % only 2.0 stops
+  under mid-grey on every picture (2.01–2.04: the envelope pins it), its median +0.48 against
+  frame's −1.27, ≈ 9 % of each frame at white. Target 5.5 pushes 1.35, the cap, landing
+  −3.40; nothing from mid-grey up moves. **The user kept hybrid at 5.5**, so the target is
+  `default`'s dark end for every placement. The hybrid's brightness on this roll is a
+  placement question, left open in the task file.
+- 2026-10-14: **the default flip** (`pipeline_version` 17). `DarkEnd::default()` and the
+  `default` rendering's base are `{"target": 5.5}`; the floor stays as `--dark-floor`
+  (`REVIEWED_DARK_FLOOR_STOPS` 4.5, its value unchanged). `recipe` fingerprint
+  `bb01d83b037d9f91`; `render` and `base` unmoved. A new chain golden `FIT_RANGE_TARGET`
+  pins the default target's pixels (the floor golden now states its floor). A saved
+  recipe writes `fit_range.dark_end` as `null`, so no saved document carries the old
+  floor: replaying one renders the target.
+  - **Gotcha — a frame entry rebuilt by hand drops its tones.** A binary test that
+    replaced a `roll.frames` entry with only its thin pair passed under the floor (which
+    never acted on that frame) and failed under the target, which reads the tones. Keep
+    the entry's `tones` when rewriting it.

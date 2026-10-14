@@ -64,7 +64,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 13 | a frame's own exposure sits within ±1 EV of the roll's, for every placement (2026-10-10, `nf-calibration/per-frame-placement`; was −1.5 / +0.5), so a measured roll's hybrid frames move (on 09-29 its darkest frames lift up to +0.47 EV). Adds the opt-in `--placement frame` (each frame from its own span, its white at L\* 93). `render`, `base` and `recipe` are unmoved — the limits act after the gate — so the row was added by hand. |
 /// | 14 | a hybrid frame the ±1 EV limit holds flattens until its ends stay inside the roll's envelope (2026-10-11, `nf-calibration/hybrid-slope-bounds`); no archive frame is held, so no measured archive render moves. `render`, `base` and `recipe` are unmoved — the guard acts after the gate — so the row was added by hand. |
 /// | 15 | the dark floor is on by default (2026-10-12, `nf-display-stages/midtone-contrast-toe`): a frame whose measured darkest 1 % (its `roll.frames` entry `tones`) renders deeper than 4.5 stops below mid-grey is lifted there, the lift fading to nothing at mid-grey. Display black became the other setting of the same key, `fit_range.dark_end` (`fit_range.display_black` retired; `direct` keeps its pinned black 6). At the default slope no reviewed frame is lifted; frames wider than the placement fits, and `--contrast 1.3`, are. `render` and `base` are unmoved; `recipe` moved with the key and the `default` rendering's base. |
-/// | 16 | **current** — the hybrid's span target R 7 → **8** look stops (2026-10-13, `nf-calibration/hybrid-span-target`): a measured roll's hybrid frames steepen inside the envelope (192 of 226 archive frames; by 8/7 where the span already set the slope), so on a thin roll they brighten rather than deepen. `render` and `base` are unmoved — R acts after the gate — so the row was added by hand; `recipe` was refreshed in place for the opt-in `roll.white_balance_form` and `roll.white_balance_stops`. |
+/// | 16 | the hybrid's span target R 7 → **8** look stops (2026-10-13, `nf-calibration/hybrid-span-target`): a measured roll's hybrid frames steepen inside the envelope (192 of 226 archive frames; by 8/7 where the span already set the slope), so on a thin roll they brighten rather than deepen. `render` and `base` are unmoved — R acts after the gate — so the row was added by hand; `recipe` was refreshed in place for the opt-in `roll.white_balance_form` and `roll.white_balance_stops`. |
+/// | 17 | **current** — the dark **target** in place of the floor (2026-10-14, `nf-display-stages/frame-dark-target`): a frame's measured darkest 1 % is placed 5.5 stops below mid-grey, lifted (capped at a third of the way to mid-grey, as the floor's) or pushed down (capped at two thirds). Every measured frame's shadows move, most of them deeper: on 2026-10-12 Gold200 `--placement frame` lands at 5.5 from 4.26, and the hybrid is held by the cap at 3.4 from 2.0. `render` and `base` are unmoved; `recipe` moved with the `default` rendering's base. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -139,7 +140,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// commands' own algorithms, which change what a new measurement writes but not how a
 /// written one replays. It cannot tell a document that pins every value it relies on
 /// from one that does not, so a bump warns on both.
-pub const PIPELINE_VERSION: u32 = 16;
+pub const PIPELINE_VERSION: u32 = 17;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -541,6 +542,25 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
         recipe: "2fd4ff2e479ca60d",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v17 bump took the constant over.
+        behavior: "SDR Display P3 16-bit TIFF default output; the fixed \
+                   decode (linearization 1.8, mid-grey 0.62 density above the film base, \
+                   neutral-patch-calibrated per-channel density gain); look slope on luminance spreading a \
+                   measured roll's span, white to dark end, over 9.049 stops, each frame placed inside the \
+                   roll's envelope at its own slope (its span over at least 8 stops) and exposure, \
+                   within 1 EV of the roll's (flatter where that limit holds it), or placing a white \
+                   1.75 stops above mid-grey when none is given, saturation 1.15 times the roll's \
+                   slope's colour, with highlight desaturation; extended-Reinhard fit range at 6 stops, a frame's measured darkest 1 % lifted to no \
+                   deeper than 4.5 stops below mid-grey (at most a third of the way to mid-grey); radial \
+                   gamut map into Display P3; no auto white balance",
+    },
+    // v17 — the dark end placed at a 5.5-stop target, lifted or pushed, in place of the
+    // 4.5-stop floor (2026-10-14, `nf-display-stages/frame-dark-target`).
+    PipelineFingerprint {
+        pipeline_version: 17,
+        render: "f51d3397c7364160",
+        base: "01c5acccc36a3388",
+        recipe: "bb01d83b037d9f91",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -690,8 +710,9 @@ pub const PIPELINE_BEHAVIOR: &str = "SDR Display P3 16-bit TIFF default output; 
      roll's envelope at its own slope (its span over at least 8 stops) and exposure, \
      within 1 EV of the roll's (flatter where that limit holds it), or placing a white \
      1.75 stops above mid-grey when none is given, saturation 1.15 times the roll's \
-     slope's colour, with highlight desaturation; extended-Reinhard fit range at 6 stops, a frame's measured darkest 1 % lifted to no \
-     deeper than 4.5 stops below mid-grey (at most a third of the way to mid-grey); radial \
+     slope's colour, with highlight desaturation; extended-Reinhard fit range at 6 stops, a frame's measured darkest 1 % placed at \
+     5.5 stops below mid-grey (lifted at most a third, pushed at most two thirds of the way \
+     to mid-grey); radial \
      gamut map into Display P3; no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it
@@ -942,6 +963,7 @@ pub(crate) mod drift_gate {
         let dark_end = match base.dark_end {
             DarkEnd::Off => "off".to_string(),
             DarkEnd::Floor(s) => format!("floor {}", hex(s)),
+            DarkEnd::Target(s) => format!("target {}", hex(s)),
             DarkEnd::Black(s) => format!("black {}", hex(s)),
         };
         let a = &base.axes;
@@ -1155,7 +1177,12 @@ pub(crate) mod drift_gate {
             row.recipe,
             "a moved default saturation must move the recipe fingerprint"
         );
-        for dark_end in [DarkEnd::Floor(5.0), DarkEnd::Black(4.5), DarkEnd::Off] {
+        for dark_end in [
+            DarkEnd::Target(5.0),
+            DarkEnd::Floor(5.0),
+            DarkEnd::Black(4.5),
+            DarkEnd::Off,
+        ] {
             let perturbed_dark_end = Base {
                 dark_end,
                 ..Rendering::Default.base()

@@ -155,8 +155,8 @@ pub struct FitRangeSection {
     /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
     /// `0` is the identity.
     pub headroom_stops: Option<f32>,
-    /// Where the dark end renders: `{"floor": stops}`, `{"black": stops}` or `"off"`
-    /// (`pipeline::fit_range`'s dark end).
+    /// Where the dark end renders: `{"target": stops}`, `{"floor": stops}`,
+    /// `{"black": stops}` or `"off"` (`pipeline::fit_range`'s dark end).
     pub dark_end: Option<DarkEnd>,
 }
 
@@ -911,8 +911,8 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
         &["fit_range", "display_black"],
         "display black is now one setting of the dark end, `fit_range.dark_end`: \
          `{\"black\": <stops>}` for the old number. The old `\"off\"` is `\"off\"` there, \
-         which also turns off the floor that holds a frame's darkest 1 % (the default, \
-         `{\"floor\": 4.5}`); drop the key for the default",
+         which also turns off the target that places a frame's darkest 1 % (the default, \
+         `{\"target\": 5.5}`); drop the key for the default",
     ),
     (
         &["input", "color"],
@@ -1542,7 +1542,12 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
         axes.container = d.container.or(axes.container);
         r.output = OutputSection::Display(axes);
     }
-    if let Some(dark_end) = args.display.dark_floor.or(args.display.display_black) {
+    if let Some(dark_end) = args
+        .display
+        .dark_floor
+        .or(args.display.dark_target)
+        .or(args.display.display_black)
+    {
         r.fit_range.dark_end = Some(dark_end);
     }
     if let Some(rendering) = args.rendering.rendering {
@@ -2406,7 +2411,7 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
         section: "fit_range",
         flag: "--display-black",
         key: "dark_end",
-        // Only display black reads the base, so the rendering's (the floor under
+        // Only display black reads the base, so the rendering's (the target under
         // `default`) clears it.
         stated: |r| {
             r.fit_range
@@ -2648,11 +2653,8 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
     // Only stated values: an unset one is the rendering's base, a constant.
     if let Some(dark_end) = p.dark_end
         && let Err(DarkEndFault(v)) = dark_end.check()
+        && let Some((flag, _)) = dark_end.names()
     {
-        let flag = match dark_end {
-            DarkEnd::Black(_) => "--display-black",
-            _ => "--dark-floor",
-        };
         return Err(NcError::Usage(format!(
             "{} must be stops below mid-grey within (0, {MAX_DARK_END_STOPS}], or `off`, got \
              {v}",
@@ -2782,11 +2784,19 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
         ));
     }
     if r.fit_range.asks_for_a_fit() {
+        // The asked setting's own flag: another dark-end flag beside a typed one conflicts.
+        let identity = match r.fit_range.dark_end {
+            Some(DarkEnd::Target(_)) => "--display-tone-headroom 0 --dark-target off",
+            Some(DarkEnd::Black(_)) => "--display-tone-headroom 0 --display-black off",
+            Some(DarkEnd::Floor(_)) => "--display-tone-headroom 0 --dark-floor off",
+            // Unset or `off`: only the headroom asks.
+            None | Some(DarkEnd::Off) => "--display-tone-headroom 0",
+        };
         asked.push(pick(
             (
-                "fit range (--display-tone-headroom, --dark-floor, --display-black, recipe \
-                 `fit_range`)",
-                "--display-tone-headroom 0 --dark-floor off",
+                "fit range (--display-tone-headroom, --dark-floor, --dark-target, \
+                 --display-black, recipe `fit_range`)",
+                identity,
             ),
             (
                 "fit range (`fit_range`)",
@@ -5794,6 +5804,7 @@ mod tests {
             for (dark_end, flag) in [
                 (DarkEnd::Black(bad), "--display-black"),
                 (DarkEnd::Floor(bad), "--dark-floor"),
+                (DarkEnd::Target(bad), "--dark-target"),
             ] {
                 let err = with(dark_end, KnobNames::FlagAndKey).unwrap_err();
                 assert!(
@@ -5814,6 +5825,7 @@ mod tests {
             (r#""off""#, DarkEnd::Off),
             (r#"{"black": 5}"#, DarkEnd::Black(5.0)),
             (r#"{"floor": 4}"#, DarkEnd::Floor(4.0)),
+            (r#"{"target": 5.5}"#, DarkEnd::Target(5.5)),
         ] {
             let r = parse(&format!(
                 r#"{{"recipe_version": 3, "fit_range": {{"dark_end": {json}}}}}"#
@@ -5822,7 +5834,7 @@ mod tests {
             assert_eq!(r.fit_range.dark_end, Some(want), "{json}");
         }
         assert!(parse(r#"{"recipe_version": 3, "fit_range": {"dark_end": 5}}"#).is_err());
-        // The rendering's base: the floor under `default`, display black under `direct`.
+        // The rendering's base: the target under `default`, display black under `direct`.
         assert_eq!(Recipe::default().resolved_fit_range().1, DarkEnd::default());
         let direct = parse(r#"{"recipe_version": 3, "rendering": "direct"}"#).unwrap();
         assert_eq!(
@@ -5840,7 +5852,7 @@ mod tests {
             assert!(
                 err.contains("`fit_range.display_black` is not a recipe key any more")
                     && err.contains(r#"`{"black": <stops>}`"#)
-                    && err.contains("floor"),
+                    && err.contains(r#"`{"target": 5.5}`"#),
                 "{value}: {err}"
             );
         }
@@ -6168,6 +6180,9 @@ mod tests {
             ("--dark-floor", &["--dark-floor", "5"], |r| {
                 r.fit_range.dark_end == Some(DarkEnd::Floor(5.0))
             }),
+            ("--dark-target", &["--dark-target", "5.5"], |r| {
+                r.fit_range.dark_end == Some(DarkEnd::Target(5.5))
+            }),
         ]
     }
 
@@ -6250,7 +6265,7 @@ mod tests {
                 "{flag}: {err}"
             );
         }
-        // A display black stated under `default` is named too: its default, the floor,
+        // A display black stated under `default` is named too: its default, the target,
         // reads no base.
         let err = render_err(
             V3,
