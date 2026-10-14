@@ -2447,8 +2447,9 @@ its own (`--exposure=-100` on a fixture, with the roll stated):
 A render that is black in practice can still keep a few low codes, tiny float values,
 or PQ's floor. So every rendered destination also measures, per channel and before the
 encode, the level 99.9 % of the samples sit at or below. It warns when that level is more
-than 10 stops below diffuse white, so a few bright specks cannot hide a black frame. A channel the warning above already names is not named again. The
-film master has no display white and is not measured. `--exposure=-14` on the same fixture:
+than 10 stops below diffuse white, so a few bright specks cannot hide a black frame. A
+channel the warning above already names is not named again. The film master has no
+display white and is not measured. `--exposure=-14` on the same fixture:
 
 ```json
 ["99.9 % of the samples in the red, green and blue channels sit about 15 stops or more below diffuse white, past the 10-stop near-black threshold: the frame renders near-black there; raise `--exposure` (recipe `scene_correction.exposure`)"]
