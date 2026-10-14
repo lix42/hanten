@@ -1673,9 +1673,10 @@ the design now in `docs/design-spec.md` (§6–§7):
   the film base and the reachable scan range through the real decode and grade, and
   refuses (exit 2) naming each knob whose default alone would render; a channel written
   as 0 everywhere warns at the encode. Part 3 is the task below.
-- [ ] [Near-black collapse warning](tasks/algo/near-black-collapse-warning.md) — warn on a
-  render that collapses to near-black without a channel reaching exactly 0, with a
-  false-positive guard tuned on real scans
+- [x] [Near-black collapse warning](tasks/algo/near-black-collapse-warning.md) — **done
+  2026-10-13**: a rendered channel whose p99.9 (`pipeline::near_black`, on the
+  display-referred buffer before the encode) is more than 10 stops below diffuse white
+  warns, beside part 2's all-zero rule; no real frame comes within 4.3 stops of it
 
 ### color — [progress](progress/color.md)
 > `pipeline/color.rs`, `pipeline/working_space.rs`, and

@@ -176,6 +176,11 @@ What other epics need to know about `algo`:
   `NaN` (`f32::max(NaN, 0.0)` returns `0.0` — a real trap here). Extreme-but-finite
   params that would posterize are bounded by explicit caps (`contrast ≤ 50`, knee
   widths ≤ 10) because such output trips *no* counter.
+- **A rendered frame whose p99.9 is more than 10 stops below diffuse white warns**
+  (`algo/near-black-collapse-warning`, `pipeline::near_black`), beside the all-zero
+  black-channel warning. The threshold was tuned on the archive's renders at
+  2026-10-13 defaults, with 4.3 stops to spare. A default move that darkens renders
+  should rerun `near_black_probe`.
 - **Golden fixtures live in `pipeline::stages::golden`** — curated **per-pixel**
   `f32::to_bits` vectors, plus a decoded-pixels hash. Never checksum a whole
   encoded TIFF or post-lcms2 pixels: the embedded ICC and colour transform differ
@@ -616,12 +621,45 @@ gained an explicit `hdri-exponential` case; two shipped doc examples passing
 
 ## near-black-collapse-warning
 
-**Status:** not started
-**Updated:** 2026-10-01
+**Status:** done (2026-10-13)
+**Updated:** 2026-10-13
 
 - 2026-10-01: Split out of `density-safety-bounds` as its part 3, the only part that
   needs real scans: a near-black warning with a false-positive guard tuned on every
   real frame. What part 2 misses is listed in the task file.
+- 2026-10-13: **Implemented** (`pipeline::near_black`, wired in `cli::render_frame`).
+  - **The measure** is each channel's p99.9 on the display-referred linear buffer the
+    chain hands the encoder (the gain map's SDR base). It is read off a histogram keyed
+    by the f32 bits (exponent plus 3 mantissa bits, 8 bins per octave), so there is no
+    `log2`, integer counts fold in any order, and every target gets the same result.
+    Below diffuse white the SDR and HDR renditions agree, so one threshold serves every
+    destination. The film master is not measured; part 2 covers it.
+  - **The threshold is 10 stops below diffuse white.** The evidence comes from the
+    `#[ignore]` `near_black_probe`, reading `--export-pre-encode` TIFFs. It covered 246
+    real frames on 12 rolls (the positive roll has no unexposed frame) in two arms:
+    - Under each roll's `measure-roll --unexposed` recipe, the darkest channel of any
+      frame is -0.83 stops (`2026-09-20-Portra400` 1904, `2026-09-28-Portra400-dark`
+      2000).
+    - With only `--film-base` from `measure-base`, the darkest is -5.68 (the dark roll's
+      2000, blue). That is a 4.3-stop margin.
+    - The fixture (`--roll-dark -20` roll, as part 2's test) measures -10.2 at
+      `--exposure=-10`, -15.1 at -14 and -22.5 at -20. Part 2 now claims -20 on SDR,
+      because it quantizes to 0 there.
+  - **The trap:** the gain map's base is 8-bit, so it writes 0 from about 12.7 stops
+    down, and part 2 owns that case. The binary test uses `-11` there.
+  - Costs about 35 ms on an 18.7 MP frame (destination stage, release, M3 Pro). No
+    full-frame buffer; no render moved, so no `pipeline_version` bump.
+- 2026-10-13: **Done.** Review changes:
+  - The remedy is chosen over every collapsed channel, before dropping the ones part 2
+    names. A frame with red written as 0 and green and blue near-black is told
+    `--exposure`, not two white-balance gains.
+  - The message says what p99.9 bounds: "99.9 % of the samples in the … sit about N
+    stops or more below diffuse white". The brightest 0.1 % may be a glint at white.
+    It is whole stops because the bin is 0.17 stop wide.
+  - The threshold keys on `algo::fixed::DIFFUSE_WHITE`.
+  - **For a later default change:** the 10-stop threshold was tuned on today's
+    renders. A change that darkens default renders should rerun `near_black_probe` on
+    the archive. The command shape is in the probe's doc.
 
 
 ## reference-anchored-sigmoid
