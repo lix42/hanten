@@ -424,11 +424,11 @@ pub fn corrected_white(
         .0
         .iter()
         .flat_map(|px| {
-            let mut aces = film_rgb_to_acescg(*px);
-            if let Some(line) = line {
-                line.correct(&mut aces, balance);
-            }
-            acescg_to_film_rgb(balance.apply(aces))
+            acescg_to_film_rgb(MidtoneLine::balanced(
+                line,
+                film_rgb_to_acescg(*px),
+                balance,
+            ))
         })
         .collect();
     sample_white(&corrected)

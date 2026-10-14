@@ -8,8 +8,8 @@
 //! two fold into one multiply and nothing is clamped. The roll's gains are folded in too,
 //! unless they apply as a tilt ([`crate::pipeline::roll_balance`]), which runs per pixel
 //! before the multiply. The midtone neutral ([`crate::pipeline::midtone_neutral`]) runs
-//! first, keyed on the roll's balance, which it was measured after: a stated white balance
-//! does not move it.
+//! first (after the tilt, which does not commute with it), keyed on the roll's balance,
+//! which it was measured after: a stated white balance does not move it.
 //!
 //! Written fresh, per CLAUDE.md's migration rule, rather than from the removed chain's
 //! `render_split::apply_shared_controls`, which fused the same arithmetic with the
@@ -310,13 +310,15 @@ pub fn apply(
     let mut buffer = WorkingBuffer::from_aces(image);
     let scale = gains != [1.0, 1.0, 1.0];
     if line.is_some() || tilt.is_some() || scale {
-        // One pass: the line, the tilt, then the gains.
+        // One pass: the line and the tilt (which `correct` applies first), then the gains.
         pixels::map_in_place(buffer.rgb_mut(), |px| {
-            if let (Some(l), Some(r)) = (&line, roll) {
-                l.correct(px, &r.balance);
-            }
-            if let Some(t) = tilt {
-                *px = t.apply(*px);
+            match (&line, roll) {
+                (Some(l), Some(r)) => l.correct(px, &r.balance),
+                _ => {
+                    if let Some(t) = tilt {
+                        *px = t.apply(*px);
+                    }
+                }
             }
             if scale {
                 for c in 0..3 {
@@ -556,7 +558,6 @@ mod tests {
         for (i, px) in mapped.rgb().as_chunks::<3>().0.iter().enumerate() {
             let mut want = *px;
             line.correct(&mut want, &roll.balance);
-            let want = tilt.apply(want);
             let want: Vec<u32> = (0..3).map(|c| (want[c] * gains[c]).to_bits()).collect();
             assert_eq!(bits(&out[i * 3..i * 3 + 3]), want, "pixel {i}");
         }

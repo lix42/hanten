@@ -137,22 +137,49 @@ impl MidtoneLine {
         }
     }
 
-    /// Remove the cast from one linear ACEScg pixel, **before** the white balance:
-    /// `balance` is the roll's, which the line was measured after. Red and blue are
-    /// divided by the cast, then all three scaled back to the pixel's luminance. A pixel
-    /// with no finite positive luminance is left alone.
+    /// Remove the cast from one linear ACEScg pixel, measured after `balance`. Under a gain,
+    /// before it: the gain commutes with the cast, so the caller applies it (folded into
+    /// the stated gains). Under a tilt, which does not commute, the tilt is applied here
+    /// first and the cast removed from the tilted pixel. Red and blue are divided by the
+    /// cast, then all three scaled back to the luminance they had. A pixel with no finite
+    /// positive luminance is left alone (tilted, under a tilt).
     pub fn correct(&self, px: &mut [f32; 3], balance: &RollBalance) {
+        match balance {
+            RollBalance::Gain(_) => {
+                let balanced = balance.apply(*px);
+                self.remove(px, balanced, None);
+            }
+            RollBalance::Tilt(t) => {
+                *px = t.apply(*px);
+                self.remove(px, *px, Some(t.base_stops()));
+            }
+        }
+    }
+
+    /// The pixel `correct` leaves, with `balance` applied under a gain too.
+    pub fn balanced(line: Option<&Self>, mut px: [f32; 3], balance: &RollBalance) -> [f32; 3] {
+        match (line, balance) {
+            (Some(l), RollBalance::Tilt(_)) => {
+                l.correct(&mut px, balance);
+                px
+            }
+            (Some(l), RollBalance::Gain(_)) => {
+                l.correct(&mut px, balance);
+                balance.apply(px)
+            }
+            (None, _) => balance.apply(px),
+        }
+    }
+
+    /// `correct`'s arithmetic: the cast is keyed on, and gated by, `balanced`, and removed
+    /// from `px`.
+    fn remove(&self, px: &mut [f32; 3], balanced: [f32; 3], floor: Option<f32>) {
         let luma = |p: [f32; 3]| dot(p, ACESCG_LUMA);
-        let balanced = balance.apply(*px);
         let y = luma(*px);
         let yw = luma(balanced);
         if !(y > 0.0 && yw > 0.0 && y.is_finite() && yw.is_finite()) {
             return;
         }
-        let floor = match balance {
-            RollBalance::Gain(_) => None,
-            RollBalance::Tilt(t) => Some(t.base_stops()),
-        };
         let [cr, cb] = self.cast(scene_stops(yw), floor);
         let off_cast = ((balanced[0] / balanced[1]).log2() - cr)
             .hypot((balanced[2] / balanced[1]).log2() - cb);
@@ -583,5 +610,37 @@ mod tests {
             .check()
             .is_err()
         );
+    }
+
+    #[test]
+    fn under_a_tilt_a_cast_the_line_measured_is_removed_whole() {
+        use crate::pipeline::roll_balance::Tilt;
+        // Codex's case: a strong tilt, and a line whose constant cast is exactly the
+        // tilted pixel's colour, so it must come out neutral.
+        let tilt = Tilt::new([0.5, 1.0, 2.0], [0.004; 3], 2.0);
+        let balance = RollBalance::Tilt(tilt);
+        let raw = [0.12f32, 0.1, 0.08];
+        let tilted = tilt.apply(raw);
+        let rho = [
+            (tilted[0] / tilted[1]).log2(),
+            (tilted[2] / tilted[1]).log2(),
+        ];
+        let line = MidtoneLine {
+            red: [0.0, rho[0]],
+            blue: [0.0, rho[1]],
+            bands: [-6.0, 1.5],
+            fade_end_stops: 4.0,
+        };
+        let mut px = raw;
+        line.correct(&mut px, &balance);
+        for (c, want) in [(0, 1.0f32), (2, 1.0)] {
+            assert!((px[c] / px[1] - want).abs() < 1e-5, "{c}: {px:?}");
+        }
+        let y = |p: [f32; 3]| dot(p, ACESCG_LUMA);
+        assert!(
+            (y(px) / y(tilted) - 1.0).abs() < 1e-5,
+            "luminance kept: {px:?}"
+        );
+        assert_eq!(MidtoneLine::balanced(Some(&line), raw, &balance), px);
     }
 }
