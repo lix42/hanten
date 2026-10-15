@@ -445,7 +445,12 @@ style    the user's taste
 ```
 
 The measured values live in their own recipe section, `roll` (§8), so a measured
-value is never mistaken for a chosen one. `--rendering` chooses the base every stage
+value is never mistaken for a chosen one. The three are combined into each stage's
+parameters (`Recipe::shared_params`), not run as stages of their own: a roll value and
+the user's act through one operator — the roll's gains times the stated white balance,
+its slope times `look.contrast`, its exposure plus the stated one — and a frame's
+measured dark end (`tones.dark_stops`) is placed in fit range, after the frame is
+graded (`nf-core/three-step-pipeline`). `--rendering` chooses the base every stage
 knob starts from, and each has one principle (`crate::rendering`):
 
 - **`direct` loses as little information as possible and applies only what the
@@ -2515,7 +2520,6 @@ Each names the task that owns it, or says it has none.
 - **Other outputs the old chain had** (ProPhoto, arbitrary ICC paths): keep or drop.
   No task yet.
 - **The saturation warning's margin** (`nf-calibration/saturation-margin`).
-- **Rebuilding the pipeline as decode → roll → style** (`nf-core/three-step-pipeline`).
 
 Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for the
 film master (§6); the recipe travels in the report, not the image container (§5);
@@ -2523,4 +2527,6 @@ reinhard over a parametric shoulder (§6); a separate contrast and per-channel g
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
 (§6); one dark end, fit range's target, floor or display black (§6); the fallback slope without a
 roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
-stands (`nf-calibration/white-rule-hdr`).
+stands (`nf-calibration/white-rule-hdr`); stages defined by operation, with decode, roll
+and style combined into their parameters rather than rebuilt as stages (§6,
+`nf-core/three-step-pipeline`).

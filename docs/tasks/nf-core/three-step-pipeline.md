@@ -1,6 +1,6 @@
 ---
 title: Rethink the pipeline as decode → roll → style
-status: todo
+status: done
 deps: [nf-core/default-flip, nf-calibration/roll-section, nf-destinations/direct-preset]
 tags: [new-flow]
 summary: unscheduled, after the default flip
@@ -30,8 +30,9 @@ What is known (`docs/design-update.md`, Part 2, "Two renderings", 2026-09-27):
   (`nf-calibration/roll-section`) and `--rendering direct|default`
   (`nf-destinations/direct-preset`).
 
-Open: everything — whether the three steps should be stages, what each owns, and what
-it costs to migrate recipes and reports again.
+**Decided 2026-10-14** (progress log): the stages stay defined by operation; decode,
+roll and style are combined into their params in `Recipe::shared_params`. Follow-up:
+`nf-core/resolver-module`.
 
 ## How to Verify
 
