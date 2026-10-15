@@ -282,7 +282,7 @@ impl DisplayPeak {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FitRangeParams {
     /// How much scene range above diffuse white the operator compresses, in stops:
-    /// reinhard's white point is `W = 2^headroom_stops`. `0` is the identity.
+    /// reinhard's white point is `W = 2^headroom_stops`. `0` turns reinhard off.
     pub headroom_stops: f32,
     /// The display's peak.
     pub peak: DisplayPeak,

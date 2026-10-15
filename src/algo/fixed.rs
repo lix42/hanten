@@ -104,7 +104,7 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// disagree about where white is.
 pub const DIFFUSE_WHITE: f32 = 1.0;
 
-/// The decode's slope: **the calibrated half of `gamma`**, which linearizes the film.
+/// The decode's slope: **the calibrated half of the retired single gamma**, which linearizes the film.
 ///
 /// A C-41 negative's straight line rises ≈0.55 density per decade of exposure, so
 /// `1/0.55 ≈ 1.8` undoes it. That is a calibration and stays in the decode; how
@@ -231,7 +231,7 @@ pub struct DecodeParams {
     /// Per-channel density offset.
     pub offset: [f32; 3],
     /// The straight line's slope in density against log exposure — the calibrated
-    /// half of `gamma` ([`LINEARIZATION`]). Print contrast is the look's
+    /// half of the retired single gamma ([`LINEARIZATION`]). Print contrast is the look's
     /// tone slope, never this.
     pub linearization: f32,
     /// Which tone is pinned, and where.

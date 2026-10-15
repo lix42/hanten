@@ -647,7 +647,7 @@ pub fn headroom_fault_message(fault: HeadroomFault, name: &str) -> String {
         HeadroomFault::Negative(stops) => format!(
             "{name} must be finite and non-negative (got {stops}). It is the highlight \
              range: the stops above diffuse white fit range compresses into the display; \
-             `0` is the identity."
+             `0` turns the compression off."
         ),
         HeadroomFault::TooLarge(stops) => format!(
             "{name} is {stops} stops, beyond the supported maximum of {MAX_HEADROOM_STOPS}. \

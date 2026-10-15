@@ -153,7 +153,7 @@ impl<'de> Deserialize<'de> for RecipeVersion {
 #[serde(default, deny_unknown_fields)]
 pub struct FitRangeSection {
     /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
-    /// `0` is the identity.
+    /// `0` turns the compression off.
     pub headroom_stops: Option<f32>,
     /// Where the dark end renders: `{"target": stops}`, `{"floor": stops}`,
     /// `{"black": stops}` or `"off"` (`pipeline::fit_range`'s dark end).

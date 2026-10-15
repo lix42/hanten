@@ -41,12 +41,12 @@ channel, read only by holder detection and dropped at the decode.
 |---|---|---|---|---|---|
 | **transmission** | the raw scan value, `u16 / 65535`: the fraction of light the film passes | thinner negative — a **darker** scene | `[0, 1]` | internal | `io::decode`, `Scan` |
 | **film base** (alias `Dmin`) | the unexposed film's per-channel transmission; the divisor of density | (the ceiling of transmission) | `(0, 1]` | public: `--film-base`, `calibration.film_base` | `FilmBase`, `pipeline::film_base` |
-| **density `D`** | `−log10(scan / film base)` — 0 at the base. Say "density above base" when the reference matters | denser negative — a **brighter** scene | `≈ [0, 6]`; slightly `< 0` where a pixel out-transmits the base | public: `density_above_base`, `spread_density` | `algo::fixed::decode`, measurements |
-| **corrected density `D′`** | `density scale · D + density offset`. At the base `D′` is the offset, not 0 | brighter scene | `D` shifted by the offset | internal | inside `algo::fixed::decode`, never a buffer |
+| **density `D`** | `−log10(scan / film base)` — 0 at the base. Say "density above base" when the reference matters | denser negative — a **brighter** scene | `≤ log10(65535 · film base)`, at most ≈4.8 (the scan is floored at 1/65535); slightly `< 0` where a pixel out-transmits the base | public: `density_above_base`, `spread_density` | `algo::fixed::decode`, measurements |
+| **corrected density `D′`** | `density scale · D + density offset`. At the base `D′` is the offset, not 0 | brighter scene | `D`, scaled and offset per channel | internal | inside `algo::fixed::decode`, never a buffer |
 | **film RGB** (NC film RGB v1) | the decode's linear positive, one channel per dye layer. The anchor lands at 1.0, mid-grey at 0.18, diffuse white at ≈0.80 | brighter scene | unclamped | public: `working_mapping: nc-film-rgb-v1`, `--export-film-rgb` | `algo::FilmRgbImage` |
 | **scene-linear ACEScg** | film RGB through the v1 mapping, before the look. Keeps film, lens, development and scanner character; not a physical scene recovery | brighter | unclamped | public: the `--film-master` output | `pipeline::working_space` |
 | **graded ACEScg** | after the look. Diffuse white is 1.0 here | brighter | unclamped | internal | look → fit range |
-| **display-linear** | after fit range and fit gamut, in the destination's gamut. 1.0 is reference white (203 cd/m² in an HDR destination) | brighter | `≥ 0`; content past the white point exceeds the peak and is clamped and counted at the encode | public: `--transfer linear`, `reference_white_sample` | `pipeline::fit_gamut::DisplayReferredImage` |
+| **display-linear** | after fit range and fit gamut, in the destination's gamut. 1.0 is reference white (203 cd/m² in an HDR destination) | brighter | `≥ 0`; content past the white point exceeds the peak and is clamped to it and counted (SDR at the integer encode, HDR at `hdr::clamp_to_peak`) | public: `--transfer linear`, `reference_white_sample` | `pipeline::fit_gamut::DisplayReferredImage` |
 | **output sample** | the written code value | brighter | destination-defined | public: `loss.clipped_*` | `io::encode`, `io::iso_gain_map` |
 
 **The one rule.** As **scene luminance rises**: `transmission ↓ · density ↑ ·
@@ -82,7 +82,7 @@ A stops figure states its reference and its sign.
 
 | Kind | Meaning | Sign | Kind | Public spellings |
 |---|---|---|---|---|
-| **scene stops** | `log2(level / 0.18)` at the decode output; the linearization is already in | dark is negative | public | `roll.white_stops`, `roll.dark_stops`, `envelope_stops`, `level_stops` |
+| **scene stops** | `log2(value / 0.18)` on the decode's output; the linearization is already in. The statistic varies: the roll white is in film RGB (see the whites below), a dark end or level is ACEScg luminance | dark is negative | public | `roll.white_stops`, `roll.dark_stops`, `envelope_stops` (`[dark end, white]`), `level_stops` |
 | **look stops** | scene stops × the tone slope (code also says "rendered stops") | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
 | **display stops below mid-grey** | distance below mid-grey after fit range | **positive is darker** — the opposite of `roll.dark_stops` | public | `fit_range.dark_end`, `film_base_stops`, `frame_dark_stops` |
 | **stops from diffuse white** | relative to graded 1.0 | signed | public | `fit_range.headroom_stops` (+6), `highlight_desaturation.start_stops` (−1) |
@@ -204,7 +204,7 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 | **rendering saturation** | the 1.15 that `default` applies over the base slope (`direct` applies 1) | public | help text |
 | **saturation slope** | the power on colour ratios, `(x/Y)^s`, ACEScg luminance kept | public | `chain.look.saturation_slope` |
 | **channel grade** | a per-channel power about 0.18 on R and B, luminance restored: a tone-dependent tint | public | `--channel-grade` |
-| **highlight desaturation** | a pull toward ACEScg luminance approaching diffuse white, gated by the **chroma band** (`log10(max/min)` measured on graded ACEScg — not the negative's density) | public | `--highlight-desaturation{,-start,-band}` |
+| **highlight desaturation** | a pull toward ACEScg luminance approaching diffuse white, gated by the **chroma band** on `log10(max/min)` of graded ACEScg over the colour slope — not the negative's density | public | `--highlight-desaturation{,-start,-band}` |
 
 ### Fitting into the destination
 
@@ -249,18 +249,18 @@ Each changes the scripting contract, so it waits for a migration
 public name once. Internal identifiers that contradict this doc are
 `core/internal-term-renames`.
 
-| Public name | What it really is |
-|---|---|
-| `--density-gamma` | linearization |
-| `reconstruction.anchor` (holds `d`) vs `chain.decode.anchor` (holds `A`) | two quantities under one leaf name |
-| look stage string `"contrast"` | fires on tone slope ≠ 1, even at `look.contrast` 1 |
-| `--display-tone-headroom`, `fit_range.headroom_stops` | the highlight range (and a retired stage name) |
-| `--display-black`, `{"black"}` | places the film base in display stops; sets no black level |
-| `roll.frames.*.exposure` | the small lift, `roll.frame_exposure` |
-| `slope_bound` | an enum in `frames[].hybrid`, a number in `thin_lift` |
-| `roll.dark_stops` vs `frame_dark_stops` | opposite signs for one word |
-| `hdr_linear_tiff.linear_headroom` | duplicates `chain.fit_range.display_peak` |
-| `area_uniformity.tilt` | collides with the WB form `tilt` |
-| `--neutral-balance`, `roll.neutral_balance` | switches the roll colour correction |
-| `saturation_margin_stops` | film saturation, beside `look.saturation` (colourfulness) |
-| `input_color`, "color-consistent", `gray-world` | American spellings |
+| | Public name | What it really is |
+|---|---|---|
+| P1 | `--density-gamma` | linearization |
+| P2 | `reconstruction.anchor` (holds `d`) vs `chain.decode.anchor` (holds `A`) | two quantities under one leaf name |
+| P3 | look stage string `"contrast"` | fires on tone slope ≠ 1, even at `look.contrast` 1 |
+| P4 | `--display-tone-headroom`, `fit_range.headroom_stops` | the highlight range (and a retired stage name) |
+| P5 | `--display-black`, `{"black"}` | places the film base in display stops; sets no black level |
+| P6 | `roll.frames.*.exposure` | the small lift, `roll.frame_exposure` |
+| P7 | `slope_bound` | an enum in `frames[].hybrid`, a number in `thin_lift` |
+| P8 | `roll.dark_stops` vs `frame_dark_stops` | opposite signs for one word |
+| P9 | `hdr_linear_tiff.linear_headroom` | duplicates `chain.fit_range.display_peak` |
+| P10 | `area_uniformity.tilt` | collides with the WB form `tilt` |
+| P11 | `--neutral-balance`, `roll.neutral_balance` | switches the roll colour correction |
+| P12 | `saturation_margin_stops` | film saturation, beside `look.saturation` (colourfulness) |
+| P13 | `input_color`, "color-consistent", `gray-world` | American spellings |

@@ -14,7 +14,7 @@
 //!   the base itself is the measure: closer than [`MIN_FILM_BASE_STOPS`] under mid-grey.
 //!   A roll's exposure alone is left alone there — a thin roll's puts the base at that
 //!   threshold by measurement, not by fault — but a stated exposure added on top is not.
-//! - **Squeezed flat**: the look's slope is under [`MIN_SLOPE`], the flattest any
+//! - **Squeezed flat**: the look's tone slope is under [`MIN_SLOPE`], the flattest any
 //!   placement sets — a `look.contrast` under 1, or a stated thin slope, gets there.
 //!
 //! **A tone lands at `display_stops(slope · (tone + exposure + log2 gain))`**, `gain` the
@@ -149,14 +149,14 @@ impl Fault {
                 base_slope,
                 base_from,
             } => format!(
-                "the look's slope is {slope:.3} (`--contrast` {contrast:.3} times \
+                "the look's tone slope is {slope:.3} (`--contrast` {contrast:.3} times \
                  {base_from} {base_slope:.3}), flatter than the {MIN_SLOPE:.3} any \
-                 placement sets, so the frame's shadows are lifted toward mid-grey: raise \
+                 placement sets, so the frame's shadows are raised toward mid-grey: raise \
                  `--contrast` (recipe `look.contrast`)"
             ),
             Fault::Pushed { middle, dark } => format!(
                 "the frame is placed so bright its black cannot approach black: the curve \
-                 puts its middle {} and its dark end (luma p1) {}, before the dark end is \
+                 puts its middle {} and its dark end (ACEScg luminance p1) {}, before the dark end is \
                  moved. This is where the look places the frame's measured tones, with \
                  display black off: {LOWER_EXPOSURE}",
                 from_mid(middle),

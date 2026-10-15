@@ -144,7 +144,7 @@ pub const NOTES: &[Note] = &[
     value(
         "fit_range.headroom_stops",
         "--display-tone-headroom",
-        "highlight range: stops above diffuse white; 0 is the identity",
+        "highlight range: stops above diffuse white; 0 turns the compression off",
     ),
     value(
         "fit_range.dark_end",

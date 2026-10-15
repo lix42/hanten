@@ -1796,7 +1796,7 @@ by the curve's limit at black, so the scale is continuous there.
 
 - `--display-tone-headroom <stops>` ⇒ `fit_range.headroom_stops` — finite, `0`–`24`
   (a value rule, so `roll` and per-frame overrides refuse it before any frame is
-  decoded), unset `6` (`W = 64`); `0` is the identity. Beyond ~8 stops the operator
+  decoded), unset `6` (`W = 64`); `0` turns the compression off (the dark end still applies). Beyond ~8 stops the operator
   converges on plain reinhard and a wider range buys nothing.
 - `fit_range.dark_end` — `{"target": stops}` (`--dark-target`), `{"floor": stops}`
   (`--dark-floor`), `{"black": stops}` (`--display-black`), or `"off"` (any flag's

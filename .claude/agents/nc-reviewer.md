@@ -123,7 +123,8 @@ The load-bearing rules you review against:
 - `docs/colorimetry-maintenance.md` — the workflow for changing any colorimetry.
 - `docs/terminology.md` — which word names which value. A help text, message, doc
   comment or key that uses a word against it (e.g. `Dmin` leading, "lift" for fit
-  range, "luma", a bare "slope" or "headroom") is a finding.
+  range, "luma", a bare "slope", or a bare "headroom" for the highlight range) is a
+  finding.
 - `docs/reports/` — versioned conversion baselines (`v0-baseline.md` is the
   reference point).
 

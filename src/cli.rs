@@ -1250,9 +1250,9 @@ pub struct DisplayOverrides {
     /// into the display, default 6 (a white point of 64; recipe key
     /// `fit_range.headroom_stops`). Fit range is extended Reinhard, which compresses
     /// the whole curve against that white point while holding mid-grey where it is, so
-    /// a wider range changes the highlights without darkening the midtones. `0` is the
-    /// exact identity. Rendered destinations only; the film master applies no fit
-    /// range.
+    /// a wider range changes the highlights without darkening the midtones. `0` turns
+    /// the compression off; the dark end still applies. Rendered destinations only; the
+    /// film master applies no fit range.
     // A negative headroom must reach the value check, whose message names this very
     // flag: without this, clap refused `-1` as "unexpected argument".
     #[arg(
@@ -3402,7 +3402,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
                            applied, so there is nothing to select — drop the flag"
                 .to_string(),
             "none" => {
-                "the nearest to `none` is the identity, `--display-tone-headroom 0`".to_string()
+                "the nearest to `none` is `--display-tone-headroom 0`, no compression".to_string()
             }
             "shoulder" => "`shoulder` has no replacement — drop the flag for the default \
                            tone"

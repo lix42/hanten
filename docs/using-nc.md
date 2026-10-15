@@ -1381,7 +1381,7 @@ mid-grey stays where the decode put it. It also places the dark end (below). Its
 
 | Flag | Recipe key | |
 |---|---|---|
-| `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` is the identity |
+| `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` turns the compression off, the dark end still applies |
 | `--dark-floor STOPS\|off` | `fit_range.dark_end` = `{"floor": STOPS}` | the floor: the frame's measured darkest 1 % no deeper than this, in stops below mid-grey on the display, `(0, 16]` |
 | `--dark-target STOPS\|off` | `fit_range.dark_end` = `{"target": STOPS}` | the target: the frame's measured darkest 1 % at this depth, raised or pushed down, `(0, 16]`; unstated under `default`, `5.5` |
 | `--display-black STOPS\|off` | `fit_range.dark_end` = `{"black": STOPS}` | display black: the film base at this depth, `(0, 16]`; unstated under `direct`, `6` |
@@ -2504,20 +2504,20 @@ display black (the default's target included) the report warns when a frame is w
 cases, each with its own remedy; none fires on any frame of the full archive at its
 measured default:
 
-- **Squeezed flat**: the look's slope is under 1.237, the flattest any placement sets.
+- **Squeezed flat**: the look's tone slope is under 1.237, the flattest any placement sets.
   A `--contrast` under 1 gets there, or a stated `--roll-thin-slope` under 1.237; raise
   `--contrast` (`--contrast 0.9` clears the case below):
 
   ```
-  the look's slope is 0.990 (`--contrast` 0.700 times the fallback slope 1.414), flatter
-  than the 1.237 any placement sets, so the frame's shadows are lifted toward mid-grey:
-  raise `--contrast` (recipe `look.contrast`)
+  the look's tone slope is 0.990 (`--contrast` 0.700 times the fallback slope 1.414),
+  flatter than the 1.237 any placement sets, so the frame's shadows are raised toward
+  mid-grey: raise `--contrast` (recipe `look.contrast`)
   ```
 
 - **Pushed up**, on a frame `measure-roll` measured (its `tones`): its middle lands more
-  than 1.5 stops above mid-grey *and* its dark end (luminance p1) less than 1.5 under it,
+  than 1.5 stops above mid-grey *and* its dark end (ACEScg luminance p1) less than 1.5 under it,
   before the dark end is moved. A
-  flat frame centred at mid-grey never trips this, and a one-stop `--exposure` lift
+  flat frame centred at mid-grey never trips this, and a one-stop `--exposure` raise
   warns on about a quarter of real frames. Lower `--exposure`.
 - **The film base near mid-grey**, on a frame without tones: the base renders less than
   2 stops under mid-grey. Lower
@@ -2709,8 +2709,8 @@ A base read from a region is checked as if it were 1, and the message says so.
 Fit range does not clip ordinary content at its default highlight range, so something pushed
 content past it: a positive `--exposure`, too little `--display-tone-headroom`, or a
 low anchor (`--anchor-mid-offset` smaller than the default). Lower the exposure, widen
-the highlight range, move the anchor up, or write a float output (`--transfer linear` with a
-`--gamut`, or `--film-master`) for an unclamped result.
+the highlight range, move the anchor up, or write a float output: `--transfer linear` (with a
+`--gamut`) keeps up to the HDR peak, and only `--film-master` is unclamped.
 
 **"no roll measurement: rendered with …"**
 Every `convert` under the `default` rendering warns until the roll is measured, and
