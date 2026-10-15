@@ -837,7 +837,7 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
     "print",
     "white balance and exposure are `scene_correction.white_balance` and \
          `scene_correction.exposure`; the display tone is fit range, whose one \
-         operator is reinhard and whose headroom is `fit_range.headroom_stops`; the \
+         operator is reinhard and whose highlight range is `fit_range.headroom_stops`; the \
          black point's surviving half is display black, `fit_range.dark_end` \
          `{\"black\": <stops>}` (where the film base renders); and `linear_range`, the \
          levels remap, retired: its gain is `scene_correction.exposure` and its black is \

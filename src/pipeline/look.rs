@@ -38,10 +38,10 @@ use crate::types::{NcError, Result};
 ///
 /// - **Keyed on distance from the neutral axis as well as brightness**, or a bright
 ///   *coloured* surface is neutralised as hard as a bright white one — the sunset case
-///   `docs/spike/highlight-desaturation.md` found on one marked patch. `s` is the
-///   negative's own density spread — the log ratio over **the whole slope that shaped
-///   its colour**, the decode's linearization times [`LookSection::saturation_slope`] —
-///   so the band means the same on a flat roll and a contrasty one.
+///   `docs/spike/highlight-desaturation.md` found on one marked patch. `s`, the chroma
+///   band's measure, is the graded log ratio over linearization ×
+///   [`LookSection::saturation_slope`], so the band means the same on a flat roll and
+///   a contrasty one.
 /// - **The band assumes a roll-level white balance ahead of it**
 ///   (`hanten measure-roll`): `s` measures distance from R = G = B, which is distance
 ///   from white only once the roll's cast is gone (`docs/spike/desaturation-band.md`).
@@ -188,7 +188,7 @@ pub struct LookSection {
     /// - **Log ratios scale by the slope** — `r/g` becomes `(r/g)^s` — and luminance is
     ///   kept, so it never moves a neutral or the tone scale.
     /// - **Highlight desaturation divides by it** (times the decode's linearization): its
-    ///   band measures the negative's density spread, which this slope stretches.
+    ///   chroma band undoes the stretch this slope puts on colour ratios.
     /// - **A pixel is saturated whole or not at all**, as the grade is: only when every
     ///   channel is finite and positive. Any finite slope then saturates it — the stretch
     ///   is normalised so it cannot overflow.
@@ -233,8 +233,8 @@ pub struct LookSection {
     ///   exposure ray (below), so the claim holds for every pixel.
     /// - **At the gamut edge the whole pixel passes through**, bit for bit: a pixel is
     ///   graded only when all three channels are finite and positive, both luminances
-    ///   are finite and positive and the result is finite. Unlike contrast's
-    ///   per-channel pass-through, because the restore couples the channels: a
+    ///   are finite and positive and the result is finite. Unlike a per-channel
+    ///   pass-through, because the restore couples the channels: a
     ///   non-positive channel left in the luminance could drive the powered luminance
     ///   to zero and the restore without bound. An exposure change never flips a
     ///   channel's sign, so a pixel is graded along its whole exposure ray or not at all
@@ -479,7 +479,7 @@ fn apply_contrast(px: &mut [f32; 3], contrast: f32) {
 ///
 /// Normalised by the largest channel instead of `Y` — the scale cancels in the restore
 /// — so every stretched value is in `(0, 1]` with the largest exactly 1: no slope can
-/// overflow it, and `Y(stretched)` is at least the smallest luma weight. A pixel with a
+/// overflow it, and `Y(stretched)` is at least the smallest luminance weight. A pixel with a
 /// non-finite or non-positive channel passes through whole, the guard
 /// [`apply_channel_grade`] states.
 fn apply_saturation(px: &mut [f32; 3], s: f32) {

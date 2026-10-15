@@ -11,7 +11,7 @@
 //!
 //! Pure statistics over samples the orchestrator takes at the **decode's output in
 //! linear ACEScg** — the input scene correction's gains multiply. The look's
-//! slope is a channel-equal power pivoted at mid-grey, so a white these gains
+//! tone slope acts on luminance and keeps colour ratios, so a white these gains
 //! make neutral stays neutral under any slope; the gain *values* belong to this
 //! decode, which is why they are measured here and not at a rendered output.
 //!
@@ -35,7 +35,7 @@
 //! deliberately bad frames:
 //!
 //! - A frame's white is the [`WHITE_PERCENTILE`] of its pixels' **brightest channel**
-//!   over its effective area, which keeps the specular headroom above white, in **scene
+//!   over its effective area, which keeps specular highlights above the white, in **scene
 //!   stops** above mid-grey — on the decode's film RGB, before the working-space 3×3,
 //!   **after the roll's colour correction** (its gains and its midtone line, mapped back
 //!   through the 3×3: [`corrected_white`]). The rule's cap and floor were tuned on whites
@@ -49,7 +49,7 @@
 //!   leader is near film saturation, and that warns. Without a leader there is no check.
 //!
 //! **A frame's white is measured before the leader guard.** The guard drops pixels
-//! within [`LEADER_GUARD_DENSITY`] (≈0.6 stop) of the leader — exactly the highlights of
+//! within [`LEADER_GUARD_DENSITY`] (≈0.6 scene stop) of the leader — exactly the highlights of
 //! a frame near saturation. Measured after it, such a frame's white lands lower, can
 //! escape the clamp and set the roll's slope, and can never come within the margin of
 //! its leader. The cap already keeps a blown frame from raising the roll's white, so the
@@ -64,7 +64,7 @@
 //! which the white rule cannot: it pins mid-grey and only moves contrast. It is one
 //! neutral gain for the whole roll (`roll.exposure`, added to scene correction's), so a
 //! frame darker than its roll stays dark, beyond a bounded lift. Each frame's level is the log-average of its
-//! luma in ACEScg ([`frame_level`]); the roll's exposure brings the median frame level to
+//! luminance in ACEScg ([`frame_level`]); the roll's exposure brings the median frame level to
 //! [`LEVEL_TARGET_STOPS`], within [`EXPOSURE_BOUND_EV`] ([`roll_exposure`]). A median over
 //! frames, so one night scene cannot set it — the failure that retired per-frame auto
 //! white balance. **The white is measured at exposure 0**: re-placing it after the
@@ -114,6 +114,10 @@ pub const PERCENTILE: f32 = 0.99;
 /// left out: a fully exposed frame mixed into the roll otherwise **is** the roll's top
 /// percentile. Measured: the leader's own pixels added as a frame moved the gains
 /// 0.4–1.3 stops without the guard, and not at all with it.
+///
+/// A step in `D′` through the linearization alone (`10^(−linearization · 0.1)`, ≈0.6
+/// scene stop at the default), applied to decoded values, so the density scale never
+/// enters it.
 pub const LEADER_GUARD_DENSITY: f32 = 0.1;
 
 /// Most pixels one frame contributes, so every frame weighs alike in the pool and a
@@ -168,7 +172,7 @@ pub const LIFT_FULL_STOPS: f32 = 0.9;
 /// falls linearly.
 pub const LIFT_NONE_STOPS: f32 = 1.5;
 
-/// A frame whose luma spans fewer stops than this from its p5 to its p95 is **flat** — one
+/// A frame whose luminance spans fewer stops than this from its p5 to its p95 is **flat** — one
 /// surface filling the frame — and gets no lift of either kind: a lift lost on the two
 /// such frames of ten rolls (0.59 and 0.67 stop), and won on none under 1.36.
 pub const FLAT_SPREAD_STOPS: f32 = 1.0;
@@ -177,12 +181,12 @@ pub const FLAT_SPREAD_STOPS: f32 = 1.0;
 /// measures it) is at or under this…
 pub const THIN_WHITE_STOPS: f32 = LIFT_FULL_STOPS;
 
-/// …and whose luma has at least this share within [`NEAR_BASE_STOPS`] of the film base:
+/// …and whose luminance has at least this share within [`NEAR_BASE_STOPS`] of the film base:
 /// its shadows sit on the base, which a normal low-key frame's do not. A night scene's do
 /// too, and review preferred the lift there.
 pub const THIN_BASE_SHARE: f32 = 0.3;
 
-/// How close to the base, in scene stops, a pixel's luma counts toward
+/// How close to the base, in scene stops, a pixel's luminance counts toward
 /// [`THIN_BASE_SHARE`].
 pub const NEAR_BASE_STOPS: f32 = 1.0;
 
@@ -195,7 +199,7 @@ pub const THIN_LIFT_STOPS: f32 = 1.0;
 /// on two thin frames.
 pub const THIN_SLOPE_BOUND: f32 = 2.4;
 
-/// The percentile of a frame's luma taken as its dark end ([`FrameTones::dark_stops`]).
+/// The percentile of a frame's luminance taken as its dark end ([`FrameTones::dark_stops`]).
 /// From the poor-development spike (`docs/spike/poor-development.md`), whose 5 % is
 /// untried.
 pub const DARK_PERCENTILE: f32 = 0.01;
@@ -434,8 +438,8 @@ pub fn corrected_white(
     sample_white(&corrected)
 }
 
-/// A frame's level: the log-average luma over `region` of its pixels with finite channels
-/// and positive luma — an out-of-gamut pixel with a negative channel still counts — in
+/// A frame's level: the log-average luminance over `region` of its pixels with finite channels
+/// and positive luminance — an out-of-gamut pixel with a negative channel still counts — in
 /// scene stops from mid-grey; `None` when no pixel counts. **No leader guard**: it would
 /// drop the real highlights of a frame near saturation. `rgb` is the decode's **linear
 /// ACEScg** — where the roll's exposure is a gain, so an exposure of `e` moves the level
@@ -730,17 +734,17 @@ pub fn small_lift(white_stops: f32, roll_ev: f32) -> f32 {
     LIFT_BOUND_EV * t.clamp(0.0, 1.0)
 }
 
-/// A frame's tonal shape over `region`, from its luma in scene stops: what decides whether
+/// A frame's tonal shape over `region`, from its luminance in scene stops: what decides whether
 /// a lift may touch it ([`FLAT_SPREAD_STOPS`], [`THIN_BASE_SHARE`]), and its dark end.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct FrameTones {
-    /// Stops from the luma's p5 to its p95.
+    /// Stops from the luminance's p5 to its p95.
     pub spread_stops: f32,
-    /// The luma's [`DARK_PERCENTILE`]: the frame's dark end, which [`roll_dark`] pools.
+    /// The luminance's [`DARK_PERCENTILE`]: the frame's dark end, which [`roll_dark`] pools.
     /// Before the roll's gains, as the exposure's level is (the white is after them): the
-    /// gains move a dark pixel's luma by hundredths of a stop.
+    /// gains move a dark pixel's luminance by hundredths of a stop.
     pub dark_stops: f32,
-    /// The share of pixels whose luma is within [`NEAR_BASE_STOPS`] of the base.
+    /// The share of pixels whose luminance is within [`NEAR_BASE_STOPS`] of the base.
     pub base_share: f32,
 }
 
@@ -808,7 +812,7 @@ fn luma(px: &[f32; 3]) -> f32 {
 }
 
 /// The decoded film base (one ACEScg pixel, `algo::fixed::decode_film_base` mapped) as a
-/// luma in scene stops: where every frame's shadows bottom out.
+/// luminance in scene stops: where every frame's shadows bottom out.
 pub fn base_stops(px: [f32; 3]) -> f32 {
     scene_stops(luma(&px))
 }
@@ -843,7 +847,7 @@ pub struct ThinLift {
 /// the white is not above the base, `k0` is already at the bound, or the exposure would
 /// fall under `e0` (a base above mid-grey), darkening the mid-tones the small lift raised.
 ///
-/// Approximate: the white (film RGB, brightest channel) and the base (ACEScg luma, before
+/// Approximate: the white (film RGB, brightest channel) and the base (ACEScg luminance, before
 /// the roll's gains) are not the luminance the render's slope applies to, so the base
 /// moves and the white rises by about, not exactly, these amounts.
 pub fn thin_lift(
@@ -1007,7 +1011,7 @@ pub fn roll_gains(pool: &[f32]) -> Result<[f32; 3]> {
     green_anchored_gains(percentile_levels(pool, PERCENTILE), "roll white balance")
 }
 
-/// Where the midtone line fades to zero: the scene stop of the luma of the roll's pooled
+/// Where the midtone line fades to zero: the scene stop of the luminance of the roll's pooled
 /// per-channel [`PERCENTILE`] after `balance`, over every frame's ACEScg sample
 /// ([`acescg_sample`]).
 ///
@@ -1061,7 +1065,7 @@ mod tests {
         rgb.extend(field([0.09, 0.09, 0.09], 50));
         let level = frame_level(&rgb, 100, [0, 0, 100, 1]).unwrap().unwrap();
         assert!(level.abs() < 1e-5, "{level}");
-        // A pixel with no positive luma, or a non-finite channel, is left out, not read as
+        // A pixel with no positive luminance, or a non-finite channel, is left out, not read as
         // black.
         rgb.extend(field([-0.5, 0.0, 0.0], 10));
         rgb.extend(field([f32::NAN, 0.36, 0.36], 10));
@@ -1071,7 +1075,7 @@ mod tests {
             frame_level(&field([0.0; 3], 4), 4, [0, 0, 4, 1]).unwrap(),
             None
         );
-        // An out-of-gamut pixel whose luma is positive counts, negative channel and all.
+        // An out-of-gamut pixel whose luminance is positive counts, negative channel and all.
         let px = [-0.05f32, 0.2, 0.2];
         let y: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum();
         assert!(y > 0.0);

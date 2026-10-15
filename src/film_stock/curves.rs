@@ -11,7 +11,7 @@
 //! anchor to resolve.
 //!
 //! Two invariants, both asserted in `super::tests`: **strictly increasing** in both
-//! coordinates, and a **first point at `D′ = 0`** (the film base).
+//! coordinates, and a **first point at density 0** above the film base.
 //!
 //! No render reads these tables; they are the evidence for the fixed decode's constants.
 //! Re-derive from the publication rather than hand-tuning.

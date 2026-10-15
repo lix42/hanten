@@ -127,10 +127,9 @@ pub const ACES_WHITE: Chromaticity = xy(0.32168, 0.33767);
 
 /// CIE D50, the ICC profile connection space white.
 ///
-/// `(0.3457, 0.3585)`. Source: ICC.1:2010 / ISO 15076-1. Present for
-/// completeness of the definitions surface; NC's runtime never adapts to D50
-/// itself — Little CMS does that inside profile construction
-/// (`pipeline::color`).
+/// `(0.3457, 0.3585)`. Source: ICC.1:2010 / ISO 15076-1. Little CMS adapts to it
+/// inside the profiles it builds; only the authored PQ / HLG profiles carry a pinned
+/// adaptation (`pinned::BRADFORD_D65_TO_ICC_PCS`, `pipeline::color`).
 pub const D50: Chromaticity = xy(0.3457, 0.3585);
 
 /// The ICC PCS adopted white, **as XYZ** — ICC.1:2022 §6.3.4.3 / Annex D:

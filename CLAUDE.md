@@ -66,7 +66,9 @@ there**:
 
 ## Source of truth (read these first)
 
-- `docs/design-spec.md` — the authoritative design: §4 value terms, §5 destinations,
+- `docs/terminology.md` — every value term: spaces, stops, operation words, colour
+  words, public vs internal, known misnomers.
+- `docs/design-spec.md` — the authoritative design: §5 destinations,
   §6 the chain, §7 the fixed decode, §8 recipe, reports and determinism, §9
   parameters by stage, §11 exit codes.
 - `docs/design-update.md` — the evidence behind it: how the decode is tuned (Part 3)
@@ -242,10 +244,10 @@ committed.
 - **A user-visible change updates `docs/using-nc.md` in the same PR** (a flag,
   subcommand, default, recipe key, destination, exit code, or a report field or message
   a user acts on). Verify by running the binary — the `update-usingnc-doc` skill.
-- **Value terms (high/low/bright/dark):** read design-spec §4 first. As scene
-  luminance rises, transmission falls while density, positive and output rise;
-  "bright"/"dark" mean the *scene*. `Dmin` is a transmission (the film base);
-  the anchor `A` is a scalar density (`Dmax`, a leader density, retired).
+- **Value terms:** before naming a value in prose, a message or a key, read
+  `docs/terminology.md` (the `value-terms` skill). As scene luminance rises,
+  transmission falls while density, positive and output rise; "bright"/"dark" mean
+  the *scene*. User-facing text says "film base" (`Dmin` is its alias).
 
 ### Knobs and recipes
 

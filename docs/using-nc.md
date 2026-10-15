@@ -83,8 +83,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > section were re-run against the binary (the floor's example now states
 > `--dark-floor 4.5`); the target's figures are from its review of the 2026-10-12
 > Gold200 roll. At `nf-look/midtone-contrast-colour` (`pipeline_version` 17 unchanged)
-> §7's `--contrast 1.3 --saturation 1.15` pairing was re-run against the binary (colour's
-> slope is the roll's × 1.15 × 1.15, tone's the placement's × 1.3). The staleness
+> §7's `--contrast 1.3 --saturation 1.15` pairing was re-run against the binary (the
+> saturation slope is the roll's × 1.15 × 1.15, the tone slope the placement's × 1.3). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -110,13 +110,13 @@ shape every workflow below:
 - **Every knob is a CLI flag *and* a recipe key**, and nothing is reachable only
   from code. Passing a flag that doesn't apply to your destination is a **loud
   error**, never a no-op.
-- **Calibrate once, apply many.** The film base (`Dmin`) is a property of the
+- **Calibrate once, apply many.** The film base (alias `Dmin`) is a property of the
   *roll* — film stock, development, scanner — not of an individual frame. You
-  measure it once and reuse it, which is what keeps a whole roll color-consistent;
+  measure it once and reuse it, which is what keeps a whole roll colour-consistent;
   the roll's white balance, midtone line, white and exposure are measured once the same way
-  (`hanten measure-roll`, §7). **`Dmin` has no default: every `convert` must say
-  where the film base comes from**, because it sets the black point and the colour
-  balance together.
+  (`hanten measure-roll`, §7). **The film base has no default: every `convert` must
+  say where it comes from**, because it sets the black level and its colour
+  together.
 
 That last point is the whole workflow:
 
@@ -124,8 +124,8 @@ That last point is the whole workflow:
    measure                        freeze                 apply
 ┌────────────────────┐        ┌───────────────┐        ┌──────────────────────┐
 │ hanten inspect     │  ────► │ roll.json     │ ─────► │ hanten roll          │
-│ hanten measure-roll│        │ (Dmin, white  │        │ hanten convert       │
-│ hanten measure-base│        │  balance,     │        │                      │
+│ hanten measure-roll│        │ (film base,   │        │ hanten convert       │
+│ hanten measure-base│        │  white bal.,  │        │                      │
 │   --out roll.json  │        │  exposure,    │        │                      │
 │                    │        │  clamps)      │        │                      │
 └────────────────────┘        └───────────────┘        └──────────────────────┘
@@ -153,10 +153,10 @@ transmission ↓     density ↑     positive ↑     output ↑
 pixel value. The film base is the *highest* transmission on the negative yet
 renders to *black* in the positive.
 
-- **`Dmin`** — a per-channel **transmission**: the unexposed film base. This is
-  the `--film-base R,G,B` value.
+- **The film base** (alias `Dmin`) — a per-channel **transmission**: the unexposed
+  film. This is the `--film-base R,G,B` value.
 - **The anchor** — a **scalar** in **density** units: the corrected density that
-  renders to scene white. It is placed from the film base: mid-grey sits
+  renders to film RGB `1.0` (diffuse white decodes to ≈0.80, below it). It is placed from the film base: mid-grey sits
   `--anchor-mid-offset` (default 0.62) density above it (§6).
 
 They are not two ends of one scale; don't conflate them.
@@ -242,13 +242,13 @@ scan; see [The measurement region](#the-measurement-region-the-effective-area).
 ### Step 2 — Measure the roll, once
 
 **This step is mandatory.** `convert` and `roll` refuse to run without a stated
-film base — there is no default, because `Dmin` is the divisor of the density
-conversion and sets the black point and the colour balance together:
+film base — there is no default, because the film base is the divisor of the density
+conversion and sets the black level and its colour together:
 
 ```
-usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per roll
-       with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H to read
-       it from a region of unexposed film. Recipe key: `calibration.film_base`, which
+usage: no film base selected: pass --film-base R,G,B (the film base transmission,
+       measured once per roll with `hanten measure-base <unexposed-frame>`), or
+       --base-region X,Y,W,H to read it from a region of unexposed film. Recipe key: `calibration.film_base`, which
        `hanten measure-roll <frames> --unexposed <unexposed-scan> --out roll.json`
        writes for `--params`. With no unexposed film on the roll, `hanten measure-roll
        <frames> --base-content --out roll.json` estimates it from the pictures' deepest
@@ -484,9 +484,9 @@ per-channel `(p90 - p10) / p50` (0.097 on the Ektar roll's unexposed frame). A f
 that is not unexposed film warns (`--strict` fails on it):
 
 ```
-hanten: warning: the effective area is not uniform (worst per-channel spread
-(p90 - p10) / p50 = 1.08 > 0.50): it does not look like unexposed film, so the
-median over it is not a film base. …
+hanten: warning: the effective area does not look like unexposed film (worst
+per-channel spread (p90 - p10) / p50 = 1.08 > 0.50), so the median over it is not
+a film base. …
 ```
 
 It is a coarse guard — it catches a picture frame, not a leader — so point it at the
@@ -557,7 +557,7 @@ hanten roll frames/*.tif --out-dir positives/ --params roll.json
 ```
 
 Every frame gets the identical film base, white balance and rendering, so the roll is
-color-consistent; each measured frame is placed at its own contrast and exposure inside
+colour-consistent; each measured frame is placed at its own tone slope and exposure inside
 the roll's envelope (the hybrid placement, §7), and `--placement roll` renders every frame
 at the roll's instead. Outputs are named
 `<input-stem>_positive.<ext>`, the suffix coming from the destination's container
@@ -720,7 +720,7 @@ can be the bare `params` object. `calibration.film_base` is `null` here because 
 what `hanten measure-roll` measured — nothing by default (§7). `reconstruction` is the
 fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
-there is unstated and takes the rendering's value — highlight desaturation, headroom
+there is unstated and takes the rendering's value — highlight desaturation, highlight range
 and the dark end are 0.8, 6 and the target at 5.5 stops under `default`. The look's `contrast` is a
 multiplier, so its default `1.0` keeps the base slope: the frame's placed slope (the hybrid's or `frame`'s), else a thin frame's (`roll.thin_slope`), else the roll's, else the fallback ≈1.414 (§7). `fit_gamut` is empty for good — its ceiling comes from fit range and
 its gamut from the destination. `output` is the destination (§8), with nothing stated
@@ -753,7 +753,7 @@ hanten profile --contrast 1.2 --out look.jsonc
 ```
 
 - **Every key is written.** One the rendering decides is `null` (highlight
-  desaturation, the display tone, an unstated destination axis), and takes the
+  desaturation, fit range, an unstated destination axis), and takes the
   rendering's value, which a later build may move; `contrast` and `saturation`
   multiply the roll's slope. Like every written recipe it is stamped, so a later
   `pipeline_version` warns on replay. It restates the decode (`reconstruction`), so
@@ -857,7 +857,7 @@ refused naming it, and where its knobs went, rather than parsed and read by noth
 usage: recipe print.json: `print` is a section of the removed chain's recipe: white
        balance and exposure are `scene_correction.white_balance` and
        `scene_correction.exposure`; the display tone is fit range, whose one operator
-       is reinhard and whose headroom is `fit_range.headroom_stops`; the black point's
+       is reinhard and whose highlight range is `fit_range.headroom_stops`; the black point's
        surviving half is display black, `fit_range.dark_end` `{"black": <stops>}`
        (where the film base renders); and `linear_range`, the levels remap, retired:
        its gain is `scene_correction.exposure` and its black is display black. Drop it
@@ -1008,7 +1008,7 @@ where a picture is made contrasty or warm.
 
 | Flag | Recipe (`reconstruction.`) | |
 |---|---|---|
-| `--density-scale R,G,B` | `scale` | per-channel density gain — **default `1,0.84,0.73`**, see below |
+| `--density-scale R,G,B` | `scale` | per-channel density scale — **default `1,0.84,0.73`**, see below |
 | `--density-offset R,G,B` | `offset` | per-channel density offset (orange-mask compensation), default `0,0,0` |
 | `--density-gamma G` | `linearization` | the film's linearization, default `1.8` |
 | `--anchor-mid-offset D` | `anchor` = `{"mid-at-base-offset": D}` | where mid-grey sits above the base, default `0.62` |
@@ -1063,19 +1063,19 @@ usage: --anchor-mid-fraction was removed: it pinned mid-grey at a fraction of th
 > **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
 > the base, rounded and frozen. The anchor stays referenced to the base: a roll's own
 > white acts through the look's slope, from the `roll.white_stops` that
-> `measure-roll` measures (§7), not by moving `D`. The per-channel density gain beside it has moved twice
+> `measure-roll` measures (§7), not by moving `D`. The per-channel density scale beside it has moved twice
 > (`pipeline_version` 4 and 5 — see below). Expect further movement, with a
 > `pipeline_version` bump when it happens.
 
-### The density gain
+### The density scale
 
 **`--density-scale` does not default to `1,1,1`.** It is `1,0.84,0.73` — a
 calibration, not an identity. Green and blue density rise faster than red in a scan,
-so with no gain they drift against it across the tone scale, which shows up as a
+so with no scale they drift against it across the tone scale, which shows up as a
 tone-dependent cast rather than an overall one.
 
 The values come from **31 hand-marked neutral patches** across five rolls: per patch,
-the gain that renders it neutral; per roll, the median; the default is the mean of the
+the scale that renders it neutral; per roll, the median; the default is the mean of the
 five roll medians (green `0.837`, blue `0.733`). Rolls are weighted equally on purpose
 — two thirds of the patches come from one scan date, and weighting by patch would let
 that date set the default on its own.
@@ -1158,7 +1158,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | white balance / base slope | the roll's; without them neutral / ≈1.414, and a warning | neutral / ≈1.414, pinned |
 | saturation over the base slope's colour | 1.15 | 1, pinned |
 | highlight desaturation | 0.8 | off |
-| dark end / headroom | the target at 5.5 / 6 | display black at 6 / 6, pinned |
+| dark end / highlight range | the target at 5.5 / 6 | display black at 6 / 6, pinned |
 | destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
 
 `default` is Hanten's picture from what was measured; `direct` loses as little as it
@@ -1300,13 +1300,12 @@ grade is off.
 | `--channel-grade R,B` | `look.channel_grade` | red and blue exponents pivoted at mid-grey, green fixed at 1; default `1,1` (off); both positive, with the spread over `R,1,B` under 1 |
 | `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; unstated, `0.8` (off under `--rendering direct`); `0` is off |
 | `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (unstated, `-1`) |
-| `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (unstated, `0.015,0.025`) |
+| `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the chroma band (unstated, `0.015,0.025`) |
 
 - **It only touches near-neutral highlights.** Its strength rises from `start_stops`
   up to diffuse white, and falls to nothing across the band: a pixel whose channels
   differ by more than `S1` (measured as `log10(max/min)` over `--density-gamma` × the
-  saturation slope, so the band means the same density spread on a flat roll and a
-  saturated one) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
+  saturation slope, so the band means the same on a flat roll and a saturated one) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
 - **It assumes the roll's white balance.** "Near-neutral" means near R = G = B, which
   is near white only after `measure-roll`'s gains have removed the roll's cast.
 - **Contrast is the slope, pivoted at mid-grey, on luminance**: mid-grey stays put and
@@ -1384,7 +1383,7 @@ mid-grey stays where the decode put it. It also places the dark end (below). Its
 |---|---|---|
 | `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` is the identity |
 | `--dark-floor STOPS\|off` | `fit_range.dark_end` = `{"floor": STOPS}` | the floor: the frame's measured darkest 1 % no deeper than this, in stops below mid-grey on the display, `(0, 16]` |
-| `--dark-target STOPS\|off` | `fit_range.dark_end` = `{"target": STOPS}` | the target: the frame's measured darkest 1 % at this depth, lifted or pushed down, `(0, 16]`; unstated under `default`, `5.5` |
+| `--dark-target STOPS\|off` | `fit_range.dark_end` = `{"target": STOPS}` | the target: the frame's measured darkest 1 % at this depth, raised or pushed down, `(0, 16]`; unstated under `default`, `5.5` |
 | `--display-black STOPS\|off` | `fit_range.dark_end` = `{"black": STOPS}` | display black: the film base at this depth, `(0, 16]`; unstated under `direct`, `6` |
 
 The three set one key, so they are refused together; any one's `off` (`"off"`) leaves the
@@ -1423,7 +1422,7 @@ non-finite channel is refused (exit 1, naming the pixel) rather than passed to t
 encoder.
 
 `--display-tone-headroom 0` is also how to see the decode's highlights unrolled; to
-size the headroom for a roll, read `.loss.clipped_high` against `.loss.total_samples`
+size the highlight range for a roll, read `.loss.clipped_high` against `.loss.total_samples`
 on a representative frame.
 
 #### The dark end
@@ -1437,10 +1436,10 @@ is graded with the frame's own white balance, exposure and slope.
 
 **The floor** (`--dark-floor`; 4.5 stops, about L\* 7, was the default) holds a frame's
 darkest 1 % — its `dark_stops`, which `hanten measure-roll` measures — no deeper than
-that. A frame whose darkest 1 % renders deeper is lifted to it; a lighter one is left
+that. A frame whose darkest 1 % renders deeper is raised to it; a lighter one is left
 alone. Below its darkest 1 % the shadows rise by the same factor, so their texture is
 kept. At the default slope the roll's envelope already holds the dark end above it, so
-the floor lifts almost nothing (2 of 226 measured frames, by 0.05 stop); it acts on a
+the floor raises almost nothing (2 of 226 measured frames, by 0.05 stop); it acts on a
 frame wider than the placement can fit, and under a steeper `--contrast`:
 
 ```console
@@ -1449,7 +1448,7 @@ $ hanten convert 1774.tif -o out … --contrast 1.3 --dark-floor 4.5 | jq -c '.c
 ```
 
 `frame_dark_stops` is where the darkest 1 % would have rendered, and `shift_stops` the
-lift (`5.17 − 0.67 = 4.5`). The rendered darkest 1 % lands near the floor, at
+raise (`5.17 − 0.67 = 4.5`). The rendered darkest 1 % lands near the floor, at
 L\* 7–8 on the reviewed rolls.
 
 - **Without a measured dark end it does nothing**: `frame_dark_stops` is `null`. Stated
@@ -1457,15 +1456,15 @@ L\* 7–8 on the reviewed rolls.
   give this frame its tones (`roll.frames` is keyed by file name). Under `direct`,
   which leaves the roll out, a typed `--dark-floor STOPS` is refused before anything is
   decoded (its `off` is accepted: it turns `direct`'s display black off).
-- **The lift is capped** at a third of the stops between the darkest 1 % and mid-grey,
+- **The raise is capped** at a third of the stops between the darkest 1 % and mid-grey,
   so the shadows never flatten below half their contrast; a frame sunk that far stays
   under the floor, and the report warns, naming `--contrast` and `--exposure`.
 - **Fewer stops, a lighter floor.** `off` turns it off. Chosen by review on whole rolls
   (`nf-display-stages/midtone-contrast-toe`); the target replaced it as the default.
 
 **The target** (`--dark-target`, the default at 5.5 stops, about L\* 3.6) reads the
-same darkest 1 % as the floor but moves it **either way** onto its depth: lifted when
-deeper, as the floor lifts, and pushed down when lighter. Under `--placement frame`
+same darkest 1 % as the floor but moves it **either way** onto its depth: raised when
+deeper, as the floor raises, and pushed down when lighter. Under `--placement frame`
 every ordinary frame's darkest 1 % would render about 4.26 stops under mid-grey (about
 L\* 8.5), above the floor, so the floor left it there; the target takes each frame to
 the same black:
@@ -1483,7 +1482,7 @@ $ hanten convert 2100.tif -o out --params roll.json --placement frame --dark-tar
   shadows, without a warning; one at or above mid-grey is left alone.
   On that roll the default (hybrid) placement renders the darkest 1 % about 2.0 stops
   under mid-grey, so the cap stops it at about 3.4.
-- **A lift is capped and warned about** as the floor's is; without a measured dark end
+- **A raise is capped and warned about** as the floor's is; without a measured dark end
   it does nothing and, stated, warns; under `direct` a typed `--dark-target STOPS` is
   refused, as `--dark-floor` is.
 - **Unlike display black it follows the picture, not the film base**, which renders at
@@ -1528,8 +1527,8 @@ hue: never clipped channel by channel, it moves toward neutral at the same lumin
 until it fits. The one exception is a colour whose luminance there is zero or below,
 which has no in-gamut rendition and is written black. It has no knobs — its ceiling is
 fit range's display peak and its gamut the destination's — so its recipe section stays
-empty. What can still clip is content brighter than fit range's headroom, which reaches
-the encoder above display white as a neutral: counted in `loss`, and failed by
+empty. What can still clip is content brighter than fit range's white point, which reaches
+the encoder above the display peak as a neutral: counted in `loss`, and failed by
 `--strict`.
 
 ### `measure-roll` — a roll's white balance, midtone line, white and exposure, measured once
@@ -1787,7 +1786,7 @@ white at or under the **cap** (+2.0), raised to at least the **floor** (+1.5); `
 says which limit set it (`none`, `floor`, or `cap` when every frame is above it).
 
 **The roll's dark end** is measured per frame too: each frame's `dark_stops` is the 1st
-percentile of its luma in linear ACEScg, in scene stops, and the roll's
+percentile of its luminance in linear ACEScg, in scene stops, and the roll's
 (`white.dark_stops`) is the 10th percentile of those over its picture frames, so its
 darkest content sets it but not its single darkest frame. `slope` is the look's slope at
 `--contrast 1`: it spreads the span from the dark end to the white over 9.049 stops,
@@ -1824,8 +1823,8 @@ dark end.
   `--contrast` multiplies past it.
 
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
-`level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
-mid-grey, over the pixels with positive luma; the exposure (`exposure.ev`) brings the
+`level_stops` is the log-average of its luminance in linear ACEScg, in scene stops from
+mid-grey, over the pixels with positive luminance; the exposure (`exposure.ev`) brings the
 **median** frame level to mid-grey (`target_stops` 0), where a light meter would put it, so one night scene or one bright frame does not set it. A frame darker than its roll stays
 dark, beyond a small lift (below) — it renders what is on the film. The exposure is limited to ±3 EV (`bound_ev`); a
 roll that needs more warns (`bounded: true`), and `measure-roll --strict` refuses it.
@@ -1916,21 +1915,21 @@ With the lift on, the exposure applied is the sum (`chain.scene_correction.expos
 0.65). `roll.small_lift` is the same switch in a recipe, so a `--frames` manifest can
 turn one frame's lift off.
 
-**A flat frame gets no lift**: one whose luma spans under a stop from its p5 to its p95
+**A flat frame gets no lift**: one whose luminance spans under a stop from its p5 to its p95
 (`spread_stops`, against `small_lift.flat_spread_stops`) — one surface filling the frame,
 like a close-up of water — reports `"flat": true` and `lift_ev` 0. On the ten reviewed
 rolls two frames were flat, and review preferred no lift on both.
 
 **A thin frame gets a bigger lift** in place of the small one. A frame
 qualifies when its white renders at or under +0.9 stop after the roll's exposure
-(`thin_lift.white_stops`) and at least 30% of its luma sits within a stop of the film
+(`thin_lift.white_stops`) and at least 30% of its luminance sits within a stop of the film
 base (`base_share`, `thin_lift.base_share`): its shadows are on the base. That holds for
 an underexposed frame and for a night scene alike. Its white then rises about a stop
 (`thin_lift.lift_stops`) with the film base held about where its small lift renders it
 (the pair is solved from that render) — a steeper slope and the exposure that keeps the
 base still, in place of the small lift. Both lifts apply at the roll's placement
 (`--placement roll`); the hybrid replaces them.
-"About": the white is read in film RGB, the base as luma before the roll's gains. The
+"About": the white is read in film RGB, the base as luminance before the roll's gains. The
 slope is bounded at 2.4 (`slope_bound`): grain rises with it. A frame the bound holds
 under a full stop is listed in `thin_lift.bounded`, and a thin frame no thin lift fits —
 it has its small lift only — in `thin_lift.unlifted`; disclosed, not warned about, so
@@ -2132,7 +2131,8 @@ container can carry — `hdr_coded_tiff` for the PQ/HLG TIFFs, `hdr_linear_tiff`
 float TIFF, whose `pixel_contract`, `linear_domain` and embedded profile name its gamut
 (in a `roll` report, on each frame). The gain-map JPEG, like the SDR TIFF, has no such
 block: its base is SDR, which its embedded profile and `chain.destination` define;
-`chain.gain_map` states the map, and its headroom is `chain.fit_range.display_peak`.
+`chain.gain_map` states the map, and the HDR headroom it declares is `log2` of
+`chain.fit_range.display_peak`.
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --transfer pq | jq -c '.hdr_coded_tiff | {reference_white_nits,target_peak_nits,tone_curve,cicp,max_cll_nits,max_fall_nits}'
@@ -2515,7 +2515,7 @@ measured default:
   ```
 
 - **Pushed up**, on a frame `measure-roll` measured (its `tones`): its middle lands more
-  than 1.5 stops above mid-grey *and* its dark end (luma p1) less than 1.5 under it,
+  than 1.5 stops above mid-grey *and* its dark end (luminance p1) less than 1.5 under it,
   before the dark end is moved. A
   flat frame centred at mid-grey never trips this, and a one-stop `--exposure` lift
   warns on about a quarter of real frames. Lower `--exposure`.
@@ -2532,7 +2532,7 @@ All three read where the frame's grade places it, never the image; a stated whit
 balance counts as the exposure it is on luminance. With display black
 on, black places the base itself and only its own warning applies (§7, "The dark end").
 
-Fit range compresses the scene against its headroom, so on both test fixtures **a
+Fit range compresses the scene's highlight range into the display, so on both test fixtures **a
 default render does not clip**. A clip warning therefore means something pushed samples
 past fit range's reach — most often **exposure** (`--exposure 12` clips 100% of a frame)
 or a `--display-tone-headroom` too small for the content. Check those before anything
@@ -2671,7 +2671,7 @@ file `hanten measure-roll … --out` writes). `--base-region X,Y,W,H` also works
 is the way to get a value in the first place; with no unexposed film on the roll at all,
 `hanten measure-roll <frames> --base-content` estimates one (§4).
 
-**"the effective area is not uniform … it does not look like unexposed film"**
+**"the effective area does not look like unexposed film …"**
 `measure-base` was given a picture frame. Give it the roll's unexposed frame, or, if the
 roll has none, a region of unexposed film on another frame (`--base-region`).
 
@@ -2706,10 +2706,10 @@ usage: the film base renders to luminance 0 after the decode, scene correction a
 A base read from a region is checked as if it were 1, and the message says so.
 
 **Heavy clipping in the report**
-Fit range does not clip ordinary content at its default headroom, so something pushed
+Fit range does not clip ordinary content at its default highlight range, so something pushed
 content past it: a positive `--exposure`, too little `--display-tone-headroom`, or a
-low anchor (`--anchor-mid-offset` smaller than the default). Lower the exposure, raise
-the headroom, move the anchor up, or write a float output (`--transfer linear` with a
+low anchor (`--anchor-mid-offset` smaller than the default). Lower the exposure, widen
+the highlight range, move the anchor up, or write a float output (`--transfer linear` with a
 `--gamut`, or `--film-master`) for an unclamped result.
 
 **"no roll measurement: rendered with …"**

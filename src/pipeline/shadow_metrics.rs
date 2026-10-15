@@ -174,7 +174,7 @@ fn frozen_reference(recipe: &Path) -> FilmBase {
 ///
 /// Reading roles from the manifest rather than globbing the directory is load-bearing:
 /// a patch proposal over a *leader* or *unexposed* frame is meaningless (a leader is a
-/// near-uniform field at ~`Dmax`; an unexposed frame is the base at `D′ ≈ 0`), and an
+/// near-uniform field at ~`Dmax`; an unexposed frame is the base at `D ≈ 0`), and an
 /// early version of this harness silently ranked "shadow" and "diffuse white" tiles on
 /// both.
 struct Roles {

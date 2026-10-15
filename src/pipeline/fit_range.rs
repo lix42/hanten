@@ -238,8 +238,8 @@ impl DarkEnd {
     }
 }
 
-/// The display's peak, relative to diffuse white — the one argument the two display
-/// branches differ in.
+/// The display's peak, relative to reference white (display `1.0`) — the one argument
+/// the two display branches differ in.
 ///
 /// Checked, so an unusable peak cannot reach the operator: below `1.0` the lift would
 /// *darken* above diffuse white, and a non-finite one poisons every bright pixel.
@@ -250,7 +250,7 @@ impl DarkEnd {
 pub struct DisplayPeak(f32);
 
 impl DisplayPeak {
-    /// An SDR display: diffuse white is the peak.
+    /// An SDR display: reference white is the peak.
     pub const SDR: Self = DisplayPeak(1.0);
 
     /// The largest representable peak: PQ's 10,000 nits over 203-nit reference white.
@@ -261,14 +261,14 @@ impl DisplayPeak {
         if !peak.is_finite() || !(1.0..=Self::MAX).contains(&peak) {
             return Err(NcError::Other(format!(
                 "fit range's display peak must be finite and within [1, {}] times \
-                 diffuse white, got {peak}",
+                 reference white, got {peak}",
                 Self::MAX
             )));
         }
         Ok(DisplayPeak(peak))
     }
 
-    /// The peak as a multiple of diffuse white.
+    /// The peak as a multiple of reference white.
     pub fn value(self) -> f32 {
         self.0
     }
@@ -429,7 +429,7 @@ impl ResolvedDarkEnd {
             return (lands > floor + 1e-3).then(|| {
                 format!(
                     "the frame's darkest 1 % renders {dark:.2} stops under mid-grey, so far \
-                     that the {what}'s lift stops at its cap (a third of the way to \
+                     that the {what}'s raise stops at its cap (a third of the way to \
                      mid-grey, so the shadows keep at least half their contrast): it lands \
                      {lands:.2} stops under, below the {what}'s {floor}. The frame is very \
                      steep or very dark: lower `--contrast` (recipe `look.contrast`) or raise \
@@ -489,7 +489,7 @@ pub struct FitRange {
     pub headroom_stops: f32,
     /// Reinhard's white point, `2^headroom_stops`.
     pub white_point: f32,
-    /// The display's peak, as a multiple of diffuse white.
+    /// The display's peak, as a multiple of reference white.
     pub display_peak: DisplayPeak,
     /// Where the dark end landed on the display.
     pub dark_end: ResolvedDarkEnd,
@@ -1146,7 +1146,7 @@ mod tests {
             .dark_end;
         assert!((t.shift_stops - r.shift_stops).abs() < 1e-6, "{t:?}");
         let w = t.warning().expect("warned");
-        assert!(w.contains("dark target's lift stops at its cap"), "{w}");
+        assert!(w.contains("dark target's raise stops at its cap"), "{w}");
         assert!(w.contains("below the dark target's 5.5"), "{w}");
         let o = operator(&p);
         let slope = |v: f32| (o.apply(v * 1.001) / o.apply(v)).ln() / 1.001f32.ln();

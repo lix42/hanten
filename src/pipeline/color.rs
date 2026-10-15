@@ -7,7 +7,7 @@
 //! film master's pixels are already linear ACEScg, so [`icc_profile`] only tags them
 //! (AP1, ~D60, linear). The HDR profiles are built for their encoders below.
 //!
-//! Values may leave `[0, 1]` after a gamut remap; range clamping and clipping
+//! Values may leave `[0, 1]`; range clamping and clipping
 //! warnings are the encoder's job ("fail loudly" at encode), not this stage's.
 
 use lcms2::{
@@ -28,8 +28,7 @@ use crate::types::{LinearImage, NcError, Result};
 pub enum OutputSpace {
     AcesCg,
     /// Display P3 SDR: P3 primaries, D65 encoding white, piecewise sRGB TRC.
-    /// The standardized wide-gamut SDR destination (and the planned gain-map
-    /// base).
+    /// The standardized wide-gamut SDR destination, and a gain-map base.
     ///
     /// Every caller hands it pixels already in the P3 primaries, so its transform
     /// is a pure transfer-encode (see [`display_p3_transfer_profiles`]).

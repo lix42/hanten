@@ -80,7 +80,7 @@ pub const NOTES: &[Note] = &[
     value(
         "reconstruction.scale",
         "--density-scale",
-        "per-channel density gain R, G, B",
+        "per-channel density scale R, G, B",
     ),
     value(
         "reconstruction.offset",
@@ -135,19 +135,22 @@ pub const NOTES: &[Note] = &[
     value(
         "look.highlight_desaturation.band",
         "--highlight-desaturation-band",
-        "saturation band S0, S1",
+        "chroma band S0, S1",
     ),
-    section("fit_range", "the display tone; null: the rendering's"),
+    section(
+        "fit_range",
+        "compresses the range into the display; null: the rendering's",
+    ),
     value(
         "fit_range.headroom_stops",
         "--display-tone-headroom",
-        "stops above reference white; 0 is the identity",
+        "highlight range: stops above diffuse white; 0 is the identity",
     ),
     value(
         "fit_range.dark_end",
         "--dark-target",
         "{\"target\": S}, the frame's darkest 1 % at S display stops below mid-grey, \
-         lifted or pushed down; {\"floor\": S}, it no deeper than S (--dark-floor); \
+         raised or pushed down; {\"floor\": S}, it no deeper than S (--dark-floor); \
          {\"black\": S}, the film base at S (--display-black); or \"off\"",
     ),
     section("fit_gamut", "no settings yet"),

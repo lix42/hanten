@@ -1,72 +1,61 @@
 ---
 title: Value-domain terminology & Dmin/Dmax clarity
-status: todo
+status: done
 deps: [core/pipeline-orchestration]
 tags: [post-mvp, cleanup]
-summary: extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear
+summary: one terminology doc (value spaces + per-stage quantities, public vs internal) and an agent skill; "film base" leads over `Dmin` in user-facing text
 ---
-# Value-domain terminology & Dmin/Dmax clarity
-
-> **From TASKS.md** (migrated 2026-10-14): extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
->
-> **Dependency note** (migrated 2026-10-14): **preserves data flow**
+# Value-domain terminology
 
 ## Goal
 
-Make nc's value-domain terminology — especially `Dmin`/`Dmax` — easy to
-understand, use, and maintain for **both people and agents**. This is a clarity /
-representation task: it improves understandability, operability, and
-maintainability **without changing the data flow** (the pipeline stages and the
-transformations they perform). It may well change code — e.g. splitting two values
-into four, new value types, or CLI/recipe surface — it just does not re-route the
-pipeline.
+Make Hanten's terminology easy to understand and use consistently, for people and
+agents, without changing the data flow or any public identifier.
 
 ## Why
 
-The design-spec §4 "Terminology & value domains" content is correct but buried in
-the spec and awkward to reference. And `Dmin`/`Dmax` are a recurring source of
-**human** confusion (agents cope better): they are named as a pair but live in two
-different measurement systems — `Dmin` is a per-channel *transmission*, `Dmax` is a
-scalar *density*. This has had to be re-explained repeatedly.
+Two kinds of confusion keep recurring:
 
-## Scope (kept deliberately high-level — brainstorm specifics when executing)
+- **Value spaces.** design-spec §4's "Terminology & value domains" is correct but
+  buried under "Input formats". `Dmin` is named for a density but is a per-channel
+  *transmission*.
+- **The multiplier family.** `slope`, `gain`, `contrast`, `scale`, `linearization`,
+  `gamma`, `exposure`, `offset`, `tilt`, `headroom` … Each stage tends to own one word
+  (`scale` in the decode, `contrast` in the look), but some words, `slope` above all,
+  are used across stages for different quantities, and some quantities go by
+  several words.
 
-1. **Extract the terminology.** Pull "Terminology & value domains" out of
-   `design-spec.md` into its own standalone doc so people and agents can track and
-   reference it directly (design-spec links to it). Add an **agent skill** so agents
-   consistently use the correct terms in naming and docs.
-2. **Clearer Dmin/Dmax definition.** Give them a human-friendly definition that, at
-   minimum, stops pairing two different measurement systems under similar names.
-   Possibly introduce explicit named values/terms (e.g. `TransClear` /
-   `TransBlocking` alongside `Dmin` / `Dmax`) — to be decided at execution.
+## Scope (rescoped 2026-10-14)
 
-3. **The `dmax` move is no longer here.** Moving `dmax` out of `reconstruction.curve`
-   into a top-level `calibration` section beside `film_base` (decided 2026-08-11) is a
-   schema change three workflow tasks depend on, so it is its own task:
-   [`core/calibration-recipe-section`](calibration-recipe-section.md). This task keeps
-   the documentation, skill and help-text work only, and changes no code path.
-4. **Keep the name `dmax`.** An earlier revision of this task proposed
-   `--reference-density`; that was **overruled 2026-08-11**. `dmax` accurately
-   names the maximum density, and "reference" does not connote the top end at
-   all. The historic confusion was never the word but the *role* — reading it as
-   "the density that renders to white" — and `anchor` now carries that role
-   explicitly. What does still need fixing is `--d-max`'s help text, which calls
-   it a "display-white anchor" and has been wrong since the split.
-   **Avoid a symmetric pair** (`--d-min`/`--d-max`, or base/ceiling): `Dmin` is a
-   per-channel *transmission* and `Dmax` a scalar *density*, so symmetric naming
-   would encode into the CLI exactly the conflation this task exists to remove.
+1. **Inventory** every meaning of the multiplier family and the value-space terms:
+   stage, value space, **public** (flag, recipe key, report field, message) or
+   **internal** (identifier, comment), and every word in use for it. The user reviews
+   the proposed canonical term set before anything is written.
+2. **`docs/terminology.md`**: value spaces (from design-spec §4, which keeps a short
+   summary and a link), quantities by stage, each marked public or internal, and the
+   known collisions. `algo::fixed`'s "Five quantities" table moves there too.
+3. **"Film base" leads over `Dmin`** in user-facing text (help, messages, the guide);
+   `Dmin` stays a defined alias.
+4. **Prose follows the doc**: guide, spec, doc comments where a word misleads.
+5. **A thin agent skill** pointing at the doc, plus the `CLAUDE.md` and agent-primer
+   pointers.
+
+Out of scope:
+
+- **Renaming code identifiers.** That is a follow-up task, filed from the inventory.
+- **Changing public flags, keys and fields.** They are the scripting contract; a bad
+  one gets its own task with a migration.
+
+Already done elsewhere:
+
+- `dmax` was retired by `nf-retire/dmax-machinery`, so the old `--d-max` help-text
+  item is moot.
+- `dmax`'s move into `calibration` was `core/calibration-recipe-section`.
 
 ## Constraints
 
-- **Preserve the data flow.** The pipeline stages and the transformations they
-  perform must not change. Code changes are expected (new value types/terms,
-  CLI/recipe surface, mechanical renames) — this is about how values are
-  *represented and named*, not how data moves through the pipeline.
-- Terminology and definitions must stay **stock-general** — nc supports extreme
-  stocks (e.g. Harman Phoenix) even though it does not optimize for them.
-
-> Intentionally light on detail: the concrete term set and doc/skill structure are
-> to be brainstormed when the task is picked up.
+- Preserve the data flow. No pixel, recipe or report changes.
+- Terms stay stock-general.
 
 ## Dependencies
 

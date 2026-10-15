@@ -152,76 +152,21 @@ nothing in the negative algorithm needs to know the on-disk container.
 
 ### Terminology & value domains
 
-**Read this before using "high", "low", "bright", or "dark" anywhere in the code
-or docs.** A pixel passes through several value *spaces* between scan and output,
-and one runs **backwards** relative to the others, so an unqualified "high value"
-is ambiguous. Everything below is **per channel** (RGB) — each pixel carries three
-values in every space; the lone exception is the anchor `A` (a scalar, below). The IR
-plane is a separate single channel, read only by holder detection and dropped at the
-fixed decode (§6.1).
+**[`docs/terminology.md`](terminology.md) is the definition** of every value space,
+kind of stops, operation word (gain, scale, slope, contrast, gamma, exposure, lift),
+reference point and colour term, each tagged public or internal, with the known public
+misnomers. Read it before using "high", "low", "bright" or "dark", or any of those
+words. The summary:
 
-| Space | Meaning | "Higher" means | Range (`f32`) | Where in code |
-|---|---|---|---|---|
-| **transmission** (raw scan value) | fraction of light the film passes | more transparent film, thinner negative, brighter pixel *in the raw scan* — a **darker** scene | `[0, 1]` (= `u16`/65535) | `io::decode`, `Scan.image.rgb` |
-| **film base / `Dmin`** | the unexposed film's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate`, `film_base::measure_area` |
-| **density `D` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `D′ = scale·D + offset` (per-channel corrected density, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `D′` shifted by the offset | inside `algo::fixed::decode`, fused per sample (never a buffer) |
-| **NC film RGB v1** (`FilmRgbImage`) | the fixed decode's positive: how much light each dye layer received, declared linear Rec.709/D65 (§7.5) | **brighter** positive — a **brighter** scene | unclamped `f32`; mid-grey `0.18` at the anchor rule's placement | `algo::FilmRgbImage`, `algo::fixed::decode` |
-| **linear ACEScg** (`AcesCgImage`) | NC film RGB v1 mapped into linear ACEScg/D60; keeps film/lens/development/scanner character and is not physical scene recovery. The working space of every rendering stage up to fit gamut | **brighter** rendered value | unclamped `f32`; the datasheets' diffuse white decodes to ≈0.80 here, and reaches `1.0` only after the look's contrast (`algo::fixed::DIFFUSE_WHITE`) | `pipeline::working_space`, then the stage modules of `pipeline::chain` |
-| **display-referred positive** | after fit range and fit gamut: display-linear, in the destination's gamut, `1.0` = reference white (203 cd/m²) | **brighter** rendered value | `≥ 0`; content past fit range's white point exceeds the peak and is clamped at the encode (at the HDR hand-off on an HDR destination), counted | `pipeline::fit_gamut::DisplayReferredImage` |
-| **output sample** (terminal) | the written image value | brighter | destination-defined integer or float encoding | `io::encode`, `io::iso_gain_map` |
-
-**The one rule.** As the depicted **scene luminance rises**:
-`transmission ↓ · density ↑ · positive ↑ · output ↑`. Transmission is the only
-axis that falls.
-
-**"bright" / "dark" / "highlight" / "shadow" always mean the *scene's*
-luminance** — never a raw pixel value. A scene highlight is the **densest**
-negative and the **lowest** transmission; a scene shadow (including the unexposed
-base) is the **thinnest** negative and the **highest** transmission. So in any
-mixed or ambiguous context never call a high-transmission value "bright" — say
-"high-transmission". (A module working *purely* in the raw-scan transmission
-domain may adopt a local "'bright' = raw-scan transmission" convention, stated
-with an explicit §4 cross-reference.) When
-naming a numeric value, name its space: "high density", "high transmission",
-"bright positive".
-
-**The film-base paradox.** The unexposed base is at once the **highest
-transmission**, **zero density** (`D = 0`), and renders to **near-black positive** —
-it depicts scene black. *Brightest in the scan = darkest in the positive.*
-
-**`Dmin`** is the film base **transmission** — the divisor the conversion anchors
-on. It is the per-channel *relative* maximum (no **genuine picture** pixel
-out-transmits it — dust, specular highlights, hot pixels, or noise can, which is
-why `D` can dip `< 0`),
-**not** a value near 1: the orange mask and scanner gain pull channels down (real
-Ektar base ≈ `[0.53, 0.26, 0.16]`, blue near the bottom). Named for minimum
-*density* but stored as a transmission.
-
-**The anchor `A`** is the corrected density `D′` that renders to positive `1.0`. It
-is a **scalar** pooled across channels (a per-channel anchor would apply three gains
-in `10^(lin·(D′ − A))`, i.e. a white balance, which is scene correction's job) and
-is **derived from the film base**, never measured: `A = d + 0.745/linearization` with
-mid-grey at `d` above the base (§7.2). It is reported, not an input.
-
-**`Dmax`** (historical) named the roll-fixed **reference density** the anchor used to
-be placed from — a nominal constant, a value measured from a light-struck leader, or a
-per-frame percentile. `nf-retire/dmax-machinery` retired it: **it is no longer an input
-anywhere**, and nothing measures, reads or reports it. ⚠️ Distinct from classic
-photographic film `Dmax` (the negative's physical maximum density), from diffuse white
-(a datasheet reference number, `d + 0.36`; `1.0` in the graded image, after the look), and from a roll's content white (not
-measured) — `src/algo/fixed.rs`'s "Five quantities" table keeps them apart.
-
-**Domain glossary.** *rebate* — the unexposed film strip between holder and
-picture; maximum transmission, zero density. *holder* — the opaque scanner carrier;
-near-zero transmission (`< 0.05`). *effective area* — a frame minus its measured
-holder and a static inset (§9 `measure`); `measure-base` reads an unexposed frame's
-`Dmin` over it. *base-region* — a user rectangle sampled for `Dmin`
-(`FilmBaseSource::Region`). *scene white / scene black* — the brightest /
-darkest depicted scene luminance (highest / lowest `D′`). *display (paper) white /
-black* — the output extremes (`1.0` / `0.0`). *uniform / spread* — a stated region is
-uniform when every channel's relative spread `(p97 − p10) / p97 ≤ 0.15`; an effective
-area passes when `(p90 − p10) / p50 ≤ 0.5`, a coarse "is this a picture?" guard.
-"Spread" is that figure.
+- A pixel passes through **transmission → density `D` / corrected density `D′` →
+  film RGB → scene-linear ACEScg → graded ACEScg → display-linear → output sample**.
+- **The one rule.** As scene luminance rises: `transmission ↓ · density ↑ · positive ↑
+  · output ↑`. Transmission is the only axis that falls.
+- **"Bright", "dark", "highlight" and "shadow" mean the scene's luminance**, never a raw
+  value: say "high-transmission", not "bright", for a thin negative.
+- **The film base** (alias `Dmin`) is a per-channel *transmission*, the divisor of
+  density; it renders near-black. **The anchor `A`** is a scalar *corrected density*,
+  derived from it and reported, never an input. `Dmax` is retired.
 
 
 ## 5. Output: the destination set
@@ -286,7 +231,9 @@ destination; an explicit manifest path goes through the same rule as `convert`.
 profile on the SDR TIFF, the gain-map base and the linear float TIFF; a
 `cicp`-tagged A2B profile on the PQ/HLG TIFF; the ACEScg profile
 on the film master. The renderer already produces pixels in the destination's
-primaries, so the encode applies only the transfer, never a second gamut transform.
+primaries, so the encode applies only the transfer, never a second change of primaries.
+HLG's transfer does repeat the gamut map once, in scene-linear BT.2020: its inverse OOTF
+can carry an in-gamut display colour outside the cube (`pipeline::hdr::encode_transfer`).
 **No sidecar is written** (since `pipeline_version` 8): the report carries the
 resolved `recipe`, which reloads through `--params`, and its `identity`. A sidecar an
 earlier build left beside the output is removed, and the report says so
@@ -342,7 +289,7 @@ allocation.
   map requires its two renditions to agree below diffuse white; if contrast or
   character lived in fit range, whose argument is the display's peak, the midtones
   would disagree. So the chain splits after the look, and the branches differ in one
-  argument: the peak. Fit range runs once per branch, but its headroom and display
+  argument: the peak. Fit range runs once per branch, but its highlight range and display
   black are fixed above the split, with the film base graded once for both.
 - **The branch contract** (`pipeline::chain`, checked bit for bit by
   `chain::contract::check`): below diffuse white the two renditions are identical
@@ -363,7 +310,7 @@ allocation.
 — range clamping happens only at the encode, which counts clamped and non-finite
 samples into the report's `loss` for a warning. Per-pixel maps go through
 `pipeline::pixels`, and floating-point reductions run in a fixed order, or output
-stops being byte-identical. Every standards-based matrix, luma vector and transfer
+stops being byte-identical. Every standards-based matrix, luminance vector and transfer
 constant lives in `pipeline::colorimetry` (`docs/colorimetry-maintenance.md`).
 
 ### The rendering stages
@@ -413,13 +360,13 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   the same stops:
   - **The target, `default`'s** (`nf-display-stages/frame-dark-target`): the frame's
     measured darkest 1 % (`roll.frames` entry `tones.dark_stops`), graded by its own
-    slope and exposure, is **placed** 5.5 stops below mid-grey (L\* ≈ 3.6), lifted or
+    slope and exposure, is **placed** 5.5 stops below mid-grey (L\* ≈ 3.6), raised or
     pushed down. A push is capped at two thirds of the way to mid-grey, so a high-key
     frame keeps its light shadows. Without measured tones it cannot act.
   - **The floor** (`nf-display-stages/midtone-contrast-toe`, `default`'s before the
-    target): the same reference, only **lifted**, to no deeper than 4.5 stops (L\* ≈ 7).
+    target): the same reference, only **raised**, to no deeper than 4.5 stops (L\* ≈ 7).
   - **Display black, `direct`'s**: the decoded film base, graded with the frame, is
-    **pushed down** to its target (6 stops), never lifted. It was `default`'s while the
+    **pushed down** to its target (6 stops), never raised. It was `default`'s while the
     roll's slope came from its white alone and left the base pale; with the slope from
     the roll's span and the hybrid placement, it darkened low-key frames throughout
     (`nf-calibration/envelope-hybrid-placement`).
@@ -450,7 +397,7 @@ value is never mistaken for a chosen one. The three are not stages of their own
 base beside it (`chain::render`). The roll's values and the user's are combined into
 the parameters of scene correction, the look and fit range (`Recipe::shared_params`),
 since they act through one operator: the roll's gains times the stated white balance (a
-tilt is applied beside them, in the same stage), its slope times `look.contrast`, its
+tilt is applied beside them, in the same stage), its base slope times `look.contrast`, its
 exposure plus the stated one. A frame's measured dark end (`tones.dark_stops`) is
 placed in fit range, after the frame is graded. `--rendering` chooses the base every stage
 knob starts from, and each has one principle (`crate::rendering`):
@@ -468,11 +415,11 @@ knob starts from, and each has one principle (`crate::rendering`):
 |---|---|---|
 | roll section | not applied, and reported as not applied | applied |
 | white balance | identity | the roll's gains |
-| base slope (`look.contrast` and `look.saturation` multiply it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
+| base slope (`look.contrast` multiplies it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
 | saturation over the base slope's colour (`look.saturation` multiplies it) | 1, pinned | 1.15 |
 | highlight desaturation | off | 0.8 |
 | dark end | display black, 6 stops below mid-grey, pinned | the target, 5.5 stops below mid-grey |
-| fit range | reinhard at 6 stops of headroom, pinned | 6 stops |
+| fit range | reinhard at a 6-stop highlight range, pinned | 6 stops |
 | unset destination axes | HDR, `linear`, Adobe RGB, TIFF, container first (§5) | SDR, `native`, Display P3, TIFF |
 
 - **Display black is on in `direct`** because it does not compress: a monotone
@@ -679,10 +626,10 @@ out_c = 10^(−lin·A) × 10^(lin·offset_c) × (10^(D_c))^(lin · scale_c)
 
 | Knob | Effect | Rendering counterpart |
 |---|---|---|
-| anchor `A` | one gain on all channels | **exactly exposure** — a scalar commutes with the 3×3 |
-| `offset[3]` | a per-channel gain, constant at every brightness | white balance, but in film-layer space *before* the 3×3, so not the same operator (≈2.6 % apart on a neutral) |
+| anchor `A` | one gain on all channels | equivalent to an exposure change — a scalar commutes with the 3×3 |
+| `offset[3]` | a per-channel gain, constant at every brightness | white balance, but in film RGB *before* the 3×3, so not the same operator (≈2.6 % apart on a neutral) |
 | `scale[3]` | a per-channel exponent: how fast each channel grows with exposure | the pivoted per-channel grade — same symptom, different basis |
-| linearization | overall slope | the look's contrast on luminance, its saturation slope on colour |
+| linearization | the decode's slope | the look's tone slope on luminance, its saturation slope on colour |
 
 A counterpart acts after the 3×3, so it addresses the symptom rather than the error.
 Only the products `linearization · scale_c` enter, pinned by the convention
@@ -708,7 +655,7 @@ bracketed calibration frames. Moving one moves every default pixel, so it costs 
   the film master, the roll's gains and `scale` rely on. Print contrast is the look's
   slope. The single `2.0` the removed chain shipped bundled both.
 - **`d` and the linearization are fixed nominal values, not per-stock ones.** Both
-  are per stock in the datasheet registry (`d` 0.542–0.699, i.e. 1.06 stops at gamma 2;
+  are per stock in the datasheet registry (`d` 0.542–0.699, i.e. ≈0.94 scene stops at the default linearization;
   red film gamma 0.53–0.61, `film_stock/`), and choosing either per stock would be per-stock exposure and contrast normalization
   inside a decode declared stock-agnostic. Fixed values let film speed and stock
   contrast show through, which is the faithful behaviour.
@@ -785,14 +732,14 @@ stocks is character:
 |---|---|---|
 | neutral balance | grey prints grey | not character: every stock is designed neutral under its rated light |
 | illuminant cast | tungsten light on daylight film | a scene fact; kept by the decode, decided by white balance |
-| colour rendering | Ektar's saturation and hue shifts | real character, kept automatically: the layers saw the scene through the stock's sensitivities |
+| colour rendering | Ektar's saturation and hue shifts | real character, kept: the layers saw the scene through the stock's sensitivities. How it reads in ACEScg still depends on the NC film RGB v1 declaration (§7.5), and `default` adds its 1.15 rendering saturation on top |
 | tone character | Ektar prints punchier than Portra | real character; kept by the fixed decode, removed only by the optional per-stock normalization |
 
 **NC film RGB v1** is the contract between the decode and rendering. After the
 decode, "R" means how much light the red-sensitive layer received — channels defined
 by the film's own sensitivities, not by any colour space. NC film RGB v1 **declares
 those channels to be Rec.709 primaries with D65 white**, then applies the pinned
-standard transform and Bradford adaptation into linear ACEScg/D60
+standard transform and Bradford adaptation into linear ACEScg (~D60, the ACES white)
 (`pipeline::working_space::map_nc_film_rgb_v1`). The declaration is a convention,
 not a measurement:
 
@@ -816,7 +763,7 @@ not a measurement:
 neutral to within a couple of f32 ULP between channels; what "Rec.709 primaries" declares is moot for one
 signal ([`design/mono.md`](design/mono.md)).
 
-Where the 3×3 should ultimately live — reconstruction output in film-layer space,
+Where the 3×3 should ultimately live — reconstruction output in film RGB,
 with the move into a working space becoming scene correction's — is open (§13).
 
 ### 7.6 Interfaces
@@ -856,7 +803,7 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. In measure mode (`--measure-roll`, or implied by `--unexposed` or `--base-content`) it first measures the roll as `measure-roll` does and layers the measurement last; its report carries it as `measurement` (`docs/design/roll-workflow.md`). |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5); a frame above the cap is clamped to the cap and disclosed. Each frame's dark end is the p1 of its ACEScg luma in scene stops, and the roll's is the p10 over its picture frames; the look's slope spreads the span from the roll's dark end to its white over 9.049 stops, mid-grey pinned, held within the cap's slope and 3.5 (`nf-calibration/span-roll-slope`); a clamped frame's spreads the cap's span instead. The roll's envelope is its frames' lowest dark end and highest white, unclamped; each frame's tones (white, level, dark end) go in its `roll.frames` entry, and the report gives each frame's hybrid placement at the defaults (`frames[].hybrid`, `nf-calibration/envelope-hybrid-placement`) and its per-frame one (`frames[].frame`, `nf-calibration/per-frame-placement`). The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luma (over pixels with positive luma) to mid-grey, within ±3 EV (a bound that binds warns). `--white-balance-form gain|tilt` (unset, the recipe's `roll.white_balance_form`) sets how the gains apply, which the line and the whites are measured after; the form is written as `roll.white_balance_form`, and the white the gains equalize as `roll.white_balance_stops`. Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-dark … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written), and each measured frame's own (`frames[].flag`, adding its tones and lifts); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.envelope_stops` and `roll.frames` giving each measured frame, by file name, its tones, each clamped frame the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `--unexposed auto` and `--leader auto` find those frames among the inputs and leave them out of the pictures, recording each input's class in the report's `references`; a roll with no trustworthy unexposed frame is refused (`core/auto-calibration`). `--base-content` estimates the base from the frames instead, for a roll with no unexposed film (§9 film base, Tier 3). `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
+| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5); a frame above the cap is clamped to the cap and disclosed. Each frame's dark end is the p1 of its ACEScg luminance in scene stops, and the roll's is the p10 over its picture frames; the look's slope spreads the span from the roll's dark end to its white over 9.049 stops, mid-grey pinned, held within the cap's slope and 3.5 (`nf-calibration/span-roll-slope`); a clamped frame's spreads the cap's span instead. The roll's envelope is its frames' lowest dark end and highest white, unclamped; each frame's tones (white, level, dark end) go in its `roll.frames` entry, and the report gives each frame's hybrid placement at the defaults (`frames[].hybrid`, `nf-calibration/envelope-hybrid-placement`) and its per-frame one (`frames[].frame`, `nf-calibration/per-frame-placement`). The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luminance (over pixels with positive luminance) to mid-grey, within ±3 EV (a bound that binds warns). `--white-balance-form gain|tilt` (unset, the recipe's `roll.white_balance_form`) sets how the gains apply, which the line and the whites are measured after; the form is written as `roll.white_balance_form`, and the white the gains equalize as `roll.white_balance_stops`. Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-dark … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written), and each measured frame's own (`frames[].flag`, adding its tones and lifts); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.envelope_stops` and `roll.frames` giving each measured frame, by file name, its tones, each clamped frame the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `--unexposed auto` and `--leader auto` find those frames among the inputs and leave them out of the pictures, recording each input's class in the report's `references`; a roll with no trustworthy unexposed frame is refused (`core/auto-calibration`). `--base-content` estimates the base from the frames instead, for a roll with no unexposed film (§9 film base, Tier 3). `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
 | `hanten profile` | Write a **look** from the conversion flags, with no scan: every recipe key but what belongs to one roll — `calibration`, `roll` and `scene_correction` (whose flags it refuses: a recipe white balance or exposure would warn beside every measured roll) — as annotated JSONC in the §8 envelope, to stdout or `--out PATH` (refused over an existing file unless `--force`). Checked against every rule that needs no pixels, and the render probe at a base thinner than any measured, so a look no base could render is refused; what depends on the base or the scan is checked when it converts. A key the rendering decides is written `null`. It restates the decode, so it is layered before a roll's measured file. `hanten params` is its removed name. |
 
@@ -1574,7 +1521,7 @@ is refused (exit 2), since it asks for something the run will not do.
   low-key frame (`nf-calibration/frame-level-trim`), 0 to +0.3 EV, keyed on where the
   frame's white renders after the roll's exposure. A delta, so it keeps its meaning when
   the roll is re-measured. A thin lift replaces it while that applies. A **flat** frame —
-  its luma spans under a stop from p5 to p95, one surface filling it — gets no lift.
+  its luminance spans under a stop from p5 to p95, one surface filling it — gets no lift.
 - `--small-lift on|off` ⇒ `roll.small_lift` — whether the small lift applies.
 - `--roll-thin-slope SLOPE` ⇒ `roll.thin_slope` and `--roll-thin-exposure EV` ⇒
   `roll.thin_exposure` — a **thin** frame's lift, a preference (§6;
@@ -1583,7 +1530,7 @@ is refused (exit 2), since it asks for something the run will not do.
   `roll.exposure` in place of the small lift. A frame is thin when its white sits low
   after the roll's exposure and its shadows on the film base. The pair raises the
   frame's white about a stop with the film base held about where its small lift renders
-  it (the white is read in film RGB, the base as luma before the roll's gains), within a
+  it (the white is read in film RGB, the base as luminance before the roll's gains), within a
   slope bound (2.4); solved from that render, the pair is the same with the small lift
   off. A frame the bound holds, or one no thin lift fits (it has its small
   lift only), is listed in the report's `thin_lift` section, not warned about. A slope,
@@ -1706,10 +1653,10 @@ or non-zero `scene_correction.exposure` sits beside the roll's — a possible le
 missing-exposure warning.
 
 ### Reconstruction (`reconstruction`, the fixed decode)
-- `--density-scale R,G,B` ⇒ `reconstruction.scale` — the per-channel density gain
+- `--density-scale R,G,B` ⇒ `reconstruction.scale` — the per-channel density scale
   (§7.2). **Default `[1, 0.84, 0.73]`** (`algo::fixed::DENSITY_SCALE`, since
   `pipeline_version` 5): green and blue density rise faster than red in a scan, so
-  without a gain they drift against it across the tone scale. Calibrated from 31
+  without a scale they drift against it across the tone scale. Calibrated from 31
   hand-marked neutral patches over five rolls — each roll's median nulling scale,
   averaged with equal weight per roll. Every roll measured wants blue 0.68–0.78; green
   splits by scan date (July rolls 0.86–0.90, September ~0.77), so `0.84` is a
@@ -1820,7 +1767,8 @@ stage is a bit-exact identity. Controls run in the order listed.
   scene-referred ACEScg: `rgb ← rgb + strength · b · w · (Y − rgb)`, where `b` is a
   smoothstep in stops from `start_stops` (default −1) up to diffuse white, held above
   it, and `w` a linear band over `s = log10(max/min) / (linearization · saturation
-  slope)` — the negative's density spread, the same at any contrast or saturation — full
+  slope)` — the chroma band, a density-equivalent spread measured on the graded
+  image, the same at any contrast or saturation — full
   pull at
   `s ≤ s0`, none at `s ≥ s1` (unset: `0.015, 0.025`). Luminance is kept. `strength` is
   in `[0, 1]`, unset `0.8` under `default` and `0` under `direct`; `0` is off, a
@@ -1849,7 +1797,7 @@ by the curve's limit at black, so the scale is continuous there.
 - `--display-tone-headroom <stops>` ⇒ `fit_range.headroom_stops` — finite, `0`–`24`
   (a value rule, so `roll` and per-frame overrides refuse it before any frame is
   decoded), unset `6` (`W = 64`); `0` is the identity. Beyond ~8 stops the operator
-  converges on plain reinhard and extra headroom buys nothing.
+  converges on plain reinhard and a wider range buys nothing.
 - `fit_range.dark_end` — `{"target": stops}` (`--dark-target`), `{"floor": stops}`
   (`--dark-floor`), `{"black": stops}` (`--display-black`), or `"off"` (any flag's
   `off`); stops `(0, 16]` below mid-grey on the display; unset, the rendering's
@@ -1882,7 +1830,7 @@ by the curve's limit at black, so the scale is continuous there.
     above mid-grey it is skipped.
 
 The report's `chain.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
-`identity` at zero headroom) with its headroom, white point and display peak, and
+`identity` at a zero highlight range) with its highlight range, white point and display peak, and
 `dark_end` with its setting, curve (`log-shift-to-mid-grey-v1` or `identity`), where
 the film base and the frame's darkest 1 % render without it (`film_base_stops`,
 `frame_dark_stops`, `null` without tones) and the shift applied (`shift_stops`).
@@ -2285,7 +2233,7 @@ src/
     ├── roll_white.rs       # measure-roll: the roll's white balance, exposure, and white after its colour correction
     ├── white_balance.rs    # white-balance statistics
     ├── color.rs            # output transfer transforms (lcms2) and ICC blobs
-    ├── colorimetry/        # every standards-based matrix, luma vector and transfer constant
+    ├── colorimetry/        # every standards-based matrix, luminance vector and transfer constant
     ├── pixels.rs           # parallel per-pixel map drivers (byte-identical to a loop)
     ├── memory.rs           # peak-memory sizing model + budget preflight
     ├── chain_golden.rs     # (test) per-pixel goldens for the chain's stages

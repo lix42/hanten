@@ -2,8 +2,8 @@
 //!
 //! The film base is the unexposed film: minimum density, hence **maximum
 //! transmission**. Its per-channel transmission is the divisor of the density
-//! conversion (`D = -log10(scan / Dmin)`), so it sets black point and colour balance
-//! together.
+//! conversion (`D = -log10(scan / base)`), so it sets the black level and its colour
+//! together. `Dmin` is its alias.
 //!
 //! A base is measured from an **area** and a **method**, and nothing else
 //! (`film-base/holder-masked-measurement`):
@@ -12,8 +12,8 @@
 //!   holder cut, then a static inset), read by [`measure_area`] at the per-channel
 //!   **median**. With the holder cut away the area is one population — unexposed film
 //!   plus grain and scanner noise — and an extreme percentile would land in its noise
-//!   tail: p97 sat 0.046 density above the median on a Gold 200 leader, ~0.16 stops
-//!   pale. It measures an *unexposed* frame; over a picture it returns a plausible,
+//!   tail: p97 sat 0.046 density above the median on a Gold 200 leader, ~0.15 stops
+//!   of transmission pale. It measures an *unexposed* frame; over a picture it returns a plausible,
 //!   wrong base, which its uniformity warning exists to catch.
 //! - **A region the user states** ([`FilmBaseSource::Region`]), read at
 //!   [`SAMPLE_PERCENTILE`] (p97). A hand-drawn rectangle may still mix holder, rebate
@@ -64,7 +64,8 @@ pub const AREA_PERCENTILE: f32 = 0.5;
 const AREA_SPREAD_PERCENTILES: [f32; 2] = [0.10, 0.90];
 
 /// Worst per-channel [`AREA_SPREAD_PERCENTILES`] spread above which the effective area
-/// is reported as not uniform — the sign that the frame is not unexposed film.
+/// warns that the frame does not look like unexposed film — a coarse "is this a
+/// picture?" guard, not a uniformity verdict.
 ///
 /// Measured 2026-09-28 over `../nc-assets`: the 9 unexposed frames read 0.06-0.29
 /// (grain and scanner noise, wider on the thinner-scanned 2026-09 rolls; each
@@ -246,9 +247,9 @@ pub fn measure_area(image: &LinearImage, area: &EffectiveArea) -> Result<BaseEst
     let mut warnings = Vec::new();
     if spread > AREA_MAX_RELATIVE_SPREAD {
         warnings.push(format!(
-            "the effective area is not uniform (worst per-channel spread (p90 - p10) / \
-             p50 = {spread:.2} > {AREA_MAX_RELATIVE_SPREAD:.2}): it does not look like \
-             unexposed film, so the median over it is not a film base. Measure an \
+            "the effective area does not look like unexposed film (worst per-channel \
+             spread (p90 - p10) / p50 = {spread:.2} > {AREA_MAX_RELATIVE_SPREAD:.2}), so \
+             the median over it is not a film base. Measure an \
              unexposed frame, or state a region of unexposed film (--base-region)"
         ));
     }
@@ -669,8 +670,8 @@ pub fn content_warnings(est: &ContentBase, name: impl Fn(usize) -> String) -> Ve
 /// holder measurement (`ir-usability-detection`). The declaration keyed on the
 /// film's chemistry; what decides separability is the frame's own accumulated
 /// density, and the two disagree on exactly the frames the calibration workflow
-/// uses — an *unexposed* silver frame (where `Dmin` is measured) separates ~20:1
-/// while a fully-exposed silver leader (where `Dmax` is measured) is uniformly
+/// uses — an *unexposed* silver frame (where the film base is measured) separates ~20:1
+/// while a fully-exposed silver leader is uniformly
 /// opaque and cannot be told from the holder at all.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct IrSeparability {
@@ -990,9 +991,8 @@ pub fn effective_area(scan: &Scan, inset_frac: f32) -> Result<EffectiveArea> {
     // At the default it never binds (a 3600 px frame insets 180 px against an 18 px
     // step); it takes effect only near `--measure-inset 0`, where the residual is
     // otherwise the whole defence — a 9-18 px holder ring is ~1-2% of the region at
-    // `SCAN_EPSILON` density, the size of the top 1% `hanten measure-roll`'s pooled
-    // white (`roll_white::PERCENTILE`, p99) reads. (It was sized against the per-frame
-    // auto `Dmax`'s p99.5, which retired.) A
+    // the density `SCAN_FLOOR` decodes to, the size of the top 1% `hanten measure-roll`'s
+    // pooled white (`roll_white::PERCENTILE`, p99) reads. A
     // stated `0` is therefore not honoured exactly on a measured frame; that is
     // deliberate, and [`EffectiveArea::inset`] reports the **applied** value so the
     // floor is visible rather than silent. Where the holder was *not* measured
@@ -1828,7 +1828,9 @@ mod tests {
         let scan = Scan::from(LinearImage::new(w, h, buf).unwrap());
         let est = measure_area(&scan.image, &effective_area(&scan, 0.05).unwrap()).unwrap();
         assert!(
-            est.warnings.iter().any(|w| w.contains("not uniform")),
+            est.warnings
+                .iter()
+                .any(|w| w.contains("does not look like unexposed film")),
             "{:?}",
             est.warnings
         );

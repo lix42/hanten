@@ -3,10 +3,10 @@
 //! The chain every conversion runs (design-spec §6), fed by the fixed decode
 //! (`algo::fixed`) and rendering into the destination `crate::destination` resolves (`cli::convert_frame`). Scene
 //! correction applies the roll's midtone neutral, white balance and exposure; the look
-//! applies print contrast, saturation and the per-channel grade and desaturates near-neutral
+//! applies the tone slope, saturation and the per-channel grade and desaturates near-neutral
 //! highlights (the rest of its epic fills it); fit range compresses the scene's range against the destination's peak
-//! and places black where the film base renders, and fit gamut maps into the
-//! destination's gamut, keeping hue.
+//! and places the dark end, and fit gamut maps into the destination's gamut, keeping
+//! the linear-RGB hue direction.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
