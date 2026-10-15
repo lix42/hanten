@@ -169,7 +169,9 @@ function Labeller(props: { session: Session }) {
       const stem = s.frames[i]!.stem;
       const prev = s.frames[i - 1]?.stem;
       const seed = seedLabels(
-        !visited.has(stem),
+        // A frame the labels file already has, even empty (cleared and saved), is
+        // never seeded: only one nobody has saved yet.
+        !visited.has(stem) && !(stem in s.labels),
         labels[stem] ?? [],
         prev === undefined ? undefined : labels[prev],
       );
@@ -226,7 +228,10 @@ function Labeller(props: { session: Session }) {
   // say which, by clicking the target's anchor patch.
   const pending = () => {
     if (dirty[frame().stem]) return undefined;
-    const r = (results[frame().stem] ?? []).find((x) => (x.candidates?.length ?? 0) > 1);
+    // Only for the selected target, so another target can still be placed meanwhile.
+    const r = (results[frame().stem] ?? []).find(
+      (x) => x.target === targetId() && (x.candidates?.length ?? 0) > 1,
+    );
     const t = r && s.targets.find((x) => x.id === r.target);
     return r && t ? { result: r, target: t } : undefined;
   };
@@ -502,8 +507,8 @@ function ResultView(props: { result: CheckResult }) {
         <b>{r().target}</b>: {r().pass ? "pass" : "FAIL"}
       </div>
       <div class={styles.dim}>
-        worst spread {r().worst_spread.toFixed(2)} stops; worst gap{" "}
-        {r().worst_gap === null ? "—" : r().worst_gap!.toFixed(2)}; neutral steps{" "}
+        worst spread {r().worst_spread === null ? "—" : r().worst_spread!.toFixed(2)} stops; worst
+        gap {r().worst_gap === null ? "—" : r().worst_gap!.toFixed(2)}; neutral steps{" "}
         {r()
           .neutral_steps.map((x) => x.toFixed(2))
           .join(" ")}

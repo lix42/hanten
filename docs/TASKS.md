@@ -1916,7 +1916,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   split out. Gates
   `nf-calibration/neutrality-gate`, `saturation-margin`, `offset-question`,
   `nf-scene-correction/midtone-neutral-fit` and `io/scanner-density-calibration`
-- [ ] [Label the charts in a frame](tasks/analysis/chart-labeling-tool.md) — a tool to
+- [x] [Label the charts in a frame](tasks/analysis/chart-labeling-tool.md) — a tool to
   mark each target's four corners, check the projected patch grid, and write chart
   entries to `manifest.json`
 - [ ] [Extract the chart patches](tasks/analysis/chart-extraction.md) — one per-patch

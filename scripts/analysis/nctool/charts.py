@@ -407,6 +407,10 @@ def load_labels(path: str) -> dict:
         for i, e in enumerate(labels):
             if errs := check_label(e):
                 raise ValueError(f"{path}: frame {stem} label {i}: " + "; ".join(errs))
+        keys = [(e["target"], e["card"]) for e in labels]
+        if dup := sorted({k for k in keys if keys.count(k) > 1}):
+            raise ValueError(f"{path}: frame {stem} labels {dup[0][0]} on card "
+                             f"{dup[0][1]!r} twice")
     return data
 
 

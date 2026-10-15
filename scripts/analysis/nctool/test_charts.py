@@ -294,6 +294,14 @@ class TestImport(unittest.TestCase):
             cards = [c["card"] for c in json.load(f)["rolls"]["R"]["frames"][0]["charts"]]
         self.assertEqual(cards, ["other"])
 
+    def test_a_labels_file_with_one_target_twice_is_refused(self):
+        path = os.path.join(self.A, "labels.json")
+        label = {"target": CLASSIC, "card": "ccpp2", "corners": CORNERS}
+        with open(path, "w") as f:
+            json.dump({"roll": "R", "frames": {"2127": [label, label]}}, f)
+        with self.assertRaisesRegex(ValueError, "twice"):
+            charts.load_labels(path)
+
     def test_a_failing_label_writes_nothing(self):
         bad = [list(c) for c in CORNERS]
         bad[2][0] += 0.05

@@ -174,8 +174,10 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts import \
   ../temp/chart-labels/<roll>.json --source 'chart-labels <date>'
 ```
 
-`import` re-runs the check and writes nothing if any label fails; it replaces only the
-(target, card) entries it brings. `charts check <labels>` prints the check without
+`import` re-runs the check and writes nothing if any label fails. Each frame the file
+lists loses its entries from the same `--source` (and any for a (target, card) it
+brings) and gains the file's, so a label cleared or re-carded in the tool leaves the
+manifest too; other sources' entries stay. `charts check <labels>` prints the check without
 writing. Both read pixels (the venv). From schema 4 on, `generate` keeps any frame or
 roll field it does not write itself, so the next hand-entered field needs no bump.
 

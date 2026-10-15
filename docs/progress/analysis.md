@@ -171,6 +171,14 @@ What other epics need to know about `analysis`:
   includes a hermetic real-binary `freeze` → `convert` harness test plus a fake
   successful-wrong-container regression. The real-scan verification matrix
   remains manual; CI protects its CLI/recipe/container plumbing.
+- **Where a colour target sits is in the manifest (2026-10-14).** A frame's `charts`
+  (manifest schema 4) holds each target's four corners, in the target's own order, and
+  the placement check it passed; the layouts and the Classic's reference values are in
+  `scripts/analysis/nctool/targets/`. Patch positions are projected from the corners
+  (`nctool.charts`), never stored. `2026-10-12-Gold200`'s bracket (2127-2133) is
+  labelled on both Passport targets. Schema 4 also makes `generate` keep any frame or
+  roll field it does not write, so the next hand-entered field needs no bump. Labels
+  come from the review app's `/label` page (`pnpm label`) via `manifest charts import`.
 
 
 ## real-scan-verification
@@ -1400,7 +1408,7 @@ What other epics need to know about `analysis`:
 
 ## chart-labeling-tool
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-14
 
 - 2026-10-14: filed (user), split from `calibration-frame-capture` with the registration
@@ -1445,6 +1453,16 @@ What other epics need to know about `analysis`:
     shown as warnings. Shifting a sharp label (2131) by a tenth of a patch already lifts
     7-9 of ~55 strips and fails, except the Creative sideways (its gaps are wider); a
     fifth of a patch fails everywhere.
+- 2026-10-14: **done.** Landed as the `/label` page (`pnpm label`) plus
+  `nctool manifest charts check|import`, manifest schema 4. Verified: 2127-2133 on both
+  targets pass and are in the archive manifest (`validate` clean; a dry-run `generate`
+  keeps them and drops nothing); a label moved by a tenth of a patch fails. Review
+  fixes: a label oriented by the anchor click records `oriented` and is checked in that
+  order only; a save merges only into what it sent; import replaces a frame's entries
+  from the same `--source`, so a cleared label leaves the manifest. For
+  `chart-extraction`: read `charts` from the manifest, project patches with
+  `charts.target_to_frame` and sample like `check_placement` (the middle half, from the
+  scan); 2132 is shaken (1 s), so its gaps are soft though its patch middles are clean.
 
 
 ## chart-extraction

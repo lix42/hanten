@@ -110,7 +110,8 @@ export interface CheckResult {
   readonly failures: readonly string[];
   /** Gaps read bright, but too few to say the grid is off (blur, flare). */
   readonly warnings: readonly string[];
-  readonly worst_spread: number;
+  /** `null` when a patch lies off the scan (the label then fails). */
+  readonly worst_spread: number | null;
   readonly worst_gap: number | null;
   readonly neutral_steps: readonly number[];
   /** The corners in the target's own order — the turn that passed, else as given. */
