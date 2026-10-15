@@ -1,4 +1,16 @@
+---
+title: Teach the role consumers the `calibration` role
+status: done
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+summary: ": `manifest roles`, `nctool roll`, `viewer` and `shadow_metrics` leave a `calibration` frame out of `real`"
+done: 2026-10-10
+---
 # Teach the role consumers the `calibration` role
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-10**: `manifest roles`, `nctool roll`, `viewer` and `shadow_metrics` leave a `calibration` frame out of `real`; the known roles are `nctool.manifest.ROLES`, and `validate` flags any other spelling
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-01: `manifest roles` and `shadow_metrics` count a `calibration` frame as `real`, and `nctool roll` refuses its roll
 
 ## Goal
 

@@ -1,3 +1,9 @@
+---
+title: Roll conversion (batch with a shared frozen recipe)
+status: done
+deps: [core/pipeline-orchestration, algo/dmax-white-anchor]
+tags: [post-mvp]
+---
 # Roll conversion (batch with a shared frozen recipe)
 
 ## Goal

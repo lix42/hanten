@@ -1,4 +1,15 @@
+---
+title: Retire the `shoulder` and `none` tones
+status: done
+deps: [nf-retire/legacy-custom, nf-display-stages/fit-range]
+tags: [new-flow]
+done: 2026-09-24
+---
 # Retire the `shoulder` and `none` tones
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** Extended Reinhard is the current chain's one display tone (`pipeline_version` 7); its headroom is `fit_range.headroom_stops`, the new recipe's key. `--display-tone`, `--highlight-compress` and `print.display_tone` are migration errors on both chains; zero headroom is the self-policing identity. Fixed a latent gain-map defect on the way (the legacy luminance map ratioed against the rendered, not stored, SDR)
+>
+> **Dependency note** (migrated 2026-10-14): both exist for reconstructions already bounded at white
 
 ## Goal
 

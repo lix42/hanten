@@ -1,4 +1,16 @@
+---
+title: Hanten against SilverFast CCR on the Lomography 100 roll
+status: done
+deps: [nf-scene-correction/roll-white-balance, nf-scene-correction/midtone-neutral]
+tags: [new-flow]
+summary: the user preferred CCR on 18 of 36 frames
+done: 2026-10-12
+---
 # Hanten against SilverFast CCR on the Lomography 100 roll
+
+> **From TASKS.md** (migrated 2026-10-14): the user preferred CCR on 18 of 36 frames; Hanten leaves a blue, slightly green cast. **Done 2026-10-12**: the roll gains and the midtone line's blue term add it, both misled by a warm roll; one roll-level correction is enough (oracle gains), the estimate is what fails. Follow-ups `two-point-tilt` and `midtone-line-terms`
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-11 from the Lomography 100 review: the user preferred SilverFast CCR to Hanten on half the roll, Hanten leaving a blue, slightly green cast
 
 ## Goal
 

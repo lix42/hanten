@@ -1,4 +1,14 @@
+---
+title: Extract the chart patches
+status: done
+deps: [analysis/chart-labeling-tool]
+tags: [post-mvp]
+summary: one per-patch table from the scans, read by every calibration consumer
+done: "2026-10-14 #296"
+---
 # Extract the chart patches
+
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-14 (split from `calibration-frame-capture`): one per-patch table from the scans that every calibration consumer reads
 
 ## Goal
 

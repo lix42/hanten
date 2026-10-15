@@ -1,4 +1,16 @@
+---
+title: Does a parametric shoulder beat reinhard?
+status: done
+deps: [nf-display-stages/parametric-operator, nf-calibration/roll-white-rule]
+tags: [new-flow]
+summary: reinhard stands
+done: 2026-09-27
+---
 # Does a parametric shoulder beat reinhard?
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-27: reinhard stands.** With mid-grey, the rendered white and the peak pinned, any smooth shoulder stays within ~0.15 stop of reinhard; a brighter white with mid-grey pinned (+0.15, +0.30 stop) lost in review. No code change; HDR under the white rule moved to `nf-calibration/white-rule-hdr`
+>
+> **Dependency note** (migrated 2026-10-14): whether a parametric shoulder beats reinhard is judged with black in the chain, and against the white rule it would move (the rule was chosen under reinhard)
 
 ## Goal
 

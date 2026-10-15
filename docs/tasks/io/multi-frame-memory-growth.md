@@ -1,4 +1,15 @@
+---
+title: Multi-frame runs outgrow the per-frame memory model
+status: done
+deps: [io/memory-preflight]
+tags: [hardening]
+summary: macOS malloc kept freed full-frame blocks resident, so a roll's peak climbed with every slightly larger frame
+---
 # Multi-frame runs outgrow the per-frame memory model
+
+> **From TASKS.md** (migrated 2026-10-14): macOS malloc kept freed full-frame blocks resident, so a roll's peak climbed with every slightly larger frame; a global allocator now maps big blocks directly, and 35 frames peak at their largest frame
+>
+> **Dependency note** (migrated 2026-10-14): the gate judges each frame alone, and a roll of slightly different frame sizes peaks several times higher (0.6 → 2.8 GB over 35 frames)
 
 ## Goal
 

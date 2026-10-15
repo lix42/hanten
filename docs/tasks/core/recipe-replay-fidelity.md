@@ -1,4 +1,15 @@
+---
+title: Recipe replay fidelity
+status: done
+deps: [core/conversion-versioning, nf-core/default-flip]
+tags: [post-mvp]
+summary: every recipe document hanten writes (`--dump-params`, `hanten params`, `measure-base`/`measure-roll --out`) is a `{meta, params}` envelope stamped with the build's identity, so a replay under…
+---
 # Recipe replay fidelity
+
+> **From TASKS.md** (migrated 2026-10-14): every recipe document hanten writes (`--dump-params`, `hanten params`, `measure-base`/`measure-roll --out`) is a `{meta, params}` envelope stamped with the build's identity, so a replay under another `pipeline_version` warns (`--strict`-promotable); `roll.json` always states the decode it measured through. `--dump-params` is staged before the decode and written only when the run succeeds. Replay contract in design-spec §8.
+>
+> **Dependency note** (migrated 2026-10-14): re-scoped 2026-10-01
 
 > **Re-scoped 2026-10-01** for the new chain. The original file was about recipes
 > opting into a non-default curve (the 2026-08-03 sigmoid defaults, the 2026-09-09

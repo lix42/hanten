@@ -1,4 +1,13 @@
+---
+title: Background telemetry upload
+status: done
+deps: [telemetry/upload-schema, telemetry/ingestion-service]
+tags: [post-mvp]
+done: 2026-10-01
+---
 # Background telemetry upload
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-01.** `hanten telemetry enable|disable|status|preview|flush|purge`: persistent consent selects one queue; every `convert` (and a refused one, as a `parse` failure) appends its event there and a detached `upload-once` helper sends it over HTTPS (`ureq`) to the build-time endpoint (`NC_TELEMETRY_ENDPOINT`, default the live Worker; `none` or `file:<path>`). Leases, spool, crash-safe batches, retries, quarantine, 25 MiB/30-day caps, retarget and purge as the strategy specifies. Records of an older local schema are dropped, not uploaded (user, 2026-10-01). No pixel, recipe or fingerprint change. The live endpoint, macOS and Windows are checked by the two follow-ups below.
 
 ## Goal
 

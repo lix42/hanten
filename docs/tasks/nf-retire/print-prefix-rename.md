@@ -1,4 +1,16 @@
+---
+title: Rename the `print.*` prefix
+status: done
+deps: [nf-retire/legacy-custom, nf-scene-correction/stage]
+tags: [new-flow]
+summary: ", no code"
+done: 2026-09-29
+---
 # Rename the `print.*` prefix
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-29, no code.** `nf-core/default-flip` already retired it: a `print` section is refused naming each knob's new key, and the removed flags name theirs; the spec's stale `print.*` sections pass to `nf-docs/design-spec`
+>
+> **Dependency note** (migrated 2026-10-14): after the second implementation is gone, so nothing is renamed twice
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Fold the new design into the spec
+status: done
+deps: []
+tags: [new-flow]
+done: 2026-09-30
+---
 # Fold the new design into the spec
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-30.** `design-spec.md` is the design: §5 the destination set, §6 the chain and the two renderings, §7 the fixed decode and the NC film RGB v1 contract, §9 the parameters by stage, §13 the live open questions. `design-update.md` keeps Part 3, the appendices and a map of where each Part 1–2 heading went
+>
+> **Dependency note** (migrated 2026-10-14): none principle 2, the NC film RGB v1 contract, and the curves section
 
 ## Goal
 

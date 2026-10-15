@@ -1,3 +1,9 @@
+---
+title: IR-assisted film-holder detection
+status: done
+deps: [film-base/auto-base-redesign]
+tags: [post-mvp]
+---
 # IR-assisted film-holder detection
 
 ## Goal

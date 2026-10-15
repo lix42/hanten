@@ -1,4 +1,13 @@
+---
+title: The recipe schema across the flow boundary
+status: done
+deps: [nf-core/stage-skeleton]
+tags: [new-flow]
+summary: "the new chain reads its own `\"recipe_version\": 2` document (`src/recipe.rs`, one section per stage), and each chain refuses the other's recipe by name"
+---
 # The recipe schema across the flow boundary
+
+> **Dependency note** (migrated 2026-10-14): `deny_unknown_fields` cannot see a *known but meaningless* key, so a stale `print.*` section is accepted-and-ignored
 
 ## Goal
 

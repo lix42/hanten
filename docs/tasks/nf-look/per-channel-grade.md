@@ -1,4 +1,14 @@
+---
+title: A per-channel grade with a mid-grey pivot
+status: done
+deps: [nf-look/stage]
+tags: [new-flow]
+summary: the tunable counterpart of the decode's `scale`
+done: 2026-09-25
+---
 # A per-channel grade with a mid-grey pivot
+
+> **From TASKS.md** (migrated 2026-10-14): the tunable counterpart of the decode's `scale`; subsumes the regional balance. **Done 2026-09-25**: `look.channel_grade` / `--channel-grade R,B`, red/blue pivoted at mid-grey with the luminance restored, so it never moves neutral contrast
 
 ## Goal
 

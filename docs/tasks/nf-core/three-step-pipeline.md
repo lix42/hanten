@@ -1,4 +1,15 @@
+---
+title: Rethink the pipeline as decode → roll → style
+status: todo
+deps: [nf-core/default-flip, nf-calibration/roll-section, nf-destinations/direct-preset]
+tags: [new-flow]
+summary: unscheduled, after the default flip
+---
 # Rethink the pipeline as decode → roll → style
+
+> **From TASKS.md** (migrated 2026-10-14): unscheduled, after the default flip; the interim is a `roll` section and `--rendering`
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-27, unscheduled: the interim design (the `roll` section and `--rendering`) ships first, and the default flips
 
 ## Goal
 

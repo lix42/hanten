@@ -1,4 +1,13 @@
+---
+title: The fixed, stock-agnostic decode
+status: done
+deps: [nf-core/stage-skeleton]
+tags: [new-flow]
+summary: exponential, toe passed through as recorded
+---
 # The fixed, stock-agnostic decode
+
+> **From TASKS.md** (migrated 2026-10-14): exponential, toe passed through as recorded — written fresh, and measured bit-identical to the equivalent legacy configuration
 
 ## Goal
 

@@ -1,4 +1,16 @@
+---
+title: A scan type that ends at the decode
+status: done
+deps: [nf-core/buffer-strategy]
+tags: [new-flow]
+summary: split the scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce that the IR plane stops at `fixed::decode`
+done: 2026-10-11
+---
 # A scan type that ends at the decode
+
+> **From TASKS.md** (migrated 2026-10-14): split the scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce that the IR plane stops at `fixed::decode`. **Done 2026-10-11**: `Scan` (a `LinearImage` plus an optional `IrPlane`) is what the decoder returns and `fixed::decode` consumes; `LinearImage` is RGB only. Outputs byte-identical
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-09 from its review: the IR plane stops at the decode only because every post-decode `into_linear` passes `None`
 
 ## Goal
 

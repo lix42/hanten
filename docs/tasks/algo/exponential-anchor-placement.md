@@ -1,4 +1,15 @@
+---
+title: Anchor Placement for the Exponential Curve
+status: done
+deps: [algo/negative-reconstruction-density-curves]
+tags: [post-mvp]
+summary: all four placements now exist on **both** curves behind one curve-neutral `--anchor-*` family, so contrast and endpoint placement stop fighting
+---
 # Anchor Placement for the Exponential Curve
+
+> **From TASKS.md** (migrated 2026-10-14): all four placements now exist on **both** curves behind one curve-neutral `--anchor-*` family, so contrast and endpoint placement stop fighting. The **rendering** verdict was negative on ten real frames — not competitive at any anchor (21.4% blown, zero top-decile separation at the sigmoid's anchor — no shoulder) — so **no default moved** and the default render is byte-identical. **That verdict was rescoped on 2026-09-02**: it holds against the old fixed-ceiling knee it was measured under, not against the curve, which measures 3.89-5.95% blown under the shipped unbounded operator. Also measured here: the anchor trades midtone against black *and* highlights monotonically, a toe *raises* the black floor rather than pulling it down, and `GainMapMax` is controlled by the shoulder alone
+>
+> **Dependency note** (migrated 2026-10-14): renamed from `algo/exponential-mid-grey-anchor` on 2026-08-12 when the direction changed from pinning mid-grey to **pinning the black end at the film base**; the name now tracks the mechanism (`AnchorPlacement`, now carried by **both** curves) rather than one placement. Shipped 2026-08-29 with **no default moved**: measured on ten real frames, the exponential is not competitive at any anchor — at the sigmoid's own anchor it blows 21.4% of the frame to white with zero top-decile separation, because it has no shoulder. Its problem was never the anchor, so `white-at-dmax` stays its default on evidence rather than caution. **Rescoped 2026-09-02** by `algo/reconstruction-render-curve-split`: that measurement was taken under the *old fixed-ceiling knee*, and under the shipped unbounded display operator the same curve measures 3.89-5.95% blown. The verdict stands against the **pairing** it was measured in, not against the curve. The black pin (candidate 5b, "most likely GO" on shadow numbers) is *dominated* by the shipped default when judged as a whole picture
 
 ## Goal
 

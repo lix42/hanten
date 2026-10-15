@@ -1,4 +1,15 @@
+---
+title: Where black-and-white fits the new chain
+status: doing
+deps: [nf-reconstruction/fixed-decode]
+tags: [new-flow]
+summary: decided in [`design/mono.md`](design/mono.md)
+---
 # Where black-and-white fits the new chain
+
+> **From TASKS.md** (migrated 2026-10-14): decided in [`design/mono.md`](design/mono.md); pending the HP5 measurements
+>
+> **Dependency note** (migrated 2026-10-14): decided in `docs/design/mono.md`; pending the HP5 measurements
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: A memory profile per destination
+status: done
+deps: [nf-destinations/preset-set]
+tags: [new-flow]
+done: 2026-10-01
+---
 # A memory profile per destination
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-01.** Every destination measured on four frames (5.83–18.66 MP): PQ/HLG share `U16Tiff`, the film master `F32Tiff`; the gain map's staging cut from 12 to a fitted 5 B/px
+>
+> **Dependency note** (migrated 2026-10-14): a `RunProfile` per destination; sharing an arm is measured, not assumed
 
 ## Goal
 

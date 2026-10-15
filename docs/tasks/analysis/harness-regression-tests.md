@@ -1,4 +1,15 @@
+---
+title: Harness Regression Tests
+status: done
+deps: [analysis/real-scan-verification]
+tags: [post-mvp]
+summary: fixture-backed black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and TIFF/sidecar contracts, and reproduces the successful-wrong-container failure
+---
 # Harness Regression Tests
+
+> **From TASKS.md** (migrated 2026-10-14): fixture-backed black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full analysis suite runs in Linux and macOS CI
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-08-09 after the `output/presets` default flip broke `harness.sh` in three places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the stage printed success). The harness has no automated coverage at all
 
 ## Goal
 

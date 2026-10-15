@@ -1,4 +1,15 @@
+---
+title: One gamut-mapping implementation
+status: done
+deps: [nf-display-stages/fit-range]
+tags: [new-flow]
+done: 2026-09-24
+---
 # One gamut-mapping implementation
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** `fit_gamut::radial_to_boundary` is the one map; the legacy `sdr`/`hdr`/`gain_map` call it with their own ceilings (byte-identical output), and the new flow maps against `max(peak, Y)`, the peak riding on `RangeFittedImage`. On 92 real frames the new flow's clipped samples went 336,106 → 0; no marked white moved
+>
+> **Dependency note** (migrated 2026-10-14): one implementation both chains call, each with its own ceiling
 
 ## Goal
 

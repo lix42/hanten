@@ -1,3 +1,10 @@
+---
+title: Ultra HDR v1 Gain-Map JPEG Output
+status: done
+deps: [output/sdr-display-rendering, output/hdr-display-rendering]
+tags: [post-mvp]
+summary: write an explicit backward-compatible Display P3 JPEG plus public Ultra HDR v1 gain-map metadata
+---
 # Ultra HDR v1 Gain-Map JPEG Output
 
 ## Goal

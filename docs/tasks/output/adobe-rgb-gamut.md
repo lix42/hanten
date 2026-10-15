@@ -1,4 +1,13 @@
+---
+title: Adobe RGB (1998) as an output gamut
+status: done
+deps: [output/presets]
+tags: [post-mvp]
+done: 2026-09-24
+---
 # Adobe RGB (1998) as an output gamut
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
 
 ## Goal
 

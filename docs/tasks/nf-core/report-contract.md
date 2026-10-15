@@ -1,4 +1,15 @@
+---
+title: The report and telemetry shape for the new chain
+status: done
+deps: [nf-core/stage-skeleton]
+tags: [new-flow]
+done: 2026-09-28
+---
 # The report and telemetry shape for the new chain
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-28.** Re-scoped after the flip: the provisional `new_flow` block becomes `chain`, the report echoes the `recipe` and its `params_hash` (no sidecar), roll frames keep theirs, and telemetry schema 9 times each `StageKind`
+>
+> **Dependency note** (migrated 2026-10-14): the report names the chain's stages and echoes the recipe, and telemetry times each `StageKind`; `nctool` parses both
 
 ## Goal
 

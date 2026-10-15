@@ -1,4 +1,15 @@
+---
+title: A benchmark set for the new flow
+status: done
+deps: [nf-verification/reference-snapshot, nf-core/minimal-end-to-end]
+tags: [new-flow]
+done: 2026-10-01
+---
 # A benchmark set for the new flow
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-01.** One fixtures case per ready destination, run only on the interfaces it has a block for; comparability comes from re-running the reference build
+>
+> **Dependency note** (migrated 2026-10-14): one fixtures case per ready destination; comparability comes from re-running the reference build
 
 ## Goal
 

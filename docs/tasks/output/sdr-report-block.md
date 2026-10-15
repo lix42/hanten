@@ -1,4 +1,14 @@
+---
+title: Machine-readable SDR contract in the report
+status: closed
+deps: [output/presets]
+tags: [post-mvp]
+---
 # Machine-readable SDR contract in the report
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—no block** (2026-10-11): the SDR TIFF and the gain-map base need no encoder block. An SDR encoding states no absolute luminance, so its ICC profile and `chain.destination` define it, and the gain map's values are in `chain.gain_map`; recorded in design-spec §5 and `docs/using-nc.md`
+>
+> **Dependency note** (migrated 2026-10-14): **closed—no block** 2026-10-11; the dep below is decision history
 
 > **Closed — no block (2026-10-11).** The HDR blocks exist for what an ICC profile cannot
 > carry: reference white, peak, headroom and content light in cd/m². An SDR encoding

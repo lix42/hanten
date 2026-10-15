@@ -1,3 +1,9 @@
+---
+title: A portable fingerprint vector for the characteristic curve
+status: closed
+deps: []
+closed_into: nf-verification/fingerprints
+---
 # A portable fingerprint vector for the characteristic curve
 
 > **Superseded 2026-09-19 by `nf-verification/fingerprints`** — the row it

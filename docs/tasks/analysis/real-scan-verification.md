@@ -1,4 +1,14 @@
+---
+title: Real-Scan Core Verification
+status: done
+deps: [core/pipeline-orchestration, algo/dmax-white-anchor, film-base/dmax-reference]
+tags: [post-mvp]
+summary: exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap
+done: 2026-07-23
+---
 # Real-Scan Core Verification
+
+> **From TASKS.md** (migrated 2026-10-14): exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
 
 ## Goal
 

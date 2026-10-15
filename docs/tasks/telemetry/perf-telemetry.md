@@ -1,4 +1,13 @@
+---
+title: Embedded performance + context telemetry
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp]
+summary: "the real-world successor to `telemetry/perf-instrumentation`: an opt-in JSON telemetry record per `hanten convert` run (image + timing + context) to a local JSONL log / one-off file, no new entrypoint"
+---
 # Embedded performance + context telemetry
+
+> **From TASKS.md** (migrated 2026-10-14): the real-world successor to `telemetry/perf-instrumentation`: an opt-in JSON telemetry record per `hanten convert` run (image + timing + context) to a local JSONL log / one-off file, no new entrypoint. Lifts the prototype's per-stage timing.
 
 ## Goal
 

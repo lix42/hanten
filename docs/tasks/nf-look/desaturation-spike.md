@@ -1,4 +1,15 @@
+---
+title: "Spike: what form should highlight desaturation take?"
+status: done
+deps: []
+tags: [new-flow]
+summary: per-channel curve against a hue-preserving chroma pull
+---
 # Spike: what form should highlight desaturation take?
+
+> **From TASKS.md** (migrated 2026-10-14): per-channel curve against a hue-preserving chroma pull; the design's prose describes one and every measured reference does the other
+>
+> **Dependency note** (migrated 2026-10-14): none the per-channel half runs against today's binary and the hue-preserving half is a throwaway patch, so it settles the operator's form before the look stage exists
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Content-based film-base fallback (Tier 3)
+status: done
+deps: [film-base/estimation, core/measure-base]
+tags: [post-mvp]
+summary: "shipped as `measure-roll --base-content` and `roll --base-content`: the pooled p99 of the picture frames' effective areas, written as an explicit base with `content_base` evidence"
+---
 # Content-based film-base fallback (Tier 3)
+
+> **From TASKS.md** (migrated 2026-10-14): shipped as `measure-roll --base-content` and `roll --base-content`: the pooled p99 of the picture frames' effective areas, written as an explicit base with `content_base` evidence; no per-frame form
+>
+> **Dependency note** (migrated 2026-10-14): re-scoped 2026-10-01
 
 > **Re-scoped 2026-10-01** for the new chain. The original plan was a per-frame
 > `convert --base-content` / `calibration.film_base = "content"`, reached when

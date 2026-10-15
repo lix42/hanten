@@ -1,4 +1,15 @@
+---
+title: Reconstruction / Render Curve Split
+status: done
+deps: [algo/reference-anchored-sigmoid, color/film-master-render-pipeline]
+tags: [post-mvp]
+summary: move the sigmoid character to the render stage, restoring the separate-sub-stages rule
+---
 # Reconstruction / Render Curve Split
+
+> **From TASKS.md** (migrated 2026-10-14): move the sigmoid character to the render stage, restoring the separate-sub-stages rule. **Verdict 2026-09-02: the split holds** — measured on seven frames at matched lightness, the shoulder-less reconstruction under the unbounded display operator beats the shipped sigmoid on both metrics on every frame. The curve is the shipped sigmoid with **both knees off** (the toe buys nothing and costs black depth), which is bit-exactly the exponential — rescoping `algo/exponential-anchor-placement`'s negative verdict, which measured that curve under the *old knee*. `film-master` needs no change: its contract is the configured reconstruction, not a curve shape. Default activation is `algo/split-default-migration`
+>
+> **Dependency note** (migrated 2026-10-14): **verdict reached 2026-09-02** filed 2026-08-10 to move the sigmoid character to the *display* stage, restoring the "density conversion and print rendering are separate sub-stages" rule the current curve partly collapses. **The split holds**, measured on seven frames at matched lightness. The curve is the shipped sigmoid with **both knees off** — the toe buys nothing and costs black depth — which is bit-exactly the exponential. That does not contradict `algo/exponential-anchor-placement`'s negative verdict so much as **rescope** it: that measured the curve under the *old fixed-ceiling knee* at its own anchor, and the pairing was what failed. The HDR-headroom half was already decided: `GainMapMax` answers to the **shoulder** alone, which runs during reconstruction and strips above-white values before either display branch sees them. `film-master` looked like the sharpest constraint and was not one: its contract is the configured reconstruction, not a curve shape
 
 ## Goal
 

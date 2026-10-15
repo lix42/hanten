@@ -1,3 +1,9 @@
+---
+title: Sigmoid / H&D-Curve Tone Algorithm
+status: done
+deps: [algo/interface, algo/dmax-white-anchor]
+tags: [post-mvp]
+---
 # Sigmoid / H&D-Curve Tone Algorithm
 
 ## Goal

@@ -1,4 +1,16 @@
+---
+title: Calibrate a roll without named reference frames
+status: done
+deps: [core/roll-conversion, core/calibration-recipe-section, film-base/auto-base-redesign, film-base/ir-holder-detection, film-base/holder-masked-measurement, core/measure-base]
+tags: [post-mvp]
+summary: "renamed from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll, cross-frame agreement, provenance + confidence, a loud refusal"
+done: 2026-10-09
+---
 # Calibrate a roll without named reference frames
+
+> **From TASKS.md** (migrated 2026-10-14): renamed from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll, cross-frame agreement, provenance + confidence, a loud refusal. An opt-in mode of `measure-roll`. **Done 2026-10-09**: `--unexposed auto` / `--leader auto`
+>
+> **Dependency note** (migrated 2026-10-14): renamed from `core/base-acquisition-planner` 2026-09-28
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

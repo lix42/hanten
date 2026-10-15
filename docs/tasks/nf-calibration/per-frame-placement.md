@@ -1,4 +1,16 @@
+---
+title: Per-frame placement
+status: done
+deps: [nf-calibration/span-roll-slope, nf-calibration/envelope-hybrid-placement]
+tags: [new-flow]
+summary: "`--placement frame`: each frame its own contrast from its span, its white at L\\* 93"
+done: 2026-10-10
+---
 # Per-frame placement
+
+> **From TASKS.md** (migrated 2026-10-14): `--placement frame`: each frame its own contrast from its span, its white at L\* 93; exposure limits ±1 EV (v13). **Done 2026-10-10**
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-09 (split from `envelope-hybrid-placement`): white- and midtone-pinned per-frame placements as choices, added to the placement choice the hybrid introduces
 
 ## Goal
 

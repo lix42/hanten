@@ -1,4 +1,15 @@
+---
+title: An automatic turn-off per midtone-line term
+status: todo
+deps: [nf-scene-correction/midtone-line-terms, analysis/calibration-frame-capture]
+tags: [new-flow]
+summary: drop a term when an in-roll signal says the roll's content misled it
+---
 # An automatic turn-off per midtone-line term
+
+> **From TASKS.md** (migrated 2026-10-14): drop a term when an in-roll signal says the roll's content misled it; waits for the calibration rolls
+>
+> **Dependency note** (migrated 2026-10-14): split 2026-10-13 from `midtone-line-terms`: the automatic turn-off needs a second labelled case, which the calibration rolls give
 
 ## Goal
 

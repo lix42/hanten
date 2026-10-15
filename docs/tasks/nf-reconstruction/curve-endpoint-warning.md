@@ -1,4 +1,15 @@
+---
+title: Warn when the curve's endpoint is unreachable
+status: done
+deps: [nf-reconstruction/anchor-rule, nf-calibration/envelope-hybrid-placement]
+tags: [new-flow]
+summary: "with display black off, a washed-out frame warns (`pipeline::black_endpoint`): a look slope under 1.237, a measured frame whose middle lands above +1.5 stops and dark end above −1.5, or (no tones,…"
+---
 # Warn when the curve's endpoint is unreachable
+
+> **From TASKS.md** (migrated 2026-10-14): with display black off, a washed-out frame warns (`pipeline::black_endpoint`): a look slope under 1.237, a measured frame whose middle lands above +1.5 stops and dark end above −1.5, or (no tones, and not a roll's exposure alone) a base under 2 stops below mid-grey. Silent on every archive frame at its default
+>
+> **Dependency note** (migrated 2026-10-14): reopened 2026-10-10 supersedes `algo/curve-endpoint-validation`: read the endpoint off the renderer's own curve, at warning tier
 
 **Done (2026-10-10)** as `pipeline::black_endpoint`; the decisions and measurements are
 in `docs/progress/nf-reconstruction.md`.

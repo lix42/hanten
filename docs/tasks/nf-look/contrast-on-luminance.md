@@ -1,4 +1,16 @@
+---
+title: Contrast on luminance, saturation its own setting
+status: done
+deps: [nf-look/contrast-definition, nf-scene-correction/midtone-neutral]
+tags: [new-flow]
+summary: contrast moves luminance only
+done: 2026-10-09
+---
 # Contrast on luminance, saturation its own setting
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-09:** contrast moves luminance only; `look.saturation` multiplies the colour's base slope × 1.15 (`default`, by review) or × 1 (`direct`); `pipeline_version` 10
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07: contrast multiplied chroma; the amount of saturation is judged on corrected colour
 
 ## Goal
 

@@ -1,3 +1,8 @@
+---
+title: Color Management
+status: done
+deps: [core/project-foundation]
+---
 # Color Management
 
 ## Goal

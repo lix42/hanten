@@ -1,4 +1,13 @@
+---
+title: Transactional Output Writes
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp, hardening]
+summary: "from the output-atomicity review: write every artifact (primary TIFF, IR, sidecar, report-file) to a same-directory temp, fsync, then rename, so a failed/interrupted run never leaves a truncated…"
+---
 # Transactional Output Writes
+
+> **From TASKS.md** (migrated 2026-10-14): from the output-atomicity review: write every artifact (primary TIFF, IR, sidecar, report-file) to a same-directory temp, fsync, then rename, so a failed/interrupted run never leaves a truncated final file. Honest guarantee: no partial files + minimized inconsistency window, not literal multi-file atomicity (a crash between renames can still mix old/new artifacts).
 
 ## Goal
 

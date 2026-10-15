@@ -1,3 +1,9 @@
+---
+title: Audit the flag surface against a characteristic default
+status: closed
+deps: []
+closed_into: nf-core/knob-availability-audit
+---
 # Audit the flag surface against a characteristic default
 
 > **Superseded 2026-09-19 by `nf-core/knob-availability-audit`** — it audits

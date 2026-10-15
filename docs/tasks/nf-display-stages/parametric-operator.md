@@ -1,4 +1,15 @@
+---
+title: "Display black (was: a parametric operator with a toe)"
+status: done
+deps: [nf-display-stages/fit-range]
+tags: [new-flow]
+done: 2026-09-26
+---
 # Display black (was: a parametric operator with a toe)
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-26.** Reinhard compresses upward only, so the new chain had no black; supersedes `algo/content-aware-sigmoid-toe`. Chosen by review: `--display-black` (`fit_range.display_black`, stops below mid-grey, default 6; since `midtone-contrast-toe` `fit_range.dark_end` `{"black": …}`) shifts where the film base renders, fading to nothing at mid-grey; the reference is the decoded base graded with the frame, so it follows each frame's contrast
+>
+> **Dependency note** (migrated 2026-10-14): reinhard compresses upward only, so the shadow end is a subtraction; supersedes `algo/content-aware-sigmoid-toe`. Since 2026-09-25 it places black: the new chain had none, and `anchor-comparison`'s white rule needs one. The operator question moved to `parametric-shoulder` (2026-09-26)
 
 ## Goal
 

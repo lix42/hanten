@@ -1,4 +1,13 @@
+---
+title: Rebase the drift gate on the new chain
+status: done
+deps: [nf-core/minimal-end-to-end]
+tags: [new-flow]
+summary: "`render` stops at scene correction's input, over minimum-window samples"
+---
 # Rebase the drift gate on the new chain
+
+> **From TASKS.md** (migrated 2026-10-14): `render` stops at scene correction's input, over minimum-window samples; supersedes `algo/characteristic-fingerprint-vector`
 
 ## Goal
 

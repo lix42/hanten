@@ -1,4 +1,14 @@
+---
+title: MP Container Conformance (CIPA DC-007)
+status: closed
+deps: [output/iso-gain-map-metadata]
+tags: [post-mvp]
+---
 # MP Container Conformance (CIPA DC-007)
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—narrowed claim** (2026-10-01): `io::iso_gain_map` already writes MP Type `050000` and keeps `APP0 JFIF` first; the file carries no Exif, so its base is not the DC-007 baseline ISO 21496-1 C.4.3 asks for (DC-007 §4.2.1, §5.1), recorded in its module doc and design-spec §9
+>
+> **Dependency note** (migrated 2026-10-14): **closed—narrowed claim** 2026-10-01; the dep below is decision history split out 2026-08-06 after reading CIPA DC-007-2025: the gain map is typed `Undefined` (`000000`) where Table 4 assigns `050000` and marks `000000` "shall not be used", and the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file. **Neither blocks function** — ImageIO reconstructs HDR from nc's file today with both gaps present — so this is conformance-claim work. Deliberately *not* a dependency of `output/presets`: it changes shipped `ultra-hdr-v1` container bytes and would otherwise hold the product default behind an unrelated change
 
 > **Closed — narrowed claim recorded (2026-10-01).** nc's own writer,
 > `io::iso_gain_map` (`nf-destinations/gain-map-destination`), types the gain map

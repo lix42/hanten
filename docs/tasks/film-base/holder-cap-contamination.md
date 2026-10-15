@@ -1,4 +1,14 @@
+---
+title: "The holder march cap: a premise, not a defect"
+status: closed
+deps: [film-base/holder-depth-mask]
+tags: [post-mvp]
+---
 # The holder march cap: a premise, not a defect
+
+> **From TASKS.md** (migrated 2026-10-14): closed on a premise: no film holder is deeper than the 25% cap, so a cap (and the perpendicular edges it inflates) is an IR misread that only over-cuts. Premise and the inset remedy are stated on `HOLDER_MARCH_MAX_FRAC` and in the warning; `CappedEdges::contaminated` removed. No march or pixel change
+>
+> **Dependency note** (migrated 2026-10-14): a cap on one edge inflates the **perpendicular** edges to the cap too. **Done 2026-10-01, re-scoped:** no film holder is deeper than 25% of the shorter edge (real ones measure 2.5-4%), so a cap is an IR misread and only over-cuts; a deeper holder is covered by raising the inset. The premise is stated on `HOLDER_MARCH_MAX_FRAC`, `CappedEdges::contaminated` is removed and the warning names the remedy. No march change; the decline remedy was rejected (it leaves more holder in the region), as was raising the cap
 
 ## Goal
 

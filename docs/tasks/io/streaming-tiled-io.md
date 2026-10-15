@@ -1,4 +1,16 @@
+---
+title: Streaming / Tiled I/O
+status: todo
+deps: [io/memory-preflight, analysis/real-scan-verification]
+priority: low
+tags: [post-mvp]
+summary: strip/tile decode for very large inputs; STEP 0 evaluated no-go (2026-10-13), revisit only if the input envelope grows
+---
 # Streaming / Tiled I/O
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-10-13): STEP 0 evaluated **no-go** — the worst real frame (18.66 MP gain map) estimates 1.01 GB against the 6 GiB budget, and the gate would first reject near 134 MP ([progress/io.md](progress/io.md) `## streaming-tiled-io`); revisit only if the input envelope grows. Memory-safety review Phase B (expensive, **evaluate-first**): strip/tile decode + streaming encode.
+>
+> **Dependency note** (migrated 2026-10-14): **evaluate-first**; **low priority**
 
 ## Goal
 

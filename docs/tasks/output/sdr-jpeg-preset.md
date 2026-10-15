@@ -1,4 +1,13 @@
+---
+title: A plain SDR JPEG output
+status: done
+deps: [output/presets, output/sdr-display-rendering]
+tags: [post-mvp]
+done: 2026-10-11
+---
 # A plain SDR JPEG output
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-11.** `--range sdr --container jpeg` in Display P3, Adobe RGB and sRGB: the SDR TIFF's rendition as an 8-bit q95 4:4:4 JPEG, ICC only, through the gain-map base's encode path. Every destination row is now written, so the "not written yet" refusal is gone; telemetry `sdr_jpeg` needs the Worker deployed before a release
 
 ## Goal
 

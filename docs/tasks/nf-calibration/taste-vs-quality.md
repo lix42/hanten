@@ -1,4 +1,15 @@
+---
+title: Separate taste from quality in the automatic adjustments
+status: done
+deps: [nf-calibration/thin-frame-lift, nf-calibration/frame-level-trim]
+tags: [new-flow]
+done: 2026-10-02
+---
 # Separate taste from quality in the automatic adjustments
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-02.** Every automatic adjustment is a correction, a guard or a preference (design-spec §6); the two lifts are preferences, each with its own switch (`--small-lift`, `--thin-lift`), the thin lift stored as its own pair beside the small one; `--frame-lift` retired
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-01: thin-frame-lift's round 2 was a matter of taste; the lifts it and frame-level-trim add are preferences, unlike the corrections, and need to read as such
 
 ## Goal
 

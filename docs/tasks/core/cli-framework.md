@@ -1,3 +1,8 @@
+---
+title: CLI Framework
+status: done
+deps: [core/project-foundation]
+---
 # CLI Framework
 
 ## Goal

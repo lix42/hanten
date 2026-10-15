@@ -1,4 +1,15 @@
+---
+title: The destination set
+status: done
+deps: [nf-display-stages/branch-contract, output/output-path-suffix]
+tags: [new-flow]
+done: 2026-09-26
+---
 # The destination set
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-26.** Under `--new-flow` a destination is four separate knobs — `--range`, `--transfer`, `--gamut`, `--container` (recipe `output.display`) — or `--film-master`, resolved against one table (`src/destination.rs`) that also drives refusals, remedies and the container; unset axes are derived. Written: SDR `native` TIFF in Display P3 (default, unchanged) or Adobe RGB; HDR BT.2020 `linear` f32 TIFF, `pq`/`hlg` TIFF or AVIF, clamped to the peak and counted. The film master refuses every stage it does not run. The gain-map JPEG split to `gain-map-destination`
+>
+> **Dependency note** (migrated 2026-10-14): the destinations and their suffix rules
 
 ## Goal
 

@@ -1,3 +1,8 @@
+---
+title: SilverFast HDR/HDRi Decode
+status: done
+deps: [core/project-foundation]
+---
 # SilverFast HDR/HDRi Decode
 
 ## Goal

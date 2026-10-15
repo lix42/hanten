@@ -1,4 +1,15 @@
+---
+title: The `--new-flow` selector
+status: done
+deps: []
+tags: [new-flow]
+summary: scaffolding with a written expiry
+---
 # The `--new-flow` selector
+
+> **From TASKS.md** (migrated 2026-10-14): scaffolding with a written expiry — CLI-only, never a recipe key, removed by `nf-core/default-flip`. `convert` **and** `roll`, with the availability refusals in `src/flow.rs`; it renders since `nf-core/minimal-end-to-end`
+>
+> **Dependency note** (migrated 2026-10-14): none scaffolding with a written expiry — CLI-only, never a recipe key, removed by `nf-core/default-flip`
 
 ## Goal
 

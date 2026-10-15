@@ -1,3 +1,8 @@
+---
+title: Film-Base / Dmin Estimation
+status: done
+deps: [core/project-foundation]
+---
 # Film-Base / Dmin Estimation
 
 ## Goal

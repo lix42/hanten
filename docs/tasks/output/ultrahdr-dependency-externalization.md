@@ -1,4 +1,14 @@
+---
+title: Remove the Ultra HDR Native Dependency
+status: closed
+deps: [output/gain-map-hdr-output, output/iso-gain-map-metadata]
+tags: [post-mvp]
+---
 # Remove the Ultra HDR Native Dependency
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needed CMake and NASM for libaom (until `output/drop-avif`) and a C compiler for lcms2. Retained as decision history
+>
+> **Dependency note** (migrated 2026-10-14): **closed—moot** by `nf-core/default-flip`; the deps below are decision history **re-scoped 2026-08-05** from "externalize to a published crate" to "remove the native dependency entirely"; the id is deliberately unchanged so its links and progress sections keep resolving. The published `ultrahdr-sys` crate cannot qualify: it obtains libjpeg-turbo either by build-time clone at a mutable tag or from a machine-installed library, and that `GIT_TAG` lives inside the crate's own bundled CMake with no `ExternalProject_Add` override — so no version bump fixes it. `iso-gain-map-metadata` is a real prerequisite, not sequencing: re-implementing container assembly must reproduce **both** dialects, so its C.4.3/C.4.6 placement rules have to be settled or the ISO container work gets written twice
 
 > **Closed — moot (2026-09-27).** `nf-core/default-flip` retired the Ultra HDR v1
 > dialect with the chain that wrote it, and deleted `vendor/ultrahdr-sys`, the

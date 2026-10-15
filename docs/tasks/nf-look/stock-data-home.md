@@ -1,4 +1,15 @@
+---
+title: A home for the film-stock data
+status: done
+deps: [nf-look/stage]
+tags: [new-flow]
+summary: the data stays as `film_stock/`, the evidence for the fixed decode's constants
+---
 # A home for the film-stock data
+
+> **From TASKS.md** (migrated 2026-10-14): the data stays as `film_stock/`, the evidence for the fixed decode's constants; the inversion is split into `algo/characteristic.rs` for its retirement, and `--film-stock` leaves with the curve
+>
+> **Dependency note** (migrated 2026-10-14): the registry and datasheets lose their consumer when `characteristic` leaves the decode
 
 ## Goal
 

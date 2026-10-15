@@ -1,4 +1,15 @@
+---
+title: Fit range as one stage
+status: done
+deps: [nf-look/stage]
+tags: [new-flow]
+done: 2026-09-23
+---
 # Fit range as one stage
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-23.** One reinhard with the display's peak as its argument; every peak agrees bit for bit below diffuse white (`algo::fixed::DIFFUSE_WHITE`), and content above the headroom exceeds the peak on every branch, counted at the encode. Knob `fit_range.headroom_stops` (`--display-tone-headroom`); non-finite samples refused
+>
+> **Dependency note** (migrated 2026-10-14): one function both branches use, reinhard as the baseline setting
 
 ## Goal
 

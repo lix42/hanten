@@ -1,4 +1,14 @@
+---
+title: "`measure-base`, and `measure-roll` as the one-stop measurement"
+status: done
+deps: [core/calibration-recipe-section, nf-calibration/roll-section]
+tags: [post-mvp]
+summary: "`measure-roll --unexposed` measures the base too and writes one recipe (`calibration` + `roll`)"
+done: 2026-09-28
+---
 # `measure-base`, and `measure-roll` as the one-stop measurement
+
+> **From TASKS.md** (migrated 2026-10-14): `measure-roll --unexposed` measures the base too and writes one recipe (`calibration` + `roll`); `hanten estimate` becomes `measure-base`, kept for a single-frame `convert` and a roll with no unexposed frame, and writes its fragment as a file. No `jq` between measuring and converting. **Done 2026-09-28**: `--out` (refused over a file unless `--force`), clamps as `roll.frames` keyed by file name
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

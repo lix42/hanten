@@ -1,4 +1,14 @@
+---
+title: Stdout broken-pipe safety
+status: done
+deps: [core/cli-framework]
+tags: [post-mvp, hardening]
+summary: make every stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed pipe (e.g
+done: 2026-10-01
+---
 # Stdout broken-pipe safety
+
+> **From TASKS.md** (migrated 2026-10-14): make every stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed pipe (e.g. `hanten … | head`) without a panic/backtrace. **Done 2026-10-01**: every stdout and stderr write goes through `stdio`; a closed pipe drops the write and the run carries on with its own exit code (`SIGPIPE` stays ignored, since `--out`, the gates and telemetry come after the report); any other stdout failure is exit 5
 
 ## Goal
 

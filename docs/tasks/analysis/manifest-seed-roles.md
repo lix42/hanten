@@ -1,4 +1,15 @@
+---
+title: Seed roles for the date-named rolls
+status: done
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+summary: "a frame or roll new to the manifest is seeded from its name: roles from base/leader/calibration stems, stock from the roll name"
+---
 # Seed roles for the date-named rolls
+
+> **From TASKS.md** (migrated 2026-10-14): done 2026-10-01. A frame or roll new to the manifest is seeded from its name: `base` / `leader` / `calibration` stems give those roles, and stock is parsed from a `<date>-<Stock><speed>` roll name. A from-scratch generation reproduces the live manifest.
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-24: no `SEED_ROLES` entry matches a date-named roll, so a from-scratch generation marks reference frames `real`
 
 ## Goal
 

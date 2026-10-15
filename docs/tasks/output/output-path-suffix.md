@@ -1,4 +1,15 @@
+---
+title: Derive the output suffix from the resolved preset
+status: done
+deps: [output/hdr-avif-output]
+tags: [post-mvp]
+done: 2026-09-22
+---
 # Derive the output suffix from the resolved preset
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-22.** `-o out` takes its container from the resolved preset (`out.jpg` by default, `out.tiff`/`out.avif` elsewhere); a stated suffix is honoured verbatim (`.jpeg` stays `.jpeg`, case preserved) or still fails on a mismatch. A dot-segment is a suffix only when *some* preset accepts that spelling, so `out.v2` is a stem and becomes `out.v2.jpg`. **Refines rather than overturns `output/presets`' "never silently renamed"**: renaming is rewriting typed bytes, completing is appending to them. `cli::container_for` is now the one preset-shaped step both the accepted set and the supplied spelling hang off (`required_extensions` lost its `Option`), which is what `nf-destinations/preset-set` carries forward. `roll` shares the resolver, so an explicit manifest `output` is completed too; the completed path is resolved before the sidecar, the write-target guard, `report.output` and telemetry see it. No pixel, recipe or fingerprint change
+>
+> **Dependency note** (migrated 2026-10-14): let `-o` name the output without its container; derive the suffix from the resolved preset, honour a matching explicit one (including `.jpeg` over `.jpg`), keep failing on a mismatch. Coordinated with `output/presets`, which owns the "never silently renamed" wording and container-aware roll naming — deliberately *not* a dependency, since the suffix table already shipped and this stood alone for `convert`. Shipped 2026-09-22 refining that wording: completing an absent suffix appends, renaming would rewrite, and nc still never rewrites
 
 ## Goal
 

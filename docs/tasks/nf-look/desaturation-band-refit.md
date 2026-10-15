@@ -1,4 +1,16 @@
+---
+title: Re-fit the highlight-desaturation band under the chosen white and black
+status: done
+deps: [nf-calibration/roll-white-rule, nf-display-stages/parametric-operator]
+tags: [new-flow]
+summary: the band was fitted under a hand-set contrast
+done: 2026-09-30
+---
 # Re-fit the highlight-desaturation band under the chosen white and black
+
+> **From TASKS.md** (migrated 2026-10-14): the band was fitted under a hand-set contrast. **Done 2026-09-30: nothing moves** (strength 0.8, start −1, band `0.015 → 0.025`). The band's measure divides out the slope, so contrast never moves a pixel against it; it is only as good as a white balance measured over the whole roll ([`desaturation-band-refit.md`](reports/desaturation-band-refit.md))
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-25: `path-to-white`'s re-fit, owned by a task now that the white rule is chosen; the white decides what reaches the band, and the black is what the re-fit must be judged with
 
 ## Goal
 

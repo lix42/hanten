@@ -1,4 +1,15 @@
+---
+title: Author a reusable pipeline profile without an image
+status: done
+deps: [core/recipe-composition, core/cli-framework, core/calibration-recipe-section]
+tags: [post-mvp]
+summary: "`hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via `--out`, needs no image"
+---
 # Author a reusable pipeline profile without an image
+
+> **From TASKS.md** (migrated 2026-10-14): `hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via `--out`, needs no image; `--dump-params` is renamed `--save-recipe` (roll-workflow open question 5, resolved 2026-10-09)
+>
+> **Dependency note** (migrated 2026-10-14): `hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes an annotated JSONC look with `--out`, no image. `--dump-params` is renamed `--save-recipe` (roll-workflow open question 5, resolved 2026-10-09)
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

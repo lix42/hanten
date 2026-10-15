@@ -1,3 +1,9 @@
+---
+title: Reuse-ready `nc estimate` output
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp]
+---
 # Reuse-ready `nc estimate` output
 
 ## Goal

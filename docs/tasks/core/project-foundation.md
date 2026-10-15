@@ -1,3 +1,8 @@
+---
+title: Project Foundation and Core Types
+status: done
+deps: []
+---
 # Project Foundation and Core Types
 
 ## Goal

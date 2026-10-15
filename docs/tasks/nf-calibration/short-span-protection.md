@@ -1,4 +1,16 @@
+---
+title: Protect short-span frames from too much contrast
+status: done
+deps: [nf-calibration/hybrid-slope-bounds, nf-display-stages/midtone-contrast-toe]
+tags: [new-flow]
+summary: ": the maximum stays 3.5 on the placement's slope (4.0 showed more grain), `--contrast` passes it"
+done: 2026-10-13
+---
 # Protect short-span frames from too much contrast
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-13**: the maximum stays 3.5 on the placement's slope (4.0 showed more grain), `--contrast` passes it; nothing stored predicts grain, so no frame-keyed guard. No code change
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-11: the maximum slope's value, split from `hybrid-slope-bounds` as a noise guard; a toe changes the shadows where thin frames' grain shows
 
 ## Goal
 

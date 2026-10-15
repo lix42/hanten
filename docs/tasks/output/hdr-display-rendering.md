@@ -1,3 +1,10 @@
+---
+title: Display-HDR Rendering
+status: done
+deps: [color/film-master-render-pipeline, output/hdr-output-spike]
+tags: [post-mvp]
+summary: render intentional linear ACEScg film values into BT.2020 PQ/HLG with explicit headroom, tone, and gamut mapping
+---
 # Display-HDR Rendering
 
 ## Goal

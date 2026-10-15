@@ -1,4 +1,15 @@
+---
+title: Linear Display Render
+status: done
+deps: [output/sdr-display-rendering]
+tags: [no-downstream-blockers]
+summary: "`print.display_tone` / `--display-tone <shoulder|none>`, on **both** display branches"
+---
 # Linear Display Render
+
+> **From TASKS.md** (migrated 2026-10-14): `print.display_tone` / `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture frames against the shipped default reconstruction: `blown%` fell on every one (mean 6.5 → 4.9), `code sep` improved on the three whose p90 sits above the knee and is blind on the rest, midtones bit-identical. No curve-type gate — the renderers' range checks make the mode self-policing. Default unchanged, so `pipeline_version` stays 3 (only the `recipe` fingerprint moved). The residual ~4–5% blown is the *reconstruction's*, which sizes `output/display-tone-mapping`
+>
+> **Dependency note** (migrated 2026-10-14): **done** 2026-09-01 shipped `print.display_tone` / `--display-tone <shoulder|none>`, applied by both display branches and rejected by the legacy branch and `film-master`. `none` skips the display Hermite so a reconstruction already bounded at reference white is not shouldered twice; gamut mapping and the transfer encode still run. Self-policing rather than curve-gated. The selector is the extension point `output/display-tone-mapping`'s operator plugs into — a payload variant is a pure recipe addition, only the CLI wiring changes
 
 ## Goal
 

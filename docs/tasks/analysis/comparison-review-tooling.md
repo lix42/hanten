@@ -1,4 +1,15 @@
+---
+title: Comparison Review Tooling
+status: done
+deps: [algo/reference-anchored-sigmoid]
+tags: [post-mvp]
+summary: the ad-hoc review pages from `algo/reference-anchored-sigmoid` are now a maintained tool
+---
 # Comparison Review Tooling
+
+> **From TASKS.md** (migrated 2026-10-14): the ad-hoc review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer** shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on Vite+ / Solid / Panda CSS): every rendition of a frame shares one grid cell, so switching config cannot move the picture, and the server takes the set by path and watches it. **Generator** shipped 2026-09-12 as `nctool review generate <matrix.json>` — the matrix is data, each cell is one `hanten convert`, and each rendition gets its `nctool metrics` record written beside it. HDR review is deferred with a reason in the task file (nothing downscales a gain map); build-vs-build was deferred there too and has since shipped as `analysis/review-build-axis`.
+>
+> **Dependency note** (migrated 2026-10-14): promote the ad-hoc review pages into a maintained config-comparison tool; the user asked for it as a separate task rather than continued inline patching
 
 ## Goal
 

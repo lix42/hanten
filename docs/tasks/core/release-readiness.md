@@ -1,4 +1,16 @@
+---
+title: Release Readiness
+status: todo
+deps: [core/pipeline-orchestration]
+related: [analysis/display-output-acceptance]
+tags: [post-mvp, productization]
+summary: "from the release-readiness review: (1) correct public docs that misstate the product (README \"pre-implementation\" + \"planned\", TASKS.md \"two algorithms\" omitting sigmoid, obsolete `--out-depth` in…"
+---
 # Release Readiness
+
+> **From TASKS.md** (migrated 2026-10-14): from the release-readiness review: (1) correct public docs that misstate the product (README "pre-implementation" + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in `core/pipeline-orchestration`, PUA-wrapped `citeturn` tokens in the research report); (2) license (user decision), Cargo release metadata, supported platforms (lcms2-sys C FFI constraint), and binary packaging.
+>
+> **Dependency note** (migrated 2026-10-14): doc fixes now; packaging best sequenced after analysis/display-output-acceptance
 
 ## Goal
 

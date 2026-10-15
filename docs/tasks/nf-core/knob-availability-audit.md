@@ -1,4 +1,15 @@
+---
+title: Audit every knob against the new flow
+status: done
+deps: [nf-core/new-flow-flag]
+tags: [new-flow]
+summary: every conversion flag classified (refused by presence, or kept) and held complete by an exhaustiveness test
+---
 # Audit every knob against the new flow
+
+> **From TASKS.md** (migrated 2026-10-14): every conversion flag classified (refused by presence, or kept) and held complete by an exhaustiveness test — its resolved-value table and section refusal were since replaced by the new chain's own recipe (`nf-core/recipe-schema`); three remedies that named a knob this flow refuses are fixed
+>
+> **Dependency note** (migrated 2026-10-14): classify every knob value-rejected vs flag-rejected before the default moves
 
 ## Goal
 

@@ -1,4 +1,13 @@
+---
+title: Film-Stock Profiles
+status: done
+deps: [algo/reference-anchored-sigmoid]
+tags: [post-mvp]
+summary: a selectable registry of known stocks carrying the per-stock reference densities that reconstruction needs (the mid-grey and diffuse-white aims, their difference, the mid-above-base offset and the…
+---
 # Film-Stock Profiles
+
+> **From TASKS.md** (migrated 2026-10-14): a selectable registry of known stocks carrying the per-stock reference densities that reconstruction needs (the mid-grey and diffuse-white aims, their difference, the mid-above-base offset and the per-channel structure), sourced from datasheets with provenance, with a generic C-41 fallback so stock selection stays a refinement rather than a requirement. Measured roll `film_base` stays authoritative — a published `D-min` is a nominal diagnostic, never a substitute. **2026-09-04: corpus collected and 8 colour stocks digitized** (see `progress/algo.md`) — the aims' Status M `D-min` now comes from the characteristic curve, which resolves the old chart-read blocker. **The reconstruction half has shipped** as the opt-in `characteristic` density curve (`--film-stock`, ten stocks, no default moved), with the publications in `docs/datasheets/`, a committed digitizer and a `cargo test` audit tying the pinned literals to them. **Closed 2026-09-08** after a ten-frame visual review: the blue cast is fixed, a smaller green residual remains and is routed to `io/scanner-density-calibration` (it needs one known-neutral frame, which no datasheet correction substitutes for). The generic per-channel fallback for the parametric path moves to `film-base/dmax-per-channel-reduction`, B&W to `algo/bw-support`, and making it the default to `algo/split-default-migration`
 
 ## Goal
 

@@ -1,3 +1,8 @@
+---
+title: Why `--auto-base` refuses every real scan
+status: closed
+deps: []
+---
 # Why `--auto-base` refuses every real scan
 
 > **Retired 2026-09-19** — it investigates why that same detector does not

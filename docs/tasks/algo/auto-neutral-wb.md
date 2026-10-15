@@ -1,3 +1,9 @@
+---
+title: Auto Neutral White Balance
+status: done
+deps: [algo/density, core/pipeline-orchestration]
+tags: [post-mvp]
+---
 # Auto Neutral White Balance
 
 ## Goal

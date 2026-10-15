@@ -1,4 +1,13 @@
+---
+title: Goldens for the new stages
+status: done
+deps: [nf-core/minimal-end-to-end]
+tags: [new-flow]
+summary: curated per-pixel vectors for the new stages
+---
 # Goldens for the new stages
+
+> **From TASKS.md** (migrated 2026-10-14): curated per-pixel vectors for the new stages; never a full-frame or post-transform hash
 
 ## Goal
 

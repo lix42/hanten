@@ -1,4 +1,15 @@
+---
+title: Metrics Visualization
+status: done
+deps: [analysis/metrics-chart-design, analysis/comparison-review-tooling]
+tags: [post-mvp]
+summary: the charts from `analysis/metrics-chart-design` are wired into `tools/review-app`, so numeric review sits beside visual review
+---
 # Metrics Visualization
+
+> **From TASKS.md** (migrated 2026-10-14): the charts from `analysis/metrics-chart-design` are wired into `tools/review-app`, so numeric review sits beside visual review. A record reaches the app as a **sibling file** named by an optional `metrics` key on a rendition, read server-side and watched like an image, so re-measuring updates the page in place; the charts sit below the picture and swap with the config. A rendition with no measurement renders its picture and says so, and an unreadable record costs only its own charts.
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-03. The measurements exist and read well as JSON and as a Markdown table; neither shows what a difference *looks* like. The review app already compares configs by toggling in place and its `review.json` is keyed by (image, config), which is the shape a metrics record has — so this is an extension of that app, not a new one
 
 ## Goal
 

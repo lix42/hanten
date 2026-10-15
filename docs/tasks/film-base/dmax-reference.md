@@ -1,4 +1,13 @@
+---
+title: Roll-fixed Dmax from a fully-exposed reference frame
+status: done
+deps: [algo/dmax-white-anchor]
+tags: [post-mvp]
+summary: shipped roll-fixed acquisition/default policy
+---
 # Roll-fixed Dmax from a fully-exposed reference frame
+
+> **From TASKS.md** (migrated 2026-10-14): shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
 
 ## Goal
 

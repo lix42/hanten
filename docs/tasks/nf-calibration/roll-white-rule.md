@@ -1,4 +1,16 @@
+---
+title: "`measure-roll` places the roll's white"
+status: done
+deps: [nf-calibration/anchor-comparison, nf-display-stages/parametric-operator]
+tags: [new-flow]
+summary: "the rule the comparison chose: brightest frame under a cap, a floor below, a warning near the leader"
+done: 2026-09-27
+---
 # `measure-roll` places the roll's white
+
+> **From TASKS.md** (migrated 2026-10-14): the rule the comparison chose: brightest frame under a cap, a floor below, a warning near the leader. **Done 2026-09-27**: each frame's white is the p97 of its pixels' brightest channel (film RGB, effective area, before the leader guard); `measure-roll` reports `look.contrast` and a `roll --frames` manifest for clamped frames
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-25: implements the white rule `anchor-comparison` chose by review, which was chosen with a black point in the chain and is not valid without one
 
 ## Goal
 

@@ -1,4 +1,16 @@
+---
+title: Envelope hybrid placement
+status: done
+deps: [nf-calibration/span-roll-slope, nf-calibration/level-target-zero, nf-calibration/taste-vs-quality, nf-look/contrast-on-luminance]
+tags: [new-flow]
+summary: each measured frame its own slope and exposure inside the roll's envelope (R 7, α 0.6), in place of the lifts
+done: 2026-10-10
+---
 # Envelope hybrid placement
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-10** (`pipeline_version` 12): each measured frame its own slope and exposure inside the roll's envelope (R 7, α 0.6), solved at render time from its stored tones, in place of the lifts; `--placement roll` keeps per-roll. **Display black is off by default** (`--display-black 6` turns it on; `direct` keeps 6)
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07: the spike's default placement; it starts from the target-0 exposure, generalises the lifts, and was approved with saturation held
 
 ## Goal
 

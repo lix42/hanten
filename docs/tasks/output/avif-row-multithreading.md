@@ -1,4 +1,15 @@
+---
+title: AVIF row multithreading
+status: done
+deps: [output/hdr-avif-output, core/conversion-versioning]
+tags: [post-mvp]
+summary: libaom row-mt at a pinned thread count of 8 (identical bytes at every worker count from 2 up, ~5x faster)
+---
 # AVIF row multithreading
+
+> **From TASKS.md** (migrated 2026-10-14): libaom row-mt at a pinned thread count of 8 (identical bytes at every worker count from 2 up, ~5x faster). Changes shipped `hdr-pq`/`hdr-hlg` bytes; **no `pipeline_version` bump** since neither is the default — the change is recorded in [reports/render-defaults-v3.md](reports/render-defaults-v3.md)'s addendum and pinned by a thread-count equality test in CI
+>
+> **Dependency note** (migrated 2026-10-14): libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
 
 **Done:** 2026-09-16 — see `docs/progress/output.md`. No `pipeline_version` bump: the presets are not the default.
 

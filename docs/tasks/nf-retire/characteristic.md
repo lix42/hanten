@@ -1,4 +1,15 @@
+---
+title: Retire the `characteristic` curve path
+status: done
+deps: [nf-retire/sigmoid-and-simple, nf-look/stock-data-home]
+tags: [new-flow]
+done: 2026-09-26
+---
 # Retire the `characteristic` curve path
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-26.** The curve (`algo/characteristic.rs` and `algo/curve_probe.rs` deleted whole), `--density-curve`, `--film-stock` and `--preset` itself are migration errors on both chains; the curve is a plain `ExponentialParams` (the old `"type": "exponential"` dropped on load); `density.scale` has one default; the report's `conversion_preset` and curve `type`/`stock`/`out_of_table` and telemetry `conversion.curve` (schema 7) are gone. The stock *data* stays, `#[cfg(test)]`. No pixel moved (`render`/`base` reproduced, `recipe` refreshed)
+>
+> **Dependency note** (migrated 2026-10-14): the curve, `--film-stock`, `--preset` and `default_scale_for`'s per-curve case; the stock *data* stays (`nf-look/stock-data-home`) and becomes `#[cfg(test)]`
 
 ## Goal
 

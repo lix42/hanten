@@ -1,4 +1,16 @@
+---
+title: Highlight desaturation
+status: done
+deps: [nf-look/stage, nf-calibration/scale-ladder, nf-reconstruction/anchor-spike, nf-look/desaturation-spike, nf-look/desaturation-band-fit, nf-display-stages/gamut-map-share, nf-scene-correction/roll-white-balance]
+tags: [new-flow]
+summary: what makes whites read clean, made a deliberate control instead of a side effect of the sigmoid's shoulder
+done: 2026-09-24
+---
 # Highlight desaturation
+
+> **From TASKS.md** (migrated 2026-10-14): what makes whites read clean, made a deliberate control instead of a side effect of the sigmoid's shoulder; placed under a hand-set per-roll contrast (the base-referenced anchor then left the operator inert) and behind a roll-level white balance, without which its saturation band cannot tell a cast white from skin. **Done 2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
+>
+> **Dependency note** (migrated 2026-10-14): what makes whites read clean, made a deliberate control instead of a side effect (of the sigmoid's shoulder today; `gamut-map-share` found the gamut map moves no marked white under `none`/`reinhard`). Built against a **hand-set** per-roll contrast (decided 2026-09-22): under the base-referenced anchor the operator is inert, and the rule that lifts white is `nf-calibration/anchor-comparison`'s, which follows this task — so the shape ships here and the values are re-fitted later
 
 ## Goal
 

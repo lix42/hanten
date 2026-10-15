@@ -1,4 +1,16 @@
+---
+title: Android gain-map check
+status: todo
+deps: [analysis/viewer-interoperability]
+priority: low
+tags: [post-mvp]
+summary: does Android 15+ display the ISO-only, three-channel gain-map JPEG as HDR? Needs a device
+---
 # Android gain-map check
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-10-04). Does Android 15+ display nc's ISO-only, three-channel gain-map JPEG as HDR (from `output/gain-map-dialect-activation`)? Needs a device
+>
+> **Dependency note** (migrated 2026-10-14): **low priority**; split from `viewer-interoperability` 2026-10-04
 
 > **Low priority** (user, 2026-10-04). Split out of
 > [`analysis/viewer-interoperability`](viewer-interoperability.md), which covers the

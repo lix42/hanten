@@ -1,4 +1,14 @@
+---
+title: "`roll`'s measure mode"
+status: done
+deps: [core/measure-base, core/recipe-composition]
+tags: [post-mvp]
+summary: "`roll --unexposed <file|auto> [--leader L]` measures the base and the roll, then converts"
+done: 2026-10-10
+---
 # `roll`'s measure mode
+
+> **From TASKS.md** (migrated 2026-10-14): `roll --unexposed <file|auto> [--leader L]` measures the base and the roll, then converts; `--measure-roll` does the same over a base the recipe already states. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the resolved run for re-rendering the same roll. **Done 2026-10-10**
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

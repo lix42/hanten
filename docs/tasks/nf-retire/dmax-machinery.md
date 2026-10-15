@@ -1,4 +1,15 @@
+---
+title: Retire the `Dmax` anchor machinery
+status: done
+deps: [nf-reconstruction/anchor-rule, nf-retire/legacy-custom]
+tags: [new-flow]
+done: 2026-09-24
+---
 # Retire the `Dmax` anchor machinery
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** The roll reference density (`calibration.dmax`, `--d-max` family, `estimate --d-max-region`) and the three other placements are gone; `AnchorPlacement` keeps `mid-at-base-offset`. Removed flags are migration errors on both chains; a recipe's `"dmax": "fixed"` is dropped on load, anything else refused. No pixel moved (`render`/`base` reproduced, `recipe` refreshed; telemetry schema 6); the effective area is still reported but nothing in `convert` measures over it
+>
+> **Dependency note** (migrated 2026-10-14): the reconstruction anchor and the leader-measured reference; frame-range measurement may return as an opt-in
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Metrics Chart Design
+status: done
+deps: [analysis/conversion-metrics]
+tags: [post-mvp]
+summary: "*what the charts are*, settled independently of the app and accepted as v1 on 2026-09-12: a luminance histogram, a per-channel histogram, and cast-over-tone as two axis-coloured curves, in…"
+---
 # Metrics Chart Design
+
+> **From TASKS.md** (migrated 2026-10-14): *what the charts are*, settled independently of the app and accepted as v1 on 2026-09-12: a luminance histogram, a per-channel histogram, and cast-over-tone as two axis-coloured curves, in hand-rolled SVG, with the a\*/b\* path rejected as unreadable. Components built and now drawn under every picture in the review app. The task file keeps a *Still open* list for v2 — the cast chart's x axis, a compare-mode cast chart, and how far `sparse` should demote a curve — none of which the v1 set needs.
+>
+> **Dependency note** (migrated 2026-10-14): split out of `analysis/metrics-visualization` on 2026-09-10 at the user's request, as the harder and app-independent half: which encoding each measurement gets, how many visuals they collapse into, the rendering technology, and the component split. It needs the metrics *shape*, not the app, so it is executable while the app half is not
 
 ## Goal
 

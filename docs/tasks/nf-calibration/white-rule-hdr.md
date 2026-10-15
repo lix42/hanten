@@ -1,4 +1,16 @@
+---
+title: The white rule in HDR
+status: done
+deps: [nf-calibration/roll-white-rule, nf-display-stages/parametric-shoulder, nf-calibration/roll-exposure, nf-calibration/span-roll-slope]
+tags: [new-flow]
+summary: the cap and floor stand
+done: 2026-10-12
+---
 # The white rule in HDR
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-12: the cap and floor stand.** Nothing looked wrong on the gain-map JPEG under `hybrid` or `frame` (28 frames, eleven rolls). How much HDR range is used is set by the headroom and the placement more than the cap or floor. The gamut map is nearly inert on HDR
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-27: the rule was reviewed on SDR only; `roll-white-rule` handed HDR to `parametric-shoulder`, which kept reinhard and left it unreviewed; after `roll-exposure` (2026-09-29), which sets the level the rule is reviewed at
 
 ## Goal
 

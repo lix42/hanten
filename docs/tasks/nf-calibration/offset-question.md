@@ -1,4 +1,13 @@
+---
+title: Does `density.offset` earn a value?
+status: todo
+deps: [nf-calibration/scale-gamma-loop, analysis/calibration-frame-capture]
+tags: [new-flow]
+summary: the term is real
+---
 # Does `density.offset` earn a value?
+
+> **From TASKS.md** (migrated 2026-10-14): the term is real; two candidate values lost a review, and identifying one needs one illuminant
 
 ## Goal
 

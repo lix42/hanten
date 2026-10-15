@@ -1,3 +1,8 @@
+---
+title: Density-Domain Algorithm
+status: done
+deps: [algo/interface]
+---
 # Density-Domain Algorithm
 
 ## Goal

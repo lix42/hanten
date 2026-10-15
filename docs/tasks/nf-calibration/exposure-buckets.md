@@ -1,4 +1,14 @@
+---
+title: Exposure buckets within a roll
+status: closed
+deps: [nf-calibration/roll-exposure]
+tags: [new-flow]
+---
 # Exposure buckets within a roll
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—not needed 2026-10-01**: no split of the 09-28 roll moves its exposure more than 0.24 EV (0.05 at the half), so a group measures what the roll does; the residual is per frame, `frame-level-trim`'s
+>
+> **Dependency note** (migrated 2026-10-14): **closed—not needed**; the dep below is decision history filed 2026-09-29: a group of frames exposed apart from the rest (09-28's battery change) is a roll in miniature, measured by the same rule
 
 **Closed — not needed (2026-10-01).** The one known case has no exposure change the
 roll's rule can see, so a group would measure what the roll already measures.

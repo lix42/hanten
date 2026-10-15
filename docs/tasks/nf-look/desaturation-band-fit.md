@@ -1,4 +1,16 @@
+---
+title: Fit the desaturation band on more than one patch
+status: done
+deps: [nf-look/desaturation-spike]
+tags: [new-flow]
+summary: the spike placed it from a single saturated patch on a single roll
+done: 2026-09-23
+---
 # Fit the desaturation band on more than one patch
+
+> **From TASKS.md** (migrated 2026-10-14): the spike placed it from a single saturated patch on a single roll; runs against today's binary. **Done 2026-09-23**: `s0`/`s1` = 0.025/0.055 on `log10(max/min)/gamma`, and only behind a roll-level white balance ([`desaturation-band.md`](spike/desaturation-band.md))
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-22. The spike placed the saturation band from **one** saturated patch on one roll, and said so: the shape carries, the numbers do not. Runs against today's binary, so it can produce real values before the look stage exists
 
 ## Goal
 

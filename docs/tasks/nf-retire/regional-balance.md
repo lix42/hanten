@@ -1,4 +1,15 @@
+---
+title: Retire the regional balance
+status: done
+deps: [nf-look/per-channel-grade]
+tags: [new-flow]
+done: 2026-09-25
+---
 # Retire the regional balance
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-25.** `--shadow-balance` / `--highlight-balance` / `--balance-range` / `--auto-balance-range` are migration errors on both chains naming `--channel-grade` under `--new-flow`; the current chain has no counterpart. A recipe's neutral balance keys are dropped on load, anything else refused with a case-specific remedy (an equal pair is an offset; a range beside equal balances was never read). The report's `balance_range` is gone. No pixel moved (`render`/`base` reproduced, `recipe` refreshed); on a synthetic crossover a hand-matched grade leaves C\* ≤ 0.71 where the balance left 2.16
+>
+> **Dependency note** (migrated 2026-10-14): subsumed by the look's grade, and non-monotone at large values
 
 ## Goal
 

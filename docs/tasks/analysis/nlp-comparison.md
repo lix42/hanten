@@ -1,4 +1,13 @@
+---
+title: "Reference Comparison: nc vs NLP and Hand-Tweaked Targets"
+status: todo
+deps: [analysis/conversion-metrics]
+tags: [post-mvp]
+summary: pair nc output with NLP / SmartConvert / hand-edited **targets** by `source_frame` (no registration) and report per-axis deltas, so `|nc − target| < |NLP − target|` becomes a checkable claim
+---
 # Reference Comparison: nc vs NLP and Hand-Tweaked Targets
+
+> **From TASKS.md** (migrated 2026-10-14): pair nc output with NLP / SmartConvert / hand-edited **targets** by `source_frame` (no registration) and report per-axis deltas, so `|nc − target| < |NLP − target|` becomes a checkable claim; NLP outputs are already in the manifest
 
 ## Goal
 

@@ -2735,4 +2735,4 @@ So you don't go looking:
 | **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/auto-calibration`](tasks/core/auto-calibration.md) |
 | **IR dust removal** | roadmap follow-up, no task file yet |
 
-[`docs/TASKS.md`](TASKS.md) is the authoritative status for all of it.
+[`docs/TASKS.md`](TASKS.md) indexes all of it; each task file holds its status.

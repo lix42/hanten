@@ -1,3 +1,8 @@
+---
+title: Light film holder support
+status: closed
+deps: []
+---
 # Light film holder support
 
 > **Retired 2026-09-19** — holder polarity has nothing left to configure once

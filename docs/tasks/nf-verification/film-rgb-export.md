@@ -1,4 +1,15 @@
+---
+title: Export the pre-matrix film RGB
+status: done
+deps: [nf-reconstruction/fixed-decode]
+tags: [new-flow]
+done: 2026-09-30
+---
 # Export the pre-matrix film RGB
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-30.** `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32 TIFF; `nctool metrics --space film-rgb` measures it per channel
+>
+> **Dependency note** (migrated 2026-10-14): the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
 
 ## Goal
 

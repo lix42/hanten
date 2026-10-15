@@ -1,4 +1,16 @@
+---
+title: Near-black collapse warning
+status: done
+deps: [algo/density-safety-bounds]
+tags: [post-mvp]
+summary: ": a rendered channel whose p99.9 (`pipeline::near_black`, on the display-referred buffer before the encode) is more than 10 stops below diffuse white warns, beside part 2's all-zero rule"
+done: 2026-10-13
+---
 # Near-black collapse warning
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-13**: a rendered channel whose p99.9 (`pipeline::near_black`, on the display-referred buffer before the encode) is more than 10 stops below diffuse white warns, beside part 2's all-zero rule; no real frame comes within 4.3 stops of it
+>
+> **Dependency note** (migrated 2026-10-14): split from `algo/density-safety-bounds` 2026-10-01; **needs real scans**
 
 > **Done 2026-10-13.** `pipeline::near_black` measures; `cli::near_black_warning` warns.
 > The open questions are answered below; the evidence is in `docs/progress/algo.md`.

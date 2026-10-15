@@ -1,4 +1,17 @@
+---
+title: Telemetry ingestion service
+status: done
+deps: [telemetry/upload-schema]
+priority: low
+tags: [post-mvp]
+summary: the validating Cloudflare Worker + D1 ingestion endpoint, with dedup, retention, cost ceilings and a kill switch
+done: 2026-09-30
+---
 # Telemetry ingestion service
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-09-29). Build the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day retention, cost ceilings, abuse quarantine/kill switch, and initial advisory performance/failure queries. **Done 2026-09-30**: `services/telemetry-ingest/`, live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` on the owner's paid Cloudflare account (strategy amendment), deployed by a manual workflow from `main`.
+>
+> **Dependency note** (migrated 2026-10-14): **low priority**
 
 ## Goal
 

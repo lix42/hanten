@@ -1,4 +1,15 @@
+---
+title: Gain-Map Dialect Activation
+status: closed
+deps: [output/iso-gain-map-metadata]
+tags: [post-mvp]
+closed_into: analysis/viewer-interoperability
+---
 # Gain-Map Dialect Activation
+
+> **From TASKS.md** (migrated 2026-10-14): **closed: merged into `analysis/viewer-interoperability`** (2026-10-01): no dual-dialect file exists any more; the Android check of the ISO-only three-channel gain map is `analysis/android-gain-map-check`'s (split 2026-10-04)
+>
+> **Dependency note** (migrated 2026-10-14): **closed: merged into `analysis/viewer-interoperability`** 2026-10-01; the dep below is decision history Android 15+ is the only platform that reads *both* dialects, so the only place coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 
 > **Closed — merged into `analysis/viewer-interoperability` (2026-10-01).**
 > `nf-core/default-flip` retired the Ultra HDR v1 dialect, so this build writes no

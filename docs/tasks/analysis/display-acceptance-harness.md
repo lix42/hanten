@@ -1,4 +1,16 @@
+---
+title: Display-acceptance harness
+status: done
+deps: [nf-core/default-flip, nf-verification/benchmark-set]
+tags: [post-mvp]
+summary: the manifest-driven harness and independent decode-back oracles, proven on fixtures
+done: 2026-10-01
+---
 # Display-acceptance harness
+
+> **From TASKS.md** (migrated 2026-10-14): the manifest-driven harness and independent decode-back oracles, proven on fixtures; needs no real scans. **Done 2026-10-01.** `hanten convert --export-pre-encode` writes the buffers each encoder receives; `nctool acceptance run` decodes every output from the standards (ICC, BT.2100, ISO 21496-1, CIE) and checks it against them, plus determinism and cross-encoding ΔE on a synthetic chart. The gain map is gated at its own grid; the 8-bit gain map has a measured ΔE allowance. Filed `output/content-light-levels`
+>
+> **Dependency note** (migrated 2026-10-14): split from `display-output-acceptance` 2026-10-01
 
 ## Goal
 

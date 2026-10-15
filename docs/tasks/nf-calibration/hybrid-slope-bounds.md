@@ -1,4 +1,16 @@
+---
+title: The maximum slope
+status: done
+deps: [nf-calibration/envelope-hybrid-placement, nf-calibration/per-frame-placement, nf-scene-correction/midtone-neutral]
+tags: [new-flow]
+summary: a hybrid frame the ±1 EV limit holds flattens to stay inside the envelope
+done: 2026-10-11
+---
 # The maximum slope
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-11** (`pipeline_version` 14): a hybrid frame the ±1 EV limit holds flattens to stay inside the envelope; the dark target, the roll's p10 and per-roll's level measured and kept. The maximum stays 3.5, a guard; its value moved to `short-span-protection`
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07: the hybrid's provisional anchor and maximum slope, measured on whites taken after colour correction; the anchor moved to `span-roll-slope` 2026-10-09
 
 **Done:** 2026-10-11 — the limit guard and the measurements; the maximum's value moved to
 [`short-span-protection`](short-span-protection.md), the tails to

@@ -1,3 +1,9 @@
+---
+title: Content-Aware Sigmoid Toe (Optional)
+status: closed
+deps: []
+closed_into: nf-display-stages/parametric-operator
+---
 # Content-Aware Sigmoid Toe (Optional)
 
 > **Superseded 2026-09-19 by `nf-display-stages/parametric-operator`** — a toe

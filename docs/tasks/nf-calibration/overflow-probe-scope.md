@@ -1,4 +1,16 @@
+---
+title: A steep frame refused by a sample no picture holds
+status: done
+deps: []
+tags: [new-flow]
+summary: ": the scan floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the probe checks only the recipe each frame renders"
+done: 2026-10-13
+---
 # A steep frame refused by a sample no picture holds
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-13**: the scan floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the probe checks only the recipe each frame renders; `--placement frame --contrast 1.3` renders 09-18 and 09-29 whole
+>
+> **Dependency note** (migrated 2026-10-14): none filed 2026-10-12 from `midtone-contrast-toe` step 4: the densest-sample probe refuses `--placement frame --contrast 1.3` on 11 frames, and every entry is checked, so whole rolls; related to `short-span-protection`
 
 ## Goal
 

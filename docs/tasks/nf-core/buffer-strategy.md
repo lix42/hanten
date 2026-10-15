@@ -1,4 +1,14 @@
+---
+title: Stage seams, buffers and the IR plane
+status: done
+deps: [nf-core/stage-skeleton]
+tags: [new-flow]
+summary: the GPU spike decided the seams are the existing typed boundaries, not one per stage
+done: 2026-10-09
+---
 # Stage seams, buffers and the IR plane
+
+> **From TASKS.md** (migrated 2026-10-14): the GPU spike decided the seams are the existing typed boundaries, not one per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP. **Done 2026-10-09**: one buffer, in place, the gain map's split the one copy; the IR plane is dropped at `fixed::decode`. SDR TIFF peak 1.654 → 1.355 GB at 74.65 MP, outputs byte-identical
 
 ## Goal
 

@@ -1,4 +1,13 @@
+---
+title: Telemetry event schema v2
+status: done
+deps: [telemetry/strategy, nf-core/report-contract]
+tags: [post-mvp]
+done: 2026-09-28
+---
 # Telemetry event schema v2
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-28.** Typed success/failure local events (telemetry schema 10), each with a random per-event deduplication ID; every `convert` that parses writes one, a failure naming its stage, error kind and exit code. Telemetry's sinks may not land on the input, the `--params` recipe or an output. No pixel, recipe or fingerprint change.
 
 ## Goal
 

@@ -1,4 +1,16 @@
+---
+title: Colour under a steeper midtone
+status: todo
+deps: [nf-display-stages/midtone-contrast-toe]
+priority: low
+tags: [new-flow]
+summary: whether saturation follows the opt-in `--contrast 1.3`
+---
 # Colour under a steeper midtone
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority**: whether saturation follows the opt-in `--contrast 1.3`
+>
+> **Dependency note** (migrated 2026-10-14): **low priority** split from `midtone-contrast-toe` 2026-10-11: whether saturation follows `--contrast 1.3`
 
 ## Goal
 

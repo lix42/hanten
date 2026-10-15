@@ -1,3 +1,8 @@
+---
+title: Dmax Anchor Reliability
+status: closed
+deps: []
+---
 # Dmax Anchor Reliability
 
 > **Retired 2026-09-19** — it asks whether the leader-measured anchor measures

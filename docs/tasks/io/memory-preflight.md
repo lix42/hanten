@@ -1,4 +1,14 @@
+---
+title: Memory Preflight & In-Place Transform
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp, hardening]
+summary: "from the memory-safety review (Phase A, cheap): predict peak allocation and fail loudly over a budget before allocating (reconciling the dishonest 4 GiB input limit), and drop the whole-image clone…"
+done: 2026-07-27
+---
 # Memory Preflight & In-Place Transform
+
+> **From TASKS.md** (migrated 2026-10-14): from the memory-safety review (Phase A, cheap): predict peak allocation and fail loudly over a budget before allocating (reconciling the dishonest 4 GiB input limit), and drop the whole-image clone in `to_output` (transform in place, skip IR). **Done 2026-07-27** (see [progress/io.md](progress/io.md) `## memory-preflight`): `pipeline::memory` sizing model (decode 18 · film-base 16+12·s · render 32+12·s · encode 38+12·s B/px) gated before decode from a metadata-only `io::decode::probe`, fixed 6 GiB default budget + `--max-memory` (operational, not a recipe key), new exit code 6; peak on the 74.65 MP `largest.tif` 3.808 → 3.146 GB and 975 → 681 MB at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement fed `io/streaming-tiled-io` STEP 0 (evaluated no-go 2026-10-13).
 
 ## Goal
 

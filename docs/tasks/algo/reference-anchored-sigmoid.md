@@ -1,3 +1,10 @@
+---
+title: Reference-Anchored Sigmoid Calibration and Redesign
+status: done
+deps: [algo/negative-reconstruction-density-curves, film-base/dmax-reference]
+tags: [post-mvp]
+summary: reproduce and quantify the shipped sigmoid's raised, narrow real-roll shadow spread, then choose the least invasive defaults/semantics/equation remedy against frozen film-master/SDR/HDR metrics
+---
 # Reference-Anchored Sigmoid Calibration and Redesign
 
 ## Goal

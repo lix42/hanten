@@ -1,4 +1,13 @@
+---
+title: Update CLAUDE.md for the new architecture
+status: doing
+deps: []
+tags: [new-flow]
+summary: the architecture map, the HDR framing, and retiring the migration rule itself
+---
 # Update CLAUDE.md for the new architecture
+
+> **Dependency note** (migrated 2026-10-14): none the architecture map, the HDR framing, and retiring the migration rule itself
 
 ## Goal
 

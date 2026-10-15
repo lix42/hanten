@@ -1,4 +1,13 @@
+---
+title: Asset Manifest
+status: done
+deps: [analysis/conversion-analysis-tooling]
+tags: [post-mvp]
+summary: tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs)
+---
 # Asset Manifest
+
+> **From TASKS.md** (migrated 2026-10-14): tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
 
 ## Goal
 

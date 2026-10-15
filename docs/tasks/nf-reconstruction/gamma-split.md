@@ -1,4 +1,15 @@
+---
+title: Split `gamma` into calibration and look
+status: done
+deps: [nf-reconstruction/fixed-decode]
+tags: [new-flow]
+done: 2026-09-24
+---
 # Split `gamma` into calibration and look
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** Under `--new-flow` the decode's slope is `reconstruction.linearization` (1.8, `--density-gamma`) and print contrast is `look.contrast` (`--contrast`, default 2.0/1.8, pivoted at mid-grey, before highlight desaturation); a neutral renders where the single 2.0 did, saturated colour moves slightly. The pre-split `reconstruction.contrast` is refused by name. The current chain keeps the bundled 2.0, so no pixel or fingerprint moved there
+>
+> **Dependency note** (migrated 2026-10-14): the film-linearization half stays; print contrast becomes a look knob
 
 ## Goal
 

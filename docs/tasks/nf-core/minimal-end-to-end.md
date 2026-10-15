@@ -1,4 +1,15 @@
+---
+title: A minimal end-to-end render
+status: done
+deps: [nf-core/stage-skeleton, nf-reconstruction/fixed-decode]
+tags: [new-flow]
+done: 2026-09-22
+---
 # A minimal end-to-end render
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-22.** The milestone that expires the flag and unblocks retirement. `--new-flow` now renders: fixed decode → chain (three identities, fit gamut's P3 matrix) → a Display P3 16-bit TIFF with no sidecar, on `convert` and `roll`
+>
+> **Dependency note** (migrated 2026-10-14): the milestone that expires the flag and unblocks retirement
 
 ## Goal
 

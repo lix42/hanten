@@ -1,3 +1,10 @@
+---
+title: Scene correction as a named stage
+status: done
+deps: [nf-core/stage-skeleton, nf-reconstruction/fixed-decode]
+tags: [new-flow]
+summary: white balance and exposure resolved once and reported, instead of a fused expression
+---
 # Scene correction as a named stage
 
 ## Goal

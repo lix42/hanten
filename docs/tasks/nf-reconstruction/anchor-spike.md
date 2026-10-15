@@ -1,4 +1,15 @@
+---
+title: "Spike: does a diffuse-white anchor earn its place?"
+status: done
+deps: []
+tags: [new-flow]
+summary: runs against today's binary so it can run first
+---
 # Spike: does a diffuse-white anchor earn its place?
+
+> **From TASKS.md** (migrated 2026-10-14): runs against today's binary so it can run first; every converter measured anchors the bright end, and the rule currently has to choose on argument alone
+>
+> **Dependency note** (migrated 2026-10-14): none runs against today's binary so it can run before the rule has to be chosen; every converter measured anchors the bright end, and whether nc should is currently argued rather than measured
 
 ## Goal
 

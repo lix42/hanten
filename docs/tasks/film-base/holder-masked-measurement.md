@@ -1,4 +1,15 @@
+---
+title: Rebuild Dmin and Dmax measurement on area x method
+status: done
+deps: [film-base/ir-usability-detection, film-base/holder-depth-mask, core/conversion-versioning, film-base/dmax-reference]
+tags: [post-mvp]
+summary: "`estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one population sits 0.01-0.085 density pale on 9 real frames)"
+---
 # Rebuild Dmin and Dmax measurement on area x method
+
+> **From TASKS.md** (migrated 2026-10-14): `estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one population sits 0.01-0.085 density pale on 9 real frames); a stated region keeps p97. Retires `--auto-base` / `"auto"`, `--grid` and `inspect`'s suggested Dmin. No pixel change, no bump
+>
+> **Dependency note** (migrated 2026-10-14): **area x method** and nothing else: the effective area of an unexposed frame at the **median** (`estimate FRAME`, measurement-only), or a stated region at p97. **Retires** the rebate-band search (`--auto-base`, `"auto"`), `estimate --grid` and `inspect`'s suggested Dmin (decided 2026-09-28). The `Dmax` half was overtaken by `nf-retire/dmax-machinery`. No conversion's pixels move, so no `pipeline_version` bump
 
 > **Overtaken in part, 2026-09-28.** The `Dmax` half is gone: `nf-retire/dmax-machinery`
 > retired the leader `Dmax`, `reference_dmax` and `--d-max-region`, so this task is

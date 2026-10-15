@@ -1,4 +1,13 @@
+---
+title: A build axis in the review set
+status: done
+deps: [analysis/comparison-review-tooling]
+tags: [post-mvp]
+summary: a matrix may declare builds, each a pre-built binary; cells become <config>@<build>
+---
 # A build axis in the review set
+
+> **From TASKS.md** (migrated 2026-10-14): done 2026-09-22. A matrix may declare `builds`, each naming a pre-built binary; the generator expands builds x configs into cells `<config>@<build>`, so the app keeps one toggle and one grid cell. Each config carries a `producer` block **derived** from what that binary reported about itself, never typed into the matrix — and a build that reports two identities in one run aborts it.
 
 ## Goal
 

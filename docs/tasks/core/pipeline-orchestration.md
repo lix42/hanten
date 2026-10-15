@@ -1,3 +1,8 @@
+---
+title: Pipeline Orchestration
+status: done
+deps: [io/silverfast-decode, io/tiff-encode, color/management, film-base/estimation, algo/simple, algo/density, core/cli-framework]
+---
 # Pipeline Orchestration
 
 ## Goal

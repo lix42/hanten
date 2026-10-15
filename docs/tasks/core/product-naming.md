@@ -1,4 +1,16 @@
+---
+title: Name the product Hanten, and fix the boundary
+status: done
+deps: []
+tags: [cross-cutting]
+summary: Hanten as the product, `nc` as the internal name
+done: 2026-09-21
+---
 # Name the product Hanten, and fix the boundary
+
+> **From TASKS.md** (migrated 2026-10-14): Hanten as the product, `nc` as the internal name; almost every `nc` in the tree is a versioned identifier rather than branding, and the boundary goes into CLAUDE.md so it is not re-litigated. **Done 2026-09-21**: the boundary lives in CLAUDE.md ("Hanten outside, `nc` inside"); the binary **is** `hanten` (a Cargo `[[bin]]`, so the package and `nc_version` never moved) and the repo is `lix42/hanten`
+>
+> **Dependency note** (migrated 2026-10-14): none name the product Hanten; the **binary is `hanten`** while `nc` stays the crate and every identifier. The boundary's home is CLAUDE.md. No dependencies, but it touches README/CLAUDE.md/design-spec and should run **alone between merges**, not beside the `nf-*` migration
 
 ## Goal
 

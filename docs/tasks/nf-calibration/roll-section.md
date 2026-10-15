@@ -1,4 +1,13 @@
+---
+title: The roll's measurements as their own recipe section
+status: done
+deps: [nf-calibration/roll-white-rule]
+tags: [new-flow]
+summary: "`roll.white_balance` and `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply them or not"
+---
 # The roll's measurements as their own recipe section
+
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-27: moves the values it measures out of the style knobs
 
 ## Goal
 

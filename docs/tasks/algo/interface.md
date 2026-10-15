@@ -1,3 +1,8 @@
+---
+title: Algorithm Interface
+status: done
+deps: [core/project-foundation]
+---
 # Algorithm Interface
 
 ## Goal

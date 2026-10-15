@@ -1,4 +1,15 @@
+---
+title: Retire the sigmoid and `simple`
+status: done
+deps: [nf-retire/legacy-custom, nf-verification/stage-goldens, nf-reconstruction/fixed-decode]
+tags: [new-flow]
+done: 2026-09-23
+---
 # Retire the sigmoid and `simple`
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-23.** The current chain's default moved to the exponential at the fixed decode's configuration (`pipeline_version` 6, new fingerprint row); `Reconstruction` is a struct, `"type": "density"` is accepted at its old value, and `simple`, the sigmoid, their flags and the two `sigmoid-*` presets are migration errors. Test fixtures moved to `FilmRgbImage::fixture`; sigmoid goldens and probes deleted. The default gain map is live (1.88 log2 on the fixture), and a stated `Dmax` is now unread by default
+>
+> **Dependency note** (migrated 2026-10-14): `simple` is the cheap fixture in a dozen unrelated test modules
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Capture the calibration frames
+status: doing
+deps: [analysis/asset-manifest, analysis/chart-extraction]
+tags: [post-mvp]
+summary: "**Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first neutrality…"
+---
 # Capture the calibration frames
+
+> **From TASKS.md** (migrated 2026-10-14): **Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first neutrality measurement. **Shooting (2026-10-07)**: Gold200 and Ektar100 shot, −2 … +2; Portra400 and UltraMax400 planned. **2026-10-13**: `2026-10-12-Gold200` archived (bracket −2 … +4 on a Passport Photo 2); registration agreed 2026-10-14, labelling and extraction split out. Gates `nf-calibration/neutrality-gate`, `saturation-margin`, `offset-question`, `nf-scene-correction/midtone-neutral-fit` and `io/scanner-density-calibration`
+>
+> **Dependency note** (migrated 2026-10-14): **asset acquisition — mostly photographic** filed 2026-09-12. Several tasks named these frames as a precondition in their own words and none owned producing them, so the graph reported work executable when the thing blocking it was a roll of film that did not exist. It gates `io/scanner-density-calibration`, `nf-calibration/neutrality-gate`, `nf-calibration/saturation-margin`, `nf-calibration/offset-question` and `nf-scene-correction/midtone-neutral-fit`
 
 ## Goal
 

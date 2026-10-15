@@ -1,4 +1,15 @@
+---
+title: HDR AVIF Windows Packaging
+status: closed
+deps: [output/hdr-avif-output]
+tags: [post-mvp]
+closed_into: output/drop-avif
+---
 # HDR AVIF Windows Packaging
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—superseded** by `output/drop-avif` (2026-10-01): no AVIF encoder is left to package; kept as the plan if AVIF returns
+>
+> **Dependency note** (migrated 2026-10-14): **closed—superseded** by `output/drop-avif`
 
 **Status:** closed—superseded (2026-10-01) by `output/drop-avif`: there is no AVIF
 encoder left to package. Kept as the plan to resume if AVIF returns

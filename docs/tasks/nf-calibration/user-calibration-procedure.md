@@ -1,3 +1,10 @@
+---
+title: What a user would actually run
+status: todo
+deps: [io/scanner-density-calibration, nf-calibration/scale-gamma-loop]
+tags: [new-flow]
+summary: we fit our own chain, never a user's, so the shipped value is a prior
+---
 # What a user would actually run
 
 ## Goal

@@ -1,4 +1,15 @@
+---
+title: The default rendering without a roll measurement
+status: done
+deps: [nf-calibration/roll-white-rule]
+tags: [new-flow]
+done: 2026-09-30
+---
 # The default rendering without a roll measurement
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-30.** The fallback slope is placed as if the roll's white were +1.75 stops (whole contrast 2.54, where it was 2.0), chosen by review; `direct`'s pinned slope moved with it; white balance stays neutral and exposure 0; `pipeline_version` 9
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
 
 ## Goal
 
