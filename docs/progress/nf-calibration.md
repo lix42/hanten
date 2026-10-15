@@ -2258,8 +2258,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
   −0.50, 09-29 −0.68, 09-20 −0.21 look stops of median level), and acts like a per-frame
   R (Gold200's frames at an effective 5.4–7.4); a lower global R still lifts (R 7: Gold200
   +0.28, 09-28 +0.27). Round 2 (`round2/review.json`, today vs C on the 47 frames C moves on
-  09-18, 09-29, 09-20; p50 −10 to −13 L\*, 09-29's p99 85 → 73). **Decided (user): C's
-  effect should not reach every roll.** Back to round 1: **A too dark, today acceptable**
+  09-18, 09-29, 09-20; p50 −10 to −13 L\* on 09-18 and 09-29, −3 on 09-20; 09-29's p99
+  85 → 73). **Decided (user): C's effect should not reach every roll.** Back to round 1: **A too dark, today acceptable**
   — the 5.5 dark target (`nf-display-stages/frame-dark-target`, after this roll was first
   reviewed) already deepened the hybrid's blacks (Gold200 p1 L\* 13.9). A moves 125 frames
   (thin rolls −0.6 to −1.0 look stops of level; 09-18, 09-20, 09-29 −0.13 to −0.21).

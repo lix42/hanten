@@ -17,8 +17,6 @@ brighter for it.
   in the archive): envelope −3.82…+0.88 stops; frames' dark ends at −3.80…−3.82 on 2107,
   2114, 2117 and 2098; the lowest levels are 2107 and 2114 (−3.0). Median frame exposure
   +0.26 EV under the hybrid against −0.52 EV under `frame`.
-- Several frames share the dark end there, so whether this is one outlier frame or the
-  envelope's rule itself is not yet known.
 - 2026-10-14: **not one frame.** 21 of the 29 frames have their dark end within 0.1 stop
   of the film base, so a percentile over frames changes nothing. The cause is the envelope's
   floor on a thin roll: the roll's exposure lifts the base with the level, per-roll renders

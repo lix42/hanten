@@ -2384,8 +2384,8 @@ the design now in `docs/design-spec.md` (§6–§7):
   the dark floor, holds the dark end, so on a thin roll a higher R brightens
 - [x] [One dark frame brightens the whole roll](tasks/nf-calibration/envelope-dark-end.md) —
   **done 2026-10-14, no change**: not one frame but the envelope's floor on thin rolls,
-  which lifts every frame; two fixes (a deeper floor, flattening instead of lifting) lost
-  by review to today's hybrid with the 5.5 dark target
+  which lifts every frame; with the 5.5 dark target today's hybrid was kept (a deeper floor
+  was too dark; flattening instead of lifting also moved reviewed rolls)
 - [x] [A steep frame refused by a sample no picture
   holds](tasks/nf-calibration/overflow-probe-scope.md) — **done 2026-10-13**: the scan
   floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the
