@@ -1212,8 +1212,8 @@ all of that at the report write and turn exits 0/1 into 141; it is also process-
 
 ## value-domain-terminology
 
-**Status:** not started
-**Updated:** —
+**Status:** done
+**Updated:** 2026-10-15
 
 - Goal: Make nc's value-domain terminology — especially `Dmin`/`Dmax` — easy to understand, use, and maintain for **both people and agents**.
 
@@ -1221,6 +1221,10 @@ all of that at the report write and turn exits 0/1 into 141; it is also process-
 
 The 2026-08-04 `conversion-versioning` cross-reference that had been appended under this
 heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`).
+- 2026-10-14: Rescoped with the user: Dmax is retired (nf-retire/dmax-machinery) and its calibration move shipped (core/calibration-recipe-section), so items 3-4 are gone. New scope: inventory the multiplier family (slope, gain, contrast, scale, ...) and value-space terms per stage, public vs internal; user reviews the term set; then docs/terminology.md, a thin skill, and 'film base' leading over Dmin in user-facing text. Code-identifier renames are a follow-up task; public flags/keys do not change.
+- 2026-10-14: Inventory done (three read-only sweeps: decode/film base, rendering stages, output + public surface). Proposed term set published for user review as a private Artifact. Verified by hand: --display-tone-headroom help says 'above reference white' but recipe/fit_range docs say diffuse white; look stage string 'contrast' fires on slope != 1; fixed.rs 'Five quantities' says D'=0 at the base (it is D=0, D'=offset); using-nc says the anchor renders to scene white (it renders to film RGB 1.0). Public misnomers (--density-gamma, reconstruction.anchor vs chain.decode.anchor, etc.) deferred to a follow-up task.
+- 2026-10-14: User review: colour must be covered as fully as exposure. Ran a fourth (colour) sweep and added a C section to the review page (spaces/whites, luminance in three spaces, corrections, look colour, gamut fitting, overloaded colour words). Verified: the HLG encode runs a second neutral-axis boundary map in scene-linear BT.2020 (hdr.rs encode_transfer), contradicting design-spec's 'never a second gamut transform' / 'rejected, not clipped'; colorimetry/definitions.rs D50 doc is stale (BRADFORD_D65_TO_ICC_PCS is pinned and written to profiles).
+- 2026-10-15: Term set reviewed with the user (private Artifact, Q1–Q8 answered) and written as docs/terminology.md; design-spec §4's value-domain section is now a summary linking it, and algo::fixed's "Five quantities" table moved in. Decisions: "tone slope" for the look's slope; "HDR headroom" (stops, ISO 21496-1's sense) and "display peak" (ratio) for the destination's peak over reference white, and "highlight range" for fit range's knob (public names keep 'headroom' until core/rename-fit-range-misnomers); "lift" only for the roll's per-frame corrections, fit range's dark end "raises"; "luminance" (with its space) replaces "luma" in prose; "colour"/"grey" in prose and messages; the HLG encode's second gamut map is documented as intended (design-spec §5). Film base leads over Dmin in help, messages and using-nc. Found while writing: fit_range::DisplayPeak's docs and refusal said 'relative to diffuse white' — it is relative to reference white (display 1.0; diffuse white renders ≈0.55 at W=64, W itself ≈1.0). Prose-only scope: user-facing text, the docs and the doc comments of the modules the errors were in; remaining internal names and comments are core/internal-term-renames. Follow-ups filed: core/rename-decode-look-misnomers, core/rename-fit-range-misnomers, core/rename-roll-report-misnomers, core/internal-term-renames. New skill .agents/skills/value-terms (thin pointer to the doc); CLAUDE.md points at it.
 
 ## recipe-composition
 
@@ -1618,3 +1622,31 @@ new path. No pixel moved.
   `--d-max-region` example, §4 the workflow recipe, §5 the default document and the
   "minimal recipe is byte-identical to the flag form" claim — re-run and still
   byte-identical, plus the new migration-error text). Header pin refreshed.
+
+## rename-decode-look-misnomers
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: migrate public names that say the wrong quantity: P1–P3 in docs/terminology.md's misnomer list
+
+## rename-fit-range-misnomers
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: the highlight range gets its own name (e.g. --highlight-range); display black and the duplicated display peak
+
+## rename-roll-report-misnomers
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: report fields and roll keys whose names collide or flip sign; includes the American spellings input_color, gray-world
+
+## internal-term-renames
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: Rust identifiers, constants and remaining doc comments: apply_contrast(slope), *_LUMA, headroom_*, fit range's "lift", test helpers using contrast for linearization

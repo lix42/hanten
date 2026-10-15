@@ -51,37 +51,13 @@
 //!
 //! # Five quantities, and none of them are interchangeable
 //!
-//! They are routinely collapsed into "dmax" or "white". They are not the same
-//! number, they do not come from the same place, and only one of them is an input
-//! here:
-//!
-//! | name | what it is | where it comes from | status |
-//! |---|---|---|---|
-//! | **film base** (`Dmin`) | per-roll transmission of unexposed film | measured from that roll's rebate | an input; `D′ = 0` by construction |
-//! | **leader `Dmax`** | film **saturation** density | a light-struck leader; `estimate --d-max-region` measured it until `nf-retire/dmax-machinery` | **retired**; nothing reads it |
-//! | **anchor `A`** | the corrected density that renders to `1.0` | derived: [`AnchorRule::anchor`] | `≈1.034` at the defaults (`d + 0.745/1.8`); reported |
-//! | **diffuse white** | scene white on a correctly exposed negative | the datasheets: `d + types::REFERENCE_MID_TO_WHITE_DELTA` | `0.98` — a reference number, not an input |
-//! | **content white `W`** | a roll's bright end (red p97 of picture density) | `docs/spike/white-placement.md` | **not measured, not shipped** |
-//! | **specular headroom** | ~1 stop above diffuse white | where an HDR rendition lives | a consequence, not a knob |
-//!
-//! The anchor rule here is *reference-free*: it never reads a leader `Dmax`, which
-//! is what keeps that measurement's roll-to-roll error (0.295 density between two
-//! rolls of one stock, against bases agreeing to 0.0005) out of the render.
-//! [`DecodeReport::reads_reference`] states that as a fact the caller can read
-//! rather than a claim it has to trust.
-//!
-//! **What the white-placement shortlist would need, and where.** Of the four
-//! placements costed in `docs/spike/white-placement.md`, **C** — the only one that
-//! pins mid *and* white — needs nothing from this module: it solves its contrast
-//! from a **content** white and the spike puts that per-roll contrast in the look
-//! stage — the look's slope, `gamma / LINEARIZATION` — leaving the decode fixed.
-//! **B** and **D** would have handed this module a measured density.
-//! `nf-calibration/anchor-comparison` chose neither: its rule, a bounded C, places the
-//! roll's white through the look's slope (`roll.white_stops`), so no content-referenced
-//! variant is planned.
-//! [`AnchorRule`] stays an enum with one variant rather than a bare `f32` field, so a
-//! future one would add a variant instead of silently changing what a number means.
-//! No white reference is measured, read or representable here.
+//! The film base, the anchor `A`, diffuse white, a roll's white and the retired leader
+//! `Dmax` are different numbers from different places; only the film base is an input
+//! here. `docs/terminology.md` (Reference points) defines each. The anchor rule is
+//! *reference-free* — it never reads a reference density — and
+//! [`DecodeReport::reads_reference`] states that as a fact rather than a claim.
+//! [`AnchorRule`] stays an enum with one variant, so a future rule would add a variant
+//! instead of silently changing what a number means.
 
 use crate::algo::FilmRgbImage;
 use crate::pipeline::pixels;
@@ -90,7 +66,7 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// Mid-grey's density above the film base — the decode's one anchor constant.
 ///
 /// A **convention, not a per-stock value**: stocks measure 0.542–0.699, ≈0.94 scene
-/// stops, and choosing per stock would be per-stock
+/// stops at the default linearization, and choosing per stock would be per-stock
 /// exposure normalization inside a decode declared stock-agnostic. A fixed value lets film speed show
 /// through the decode, which is the faithful behaviour; a roll's level is set after it, by
 /// its measured exposure (`roll.exposure`, a neutral gain; `nf-calibration/roll-exposure`).
@@ -103,7 +79,7 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// `crate::film_stock`'s `the_fixed_decode_mid_is_the_generic_aim` ties the two together.
 ///
 /// The value is today's pick. `nf-calibration/anchor-comparison` left it in place — the
-/// roll's white acts through the look's contrast — but a later calibration may move it.
+/// roll's white acts through the tone slope — but a later calibration may move it.
 /// That changes every default render, so it adds a `version::PIPELINE_FINGERPRINTS`
 /// row. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
@@ -115,24 +91,24 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// [`FALLBACK_WHITE_STOPS`](crate::pipeline::roll_white::FALLBACK_WHITE_STOPS) up here
 /// (`pipeline::roll_white::slope_for`); a measured roll's white lands where its span slope
 /// puts it (`pipeline::roll_white::span_slope`). Against
-/// the datasheets' diffuse white: at the bundled contrast 2.0 it lands ≈0.08 stop from
+/// the datasheets' diffuse white: at the retired single gamma 2.0 it lands ≈0.08 stop from
 /// `1.0` (`tests::the_anchor_is_the_documented_number`); at the linearization alone it
-/// decodes a third of a stop under; a stronger look contrast lifts it above, which is
+/// decodes a third of a stop under; a steeper tone slope carries it above, which is
 /// what print contrast does. Scene correction's exposure moves the picture, not this
 /// number.
 ///
 /// **The one definition every rendering stage keys on.** It is scene-referred and
-/// common to both display branches, which is why fit range's HDR lift starts here and
+/// common to both display branches, which is why fit range's HDR ramp starts here and
 /// why the look's highlight desaturation (`nf-look/path-to-white`) anchors its
 /// threshold here too — a second spelling of it in either stage would let the two
 /// disagree about where white is.
 pub const DIFFUSE_WHITE: f32 = 1.0;
 
-/// The decode's slope: **the calibrated half of `gamma`**, which linearizes the film.
+/// The decode's slope: **the calibrated half of the retired single gamma**, which linearizes the film.
 ///
 /// A C-41 negative's straight line rises ≈0.55 density per decade of exposure, so
 /// `1/0.55 ≈ 1.8` undoes it. That is a calibration and stays in the decode; how
-/// contrasty the *picture* is is a look, `look.contrast`
+/// contrasty the *picture* is is the look's tone slope
 /// (`nf-reconstruction/gamma-split`). Fixed, not per stock: the registry's red film
 /// gammas span 0.53–0.61, and choosing per stock would normalize tone character inside
 /// a decode declared stock-agnostic.
@@ -144,7 +120,7 @@ pub const DIFFUSE_WHITE: f32 = 1.0;
 /// calibration unless `scale` moves with it — `nf-calibration/neutrality-gate` measures
 /// the two together from bracketed neutrals, never one alone.
 ///
-/// Reachable as `--density-gamma` (recipe `reconstruction.linearization`). A current
+/// Reachable as `--density-gamma`, a misnomer (recipe `reconstruction.linearization`). A current
 /// pick, expected to move with `scale`.
 pub const LINEARIZATION: f32 = 1.8;
 
@@ -194,12 +170,12 @@ pub(crate) const SCAN_FLOOR: f32 = 1.0 / u16::MAX as f32;
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AnchorRule {
     /// Pin **mid-grey** (output 0.18) at `d` density above the film base, letting
-    /// white fall where the contrast puts it.
+    /// white fall where the linearization puts it.
     ///
     /// Mid-grey is what "exposed correctly" means, it is reference-free, and pinning
-    /// mid makes contrast and exposure independent: changing the contrast pivots
+    /// mid makes slope and exposure independent: changing the linearization pivots
     /// about mid instead of moving the whole image. Pinning black instead would
-    /// leave midtone brightness depending on contrast, and the base is fog rather
+    /// leave midtone brightness depending on the slope, and the base is fog rather
     /// than scene black anyway.
     // Spelled as the removed chain spelled the placement this reproduces, so the
     // key a recipe carried before `pipeline_version` 8 names the same placement (see
@@ -249,14 +225,14 @@ impl AnchorRule {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DecodeParams {
-    /// Per-channel density gain — the calibration of the common slope error the
+    /// Per-channel density scale — the calibration of the common slope error the
     /// film-base division leaves behind.
     pub scale: [f32; 3],
     /// Per-channel density offset.
     pub offset: [f32; 3],
     /// The straight line's slope in density against log exposure — the calibrated
-    /// half of `gamma` ([`LINEARIZATION`]). Print contrast is the look's
-    /// (`look.contrast`), never this.
+    /// half of the retired single gamma ([`LINEARIZATION`]). Print contrast is the look's
+    /// tone slope, never this.
     pub linearization: f32,
     /// Which tone is pinned, and where.
     pub anchor: AnchorRule,
@@ -415,7 +391,7 @@ impl DecodeParams {
     /// Check the parameters and return the resolved anchor.
     ///
     /// Validates the **resolved** anchor, never a stand-in for it: the rule divides by
-    /// the contrast, so a finite-looking configuration can derive a non-finite anchor,
+    /// the linearization, so a finite-looking configuration can derive a non-finite anchor,
     /// and both ways the exponent goes non-finite render `10^(−inf) = 0.0` for every
     /// sample — an all-black frame that trips neither the clip counter nor the
     /// non-finite one.

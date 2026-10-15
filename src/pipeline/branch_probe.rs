@@ -16,7 +16,7 @@
 //! per-pixel, so this samples the frame rather than changing the render), and rendered
 //! by `chain::render_pair`. Three environment variables vary the run:
 //! `NC_PROBE_STRIDE` (default 2), `NC_PROBE_HEADROOM` (stops; default the recipe's)
-//! and `NC_PROBE_HDR_PEAK` (times diffuse white; default 1000/203).
+//! and `NC_PROBE_HDR_PEAK` (times reference white; default 1000/203).
 
 use std::path::{Path, PathBuf};
 

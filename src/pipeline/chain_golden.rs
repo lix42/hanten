@@ -1503,7 +1503,7 @@ fn golden_fit_gamut_is_bit_identical() {
 }
 
 /// [`FIT_GAMUT_P3`]'s input into Adobe RGB, which runs the same map through a
-/// different pinned matrix and luma row. The cases are P3's except one: diffuse white
+/// different pinned matrix and luminance row. The cases are P3's except one: diffuse white
 /// (pixel 3) lands just *inside* the Adobe RGB cube, so it passes untouched here where
 /// P3 maps it. Captured 2026-09-24 when the gamut landed (`output/adobe-rgb-gamut`).
 const FIT_GAMUT_ADOBE_RGB: [u32; 21] = [
@@ -1524,7 +1524,7 @@ fn golden_fit_gamut_adobe_rgb_is_bit_identical() {
 }
 
 /// [`FIT_GAMUT_P3`]'s input into BT.2020, the HDR destinations' gamut: the same map
-/// through BT.2020's pinned matrix and luma row. Run against the SDR peak, as its
+/// through BT.2020's pinned matrix and luminance row. Run against the SDR peak, as its
 /// siblings are, so the vector stays bit-exact — fit range's HDR lift calls `log2`
 /// above diffuse white; what this pins is the gamut's arithmetic, not the peak's. The
 /// widest gamut takes pixel 2's negative P3 channel inside the cube, so it passes
@@ -1718,7 +1718,7 @@ fn the_chain_threaded_refuses_the_nan_pixel() {
 }
 
 /// [`FIT_GAMUT_P3`]'s input into sRGB, the narrowest SDR gamut, through its own pinned
-/// matrix and luma row. Captured 2026-09-29 when the gamut landed
+/// matrix and luminance row. Captured 2026-09-29 when the gamut landed
 /// (`nf-destinations/easy-destination-rows`).
 const FIT_GAMUT_SRGB: [u32; 21] = [
     0x3e3851ea, 0x3e3851ee, 0x3e3851eb, 0x3b0314e0, 0x3b8311ce, 0x3f666667, 0x3f556241, 0x3cb22126,

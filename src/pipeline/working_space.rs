@@ -1,20 +1,18 @@
 //! NC film RGB v1 working-space mapping (design-spec §7.5):
 //!
 //! ```text
-//! FilmRgbImage → NC film RGB v1 interpretation → linear ACEScg/AP1 at D60
+//! FilmRgbImage → NC film RGB v1 interpretation → linear ACEScg (AP1, ~D60)
 //! ```
 //!
-//! This is the one deterministic mapping shared by every density curve
-//! (the exponential curve) and the fixed decode. It expresses NC's
-//! **film-rendering intent** — it does *not* claim to recover physically neutral
+//! This is the one deterministic mapping from the fixed decode into the working
+//! space. It is a **declared interpretation**, not a measurement — it does *not* claim to recover physically neutral
 //! scene color, and it deliberately preserves the differences caused by film
-//! stock, lens, development, scanner, and the selected density curve. It adds no
+//! stock, lens, development, scanner, and the decode. It adds no
 //! fitted curves or matrices.
 //!
 //! ## The mapping (pinned as "nc-film-rgb-v1")
 //! 1. **Interpret** the reconstructed film RGB as **linear Rec.709 primaries at
-//!    D65** — the existing intentional interpretation the output color stage
-//!    already uses for the working space (`pipeline::color`).
+//!    D65** — a convention, not a measurement of the dyes.
 //! 2. **Primary transform + chromatic adaptation** into **linear ACEScg (AP1)
 //!    at the ACES white point (~D60)**, via the Bradford CAT.
 //!
@@ -68,7 +66,7 @@ pub const WORKING_MAPPING_ID: &str = "nc-film-rgb-v1";
 // a neutral ACEScg value.
 
 /// The intentional film rendering after NC film RGB v1 interpretation: unclamped
-/// linear **ACEScg (AP1) at D60**.
+/// linear **ACEScg (AP1, ~D60)**.
 ///
 /// Fields are **private** and [`new`](AcesCgImage::new) is module-private, so
 /// [`map_nc_film_rgb_v1`] is the only producer — no other stage can mint an
@@ -137,8 +135,7 @@ impl std::fmt::Debug for AcesCgImage {
 }
 
 /// Map a reconstructed [`FilmRgbImage`] through NC film RGB v1 into linear
-/// ACEScg/D60 (design-spec §7.5). The **same** mapper for every density
-/// curve — it consumes the typed film-RGB
+/// ACEScg (AP1, ~D60) (design-spec §7.5). It consumes the typed film-RGB
 /// boundary and returns the typed ACEScg boundary, so the reconstruction path
 /// makes no difference to how the mapping is applied.
 ///
@@ -296,7 +293,7 @@ mod tests {
     fn matrix_matches_independent_bradford_derivation() {
         // The pinned const equals the from-primaries Bradford derivation (both
         // f64), to well under an f32 ulp — proof the literal was not mistranscribed
-        // and encodes exactly Rec.709/D65 → ACEScg/D60 with Bradford adaptation.
+        // and encodes exactly Rec.709/D65 → ACEScg (~D60) with Bradford adaptation.
         let d = derived_matrix();
         for i in 0..3 {
             for j in 0..3 {

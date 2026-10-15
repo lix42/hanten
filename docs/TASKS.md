@@ -127,8 +127,11 @@ graph TD
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
+- [ ] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
 - [ ] [Release Readiness](tasks/core/release-readiness.md) — from the release-readiness review: (1) correct public docs that misstate the product (README "pre-implementation" + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in…
-- [ ] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear
+- [ ] [Rename the decode and look misnomers (--density-gamma, reconstruction.anchor, look stage "contrast")](tasks/core/rename-decode-look-misnomers.md) — public names that say the wrong quantity in the decode and the look
+- [ ] [Rename the fit-range and HDR misnomers (--display-tone-headroom, --display-black, linear_headroom)](tasks/core/rename-fit-range-misnomers.md) — the highlight range gets its own public name; display black and the duplicated display peak
+- [ ] [Rename the roll and report misnomers (frames.*.exposure, slope_bound, dark_stops sign, area tilt, neutral_balance, saturation_margin)](tasks/core/rename-roll-report-misnomers.md) — roll keys and report fields whose names collide, mislead or flip sign, plus American spellings
 - [x] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll, cross-frame agreement, provenance + confidence, a loud refusal
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section
 - [x] [CLI Framework](tasks/core/cli-framework.md)
@@ -144,6 +147,7 @@ graph TD
 - [x] [Roll conversion (batch with a shared frozen recipe)](tasks/core/roll-conversion.md)
 - [x] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --unexposed <file|auto> [--leader L]` measures the base and the roll, then converts
 - [x] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed pipe (e.g
+- [x] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — one terminology doc (value spaces + per-stage quantities, public vs internal) and an agent skill; "film base" leads over `Dmin` in user-facing text
 - [-] [Warn when a recipe's auto modes silently defeat a roll](tasks/core/unfrozen-auto-mode-warning.md)
 
 ### io — [progress](progress/io.md)

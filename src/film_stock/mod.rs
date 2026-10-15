@@ -322,7 +322,7 @@ mod tests {
 
     /// The invariants `curves` promises and anything reading a table relies on:
     /// **strictly increasing** in both coordinates (so the curve is single-valued either
-    /// way), a **first point at `D′ = 0`** (the film base), and enough points to
+    /// way), a **first point at density 0** above the film base, and enough points to
     /// interpolate.
     #[test]
     fn every_table_rises_strictly_from_the_base() {

@@ -551,7 +551,7 @@ pub struct InputParams {
 /// and its result reaches a conversion as `Explicit`. The retired `"auto"` rebate
 /// search is refused with a migration message (`recipe::check_body`).
 ///
-/// **Deliberately has no `Default`.** `Dmin` sets black point and colour balance
+/// **Deliberately has no `Default`.** The film base sets the black level and its colour
 /// together, so `convert` requires the choice to be stated (see
 /// [`crate::recipe::Calibration::film_base`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -586,7 +586,7 @@ impl From<&FilmBaseSource> for FilmBaseProvenance {
     }
 }
 
-/// Default specular headroom for fit range (`fit_range.headroom_stops`), in stops.
+/// Default highlight range for fit range (`fit_range.headroom_stops`), in stops.
 ///
 /// `6` stops is `W = 64`, the value measured to beat the shipped sigmoid on both
 /// highlight metrics on all seven fixture frames at matched brightness. `W = 256`
@@ -595,7 +595,7 @@ impl From<&FilmBaseSource> for FilmBaseProvenance {
 /// it is deliberately not the default.
 pub const DEFAULT_HEADROOM_STOPS: f32 = 6.0;
 
-/// The largest accepted specular headroom, in stops.
+/// The largest accepted highlight range, in stops.
 ///
 /// Beyond this the operator is indistinguishable from plain `v/(1 + v)` and the number
 /// only looks like a setting. The measured useful range is 4–8 stops.
@@ -606,7 +606,7 @@ pub const DEFAULT_HEADROOM_STOPS: f32 = 6.0;
 /// roll has decoded.
 pub const MAX_HEADROOM_STOPS: f32 = 24.0;
 
-/// The white point a specular headroom asks for: `2^stops`.
+/// The white point a highlight range asks for: `2^stops`.
 ///
 /// The **single** definition: `pipeline::fit_range` and its tests read it, so the
 /// stops→white-point meaning has one home.
@@ -614,7 +614,7 @@ pub fn headroom_white_point(stops: f32) -> f32 {
     stops.exp2()
 }
 
-/// Which part of the headroom rule a value breaks — see [`headroom_fault`].
+/// Which part of the highlight-range rule a value breaks — see [`headroom_fault`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeadroomFault {
     /// Negative or non-finite.
@@ -623,11 +623,11 @@ pub enum HeadroomFault {
     TooLarge(f32),
 }
 
-/// The specular-headroom rule, as data: the **single** definition the recipe's
+/// The highlight-range rule, as data: the **single** definition the recipe's
 /// validation and fit range both check. Both refuse through [`headroom_fault_message`],
 /// naming the knob as its provenance spells it.
 ///
-/// A negative headroom is not loud on its own: `2^-40` is a white point of ~9e-13, which
+/// A negative range is not loud on its own: `2^-40` is a white point of ~9e-13, which
 /// maps essentially every sample past the ceiling and turns the render into a solid
 /// white field at exit 0 with the clip merely *counted*.
 pub fn headroom_fault(stops: f32) -> Option<HeadroomFault> {
@@ -645,13 +645,13 @@ pub fn headroom_fault(stops: f32) -> Option<HeadroomFault> {
 pub fn headroom_fault_message(fault: HeadroomFault, name: &str) -> String {
     match fault {
         HeadroomFault::Negative(stops) => format!(
-            "{name} must be finite and non-negative (got {stops}). It is the specular \
-             headroom above reference white fit range keeps distinguishable, in \
-             stops; `0` is the identity."
+            "{name} must be finite and non-negative (got {stops}). It is the highlight \
+             range: the stops above diffuse white fit range compresses into the display; \
+             `0` turns the compression off."
         ),
         HeadroomFault::TooLarge(stops) => format!(
             "{name} is {stops} stops, beyond the supported maximum of {MAX_HEADROOM_STOPS}. \
-             Above ~8 stops the operator converges on plain Reinhard and the extra headroom \
+             Above ~8 stops the operator converges on plain Reinhard and a wider range \
              buys nothing; the measured useful range is 4–8 (the default \
              {DEFAULT_HEADROOM_STOPS} is a white point of {}).",
             headroom_white_point(DEFAULT_HEADROOM_STOPS)
@@ -659,10 +659,10 @@ pub fn headroom_fault_message(fault: HeadroomFault, name: &str) -> String {
     }
 }
 
-/// Output decades between mid-grey and display white: `−log10(0.18)`.
+/// Decades between mid-grey and the decode's `1.0` (film RGB): `−log10(0.18)`.
 ///
-/// A mid-grey card reflects ~18% of the light falling on it, so on a correctly exposed
-/// display-referred image it belongs at 0.18 of white — about 2.5 stops down. This is a
+/// A mid-grey card reflects ~18% of the light falling on it, so it belongs at 0.18 of
+/// the anchor's `1.0` — about 2.5 stops down. This is a
 /// property of what "18% reflectance" means, not a tunable.
 pub const MID_GREY_OUTPUT_DECADES: f32 = 0.744_727_5;
 

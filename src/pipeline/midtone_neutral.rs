@@ -35,7 +35,7 @@ use crate::pipeline::look::MID_GREY;
 use crate::pipeline::roll_balance::RollBalance;
 use crate::pipeline::roll_white::scene_stops;
 
-/// The lowest band edge, in scene stops (log2 of ACEScg luma over mid-grey).
+/// The lowest band edge, in scene stops (log2 of ACEScg luminance over mid-grey).
 pub const BAND_LOW_STOPS: f32 = -3.0;
 /// Each band's width in scene stops.
 pub const BAND_WIDTH_STOPS: f32 = 0.5;
@@ -384,7 +384,7 @@ fn weighted_line(bands: &[Band], axis: usize) -> [f32; 2] {
 mod tests {
     use super::*;
 
-    /// A neutral-then-cast pixel at scene stop `s`: luma `0.18·2^s`, with
+    /// A neutral-then-cast pixel at scene stop `s`: luminance `0.18·2^s`, with
     /// `log2 r/g = rho[0]`, `log2 b/g = rho[1]`.
     fn pixel(s: f64, rho: [f64; 2]) -> [f32; 3] {
         let (r, b) = (rho[0].exp2(), rho[1].exp2());

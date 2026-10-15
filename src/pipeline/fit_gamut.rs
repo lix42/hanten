@@ -47,7 +47,7 @@ use crate::types::{LinearImage, NcError, Result};
 /// field so the value can travel with the image to the encoder, which reads it off
 /// [`DisplayReferredImage`] instead of re-deriving it from the destination.
 ///
-/// **Adding a variant** means a pinned ACEScg → destination matrix and luma row
+/// **Adding a variant** means a pinned ACEScg → destination matrix and luminance row
 /// (`docs/colorimetry-maintenance.md`), an arm in each method here, and one in
 /// `color::encode_display_linear`, which owns the destination's transfer and ICC
 /// profile. Each match is exhaustive, so a missed arm fails to compile.

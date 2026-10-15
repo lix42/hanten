@@ -56,6 +56,8 @@ in-progress changes, fix them, and prove the tree green — nothing more.
   `render` in place. A neutral-default opt-in knob refreshes only the `recipe`
   hash of the current row.
 - **New full-frame buffers require updating `pipeline/memory.rs`'s model.**
+- **Name values as `docs/terminology.md` does** in any text you write (help,
+  messages, doc comments); it lists the words to avoid.
 - `docs/design-spec.md` is the **sole maintained design source** — doc fixes go
   there; never recreate or hand-edit the retired rendered HTML. Progress logs
   (`docs/progress/*.md`) are **append-only** — add a new dated entry, never

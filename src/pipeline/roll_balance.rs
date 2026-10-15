@@ -40,7 +40,7 @@ pub struct Tilt {
     /// Per channel, `log2` of the base and `1 / log2(white / base)`: `t`'s affine map.
     log_base: [f32; 3],
     inv_span: [f32; 3],
-    /// The base's luma in scene stops, the midtone line's floor under a tilt.
+    /// The base's luminance in scene stops, the midtone line's floor under a tilt.
     base_stops: f32,
 }
 
@@ -57,7 +57,7 @@ impl Tilt {
         }
     }
 
-    /// The decoded base's luma in scene stops.
+    /// The decoded base's luminance in scene stops.
     pub fn base_stops(&self) -> f32 {
         self.base_stops
     }

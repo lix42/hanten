@@ -121,6 +121,10 @@ The load-bearing rules you review against:
   points at the module docs holding each subsystem's rules; a directory's own
   `CLAUDE.md` (e.g. `tools/review-app/`, `scripts/analysis/`) holds its tool rules.
 - `docs/colorimetry-maintenance.md` — the workflow for changing any colorimetry.
+- `docs/terminology.md` — which word names which value. A help text, message, doc
+  comment or key that uses a word against it (e.g. `Dmin` leading, "lift" for fit
+  range, "luma", a bare "slope", or a bare "headroom" for the highlight range) is a
+  finding.
 - `docs/reports/` — versioned conversion baselines (`v0-baseline.md` is the
   reference point).
 

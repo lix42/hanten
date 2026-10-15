@@ -7989,7 +7989,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
 fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     // `nf-display-stages/fit-range` through the binary: the headroom flag reaches the
     // stage, the report names the operator and its arguments rather than describing
-    // them, and zero headroom is the identity — which clips far more of an unbounded
+    // them, and zero headroom leaves reinhard out — which clips far more of an unbounded
     // decode at the encode than the default does.
     let tmp = TempDir::new("fit-range");
     let input = fixture("hdr-48bit.tif").display().to_string();

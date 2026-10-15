@@ -336,7 +336,7 @@ pub struct MeasureBaseArgs {
     pub measure: MeasureOverrides,
     /// Treat estimation warnings (a non-uniform area or `--base-region`, decode
     /// notes, …) as a hard error. `measure-base` produces the
-    /// `Dmin` a roll is calibrated on, so a script baking the result into a
+    /// film base a roll is calibrated on, so a script baking the result into a
     /// recipe wants a plausible-looking-but-bad base to fail loudly rather than
     /// be echoed back.
     #[arg(long)]
@@ -799,15 +799,15 @@ pub struct InputOverrides {
     pub export_ir: Option<String>,
 }
 
-/// Film-base / Dmin overrides (design-spec §9, stage 2).
+/// Film-base overrides (design-spec §9, stage 2).
 ///
 /// The two source flags are mutually exclusive (clap rejects passing both); either
 /// replaces the recipe's `calibration.film_base` entirely. `convert` and `roll` require
-/// one of them **or** the recipe key, because `Dmin` sets black point and colour
-/// balance together.
+/// one of them **or** the recipe key, because the film base sets the black level and
+/// its colour together.
 #[derive(Args, Debug, Default)]
 pub struct FilmBaseOverrides {
-    /// Explicit per-channel base transmission — a `Dmin` measured once per roll
+    /// Explicit per-channel film base transmission, measured once per roll
     /// (`hanten measure-base` on the unexposed frame).
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb,
           conflicts_with = "base_region")]
@@ -843,7 +843,7 @@ pub struct MeasureOverrides {
 /// `algo::fixed::DecodeParams`).
 #[derive(Args, Debug, Default)]
 pub struct DensityOverrides {
-    /// Per-channel density gain (recipe key `reconstruction.scale`).
+    /// Per-channel density scale (recipe key `reconstruction.scale`).
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb)]
     pub density_scale: Option<[f32; 3]>,
     /// Per-channel density offset (recipe key `reconstruction.offset`).
@@ -1230,7 +1230,7 @@ pub struct LookOverrides {
         allow_hyphen_values = true
     )]
     pub highlight_desaturation_start: Option<f32>,
-    /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
+    /// Highlight desaturation's chroma band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
     /// `--density-gamma` times the look's saturation slope (recipe key
     /// `look.highlight_desaturation.band`, default `0.015,0.025`).
@@ -1246,12 +1246,13 @@ pub struct LookOverrides {
 /// Fit-range overrides (recipe section `fit_range`).
 #[derive(Args, Debug, Default)]
 pub struct DisplayOverrides {
-    /// Specular headroom above reference white for the display tone, in stops, default
-    /// 6 (a white point of 64; recipe key `fit_range.headroom_stops`). The tone is
-    /// extended Reinhard, which compresses the whole curve against that white point
-    /// while holding mid-grey where it is, so raising the headroom changes the
-    /// highlights without darkening the midtones. `0` is the exact identity. Rendered
-    /// destinations only; the film master applies no display tone.
+    /// The highlight range: how many stops above diffuse white fit range compresses
+    /// into the display, default 6 (a white point of 64; recipe key
+    /// `fit_range.headroom_stops`). Fit range is extended Reinhard, which compresses
+    /// the whole curve against that white point while holding mid-grey where it is, so
+    /// a wider range changes the highlights without darkening the midtones. `0` turns
+    /// the compression off; the dark end still applies. Rendered destinations only; the
+    /// film master applies no fit range.
     // A negative headroom must reach the value check, whose message names this very
     // flag: without this, clap refused `-1` as "unexpected argument".
     #[arg(
@@ -1264,7 +1265,7 @@ pub struct DisplayOverrides {
     /// measure-roll`) renders no deeper than this many stops below mid-grey on the
     /// display, or `off` (recipe key `fit_range.dark_end`, `{"floor": STOPS}`; 4.5, about
     /// L* 7, was the `default` rendering's). A frame whose dark end renders deeper is
-    /// lifted, the lift fading to nothing at mid-grey and capped at a third of the way
+    /// raised, the raise fading to nothing at mid-grey and capped at a third of the way
     /// there (the report warns when the cap holds it short); a lighter one is left alone.
     /// It holds the shadows of a steep `--contrast`. Without a measured dark end it does
     /// nothing. Mid-grey and everything above it do not move.
@@ -1281,9 +1282,9 @@ pub struct DisplayOverrides {
     /// (recipe key `fit_range.dark_end`, `{"target": STOPS}`; the `default` rendering's, at
     /// 5.5, about L* 3.6; `direct` has display black instead). It replaces the dark floor
     /// and display black: the three set one key. Unlike the floor it moves the dark end **either way** — a
-    /// lighter dark end is pushed down, a deeper one lifted — fading to nothing at
+    /// lighter dark end is pushed down, a deeper one raised — fading to nothing at
     /// mid-grey. A push is capped at two thirds of the way to mid-grey, so a high-key
-    /// frame keeps its light shadows; a lift is capped as the floor's. Without a measured
+    /// frame keeps its light shadows; a raise is capped as the floor's. Without a measured
     /// dark end it does nothing. Mid-grey and everything above it do not move.
     #[arg(
         long = "dark-target",
@@ -1587,7 +1588,7 @@ pub struct Report {
     pub output: Option<PathBuf>,
     /// The pinned working-space mapping this conversion interprets the
     /// reconstructed film RGB under (`convert`): always `"nc-film-rgb-v1"`
-    /// (linear Rec.709/D65 → linear ACEScg/D60; see
+    /// (linear Rec.709/D65 → linear ACEScg, ~D60; see
     /// `pipeline::working_space`). Provenance only — the mapping is a fixed
     /// constant, not a tunable knob, so it has no CLI flag / recipe key
     /// (design-spec §8). A future mapping is a *new* identifier under
@@ -1633,7 +1634,7 @@ pub struct Report {
     /// even when the input is ambiguous or unsupported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_color: Option<InputColorReport>,
-    /// Estimated / resolved film base (the `Dmin` anchor).
+    /// Estimated / resolved film base.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_base: Option<FilmBase>,
     /// Where the film base came from ([`FilmBaseProvenance`]): the effective area, a
@@ -2704,8 +2705,8 @@ fn required_extensions(target: OutputTarget) -> &'static [&'static str] {
 /// report it ([`validate_shared`] and [`convert_frame`]'s totality guard) cannot drift
 /// into two differently-worded diagnoses of the same condition. `convert` and `roll`
 /// take the same flags, so one remedy serves both.
-pub const MISSING_FILM_BASE: &str = "no film base selected: pass --film-base R,G,B (a Dmin \
-     measured once per roll with `hanten measure-base <unexposed-frame>`), or --base-region \
+pub const MISSING_FILM_BASE: &str = "no film base selected: pass --film-base R,G,B (the film \
+     base transmission, measured once per roll with `hanten measure-base <unexposed-frame>`), or --base-region \
      X,Y,W,H to read it from a region of unexposed film. Recipe key: \
      `calibration.film_base`, which `hanten measure-roll <frames> --unexposed \
      <unexposed-scan> --out roll.json` writes for `--params`. With no unexposed film on \
@@ -3401,7 +3402,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
                            applied, so there is nothing to select — drop the flag"
                 .to_string(),
             "none" => {
-                "the nearest to `none` is the identity, `--display-tone-headroom 0`".to_string()
+                "the nearest to `none` is `--display-tone-headroom 0`, no compression".to_string()
             }
             "shoulder" => "`shoulder` has no replacement — drop the flag for the default \
                            tone"
@@ -3524,7 +3525,7 @@ fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> S
 /// The first retired sigmoid flag the user passed, with its remedy.
 fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'static str)> {
     const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
-                        the display tone (`--display-tone-headroom`)";
+                        fit range (`--display-tone-headroom`)";
     const PLACEMENT: &str = "reference-based placement retired with the reference \
                              density; the exponential's one placement is \
                              `--anchor-mid-offset`, mid-grey a stated density above the \
@@ -3608,7 +3609,7 @@ fn removed_characteristic_message(flags: &RemovedCharacteristicFlags) -> Option<
                  decode is stock-agnostic now. {REFERENCE}."
             ),
             "sigmoid" => " The `sigmoid` retired before it; highlight roll-off belongs to \
-                          the display tone (`--display-tone-headroom`)."
+                          fit range (`--display-tone-headroom`)."
                 .to_string(),
             _ => String::new(),
         };
@@ -5785,7 +5786,7 @@ const DECODED_APART: &str = "this frame's densities decode differently from the 
 const ROLL_WIDE: &[RollWide] = &[
     RollWide {
         key: "calibration.film_base",
-        breaks: "this frame's Dmin differs from the rest of the roll's, breaking colour \
+        breaks: "this frame's film base differs from the rest of the roll's, breaking colour \
                  consistency",
         compare: |f, r| changed(&f.calibration.film_base, &r.calibration.film_base),
     },
@@ -7117,7 +7118,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         Some(FilmBaseSource::Region(_))
     ) {
         let msg = "roll film base is NOT frozen: calibration.film_base is a `region`, so \
-             every frame reads its own Dmin — the roll is not color-consistent and the \
+             every frame reads its own film base — the roll is not colour-consistent and the \
              shared recipe is not truly shared. Measure the base once — `hanten measure-roll \
              <frames> --unexposed <unexposed-frame> --out roll.json`, or `hanten measure-base \
              <unexposed-frame> --out base.json` — and pass that file as --params, or its base \
@@ -8007,13 +8008,13 @@ struct MeasuredFrame {
     /// `--leader`.
     #[serde(skip_serializing_if = "Option::is_none")]
     leader_distance_stops: Option<f32>,
-    /// The frame's level — the log-average of its luma — in scene stops from mid-grey;
+    /// The frame's level — the log-average of its luminance — in scene stops from mid-grey;
     /// absent when no pixel was usable or the leader guard took every one.
     #[serde(skip_serializing_if = "Option::is_none")]
     level_stops: Option<f32>,
     /// The frame's part in the roll's white.
     white_role: roll_white::FrameRole,
-    /// The frame's tonal shape (`roll_white::frame_tones`): its luma's p5–p95 spread and
+    /// The frame's tonal shape (`roll_white::frame_tones`): its luminance's p5–p95 spread and
     /// the share near the film base; absent when no pixel was usable.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     tones: Option<roll_white::FrameTones>,
@@ -8255,12 +8256,12 @@ struct MeasuredThinLift {
     written: bool,
     /// Frames the recipe gives one.
     lifted: usize,
-    /// The decoded film base's luma, in scene stops: what the lift holds (about) still —
+    /// The decoded film base's luminance, in scene stops: what the lift holds (about) still —
     /// `roll_white::thin_lift` says why about.
     base_stops: f32,
     /// A frame qualifies at or under this rendered white…
     white_stops: f32,
-    /// …with at least this share of its luma within `near_base_stops` of the base.
+    /// …with at least this share of its luminance within `near_base_stops` of the base.
     base_share: f32,
     near_base_stops: f32,
     /// About how far the lift raises the white, in rendered stops, unless the slope bound
@@ -8292,7 +8293,7 @@ struct MeasuredSmallLift {
     /// this gets the whole bound; at or over `none_stops`, no lift.
     full_stops: f32,
     none_stops: f32,
-    /// A frame whose luma spans fewer stops from p5 to p95 is flat, and gets no lift.
+    /// A frame whose luminance spans fewer stops from p5 to p95 is flat, and gets no lift.
     flat_spread_stops: f32,
 }
 
@@ -9420,7 +9421,7 @@ fn measure_roll(
             reference_frames::LEADER_MIN_DENSITY
         )));
     }
-    // Where every frame's shadows bottom out, in the luma the frames' tones are read in.
+    // Where every frame's shadows bottom out, in the luminance the frames' tones are read in.
     let base_px =
         working_space::map_nc_film_rgb_v1(fixed::decode_film_base(&base, &recipe.reconstruction)?);
     let base_stops = roll_white::base_stops(
