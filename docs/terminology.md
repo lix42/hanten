@@ -46,7 +46,7 @@ channel, read only by holder detection and dropped at the decode.
 | **film RGB** (NC film RGB v1) | the decode's linear positive, one channel per dye layer. The anchor lands at 1.0, mid-grey at 0.18, diffuse white at ≈0.80 | brighter scene | unclamped | public: `working_mapping: nc-film-rgb-v1`, `--export-film-rgb` | `algo::FilmRgbImage` |
 | **scene-linear ACEScg** | film RGB through the v1 mapping, before the look. Keeps film, lens, development and scanner character; not a physical scene recovery | brighter | unclamped | public: the `--film-master` output | `pipeline::working_space` |
 | **graded ACEScg** | after the look. Diffuse white is 1.0 here | brighter | unclamped | internal | look → fit range |
-| **display-linear** | after fit range and fit gamut, in the destination's gamut. 1.0 is reference white (203 cd/m²) | brighter | `≥ 0`; content past the white point exceeds the peak and is clamped and counted at the encode | public: `--transfer linear`, `reference_white_sample` | `pipeline::fit_gamut::DisplayReferredImage` |
+| **display-linear** | after fit range and fit gamut, in the destination's gamut. 1.0 is reference white (203 cd/m² in an HDR destination) | brighter | `≥ 0`; content past the white point exceeds the peak and is clamped and counted at the encode | public: `--transfer linear`, `reference_white_sample` | `pipeline::fit_gamut::DisplayReferredImage` |
 | **output sample** | the written code value | brighter | destination-defined | public: `loss.clipped_*` | `io::encode`, `io::iso_gain_map` |
 
 **The one rule.** As **scene luminance rises**: `transmission ↓ · density ↑ ·
@@ -101,9 +101,9 @@ A stops figure states its reference and its sign.
 |---|---|---|---|---|
 | **white-balance gains** | per-channel multipliers: the stated ones and the roll's measured, green-anchored ones | scene correction · ACEScg | public | `--white-balance`, `--roll-white-balance`, `white_balance.gains` |
 | **exposure gain** | `2^EV`, a neutral gain | scene correction · ACEScg | internal | — |
-| **gain map** | the ISO 21496-1 image of HDR ÷ SDR. Never a bare "gain" | gain-map destination | public | `chain.gain_map.*` |
+| **gain map** | the ISO 21496-1 image of `(HDR + o) ÷ (SDR + o)`, with a stated offset `o`. Never a bare "gain" | gain-map destination | public | `chain.gain_map.*` |
 | **reinhard input gain** | the pre-gain that holds mid-grey in place | fit range | internal | — |
-| **density scale** | per-channel multiplier on `D`, red = 1. Not "density gain" | decode · `D` | public | `--density-scale`, `reconstruction.scale`, `chain.decode.scale` |
+| **density scale** | per-channel multiplier on `D`; the bundled one has red = 1. Not "density gain" | decode · `D` | public | `--density-scale`, `reconstruction.scale`, `chain.decode.scale` |
 | **density offset** | per-channel additive term on `D` | decode · `D` | public | `--density-offset`, `reconstruction.offset` |
 | **midtone-line intercept** | the constant in `log2(c/g) = slope·s + intercept` | scene correction | public (positional in `--roll-midtone-line`) | — |
 
@@ -116,10 +116,10 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | **linearization** | the decode's straight-line slope in `10^(lin·(D′ − A))`; it undoes film gamma. Default 1.8 | decode | public | `reconstruction.linearization`, `chain.decode.linearization`; `--density-gamma` (misnomer) |
 | **tone slope** | the look's luminance power about mid-grey: base slope × contrast | look | public | `chain.look.slope` |
 | **base slope** | the tone slope before the contrast knob; from roll, fallback, direct, thin or placement | look | public | `chain.look.base_slope`, `base_from` |
-| **roll slope** | the roll's span (dark end to white, scene stops) mapped onto 9.049 look stops | measure-roll | public | `chain.roll.slope` |
+| **roll slope** | the roll's span (dark end to white, scene stops) mapped onto 9.049 look stops, clamped to ≈1.237–3.5 | measure-roll | public | `chain.roll.slope` |
 | **fallback slope** | the base slope when no roll is measured (≈1.414); `direct` pins it | look | public | `base_from: fallback` |
 | **thin slope, placement slope** | per-frame replacements of the base slope | roll | public | `roll.thin_slope`, `frames[].hybrid.slope` |
-| **saturation slope** | the power on colour ratios: base slope × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope` |
+| **saturation slope** | the power on colour ratios: the roll's or fallback slope (never a frame's own) × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope` |
 | **whole slope** | linearization × tone slope (≈2.54) — what the retired single "gamma" meant | validation | public (usage messages) | — |
 | **colour slope** | linearization × saturation slope, used by highlight desaturation | look | internal | — |
 | **midtone-line slope** | the cast's change per scene stop, as a log2 ratio | scene correction | public (positional) | — |
@@ -140,16 +140,16 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | Term | Meaning | Space | Kind | Public spellings |
 |---|---|---|---|---|
 | **mid-grey** | 0.18: the look's pivot and the origin of scene stops | film RGB, ACEScg | internal | — |
-| **mid-grey density above base `d`** | where mid-grey sits above the film base, default 0.62; the anchor rule's input. A convention, not a per-stock value | `D′` | public | `--anchor-mid-offset`, `reconstruction.anchor` (misnomer) |
+| **mid-grey density above base `d`** | the corrected density where mid-grey lands, default 0.62: its height above the film base while the density offset is 0 (the default). The anchor rule's input. A convention, not a per-stock value | `D′` | public | `--anchor-mid-offset`, `reconstruction.anchor` (misnomer) |
 | **anchor `A`** | the corrected density that renders to film RGB 1.0, derived as `d + log10(1/0.18) / linearization` ≈ 1.034. A scalar (a per-channel anchor would be a white balance). Reported, never an input; not scene white | `D′` | public | `chain.decode.anchor` |
-| **diffuse white** | graded ACEScg 1.0, ≈0.80 in film RGB. The datasheets' `d + 0.36` is a reference number only | graded | public | `--highlight-desaturation-start` help |
-| **reference white** | display-linear 1.0 = 203 cd/m². Diffuse white renders below it (≈0.55 at the default highlight range) | display | public | `reference_white_nits`, `reference_white_sample` |
+| **diffuse white** | graded ACEScg 1.0, a convention. The datasheets' diffuse white (`d + 0.36`) decodes to ≈0.80 in film RGB; where it grades depends on the tone slope | graded | public | `--highlight-desaturation-start` help |
+| **reference white** | display-linear 1.0; 203 cd/m² in an HDR destination (an SDR file states no absolute level). Diffuse white renders below it (≈0.55 at the default highlight range) | display | public | `reference_white_nits`, `reference_white_sample` |
 | **highlight range** | the stops above diffuse white that fit range compresses into the display: a knob, default 6. Not "headroom" in prose | stops from diffuse white | public | `--display-tone-headroom`, `fit_range.headroom_stops` (misnomers) |
 | **white point** | reinhard's `W = 2^highlight range` (64): the graded value that lands about at the display peak (reference white for SDR) | graded | public | `chain.fit_range.white_point` |
 | **HDR headroom** | the destination's peak over reference white, **in stops** (ISO 21496-1's term): 0 for SDR, `log2(1000/203)` ≈ 2.30 at 1000 nits. A bare "headroom" means this | display | public | — |
 | **display peak** | the same, as a ratio: 1.0 for SDR, ≈4.93 for HDR. *Peak nits* is the absolute form | display | public | `chain.fit_range.display_peak`, `target_peak_nits`, `linear_headroom` |
 | **dark end** | where fit range places the frame's darkest 1 % (target or floor) or the film base (display black), in display stops below mid-grey | display | public | `--dark-target`, `--dark-floor`, `--display-black` |
-| **roll white, tilt white, fade end** | three whites measured from a roll: the brightest channel's p97 in film RGB; green's p99 in ACEScg; luminance p99 after balance. Never a bare "the roll's white" | scene stops | public | `roll.white_stops`, `roll.white_balance_stops`, `midtone_line.fade_end_stops` |
+| **roll white, tilt white, fade end** | three whites measured from a roll: the brightest channel's p97 in film RGB; green's p99 in ACEScg; the luminance of the per-channel p99s after balance. Never a bare "the roll's white" | scene stops | public | `roll.white_stops`, `roll.white_balance_stops`, `midtone_line.fade_end_stops` |
 | **content white** | a roll's bright end in picture density. Not measured and not shipped; the roll white replaces it | — | internal | — |
 
 **Not interchangeable.** The film base, the anchor, diffuse white, the roll white
