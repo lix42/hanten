@@ -325,6 +325,8 @@ an **outside reference** — Negative Lab Pro's own conversions, which are exist
 renders. It also needs those cells brought to a common SDR sRGB JPEG so the comparison is not
 confounded by Hanten decoding as HDR beside NLP's SDR. Adding a reference-cell kind to
 `nctool review` is the right home for both; do that rather than re-adding a bespoke script.
+*(Shipped 2026-10-14 as [`analysis/review-reference-cells`](../analysis/review-reference-cells.md):
+a matrix's `references` put NLP and SilverFast exports in the grid.)*
 
 Everything else needed to resume is in place: `algo::curve_probe::whole_roll_scale` and
 `whole_roll_white_point` iterate `WHOLE_ROLLS`; add a roll and re-run. The measurements taken

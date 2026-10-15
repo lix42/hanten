@@ -299,7 +299,6 @@ graph TD
 - [ ] [Android gain-map check](tasks/analysis/android-gain-map-check.md) — does Android 15+ display the ISO-only, three-channel gain-map JPEG as HDR? Needs a device · **low priority**
 - [ ] [Display-Output Acceptance](tasks/analysis/display-output-acceptance.md) — *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every destination row, the `direct` rendering and the film master
 - [ ] [Reference Comparison: nc vs NLP and Hand-Tweaked Targets](tasks/analysis/nlp-comparison.md) — pair nc output with NLP / SmartConvert / hand-edited **targets** by `source_frame` (no registration) and report per-axis deltas, so `|nc − target| < |NLP − target|` becomes a checkable claim
-- [ ] [Reference cells in the review set](tasks/analysis/review-reference-cells.md) — an NLP export or hand-tweaked target as a grid cell beside nc's renders
 - [x] [Asset Manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs)
 - [x] [Teach the role consumers the `calibration` role](tasks/analysis/calibration-role-consumers.md) — : `manifest roles`, `nctool roll`, `viewer` and `shadow_metrics` leave a `calibration` frame out of `real`
 - [x] [Extract the chart patches](tasks/analysis/chart-extraction.md) — one per-patch table from the scans, read by every calibration consumer
@@ -315,6 +314,7 @@ graph TD
 - [x] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
 - [x] [Real-Scan Core Verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap
 - [x] [A build axis in the review set](tasks/analysis/review-build-axis.md) — a matrix may declare builds, each a pre-built binary; cells become <config>@<build>
+- [x] [Reference cells in the review set](tasks/analysis/review-reference-cells.md) — a SilverFast, SilverFast CCR or NLP export as a grid cell beside Hanten's renders, made by the generator
 - [x] [`nctool`'s default-binary test depends on the checkout](tasks/analysis/review-test-local-binary.md) — fails whenever `target/release/hanten` exists
 - [x] [Viewer interoperability](tasks/analysis/viewer-interoperability.md) — the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set
 - [-] [Drive Asset Migration](tasks/analysis/drive-asset-migration.md)

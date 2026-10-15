@@ -52,10 +52,11 @@ What other epics need to know about `analysis`:
   to a JSON file rather than to any script, and a review set now carries its **measurements**,
   which the app draws as tone and cast charts under each picture. It needs `../nc-assets` and
   the metrics venv, so it is not in CI, and its output goes to a throwaway directory outside
-  the repo — the frames are the user's own photographs. **Every cell is an `nc convert`**, so
-  a study comparing nc against an *outside* reference (NLP's own TIFFs) cannot be expressed
-  as a matrix today; `film-base/dmax-per-channel-reduction` (parked 2026-09-13) asks for a
-  reference-cell kind rather than a bespoke script.
+  the repo — the frames are the user's own photographs. **Outside exports are cells too
+  (2026-10-14):** a matrix's `references` name a manifest producer (`silverfast`,
+  `silverfast-ccr`, `nlp`), each frame's export is paired by `source_frame` and converted
+  to SDR sRGB JPEG from its own ICC profile, and Hanten's cells must then be SDR sRGB JPEG
+  as well (`analysis/review-reference-cells`).
 - **A review set can compare two *builds* since 2026-09-22.** A matrix declares
   `builds` (an id, a label and a path to a **pre-built** binary each); the generator
   renders every config under every build and flattens the product into cells named
@@ -965,12 +966,14 @@ What other epics need to know about `analysis`:
 
 ## review-reference-cells
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done
+**Updated:** 2026-10-14
 
 - Goal: an outside producer's image (NLP export, SmartConvert, hand-tweaked target) as
   a grid cell beside nc's renders of the same frame, brought to a common SDR sRGB JPEG,
   paired by manifest `source_frame`. Asked for by three tasks; filed 2026-09-13.
+- 2026-10-14: **Implemented** as a matrix `references` list (`nctool/reference.py`, wired into `review generate`). Scope narrowed by the user: SilverFast, SilverFast CCR and NLP only (SmartConvert is not worth comparing; edited targets and the reference/target roles are out). Decisions: pairing through the manifest's `source_frame`; the generator converts each export to SDR sRGB JPEG from its own ICC profile, with a declared `space` only where a file has none; Hanten's cells must be SDR sRGB JPEG (a preset build is refused); charts only when the export keeps the scan's dimensions. Gotchas: the SilverFast/NLP Adobe RGB profiles are **v2 with no `chad`**, so their colorants are D50-adapted and must be Bradford-adapted back to `wtpt` before matching primaries; SilverFast's `2026-09-20-Portra400` exports carry a reduced-resolution preview page, accepted only when its subfile type says so. Verified: before JPEG, the conversion matches `sips -m` (ColorSync) within 1 code with no channel bias on Adobe RGB (SF 2099) and float linear sRGB (NLP 1137); JPEG q95 adds ~2 codes. Gold200 (2026-10-12): 36 frames, 103 reference cells, all Adobe RGB from the profile, the 5 gaps the hand-built set recorded (SF 2096-2098, CCR 2116/2120), all with charts (every export keeps scan dimensions); a rerun rewrote no reference JPEG. **Finding:** hard-clipping Adobe RGB to sRGB affects up to ~10% of pixels on some NLP frames (each cell's note states it), while Hanten fits its own gamut, so saturated colours are not like for like; a Display P3 cell format would reduce that.
+- 2026-10-14: **Done.** Hardened through a two-engine review loop and the ship review: a missing, unreadable or malformed-profile export, two exports of one frame, a manifest sha drift or a missing venv each fail only their own cell and leave a note in review.json; separate-plane and non-RGB TIFFs are refused; non-finite samples are written black and recorded (`nonfinite_fraction`, converter v2); a producer with no manifest exports is refused before rendering (exit 2). For dependents: `film-base/dmax-per-channel-reduction`'s NLP scale review and `algo/contrast-latitude-spike`'s side-by-side can now be a matrix with `references`; `analysis/nlp-comparison` keeps the numeric pairing but no longer needs a page of its own. Open: the sRGB cell format hard-clips Adobe RGB exports (up to ~10% of pixels on some NLP frames), so a Display P3 cell format is the next step if saturated colours matter.
 
 ## review-build-axis
 
@@ -1499,4 +1502,3 @@ What other epics need to know about `analysis`:
   consumers: read `charts.json` and join on roll and frame; rendered or decoded values
   are yours to derive from the density, and the roll's `film_base.hanten` names the
   build whose Dmin the densities use.
-

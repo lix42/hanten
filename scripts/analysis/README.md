@@ -466,7 +466,8 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 
 The matrix is **data** (the `render-review-set` skill writes one per set): it names
 the configurations and the flags each one passes, with `{dmin}` standing for each
-frame's film base. Every cell is one `hanten convert`; beside each
+frame's film base. Every cell is one `hanten convert` (or, with `references`, another
+producer's export — see "Reference cells"); beside each
 rendition the command writes that image's metric record, so the app can draw the
 tone and cast charts next to the picture. Frames and per-roll `Dmin` come from
 `scripts/analysis/fixtures.json` — the same declaration the metrics read,
@@ -503,6 +504,35 @@ Four rules it holds to, each of which has a reason rather than a preference:
 It needs `../nc-assets` and the venv, so it is not in CI, and it refuses an output
 directory inside the repository: the frames are the user's own photographs and are
 never committed.
+
+### Reference cells
+
+A matrix may list `references`: another producer's export of each frame as a cell
+beside Hanten's, for example
+`{"id": "sf", "label": "SF", "producer": "silverfast"}`. `producer` names a
+manifest bucket (`converted/<producer>/`: `silverfast`, `silverfast-ccr`, `nlp`), and
+each frame's export is the entry whose `source_frame` is that frame; a producer the
+manifest has no exports from is refused (exit 2) before anything renders. Rules:
+
+- **Every cell is SDR sRGB JPEG.** The export is decoded from its own embedded ICC
+  profile (curves and colorants, never the description), converted to sRGB, and
+  written as a JPEG with an sRGB profile. So the matrix's `destination` must be the
+  SDR sRGB JPEG (`range sdr`, `transfer native`, `gamut srgb`, `container jpeg`), and a
+  preset (reference) build is refused.
+- **An export with no profile needs `"space"`** in its reference (one of
+  `reference.EXPORT_SPACES`). A declaration that contradicts the profile is refused.
+- **Unpaired is reported, never guessed.** A frame with no export is a gap with a note,
+  an export naming no `source_frame` is listed before rendering, and two exports of one
+  frame fail that cell. Any cell that fails (also an unreadable export) costs only that
+  cell, and the frame's note says why.
+- **Charts only when the crop matches.** An export with the scan's dimensions is
+  measured over the matrix inset. A re-cropped one is not, since the same fraction
+  would cover other scene content, and its note says so.
+- Beside each cell, `<frame>-<id>.reference.json` records the source, its sha256, the
+  space and where it came from, the share of pixels clipped to sRGB, and the share
+  with a non-finite sample (written black, and noted). A rerun converts again only
+  when the source, the space, the converter or Pillow changed, or the JPEG no longer
+  matches its recorded sha256.
 
 ## Compare two builds
 

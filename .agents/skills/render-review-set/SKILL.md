@@ -2,8 +2,8 @@
 name: render-review-set
 description: >-
   Build a visual review set — an image set converted through two or more
-  configurations, optionally beside another tool's output (Negative Lab Pro,
-  SmartConvert, a hand-edited target) — write its review.json, and offer to serve it
+  configurations, optionally beside another tool's output (SilverFast, SilverFast
+  CCR, Negative Lab Pro) — write its review.json, and offer to serve it
   in tools/review-app. Use when asked to compare destinations, parameters or builds by
   eye, to "render a review set", "build a comparison", "see how X looks across the
   roll", to judge a default before changing it, or to put an outside reference beside
@@ -24,7 +24,7 @@ wrong one costs a full re-render:
 |---|---|---|
 | **Image set** | which frames | `../nc-assets/manifest.json` (`role: "real"`), a named subset, or arbitrary files |
 | **Config set** | what to compare | one matrix entry per configuration |
-| **References** | another tool's output | `../nc-assets/converted/<producer>/`, converted to sRGB JPEG |
+| **References** | another tool's output | the matrix's `references`, paired through `../nc-assets/converted/<producer>/` |
 | **Destination** | where it lands | a fresh folder under `../temp/`, never inside the repo |
 
 ## Before you start
@@ -34,7 +34,8 @@ wrong one costs a full re-render:
   scripts/analysis/requirements.txt`. The generator is stdlib-only apart from measuring, so a
   set still renders without it — but then run `python3` in place of `.venv/bin/python`, since
   the command in step 4 names an interpreter that will not exist, and pass `--no-metrics`.
-  A set built that way has no charts.
+  A set built that way has no charts, and **no reference cells**: converting another
+  tool's export (step 5) needs the venv even with `--no-metrics`.
 - `../nc-assets` must resolve (machine-local symlink).
 - **The frames are the user's own photographs**: output goes outside the repo and is never
   committed or published anywhere public (a private claude.ai Artifact is allowed). `nctool review generate` refuses an output directory inside it.
@@ -172,77 +173,52 @@ a full run.
 
 ## 5. References from another tool
 
-`review.json` is producer-agnostic, so an outside image can be a cell —
-[`analysis/review-reference-cells`](../../../docs/tasks/analysis/review-reference-cells.md)
-would make this first-class; until then it is manual. Three things to get right:
+SilverFast (with and without CCR) and NLP exports go in the matrix as `references`,
+and the generator turns each into a cell. The rules are in
+[`scripts/analysis/README.md`](../../../scripts/analysis/README.md) ("Reference
+cells"):
 
-1. **Convert to a common SDR sRGB JPEG.** The app streams bytes and does no colour
-   conversion, and these exports are not browser-displayable as shipped. Encodings differ per
-   batch — under `../nc-assets/converted/nlp/` both 32-bit float **linear sRGB** and 16-bit
-   **Adobe RGB (1998)** exist. Read each file's own ICC profile rather than assuming; apply
-   the right decode, a primaries-derived matrix to sRGB where needed, then the sRGB OETF.
-   **Verify one file per encoding** against an independent decode (`sips -m` with the
-   embedded profile) before converting a batch — a wrong matrix still looks plausible.
+```json
+"destination": {"display": {"range": "sdr", "transfer": "native", "gamut": "srgb", "container": "jpeg"}},
+"references": [
+  {"id": "sf",  "label": "SF",  "producer": "silverfast"},
+  {"id": "ccr", "label": "CCR", "producer": "silverfast-ccr"},
+  {"id": "nlp", "label": "NLP", "producer": "nlp"}
+]
+```
 
-   **Converting only the reference is not enough: render Hanten's cell as the SDR sRGB
-   JPEG** (`--range sdr --container jpeg --gamut srgb`; state the range, since under
-   `--rendering direct` the range defaults to HDR). A gain-map JPEG (`--range hdr`) is the wrong
-   cell: on an HDR display the browser shows its *HDR* rendition while the reference stays
-   plain SDR, and `nctool metrics` reads its SDR base, so the picture and the charts would
-   describe different renditions. The reference build has no SDR JPEG (`gain-map-hdr` and
-   `ultra-hdr-v1` are both gain-map carriers): strip its gain map, convert the base from
-   **Display P3** to sRGB (`metrics.py`'s `PRESET_SPACES`), or review on an SDR display and
-   **say** that is what was done. Measure each side in the space it is actually in.
-2. **Pair by filename identity, never registration.** An export usually carries its source's
-   serial (`converted/<producer>/<roll>/<serial>.tif` ↔ `rolls/<roll>/<serial>.tif`). Exports
-   are often cropped differently, so never expect pixel alignment. A frame with no match gets
-   no key and the app draws a gap — never force a mapping.
-   The manifest carries a `source_frame` link meant to be this identity and to survive a
-   rename, and it is what `analysis/review-reference-cells` plans to pair on — but **check it
-   before relying on it**: a manifest generated before the generator learned plain
-   `<serial>.tif` names (2026-10-07) has it `null` on every converted entry.
-3. **Measure it in the space it is now in, and write the record to disk**:
+- **Hanten's cells must be SDR sRGB JPEG** when there are references, and the loader
+  refuses anything else. A gain-map cell would show its HDR rendition next to a plain
+  SDR export.
+- **Pairing is the manifest's `source_frame`.** Read the run's notes: exports that
+  name no `source_frame` are listed before rendering (some NLP batches have it `null`
+  on most entries), and frames with no export are gaps with a note. Fix the manifest,
+  never the matrix.
+- **An export with no ICC profile needs `"space"`** on its reference (SilverFast's
+  `2026-09-20-Portra400` has none, and its space is recorded as inferred in the
+  manifest note). Otherwise its cells fail and say why.
+- **Charts appear only for exports with the scan's exact dimensions.** A re-cropped
+  export gets the picture and a note but no charts, because the same fractional inset
+  would measure different scene content.
+- Converted cells are rendered **into the set**, with a `.reference.json` beside each.
+  A rerun converts again only when the source, its space, the converter or the Pillow
+  version changes, or the JPEG no longer matches its recorded sha256.
 
-   ```sh
-   PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image <converted>.jpg \
-     --space srgb --inset <same as the matrix> \
-     --out ../temp/<set>/<frame>-<producer>.metrics.json
-   ```
-
-   Run from the repo root: `nctool` is not installed as an executable, and this is the half
-   that genuinely needs the venv.
-
-   `srgb`, because the record must describe *that* rendition. `--out`, because the record
-   otherwise goes to stdout and there is no file to name in the rendition's `metrics` field —
-   so the reference cell silently renders with no charts beside the Hanten cells that have them.
-
-   **The matrix's inset is a fraction, so it does not survive a different crop.** These
-   exports are usually cropped differently — the Gold batch is 4897x3265 against a 5184x3600
-   source — and the same fractional inset then selects different scene content on each side,
-   which `docs/progress/analysis.md` records as the reason those cross-producer numbers are
-   not comparable at this precision. Derive a region that covers the *same scene area* on the
-   reference, or leave the reference without charts. Do not put a record measured over
-   unmatched content beside Hanten's and present the two as comparable; if you keep it anyway,
-   mark it in the rendition's note as measuring a different region.
-
-   **The record belongs to the set, not to the reference image.** It is measured over *that
-   set's* `metrics.inset`, so a fixed path beside the shared reference is overwritten by the
-   next set that uses a different inset — and because every earlier `review.json` still points
-   at that same path, its reference charts quietly begin describing another region while its
-   Hanten charts describe the original. Nothing detects this. Write the record into the set.
-
-Keep the converted reference **images** in their own folder, shared across sets; their
-**measurements** are per-set and live with the set that measured them.
+An export **not in the manifest** (a one-off, a producer with no bucket) is still
+manual: convert it to an sRGB JPEG from its own ICC profile, check one file against
+`sips -m` first, measure it with `nctool metrics image --space srgb --out
+<set>/<frame>-<producer>.metrics.json`, and merge it as in step 6.
 
 ## 6. Assemble `review.json`
 
-The generator writes one review file per run. Merge in anything rendered elsewhere — other
-configurations, references — writing every path **relative to the review file**, so sibling
+The generator writes one review file per run, references included. Merge in anything rendered
+elsewhere — other configurations, an export not in the manifest — writing every path
+**relative to the review file**, so sibling
 folders are referenced rather than copied. Verify every `src` and `metrics` path resolves
 before handing it over; a broken path is a silent gap.
 
 **Declare a `configs` entry for every merged rendition, before adding its paths.** The
-generator builds `configs` from the matrix, so it names only the Hanten configurations. A
+generator builds `configs` from the matrix, so it names only the matrix's configs and references. A
 rendition keyed by an id that is not declared there makes the app refuse the **whole set**
 (`… not one of the declared configs`), and quietly reusing an existing id is worse than the
 error — it replaces that Hanten rendition rather than sitting beside it, so the cell you wanted
