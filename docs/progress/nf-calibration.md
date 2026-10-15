@@ -156,6 +156,13 @@ R: the envelope keeps each frame's dark end at or above the roll's darkest frame
 the floor on every roll. On a thin roll it holds the dark end, so a higher R brightens
 instead. Shadow noise rises with R (09-20 median 2.5 → 2.8× the scan's at 8).
 
+**`envelope-dark-end` is done (2026-10-14): no change.** On a thin roll the hybrid lifts
+every frame, but not because of one dark frame: the roll's exposure lifts the film base,
+so the envelope's floor is pale, and a frame steeper than per-roll is raised to keep its
+dark end above it (10-12 Gold200 +0.65 look stops of level). A deeper floor was too dark;
+flattening instead of lifting moved reviewed rolls too. With the 5.5 dark target the
+hybrid was judged acceptable as it is.
+
 **`short-span-protection` is done (2026-10-13): the maximum slope stays 3.5, on the
 placement's slope**, a guard with no switch; `look.contrast`, a taste, multiplies past it.
 By review of 22 capped and thin frames against caps on the final slope (placement ×
@@ -2220,11 +2227,51 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## envelope-dark-end
 
-**Status:** not started
-**Updated:** 2026-10-13
+**Status:** done — no change
+**Updated:** 2026-10-14
 
 - 2026-10-13: filed (user) from the first review of `2026-10-12-Gold200` (29 pictures plus a
   ColorChecker bracket, `../temp/gold200-1012-roll-review/`, v16 `266d696`): the hybrid
   gives each frame its own contrast inside the envelope, and one real dark frame put the
   dark end so low that every frame was pushed up. The set's Hanten arm was re-rendered
   `--placement frame`. Measurement and numbers in the task file.
+- 2026-10-14: **started; the cause is not one frame.** A Python copy of `hybrid_placement`
+  over the thirteen measured rolls (exact on the thin ones; `../temp/short-span-protection/reports/`
+  and the Gold200 measurement). On 10-12 Gold200, 21 of 29 frames' dark ends sit within
+  0.1 stop of the film base, so a robust (percentile) dark end changes nothing. The roll's
+  exposure (+2.47 EV) lifts the base with the level, so per-roll renders the envelope's
+  floor at −2.29 look stops, and the hybrid raises any frame whose dark end would fall under
+  it. The envelope here is 8.0 look stops wide, R's value, so all 29 frames fill it end to
+  end: median level +0.65 look stops over per-roll, whites at +5.71. The lift follows the
+  roll's exposure: 09-11 +0.83, 09-28 +0.68, 09-13 +0.46, LomoColor +0.38; normal rolls
+  +0.2–0.3 (09-18, 09-20, 09-29, which the hybrid's reviews accepted with it); 09-14 none.
+- 2026-10-14: **round 1** (`../temp/envelope-dark-end/`, `review.json`; variant binary
+  `scripts/hanten-variant` = `ae5a775` + `variant.patch`, v17 with the 5.5 dark target):
+  10-12 Gold200 (29 pictures; charts 2127–2133 excluded) and 09-28 Portra400-dark (34),
+  plus four 09-14 control frames (byte-identical across the hybrid arms). Arms: today; A,
+  the envelope's floor no paler than `frame`'s dark end (−4.59 look stops); C, flatten
+  where the floor would lift (keep the kept exposure, lower the slope until the dark end
+  meets the floor); `frame`. Medians L\* p1 / p50 / p99 on Gold200: today 13.9 / 57.2 /
+  97.1, A 8.3 / 48.9 / 95.4, C 13.8 / 49.1 / 92.0, `frame` 3.6 / 32.8 / 93.5. The user
+  preferred C.
+- 2026-10-14: **C is not thin-roll-only**: it moves 130 of 246 archive frames (09-18
+  −0.50, 09-29 −0.68, 09-20 −0.21 look stops of median level), and acts like a per-frame
+  R (Gold200's frames at an effective 5.4–7.4); a lower global R still lifts (R 7: Gold200
+  +0.28, 09-28 +0.27). Round 2 (`round2/review.json`, today vs C on the 47 frames C moves on
+  09-18, 09-29, 09-20; p50 −10 to −13 L\*, 09-29's p99 85 → 73). **Decided (user): C's
+  effect should not reach every roll.** Back to round 1: **A too dark, today acceptable**
+  — the 5.5 dark target (`nf-display-stages/frame-dark-target`, after this roll was first
+  reviewed) already deepened the hybrid's blacks (Gold200 p1 L\* 13.9). A moves 125 frames
+  (thin rolls −0.6 to −1.0 look stops of level; 09-18, 09-20, 09-29 −0.13 to −0.21).
+- 2026-10-14: **round 3** (`review-round3.json`): dark target 5 against 5.5 under the
+  hybrid and `frame`. The hybrid is byte-identical at both (its darkest 1 % sits ~2 stops
+  under mid-grey, so the two-thirds push limit binds), and was left out. `frame` at 5 lifts
+  p1 3.6 → 5.1 L\*, the median barely (Gold200 32.8 → 33.7). `frame`'s darkness on this roll
+  is its white-pinned exposure (median −0.52 EV under the roll's), not its black.
+  **Decided (user): too small a change; keep today's.**
+- 2026-10-14: **done — no code change.** The hybrid on a thin roll keeps the envelope's
+  lift, judged acceptable with the 5.5 dark target. **For dependents:** the lift is the
+  envelope's floor on any roll whose exposure lifts its base (it grows with the roll's
+  exposure), not an outlier frame; flattening there amounts to a per-frame R and moves
+  reviewed rolls too; `frame` being dark on a thin roll is its exposure, not its dark
+  point. Neither was filed.

@@ -19,14 +19,20 @@ brighter for it.
   +0.26 EV under the hybrid against −0.52 EV under `frame`.
 - Several frames share the dark end there, so whether this is one outlier frame or the
   envelope's rule itself is not yet known.
+- 2026-10-14: **not one frame.** 21 of the 29 frames have their dark end within 0.1 stop
+  of the film base, so a percentile over frames changes nothing. The cause is the envelope's
+  floor on a thin roll: the roll's exposure lifts the base with the level, per-roll renders
+  the darkest frame only −2.29 look stops under mid-grey, and the hybrid raises each frame's
+  exposure to keep its dark end above that. On this roll the envelope is 8 look stops wide,
+  so every frame fills it. The lift grows with the roll's exposure (09-11, 09-13, 09-28,
+  10-10 LomoColor, 10-12 Gold200).
 
-## Open
+## Outcome (2026-10-14): no change
 
-- What sets the dark end that pushes the roll: one frame's dark end, its level, or the
-  hybrid's exposure rule (α of a frame's offset from the roll's median level).
-- Whether the fix is a robust dark end (a percentile over frames instead of the minimum),
-  a per-frame exemption, or a change to how the exposure is held.
-- Whether other archive rolls show it — 09-28 Portra400-dark is the obvious check.
+Reviewed (`../temp/envelope-dark-end/`) at v17, with the 5.5 dark target: a floor no paler
+than `frame`'s dark end was too dark; flattening instead of lifting was liked on the thin
+rolls but moves 130 of 246 archive frames, reviewed rolls included. Today's hybrid stays.
+`frame` at a dark target of 5 differs little from 5.5.
 
 ## How to Verify
 
