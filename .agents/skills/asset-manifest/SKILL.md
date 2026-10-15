@@ -181,6 +181,19 @@ manifest too; other sources' entries stay. `charts check <labels>` prints the ch
 writing. Both read pixels (the venv). From schema 4 on, `generate` keeps any frame or
 roll field it does not write itself, so the next hand-entered field needs no bump.
 
+**The chart table** (`charts.json`, beside `manifest.json`) is what calibration work
+reads: every labelled patch's median transmission, base-relative density and density
+spread per channel, from the scan, with the frame's shot facts and the roll's stock,
+conditions and film base (`hanten measure-base` on its `unexposed` frame). It is
+derived — rebuild it after any `charts import`, and it reruns byte-identical:
+
+```bash
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts table
+```
+
+It also says whether every neutral's density rises with exposure across its bracket.
+`generate` and `validate` ignore it (they track images only).
+
 ## Where the assets live
 
 Since 2026-10-13 the machine-local `../nc-assets` symlink points at the **full set**

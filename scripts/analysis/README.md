@@ -57,6 +57,7 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
   --review ../temp/<set>/review.json --roll <roll> --source '<set> <date>' --kind white
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts import \
   ../temp/chart-labels/<roll>.json --source 'chart-labels <date>'
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts table
 ```
 
 - `generate` inventories source rolls, samples, and converted outputs; obtains
@@ -644,3 +645,7 @@ instead of letting the metrics tests skip while the run still prints `ok`; leave
 it unset locally if you have not made the venv. The harness tests, `compare`'s
 end-to-end test (the `fixtures` set, run twice), the acceptance tests and `viewer`'s
 end-to-end test additionally need `cargo build` to have produced `target/debug/hanten`.
+
+`NCTOOL_ARCHIVE_TESTS=1` opts into the one test that reads the real archive
+(`test_chart_table.TestOnTheArchive`: every labelled chart's neutrals rise with
+exposure). It needs `../nc-assets` and `target/debug/hanten`, and is never run by CI.

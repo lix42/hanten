@@ -248,8 +248,8 @@ def check_frame_charts(fr: dict) -> list[str]:
 # ------------------------------------------------------------------ the check
 
 def read_scan(path: str):
-    """The scan's colour channels as stored (IR dropped); `_region` converts only the
-    pixels it samples, since a full frame in float64 is gigabytes."""
+    """The scan's colour channels as stored (IR dropped); `sample` converts only the
+    pixels it reads, since a full frame in float64 is gigabytes."""
     import tifffile
     img = tifffile.imread(path)
     if img.ndim != 3 or img.shape[2] < 3:
@@ -281,18 +281,27 @@ def _median(xs: list[float]) -> float:
     return (s[len(s) // 2] + s[(len(s) - 1) // 2]) / 2
 
 
-def _region(scan, h, rect) -> "tuple[list[float], list[float], int] | None":
-    """(median log2 transmission per channel, p10-p90 spread per channel, pixels), or
-    None when the region lies outside the scan."""
+def sample(scan, h, rect):
+    """The scan's samples (pixels x channels, float64, as stored) whose centres lie in
+    `rect` (target units) projected through `h`; None when none do. The one sampler the
+    placement check and the chart table share, so they agree on what a patch is."""
     import numpy as np
     rows, cols = scan.shape[:2]
     quad = [project(h, p) for p in rect_quad(rect)]
     yy, xx = _mask((rows, cols), [[x * cols, y * rows] for x, y in quad])
-    if len(yy) == 0:
+    return scan[yy, xx].astype(np.float64) if len(yy) else None
+
+
+def _region(scan, h, rect) -> "tuple[list[float], list[float], int] | None":
+    """(median log2 transmission per channel, p10-p90 spread per channel, pixels), or
+    None when the region lies outside the scan."""
+    import numpy as np
+    s = sample(scan, h, rect)
+    if s is None:
         return None
-    v = np.log2(np.maximum(scan[yy, xx].astype(np.float64), 1.0))
+    v = np.log2(np.maximum(s, 1.0))
     p10, p50, p90 = np.percentile(v, [10, 50, 90], axis=0)
-    return [float(x) for x in p50], [float(x) for x in p90 - p10], int(len(yy))
+    return [float(x) for x in p50], [float(x) for x in p90 - p10], int(len(s))
 
 
 def check_placement(scan, target: dict, corners: list[list[float]]) -> dict:
