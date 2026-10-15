@@ -1,0 +1,408 @@
+{
+  "id": "ccpp2-classic",
+  "version": 1,
+  "name": "ColorChecker Passport Photo 2 — Classic target",
+  "corners": "The outer corners of the patch array, with dark skin (A1) at the top left and the white-to-black row at the bottom.",
+  "units": "mm",
+  "size": [
+    87.0,
+    57.0
+  ],
+  "geometry_source": "Measured 2026-10-14 from a photo of the user's card beside a ruler (the card's printed mm scale agrees): 12 mm patches at a 15 mm pitch, about +/-0.3 mm. The card prints it upright (portrait), so a frame's corners follow this landscape orientation, not the page.",
+  "patches": [
+    {
+      "id": "A1",
+      "name": "dark skin",
+      "rect": [
+        0.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "B1",
+      "name": "light skin",
+      "rect": [
+        15.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "C1",
+      "name": "blue sky",
+      "rect": [
+        30.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "D1",
+      "name": "foliage",
+      "rect": [
+        45.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "E1",
+      "name": "blue flower",
+      "rect": [
+        60.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "F1",
+      "name": "bluish green",
+      "rect": [
+        75.0,
+        0.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "A2",
+      "name": "orange",
+      "rect": [
+        0.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "B2",
+      "name": "purplish blue",
+      "rect": [
+        15.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "C2",
+      "name": "moderate red",
+      "rect": [
+        30.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "D2",
+      "name": "purple",
+      "rect": [
+        45.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "E2",
+      "name": "yellow green",
+      "rect": [
+        60.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "F2",
+      "name": "orange yellow",
+      "rect": [
+        75.0,
+        15.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "A3",
+      "name": "blue",
+      "rect": [
+        0.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "B3",
+      "name": "green",
+      "rect": [
+        15.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "red",
+      "rect": [
+        30.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "D3",
+      "name": "yellow",
+      "rect": [
+        45.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "E3",
+      "name": "magenta",
+      "rect": [
+        60.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "F3",
+      "name": "cyan",
+      "rect": [
+        75.0,
+        30.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "A4",
+      "name": "white 9.5",
+      "rect": [
+        0.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "B4",
+      "name": "neutral 8",
+      "rect": [
+        15.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "C4",
+      "name": "neutral 6.5",
+      "rect": [
+        30.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "D4",
+      "name": "neutral 5",
+      "rect": [
+        45.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "E4",
+      "name": "neutral 3.5",
+      "rect": [
+        60.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "F4",
+      "name": "black 2",
+      "rect": [
+        75.0,
+        45.0,
+        12.0,
+        12.0
+      ]
+    }
+  ],
+  "neutrals": [
+    "A4",
+    "B4",
+    "C4",
+    "D4",
+    "E4",
+    "F4"
+  ],
+  "reference": {
+    "quantity": "CIELAB, D50, 2° observer",
+    "source": "X-Rite, ColorChecker24_After_Nov2014.txt (ORIGINATOR \"ColorChecker24 - November2014 edition and newer\", measured 4/28/2015, i1Pro 2, M0), from http://www.xrite.com/-/media/XRite/Files/Literature/Misc/C/ColorChecker24_After_Nov2014.zip, linked from https://www.xrite.com/service-support/new_color_specifications_for_colorchecker_sg_and_classic_charts. X-Rite calls it a generic averaged description of charts made after November 2014.",
+    "values": {
+      "A1": [
+        37.54,
+        14.37,
+        14.92
+      ],
+      "A2": [
+        62.73,
+        35.83,
+        56.5
+      ],
+      "A3": [
+        28.37,
+        15.42,
+        -49.8
+      ],
+      "A4": [
+        95.19,
+        -1.03,
+        2.93
+      ],
+      "B1": [
+        64.66,
+        19.27,
+        17.5
+      ],
+      "B2": [
+        39.43,
+        10.75,
+        -45.17
+      ],
+      "B3": [
+        54.38,
+        -39.72,
+        32.27
+      ],
+      "B4": [
+        81.29,
+        -0.57,
+        0.44
+      ],
+      "C1": [
+        49.32,
+        -3.82,
+        -22.54
+      ],
+      "C2": [
+        50.57,
+        48.64,
+        16.67
+      ],
+      "C3": [
+        42.43,
+        51.05,
+        28.62
+      ],
+      "C4": [
+        66.89,
+        -0.75,
+        -0.06
+      ],
+      "D1": [
+        43.46,
+        -12.74,
+        22.72
+      ],
+      "D2": [
+        30.1,
+        22.54,
+        -20.87
+      ],
+      "D3": [
+        81.8,
+        2.67,
+        80.41
+      ],
+      "D4": [
+        50.76,
+        -0.13,
+        0.14
+      ],
+      "E1": [
+        54.94,
+        9.61,
+        -24.79
+      ],
+      "E2": [
+        71.77,
+        -24.13,
+        58.19
+      ],
+      "E3": [
+        50.63,
+        51.28,
+        -14.12
+      ],
+      "E4": [
+        35.63,
+        -0.46,
+        -0.48
+      ],
+      "F1": [
+        70.48,
+        -32.26,
+        -0.37
+      ],
+      "F2": [
+        71.51,
+        18.24,
+        67.37
+      ],
+      "F3": [
+        49.57,
+        -29.71,
+        -28.32
+      ],
+      "F4": [
+        20.64,
+        0.07,
+        -0.46
+      ]
+    }
+  },
+  "saturated": [
+    "F1",
+    "A2",
+    "B2",
+    "C2",
+    "D2",
+    "E2",
+    "F2",
+    "A3",
+    "B3",
+    "C3",
+    "D3",
+    "E3",
+    "F3"
+  ],
+  "saturated_note": "The patches whose reference chroma C*ab is at least 30.",
+  "anchor": {
+    "patch": "A4",
+    "prompt": "the white patch"
+  }
+}

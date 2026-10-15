@@ -125,10 +125,11 @@ Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode
   conditions** (light, camera and lens, development, scan session) are recorded, not
   left to notes.
 - **Both Passport targets are used**: the Classic's 24 (published reference values) and
-  the Creative Enhancement target's 28, whose bottom row is a neutral series in ⅓-stop
-  steps — relative exposures known by construction in every chart frame. Patch geometry is
-  per-patch rectangles in target coordinates, since the Creative target's middle rows are
-  irregular.
+  the Creative Enhancement target's 26, whose right column (upright) is a neutral series
+  of four near-white and four near-black steps — relative exposures known by construction
+  in every chart frame (corrected 2026-10-14 from photos of the card; it was written as 28
+  patches with a bottom row). Patch geometry is per-patch rectangles in target
+  coordinates, since the Creative target's middle rows are irregular.
 - **Labelling and extraction are their own tasks**: `chart-labeling-tool` (corners per
   target, the projected grid, a placement check) and `chart-extraction` (one per-patch
   table every consumer reads). This task keeps the role, the shot facts and the roll

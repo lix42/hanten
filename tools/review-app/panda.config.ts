@@ -202,6 +202,14 @@ export default defineConfig({
         // escape hatch stay unused.
         natural: { value: "auto" },
         unconstrained: { value: "none" },
+
+        // The chart-labelling page (`/label`): its frame list, its results panel,
+        // the whole page, and a frame fitted below the page's wrapping control row
+        // (whose height is not stated, so the fit leaves it a generous allowance).
+        labelSide: { value: "140px" },
+        labelPanel: { value: "320px" },
+        labelPage: { value: "100dvh" },
+        labelImage: { value: "calc(100dvh - 120px)" },
       },
     },
 

@@ -1400,11 +1400,52 @@ What other epics need to know about `analysis`:
 
 ## chart-labeling-tool
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-10-14
 
 - 2026-10-14: filed (user), split from `calibration-frame-capture` with the registration
   design agreed that day; the task file holds the decisions.
+- 2026-10-14: built (agreed with the user: a page in `tools/review-app`, the check on the
+  scan, the manifest written only by an import that re-checks).
+  - **Manifest schema 4**: per-frame `charts` (target, card, corners, source, check).
+    From 4 on `generate` keeps any frame or roll field it does not write itself and
+    refuses to drop it, so the next hand-entered field needs no bump. The archive goes
+    to v4 on the first `charts import`, which again locks un-rebased worktrees out.
+  - **Corners are the patch array's outer corners**, the target's own top left first,
+    clockwise. Patches are projected, never stored, so a refined layout moves no label.
+  - **Targets** (`nctool/targets/`): measured from the user's photos of the card. The
+    Classic is printed upright on the Passport, so its corners follow the usual landscape
+    orientation, not the page. The Creative Enhancement target has **26** patches and its
+    neutrals are the right column (four near-white, four near-black), not a bottom row.
+  - **The check** (`charts.check_placement`): uniform patch middles, dark gaps and
+    surround, neutrals in order, and saturated patches showing colour. Colour is what
+    catches a grid slipped by one whole patch, which every other test passes: the
+    samples still land on uniform patches and the outer strips on a real gap.
+- 2026-10-14: **corners may be clicked in any order** (user). The page sorts them round
+  the outline and lays the target's long side along it; the check
+  (`charts.find_placement`) tries every turn and mirror image against the scan and keeps
+  the one that passes, so the stored corners are always in the target's own order.
+- 2026-10-14: first real label (2127, user) failed with the grid upside down: the right
+  way up failed too, on D2 purple's chroma (0.30 against a 0.3 limit at -2 EV).
+  `CHROMA_STOPS` is now 0.15: a patch on the surround reads 0.01-0.04, and it is the
+  neutral order, not chroma, that tells a target from itself upside down (0.21 vs 0.30
+  there). The check now tries every way up and takes the one that passes; if several
+  pass it guesses none and the page asks for the target's `anchor` patch (user).
+- 2026-10-14: **2127-2133 labelled (user), checked and imported** — both targets on every
+  frame, all passing, `manifest validate` clean; the archive manifest is now schema 4
+  (the v3 copy is `../temp/chart-labels/manifest-before-charts-v3.json`). The limits,
+  from these frames:
+  - patch middle spread: worst 0.21 stops (limit 0.5);
+  - colour: weakest 0.24 stops at +4 EV (limit 0.15);
+  - neutral steps: all positive, smallest +0.05 (Creative near-whites at +4);
+  - gaps: well-placed labels read at most 0.27 stops brighter than black, so the limit
+    is 0.5 — but 2132, a 1 s exposure with camera shake, lifts one to three strips to
+    0.5-0.8 wherever the corners go. The gap test therefore fails only when more than
+    10% of the strips read bright (`GAP_SHARE`); fewer are stored as `bright_gaps` and
+    shown as warnings. Shifting a sharp label (2131) by a tenth of a patch already lifts
+    7-9 of ~55 strips and fails, except the Creative sideways (its gaps are wider); a
+    fifth of a patch fails everywhere.
+
 
 ## chart-extraction
 

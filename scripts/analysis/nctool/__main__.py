@@ -1,6 +1,6 @@
 """`python -m nctool` entry point.
 
-Seven command groups: `manifest` (generate / validate / roles / patches), `compare`
+Seven command groups: `manifest` (generate / validate / roles / patches / charts), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
 converted image, whatever produced it), `review` (render a described matrix
@@ -20,6 +20,7 @@ import argparse
 import sys
 
 from . import acceptance as _acceptance
+from . import charts as _charts
 from . import compare as _compare
 from . import manifest as _manifest
 from . import metrics as _metrics
@@ -101,6 +102,26 @@ def build_parser() -> argparse.ArgumentParser:
     pimp.add_argument("--dry-run", action="store_true",
                       help="report what would change; do not write manifest.json")
     pimp.set_defaults(func=_patches.cmd_import)
+
+    cha = msub.add_parser("charts", help="check and import frames' chart labels")
+    csub_ = cha.add_subparsers(dest="charts_cmd", required=True)
+    cchk = csub_.add_parser("check", help="check each label's placement against its scan "
+                                          "and print the result as JSON (exit 1 if any fails)")
+    _add_root(cchk)
+    cchk.add_argument("labels", help="the labelling tool's labels file")
+    cchk.add_argument("--frame", help="check only this frame (its file stem, e.g. 2127)")
+    cchk.set_defaults(func=_charts.cmd_check)
+    cimp = csub_.add_parser("import", help="check every label and fold the frames into the "
+                                           "manifest; nothing is written if any fails")
+    _add_root(cimp)
+    cimp.add_argument("labels", help="the labelling tool's labels file")
+    cimp.add_argument("--source", required=True,
+                      help="where and when the charts were labelled, e.g. "
+                           "'chart-labels 2026-10-14'")
+    cimp.add_argument("--date", help="the check date to store (default today)")
+    cimp.add_argument("--dry-run", action="store_true",
+                      help="report what would change; do not write manifest.json")
+    cimp.set_defaults(func=_charts.cmd_import)
 
     # --- compare: the conversion-versioning comparison harness ---------------
     cmp_ = sub.add_parser("compare",

@@ -13,7 +13,9 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AliveRouteImport } from './routes/alive'
 import { Route as ChartsRouteImport } from './routes/charts'
 import { Route as EventsRouteImport } from './routes/events'
+import { Route as LabelRouteImport } from './routes/label'
 import { Route as ImgIdRouteImport } from './routes/img.$id'
+import { Route as LabelImgStemRouteImport } from './routes/label-img.$stem'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -35,9 +37,19 @@ const EventsRoute = EventsRouteImport.update({
   path: '/events',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LabelRoute = LabelRouteImport.update({
+  id: '/label',
+  path: '/label',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ImgIdRoute = ImgIdRouteImport.update({
   id: '/img/$id',
   path: '/img/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LabelImgStemRoute = LabelImgStemRouteImport.update({
+  id: '/label-img/$stem',
+  path: '/label-img/$stem',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -46,14 +58,18 @@ export interface FileRoutesByFullPath {
   '/alive': typeof AliveRoute
   '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
+  '/label': typeof LabelRoute
   '/img/$id': typeof ImgIdRoute
+  '/label-img/$stem': typeof LabelImgStemRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/alive': typeof AliveRoute
   '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
+  '/label': typeof LabelRoute
   '/img/$id': typeof ImgIdRoute
+  '/label-img/$stem': typeof LabelImgStemRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -61,14 +77,38 @@ export interface FileRoutesById {
   '/alive': typeof AliveRoute
   '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
+  '/label': typeof LabelRoute
   '/img/$id': typeof ImgIdRoute
+  '/label-img/$stem': typeof LabelImgStemRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/alive' | '/charts' | '/events' | '/img/$id'
+  fullPaths:
+    | '/'
+    | '/alive'
+    | '/charts'
+    | '/events'
+    | '/label'
+    | '/img/$id'
+    | '/label-img/$stem'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/alive' | '/charts' | '/events' | '/img/$id'
-  id: '__root__' | '/' | '/alive' | '/charts' | '/events' | '/img/$id'
+  to:
+    | '/'
+    | '/alive'
+    | '/charts'
+    | '/events'
+    | '/label'
+    | '/img/$id'
+    | '/label-img/$stem'
+  id:
+    | '__root__'
+    | '/'
+    | '/alive'
+    | '/charts'
+    | '/events'
+    | '/label'
+    | '/img/$id'
+    | '/label-img/$stem'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -76,7 +116,9 @@ export interface RootRouteChildren {
   AliveRoute: typeof AliveRoute
   ChartsRoute: typeof ChartsRoute
   EventsRoute: typeof EventsRoute
+  LabelRoute: typeof LabelRoute
   ImgIdRoute: typeof ImgIdRoute
+  LabelImgStemRoute: typeof LabelImgStemRoute
 }
 
 declare module '@tanstack/solid-router' {
@@ -109,11 +151,25 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof EventsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/label': {
+      id: '/label'
+      path: '/label'
+      fullPath: '/label'
+      preLoaderRoute: typeof LabelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/img/$id': {
       id: '/img/$id'
       path: '/img/$id'
       fullPath: '/img/$id'
       preLoaderRoute: typeof ImgIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/label-img/$stem': {
+      id: '/label-img/$stem'
+      path: '/label-img/$stem'
+      fullPath: '/label-img/$stem'
+      preLoaderRoute: typeof LabelImgStemRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -124,7 +180,9 @@ const rootRouteChildren: RootRouteChildren = {
   AliveRoute: AliveRoute,
   ChartsRoute: ChartsRoute,
   EventsRoute: EventsRoute,
+  LabelRoute: LabelRoute,
   ImgIdRoute: ImgIdRoute,
+  LabelImgStemRoute: LabelImgStemRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

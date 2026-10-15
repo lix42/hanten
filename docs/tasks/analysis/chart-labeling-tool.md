@@ -22,15 +22,24 @@ one-off.
 - It labels a render, never the scan itself (renders keep the scan's dimensions, so
   fractions carry over); the agent never reads the pixels.
 - First targets: the ColorChecker Passport Photo 2's Classic (24) and Creative Enhancement
-  (28, irregular middle rows) — patch geometry as per-patch rectangles in target
+  (26, irregular middle rows) — patch geometry as per-patch rectangles in target
   coordinates, committed once with the reference values.
+
+## Decided (user, 2026-10-14)
+
+- A page in `tools/review-app`'s package (`pnpm label`), not a mode of the review page.
+- The placement check reads the **scan**, on save and again at import, which refuses a
+  failing label. The page writes a labels file; only `nctool manifest charts import`
+  writes the manifest.
+- Target layouts live in `scripts/analysis/nctool/targets/`, measured from photos of the
+  user's card; the Classic's reference values are X-Rite's post-2014 file, cited there.
 
 ## Open
 
-- Stack and whether it shares `tools/review-app`'s build.
-- How the import keeps hand edits and refuses a label whose check failed.
-- Where the target geometry and reference values live, and their sources (X-Rite's
-  post-2014 Classic values; the Creative target has none published).
+- The check's thresholds are first guesses until real labels show the spread of
+  passing frames.
+- The layouts are good to about half a millimetre; refine them from labelled scans if a
+  check is marginal.
 
 ## How to Verify
 
