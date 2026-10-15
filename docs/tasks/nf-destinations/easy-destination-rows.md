@@ -1,4 +1,15 @@
+---
+title: Easy destination rows
+status: done
+deps: [nf-destinations/preset-set, nf-destinations/gain-map-destination]
+tags: [new-flow, no-downstream-blockers]
+done: 2026-09-30
+---
 # Easy destination rows
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-30.** The linear float HDR TIFF in Display P3, Adobe RGB, sRGB and BT.2020 (`--transfer linear` alone now asks for `--gamut`); `--gamut srgb` as an SDR gamut; a gain map on an sRGB base (ImageIO reads it as HDR). `direct`'s unset destination is now the Adobe RGB float TIFF
+>
+> **Dependency note** (migrated 2026-10-14): linear float HDR in Adobe RGB / Display P3, sRGB as a gamut, then sRGB's float and gain-map rows
 
 ## Goal
 

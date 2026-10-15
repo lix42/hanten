@@ -1,4 +1,16 @@
+---
+title: Slide film input
+status: todo
+deps: [io/positive-input-mode, nf-scene-correction/stage]
+priority: low
+tags: [post-mvp]
+summary: "convert positive (E-6) film: no film base or decode, enters at the working space; no slide scans to verify against yet"
+---
 # Slide film input
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-10-08): no slide scans to verify against. Convert positive (E-6) film: no film base or decode, enters at the working space; the embedded SilverFast IT8 profile is the likely scanner characterization
+>
+> **Dependency note** (migrated 2026-10-14): **low priority**
 
 > **Low priority** (user, 2026-10-08): there are no slide scans to develop or verify
 > against. Pick it up when one exists.

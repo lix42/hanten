@@ -71,7 +71,8 @@ there**:
   parameters by stage, §11 exit codes.
 - `docs/design-update.md` — the evidence behind it: how the decode is tuned (Part 3)
   and the measurements (appendices).
-- `docs/TASKS.md` — the plan: canonical dependency graph and task checklist by epic.
+- `docs/TASKS.md` — the plan's index by epic, **generated** from the task files;
+  never edit it.
 - `docs/tasks/<epic>/<name>.md` — per-task file. Task ids are `<epic>/<name>`.
 - `docs/progress/<epic>.md` — **append-only** execution log per epic, opening with
   an `## Epic summary`. `_unassigned.md` parks sections that name no task.
@@ -85,18 +86,18 @@ there**:
 
 ## Task-tracking workflow
 
-Work is planned with the `task-tracking` skill (`/tasks:*`), in **epic mode**:
-`docs/TASKS.md` holds the authoritative status (`[ ]`/`[~]`/`[x]`) and the
-task-level graph; a task is executable when all its deps are `[x]`. Before
+Work is planned with the `task-tracking` skill (`/tasks:*`) and its `tasks` CLI, in
+**epic mode**. Each task file's frontmatter (`status`, `deps`, …) is the only record
+of status and dependencies; `docs/TASKS.md` is generated from it. Change them with
+the CLI (`tasks set`, `new`, `mv`), never by editing the index; `tasks ready` lists
+what can start and `tasks log <id> "…"` appends to the progress log. Before
 starting, read the task file, its epic's progress file in full, and the
-`Epic summary` of every epic it depends on. Keep the rollup, the Mermaid diagram,
-the dependency list and per-task Dependencies in sync — `TASKS.md` wins. The
-rollup may contain cycles; the task graph must not.
+`Epic summary` of every epic it depends on. CI runs `tasks check`.
 
-- **Moving a task between epics is a rename with a long tail.** The skill fixes
-  only `](…)` links; backticked prose paths (in `src/` docs and the design spec)
-  rot silently. **Never bulk-rewrite ids** — `color-management`, `asset-manifest`
-  and `perf-telemetry` are also ordinary words or skill names.
+- **Moving a task between epics is a rename with a long tail.** `tasks mv` fixes
+  ids and links but only *lists* backticked prose mentions (in `src/` docs and the
+  design spec) — review each. **Never bulk-rewrite ids** — `color-management`,
+  `asset-manifest` and `perf-telemetry` are also ordinary words or skill names.
 - **Progress logs are append-only**: add a cross-reference as a new dated entry,
   never mid-body. The exception is a **user-authorised consolidation pass**, which
   may summarise *done* tasks' sections while keeping every decision, gotcha,
@@ -190,7 +191,8 @@ committed.
   `cargo clippy --all-targets --all-features -- -D warnings` →
   `cargo build --all-targets --all-features` →
   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` → the `nctool` suite
-  (`scripts/analysis/CLAUDE.md`) → `cargo test --all-features`.
+  (`scripts/analysis/CLAUDE.md`) → `cargo test --all-features`; after touching
+  `docs/tasks/`, `tasks check` (CI pins the plugin by commit in `ci.yml`).
 - **Match CI's toolchain too.** CI takes the latest stable; `rustup check` first,
   since a newer clippy adds lints a local green run never saw.
 - **`cargo doc` warnings fail CI** (a renamed item leaves dangling intra-doc
@@ -228,7 +230,7 @@ committed.
   part to a doc.
 - **No gate reads prose.** After changing behaviour, grep for the *negation* of the
   claim you just falsified, worded several ways and across every path including
-  `docs/TASKS.md` — the stale sentence is never in your diff.
+  `docs/tasks/` — the stale sentence is never in your diff.
 - **Scripted edits:** inserting before `fn X` lands between `X`'s doc and its
   signature; a batch with fail-fast asserts skips later edits once rustfmt moves
   an anchor. Apply edits independently and grep the result.

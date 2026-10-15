@@ -1,3 +1,9 @@
+---
+title: Sigmoid Parameter Calibration
+status: closed
+deps: []
+closed_into: nf-calibration/scale-gamma-loop
+---
 # Sigmoid Parameter Calibration
 
 > **Superseded 2026-09-19 by `nf-calibration/scale-gamma-loop`** — the three

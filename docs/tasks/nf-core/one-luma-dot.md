@@ -1,4 +1,15 @@
+---
+title: One luminance dot product
+status: done
+deps: [nf-look/path-to-white]
+tags: [new-flow]
+done: 2026-09-24
+---
 # One luminance dot product
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** `colorimetry::dot` is the one f32 copy; the four private ones are gone and the look no longer imports fit range's. No pixel moved, no golden edited
+>
+> **Dependency note** (migrated 2026-10-14): `dot` is copied in four stages, and the look imports fit range's. Done 2026-09-24: one copy in `pipeline::colorimetry`
 
 ## Goal
 

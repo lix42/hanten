@@ -1,3 +1,10 @@
+---
+title: Negatives scanned in positive mode
+status: done
+deps: [io/input-data-semantics, color/film-master-render-pipeline]
+tags: [post-mvp]
+summary: convert a negative scanned in SilverFast's positive mode (same raw transmission, IT8 profile recorded, not applied), warning when a frame does not look like a negative under its base
+---
 # Negatives scanned in positive mode
 
 ## Goal

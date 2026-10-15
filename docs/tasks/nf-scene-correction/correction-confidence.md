@@ -1,4 +1,15 @@
+---
+title: How far to trust a roll's corrections
+status: done
+deps: [nf-scene-correction/midtone-neutral, nf-scene-correction/roll-white-balance, nf-calibration/taste-vs-quality]
+tags: [new-flow]
+summary: "`measure-roll` grades the white balance and the midtone line by frame count (in doubt under 16, with an advisory note) and the white balance gets a switch (`--neutral-balance`)"
+---
 # How far to trust a roll's corrections
+
+> **From TASKS.md** (migrated 2026-10-14): `measure-roll` grades the white balance and the midtone line by frame count (in doubt under 16, with an advisory note) and the white balance gets a switch (`--neutral-balance`); nothing turns one off on its own, since no signal found detects a roll of one dominant colour
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07 from the sea probe: a roll of one scene colour fools the corrections, so the report scores each one and suggests an alternative rather than auto-fixing
 
 ## Goal
 

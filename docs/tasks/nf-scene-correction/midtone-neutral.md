@@ -1,4 +1,15 @@
+---
+title: A midtone neutral measured per roll
+status: done
+deps: [nf-scene-correction/roll-white-balance, nf-calibration/taste-vs-quality]
+tags: [new-flow]
+summary: the cast a poor development leaves in the midtones, removed by a per-roll line through the frames' votes
+---
 # A midtone neutral measured per roll
+
+> **From TASKS.md** (migrated 2026-10-14): the cast a poor development leaves in the midtones, removed by a per-roll line through the frames' votes; on by default with ten frames or more; each frame's white then measured on the corrected samples
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07 from the poor-development spike (`docs/spike/poor-development.md`): the joined midtone line, on by default above a data floor
 
 ## Goal
 

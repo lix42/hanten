@@ -1,4 +1,13 @@
+---
+title: Label the charts in a frame
+status: done
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+summary: a tool to mark each target's four corners, check the projected patch grid, and write chart entries to `manifest.json`
+---
 # Label the charts in a frame
+
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-14 (split from `calibration-frame-capture`): mark each target's corners in a frame, check the projected grid, write chart entries to the manifest
 
 ## Goal
 

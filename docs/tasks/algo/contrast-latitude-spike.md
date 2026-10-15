@@ -1,3 +1,9 @@
+---
+title: Contrast / Latitude Spike
+status: closed
+deps: []
+closed_into: nf-look/contrast
+---
 # Contrast / Latitude Spike
 
 > **Superseded 2026-09-19 by `nf-look/contrast`** — contrast becomes a look

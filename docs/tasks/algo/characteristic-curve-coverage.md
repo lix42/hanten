@@ -1,4 +1,15 @@
+---
+title: Pin the `characteristic` Curve Against Regression
+status: done
+deps: [algo/film-stock-profiles]
+tags: [post-mvp]
+summary: "the curve's tables were well covered and its **wiring** barely: a refactor between `to_density` and `FilmRgbImage` moved every characteristic pixel with all four gates green"
+---
 # Pin the `characteristic` Curve Against Regression
+
+> **From TASKS.md** (migrated 2026-10-14): the curve's tables were well covered and its **wiring** barely: a refactor between `to_density` and `FilmRgbImage` moved every characteristic pixel with all four gates green. **Closed 2026-09-10** with two complementary pins — four property tests that run the real `algo::reconstruct` over a synthesized scan (neutral ramp, published mid-grey, `scale·d + offset` ordering, `out_of_table` against a recount), and a golden pinned to 1 ULP. The "no bit-exact capture is available" premise was **half wrong**: divergence needs the true value within ~`2^-5` ULP of an f32 rounding boundary, and eleven of the fifteen samples clear that by 2-16x, so which values are unsafe is decidable before CI. A committed margin test records the four that are not. `PIPELINE_FINGERPRINTS` is deliberately untouched — the gate covers the *default* render, so the row belongs to `algo/split-default-migration`, which now has the margin harness to decide whether its `render` hash is portable
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-10, closed the same day. The wiring (`to_density → check_tables → apply_curve_per_channel → FilmRgbImage`) now carries four property tests over the real `algo::reconstruct` plus a 1-ULP golden. Edged into `algo/split-default-migration` rather than `algo/conversion-presets`, because that is where the default actually moves — and it is still the one that owns the `PIPELINE_FINGERPRINTS` row, which stays unwritten here on purpose: the gate covers the *default* render, and it hashes raw f32 bits with no 1-ULP window
 
 ## Goal
 

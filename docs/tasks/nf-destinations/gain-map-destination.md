@@ -1,4 +1,15 @@
+---
+title: The gain-map destination
+status: done
+deps: [nf-destinations/preset-set]
+tags: [new-flow]
+done: 2026-09-27
+---
 # The gain-map destination
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-27.** `--range hdr` alone writes the new chain's HDR JPEG: a Display P3 SDR base and a half-resolution, per-channel gain map, ISO 21496-1 metadata only, in an MPF container nc writes (`io::iso_gain_map`, no libultrahdr; gain map typed `050000`). A flat map is `chain.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three distinct channel entries; its memory arm (now `GainMapJpeg`) was measured by `memory-profiles`
+>
+> **Dependency note** (migrated 2026-10-14): the per-channel ISO 21496-1 gain-map JPEG, split out of the destination set
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: "Spike: opt-in bounded scene-range mapping"
+status: closed
+deps: [nf-look/stage, nf-scene-correction/stage]
+tags: [new-flow]
+closed_into: nf-calibration/thin-frame-lift
+---
 # Spike: opt-in bounded scene-range mapping
+
+> **From TASKS.md** (migrated 2026-10-14): **closed 2026-09-29, folded into `nf-calibration/thin-frame-lift`**, which sets a bounded per-frame exposure and slope; the roll-level solve is `nf-calibration/roll-exposure`
+>
+> **Dependency note** (migrated 2026-10-14): **closed: folded into `nf-calibration/thin-frame-lift`** a spike: opt-in and bounded, never the default — roll consistency is the promise
 
 > **Folded into `nf-calibration/thin-frame-lift` on 2026-09-29.** That task solves a
 > per-frame exposure and slope from `measure-roll`'s measurements, as an opt-in, bounded

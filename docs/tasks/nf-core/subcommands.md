@@ -1,4 +1,15 @@
+---
+title: "`roll`'s per-frame overrides under the new chain"
+status: done
+deps: [nf-core/minimal-end-to-end]
+tags: [new-flow]
+summary: a frame's override resolves as `convert` would, and an override that changes a roll-wide value warns (`roll.white_stops` per frame is legitimate)
+---
 # `roll`'s per-frame overrides under the new chain
+
+> **From TASKS.md** (migrated 2026-10-14): a frame's override resolves as `convert` would, and an override that changes a roll-wide value warns (`roll.white_stops` per frame is legitimate). *Re-scoped 2026-09-28: `inspect` is done, `estimate` moved to `core/measure-base`, `nctool roll`'s calibrate step to `core/roll-measure-mode`*
+>
+> **Dependency note** (migrated 2026-10-14): roll's per-frame overrides: the merge onto the serialized shared recipe, roll-wide warnings for new-chain keys, and the error-code check
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

@@ -1,4 +1,15 @@
+---
+title: The effective measurement area
+status: done
+deps: [film-base/ir-usability-detection]
+tags: [post-mvp]
+summary: "one region every measurement path starts from: IR holder cut, then a user-sizable static inset"
+---
 # The effective measurement area
+
+> **From TASKS.md** (migrated 2026-10-14): one region every measurement path starts from: IR holder cut, then a user-sizable static inset. Per-edge rectangle + `measure.inset` knob + report + `auto_dmax` wired; default renders unchanged. Measured on 31 real IR frames: all measured, none capped, holder 2.5-4% of the shorter edge; `--auto-d-max` now resolves 0.76-1.18 against the 2.23-2.37 it used to
+>
+> **Dependency note** (migrated 2026-10-14): one **effective area** for every measurement path: the IR-measured holder cut, then a static inset (default 5% of the **original** frame's shorter edge, user-overridable). **Two cuts in order, not alternatives** — the inset runs whether or not IR did. Widened 2026-09-16 to own the inset it had disowned. nc never searches for a rebate; where IR cannot separate, the depth is the user's to state. Returns a **per-edge rectangle**, not a mask, and ships the knob, the report/`inspect` surface and **one consumer** (`auto_dmax`, region only) so the flag is not accepted-and-ignored. Default renders byte-identical, fingerprints unmoved (`recipe` refreshed in place, no bump); `--auto-d-max` runs change. **Done 2026-09-17** — two bugs the measurement caught (a holder ring's corners collapsing every edge; a 6 px sliver segment dragging one edge to the cap, a 7x over-cut) are recorded in the progress log
 
 ## Goal
 

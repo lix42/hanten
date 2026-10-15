@@ -1,4 +1,15 @@
+---
+title: A measured roll exposure
+status: done
+deps: [nf-calibration/roll-white-rule, nf-calibration/roll-section]
+tags: [new-flow]
+summary: "`measure-roll` writes `roll.exposure`, one neutral gain for the roll from a central statistic of its frames, so an under-exposed roll renders at a normal level"
+---
 # A measured roll exposure
+
+> **From TASKS.md** (migrated 2026-10-14): `measure-roll` writes `roll.exposure`, one neutral gain for the roll from a central statistic of its frames, so an under-exposed roll renders at a normal level; darker frames stay dark
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-29: an under-exposed roll bound at the floor rendered dark, and no contrast can lift it; a hand `--exposure 1.4` fixed it
 
 ## Goal
 

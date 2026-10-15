@@ -1,3 +1,8 @@
+---
+title: Simple Inversion Algorithm
+status: done
+deps: [algo/interface]
+---
 # Simple Inversion Algorithm
 
 > **Target-pipeline note:** this completed task records the shipped renderer.

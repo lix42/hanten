@@ -1,4 +1,16 @@
+---
+title: Each term of the midtone line on its own
+status: done
+deps: [nf-scene-correction/lomo100-cast-vs-ccr, nf-scene-correction/midtone-neutral]
+tags: [new-flow]
+summary: turn the red or blue term off by hand (`--midtone-neutral red|blue`)
+done: 2026-10-13
+---
 # Each term of the midtone line on its own
+
+> **From TASKS.md** (migrated 2026-10-14): turn the red or blue term off by hand (`--midtone-neutral red|blue`); the other change in "TR". **Done 2026-10-13**: render-time only (a measurement never states a switch); the blue term is the one a roll of sea or warm light misleads. Follow-up `midtone-term-signal`
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: each term of the midtone line off by hand (the automatic half split off 2026-10-13)
 
 ## Goal
 

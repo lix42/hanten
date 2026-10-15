@@ -1,4 +1,13 @@
+---
+title: Telemetry strategy spike
+status: done
+deps: [telemetry/perf-telemetry]
+tags: [post-mvp, spike]
+summary: "approved [strategy](telemetry-strategy.md): custom JSON to Cloudflare Worker + D1, anonymous schema-minimized upload, persistent explicit consent, crash-safe detached draining, success/failure…"
+---
 # Telemetry strategy spike
+
+> **From TASKS.md** (migrated 2026-10-14): approved [strategy](telemetry-strategy.md): custom JSON to Cloudflare Worker + D1, anonymous schema-minimized upload, persistent explicit consent, crash-safe detached draining, success/failure events, and sanitized panic reporting.
 
 **Done:** 2026-07-23 — decisions are recorded in
 [`docs/telemetry-strategy.md`](../../telemetry-strategy.md); implementation is split

@@ -1,4 +1,16 @@
+---
+title: What `look.contrast` means
+status: done
+deps: [nf-destinations/direct-preset]
+tags: [new-flow]
+summary: a multiplier on the base slope
+done: 2026-09-29
+---
 # What `look.contrast` means
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-29: a multiplier on the base slope** (the roll's, the fallback `look::DEFAULT_SLOPE`, or `direct`'s), default 1; absolute values are slopes in the report. `recipe_version` 3: a version 2 `look.contrast` number is refused with its conversion
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-27: the renderings are the bases a contrast builds on
 
 ## Goal
 

@@ -1,4 +1,13 @@
+---
+title: Colorimetry Source of Truth and Update Workflow
+status: done
+deps: [output/gain-map-hdr-output]
+tags: [post-mvp]
+summary: "shipped 2026-07-31 (#67): `pipeline/colorimetry/` holds every standards-based coefficient with provenance"
+---
 # Colorimetry Source of Truth and Update Workflow
+
+> **From TASKS.md** (migrated 2026-10-14): shipped 2026-07-31 (#67): `pipeline/colorimetry/` holds every standards-based coefficient with provenance; workflow in `docs/colorimetry-maintenance.md`
 
 ## Goal
 

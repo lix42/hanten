@@ -1,4 +1,13 @@
+---
+title: The `calibration` recipe section
+status: done
+deps: [core/roll-conversion, core/conversion-versioning]
+tags: [post-mvp]
+summary: "`film_base` and `dmax` move into their own top-level section"
+---
 # The `calibration` recipe section
+
+> **From TASKS.md** (migrated 2026-10-14): `film_base` and `dmax` move into their own top-level section; no pixel change
 
 > **Done, 2026-09-22.** `docs/progress/core.md` carries what was decided and why;
 > design-spec §8's "The `calibration` section" is the shipped schema. Everything

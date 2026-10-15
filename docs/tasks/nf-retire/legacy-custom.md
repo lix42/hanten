@@ -1,4 +1,15 @@
+---
+title: Retire `legacy` and `custom`
+status: done
+deps: [nf-core/minimal-end-to-end, nf-verification/reference-snapshot]
+tags: [new-flow]
+done: 2026-09-23
+---
 # Retire `legacy` and `custom`
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-23.** Both presets and the `--out-depth` / `--output-profile` / `--bigtiff` selectors (and their recipe keys) are removed-value errors; `to_output`, ProPhoto / ICC-path output and the film-RGB print stage are gone, so every preset is atomic and one implementation of the print controls is left. No pixel of any surviving preset moved: the drift gate now hashes `algo::reconstruct` and reproduced v5's `render` hash; only `recipe` was refreshed. `tests/pipeline.rs` states each preset; `benchmark.json` is a `display-p3` / `film-master` holding set
+>
+> **Dependency note** (migrated 2026-10-14): removes the second implementation of the print controls
 
 ## Goal
 

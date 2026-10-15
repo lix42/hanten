@@ -1,4 +1,15 @@
+---
+title: "Two renderings: `direct` and `default`"
+status: done
+deps: [nf-destinations/preset-set, output/adobe-rgb-gamut, nf-calibration/roll-section]
+tags: [new-flow]
+summary: "`--rendering`: `direct` loses as little as possible (HDR float TIFF by default, Adobe RGB when SDR"
+---
 # Two renderings: `direct` and `default`
+
+> **From TASKS.md** (migrated 2026-10-14): `--rendering`: `direct` loses as little as possible (HDR float TIFF by default, Adobe RGB when SDR; roll section unapplied) for an editor and, stated SDR, the calibration loop; `default` is our code plus the roll's measurements. Re-planned 2026-09-27
+>
+> **Dependency note** (migrated 2026-10-14): `--rendering direct|default`; re-planned 2026-09-27: `default` applies the roll section and `direct` does not
 
 ## Goal
 

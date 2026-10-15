@@ -1,4 +1,15 @@
+---
+title: A bounded lift for a thin frame
+status: done
+deps: [nf-calibration/roll-exposure, nf-calibration/roll-white-rule]
+tags: [new-flow]
+summary: a frame far thinner than its roll gets a steeper slope and more exposure that raise its white a stop with the film base held, bounded, written to `roll.frames` by `measure-roll` (on by default
+---
 # A bounded lift for a thin frame
+
+> **From TASKS.md** (migrated 2026-10-14): a frame far thinner than its roll gets a steeper slope and more exposure that raise its white a stop with the film base held, bounded, written to `roll.frames` by `measure-roll` (on by default; `--no-thin-lift` turns it off); a flat frame gets no lift of either kind
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-29: an opt-in per-frame exposure and slope for frames far thinner than the roll; hand-solved pairs at slope 2.0 and 2.4 passed review
 
 ## Goal
 

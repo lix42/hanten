@@ -1,3 +1,9 @@
+---
+title: Robust auto film-base detection
+status: done
+deps: [film-base/estimation]
+tags: [post-mvp]
+---
 # Robust auto film-base detection
 
 ## Goal

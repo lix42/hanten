@@ -1,4 +1,15 @@
+---
+title: A `density.scale` ladder, before the calibration frames exist
+status: done
+deps: []
+tags: [new-flow]
+summary: runs against today's binary so it can run first
+---
 # A `density.scale` ladder, before the calibration frames exist
+
+> **From TASKS.md** (migrated 2026-10-14): runs against today's binary so it can run first; the decode would otherwise inherit a sigmoid-era value whose green half is documented as unresolved
+>
+> **Dependency note** (migrated 2026-10-14): none runs against today's binary so it can run first; the decode would otherwise inherit a sigmoid-era scale whose green half is documented as unresolved, and whether any scale reaches the knee'd render's whites is what decides `nf-look/path-to-white`
 
 ## Goal
 

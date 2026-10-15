@@ -1,4 +1,15 @@
+---
+title: The SDR/HDR branch contract
+status: done
+deps: [nf-display-stages/fit-range, nf-display-stages/fit-gamut]
+tags: [new-flow]
+done: 2026-09-24
+---
 # The SDR/HDR branch contract
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-24.** The chain splits after the look (`chain::render_pair`), the headroom shared above it, so the branches differ only in the peak; below white they differ only where the SDR cube binds, checked bit for bit by `chain::contract::check` (0 violations on 92 frames). `pipeline::gain_ratio` is the new chain's per-channel gain. No hard HDR ceiling above `W`; the gain-map destination must clamp to its peak and count (`nf-destinations/preset-set`)
+>
+> **Dependency note** (migrated 2026-10-14): where the branch happens and what each side may differ in
 
 ## Goal
 

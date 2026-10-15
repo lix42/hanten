@@ -1,3 +1,9 @@
+---
+title: Make `display-p3` the default output preset
+status: closed
+deps: []
+closed_into: nf-destinations/default-destination
+---
 # Make `display-p3` the default output preset
 
 > **Superseded 2026-09-19 by `nf-destinations/default-destination`** — the

@@ -1,3 +1,10 @@
+---
+title: Negative Reconstruction and Density Curves
+status: done
+deps: [io/input-data-semantics, film-base/dmax-reference, algo/sigmoid]
+tags: [post-mvp]
+summary: adopt tagged simple/density reconstruction, make exponential/sigmoid tagged density curves, and produce typed `FilmRgbImage`
+---
 # Negative Reconstruction and Density Curves
 
 ## Goal

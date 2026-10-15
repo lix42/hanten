@@ -1,4 +1,15 @@
+---
+title: Where white lands on the display
+status: closed
+deps: [nf-calibration/envelope-hybrid-placement, nf-calibration/level-target-zero]
+tags: [new-flow]
+closed_into: nf-calibration/span-roll-slope
+---
 # Where white lands on the display
+
+> **From TASKS.md** (migrated 2026-10-14): **closed 2026-10-09, folded into `nf-calibration/span-roll-slope`**: the span slope maps the roll's white to the target, so the two are chosen together
+>
+> **Dependency note** (migrated 2026-10-14): **closed: folded into `nf-calibration/span-roll-slope`** 2026-10-09; the deps below are decision history filed 2026-10-07: a white target in display terms, set together with the brightness target
 
 > **Folded into `nf-calibration/span-roll-slope` on 2026-10-09.** The span slope maps the
 > roll's white to a display target, so the target cannot be chosen apart from it; that

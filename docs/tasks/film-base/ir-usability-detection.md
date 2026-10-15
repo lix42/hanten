@@ -1,4 +1,15 @@
+---
+title: Decide IR usability by measurement, not by declared film type
+status: done
+deps: [film-base/ir-holder-detection]
+tags: [post-mvp]
+summary: key IR holder detection on the **plane itself** rather than `--film-type`, which becomes a hint
+---
 # Decide IR usability by measurement, not by declared film type
+
+> **From TASKS.md** (migrated 2026-10-14): key IR holder detection on the **plane itself** rather than `--film-type`, which becomes a hint. Measured 2026-08-11 on real Ilford HP5: separability tracks the *frame's density*, not the stock's chemistry — an unexposed silver frame separates 20:1 while its own leader is uniformly opaque. So today's `silver → IR off` rule is wrong for precisely the frame `Dmin` is measured from
+>
+> **Dependency note** (migrated 2026-10-14): decide IR usability from the **plane itself**, not from `--film-type`, which becomes a hint. Measured 2026-08-11: IR separability tracks the frame's *density*, not the stock's chemistry — an unexposed silver frame separates 20:1 (0.47 film vs 0.02 holder) while its leader is uniformly opaque. Today's gate is wrong for exactly the frame `Dmin` uses
 
 ## Goal
 

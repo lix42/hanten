@@ -1,4 +1,15 @@
+---
+title: Release the decoded image after the decode
+status: done
+deps: [nf-verification/roll-side-exports]
+tags: [new-flow]
+summary: free it once `fixed::decode` has read it, lowering each frame's peak by 12–16 B/px
+---
 # Release the decoded image after the decode
+
+> **From TASKS.md** (migrated 2026-10-14): free it once `fixed::decode` has read it, lowering each frame's peak by 12–16 B/px; the memory model moves with it. **Landed 2026-10-08**: the decode rewrites the scan in place, peaks fell 16 B/px on Linux, outputs byte-identical. macOS measured 2026-10-09 (a 2×2 tile, 74.65 MP) only 3–5 MB above Linux, so the provisional 4 B/px allowance floor is gone
+>
+> **Dependency note** (migrated 2026-10-14): nothing reads the decoded image after the decode once `--export-ir` is retired
 
 ## Goal
 

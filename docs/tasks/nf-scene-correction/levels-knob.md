@@ -1,4 +1,13 @@
+---
+title: A home and a name for `linear_range`
+status: done
+deps: [nf-scene-correction/stage]
+tags: [new-flow]
+summary: "`linear_range` is a levels remap, not fit range"
+---
 # A home and a name for `linear_range`
+
+> **From TASKS.md** (migrated 2026-10-14): `linear_range` is a levels remap, not fit range — decide whether it survives and where. **Retired 2026-09-30**: its gain is `--exposure` and its black `--display-black`, and the refusals now name those two
 
 ## Goal
 

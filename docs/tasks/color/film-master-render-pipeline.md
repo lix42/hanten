@@ -1,4 +1,13 @@
+---
+title: Film-Master and Shared Display Pipeline
+status: done
+deps: [color/film-rgb-working-space, film-base/dmax-reference]
+tags: [post-mvp]
+summary: route intentional ACEScg film rendering to `film-master` or shared WB → exposure → black/range adjustments before SDR/HDR
+---
 # Film-Master and Shared Display Pipeline
+
+> **From TASKS.md** (migrated 2026-10-14): route intentional ACEScg film rendering to `film-master` or shared WB → exposure → black/range adjustments before SDR/HDR; every display preset consumes the shared stage since `output/presets` shipped (2026-08-09)
 
 ## Goal
 

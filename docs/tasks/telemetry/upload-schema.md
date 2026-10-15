@@ -1,4 +1,13 @@
+---
+title: Telemetry upload schema v1
+status: done
+deps: [telemetry/schema-v2]
+tags: [post-mvp]
+done: 2026-09-28
+---
 # Telemetry upload schema v1
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-28.** `telemetry::upload::to_upload_event` projects a local event (now schema 11, with `outcome.total_samples`) to the privacy-minimized upload form, and `contracts/telemetry/upload-v1/` holds the JSON Schema, the valid/invalid corpus the Worker and uploader share, and the field manifest. No pixel, recipe or fingerprint change.
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Separate the gamut map's share of highlight desaturation
+status: done
+deps: [nf-look/desaturation-spike]
+tags: [new-flow]
+done: 2026-09-23
+---
 # Separate the gamut map's share of highlight desaturation
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-23.** Near zero where it matters: across 92 frames on four rolls the map moves no marked white under `sigmoid-knees`, the spike's control, or `path-to-white`'s hand-set C and D, and 0.00% of top-end pixels under knees — so the knee'd whites are the per-channel shoulder's. It acts heavily only under the `shoulder` display tone. No off switch on either chain. Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-22. Nothing turns the gamut map off by flag, so every desaturation measurement so far reads shoulder-plus-gamut-map jointly; it is also one of the two surviving candidates for the knee'd render's whites. Runs against today's binary. Done 2026-09-23: the map is not that candidate, and has near-zero share at the renders `path-to-white` is built under
 
 ## Goal
 

@@ -1,4 +1,13 @@
+---
+title: Mono as a rendering
+status: todo
+deps: [nf-reconstruction/mono-decode]
+tags: [new-flow]
+summary: "a dye negative (colour or chromogenic B&W) rendered mono: a weighted pool first in the look, after white balance"
+---
 # Mono as a rendering
+
+> **Dependency note** (migrated 2026-10-14): supersedes `algo/bw-support`'s rendering half: a dye negative rendered mono, pooled with weights first in the look
 
 ## Goal
 

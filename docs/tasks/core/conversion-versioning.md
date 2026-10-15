@@ -1,4 +1,13 @@
+---
+title: Conversion versioning & baseline comparison
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp]
+summary: report identity and pipeline_version, the golden drift gate, the {meta,params} sidecar envelope, and nctool compare
+---
 # Conversion versioning & baseline comparison
+
+> **From TASKS.md** (migrated 2026-10-14): report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
 
 ## Goal
 

@@ -1,4 +1,16 @@
+---
+title: "A dark target: each frame's darkest 1 % placed at one depth"
+status: done
+deps: [nf-display-stages/midtone-contrast-toe]
+tags: [new-flow]
+summary: the dark target places a frame's darkest 1 % 5.5 stops below mid-grey, lifted or pushed
+done: 2026-10-14
+---
 # A dark target: each frame's darkest 1 % placed at one depth
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-14** (`pipeline_version` 17): the dark target, `default`'s in place of the floor, places a frame's measured darkest 1 % 5.5 stops below mid-grey, lifted or pushed (a push capped at two thirds of the way to mid-grey). Chosen over 5 and 6 under `--placement frame`, kept under the hybrid. Whether `--dark-floor` retires is open
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-14: the floor only lifts, so a frame's black sits where the placement leaves it (4.26 stops under under `frame`); a target moves it either way
 
 ## Goal
 

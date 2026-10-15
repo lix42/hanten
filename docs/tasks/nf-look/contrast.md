@@ -1,4 +1,14 @@
+---
+title: The print-contrast knob
+status: done
+deps: [nf-look/stage, nf-reconstruction/gamma-split]
+tags: [new-flow]
+summary: the look half of `gamma`
+done: 2026-09-24
+---
 # The print-contrast knob
+
+> **From TASKS.md** (migrated 2026-10-14): the look half of `gamma`; supersedes `algo/contrast-latitude-spike`. The knob landed with `gamma-split`. **Done 2026-09-24**: one knob (a per-roll contrast under `anchor-comparison`'s C/D *is* its value), default `2.0 / 1.8` provisional, presets do not set it; shadow separation is the contrast's, not fit range's
 
 ## Goal
 

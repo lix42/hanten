@@ -1,4 +1,17 @@
+---
+title: Decode a single-channel gray SilverFast scan
+status: todo
+deps: [io/silverfast-decode]
+related: [nf-reconstruction/mono-input, film-base/ir-usability-detection]
+priority: low
+tags: [post-mvp]
+summary: accept a 16-bit grayscale primary (IR page unchanged); nc refuses these HP5 scans today
+---
 # Decode a single-channel gray SilverFast scan
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work. Blocks the one-channel half of `nf-reconstruction/mono-input`; it becomes three equal channels inside ([`design/mono.md`](design/mono.md))
+>
+> **Dependency note** (migrated 2026-10-14): **low priority** accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it: `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work. Blocks the one-channel half of `nf-reconstruction/mono-input`
 
 ## Goal
 

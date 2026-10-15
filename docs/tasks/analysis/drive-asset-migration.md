@@ -1,4 +1,14 @@
+---
+title: Drive Asset Migration
+status: closed
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+---
 # Drive Asset Migration
+
+> **From TASKS.md** (migrated 2026-10-14): **closed 2026-10-13, superseded**: the assets moved off Google Drive to a local external SSD, so the Drive-specific work (materialization guard, sync hygiene) has nothing to guard; the `../nc-assets` symlink convention it decided stays
+>
+> **Dependency note** (migrated 2026-10-14): **closed—superseded** 2026-10-13: the assets left Google Drive for a local SSD; the dep below is decision history
 
 > **Closed, superseded, on 2026-10-13.** The assets moved off Google Drive to a local
 > external SSD (`/Volumes/square/hanten/assets`, the full set), so the Drive-only work —

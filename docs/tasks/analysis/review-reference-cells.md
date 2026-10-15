@@ -1,3 +1,10 @@
+---
+title: Reference cells in the review set
+status: todo
+deps: [analysis/comparison-review-tooling]
+tags: [post-mvp]
+summary: an NLP export or hand-tweaked target as a grid cell beside nc's renders
+---
 # Reference cells in the review set
 
 ## Goal

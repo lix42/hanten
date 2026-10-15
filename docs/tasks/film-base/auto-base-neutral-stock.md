@@ -1,3 +1,8 @@
+---
+title: Neutral-base robustness for auto film-base detection
+status: closed
+deps: []
+---
 # Neutral-base robustness for auto film-base detection
 
 > **Retired 2026-09-19** — it hardens a rebate detector already being replaced

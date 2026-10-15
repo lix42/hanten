@@ -1,4 +1,15 @@
+---
+title: Dependency & Module Hygiene
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp, cleanup]
+summary: "from the hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image` (test-only, JPEG decode) to a JPEG-only dev-dependency"
+---
 # Dependency & Module Hygiene
+
+> **From TASKS.md** (migrated 2026-10-14): from the hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image` (test-only, JPEG decode) to a JPEG-only dev-dependency; CI runs `cargo machete`. Pure cleanup, byte-identical output. The review's duplicate `Algorithm` enum had already gone with the `reconstruction` object.
+>
+> **Dependency note** (migrated 2026-10-14): (dep removal is standalone)
 
 ## Goal
 

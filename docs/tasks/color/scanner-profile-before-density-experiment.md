@@ -1,4 +1,16 @@
+---
+title: Scanner ICC Before-Density Experiment
+status: todo
+deps: [io/input-data-semantics, color/management]
+priority: low
+tags: [post-mvp]
+summary: compare raw density ratios with applying the same scanner ICC to image and Dmin first
+---
 # Scanner ICC Before-Density Experiment
+
+> **From TASKS.md** (migrated 2026-10-14): **deferred / lower priority**: compare raw density ratios with applying the same scanner ICC to image and Dmin first; independent of the superseded characterization proposal and the normal NC film RGB mapping
+>
+> **Dependency note** (migrated 2026-10-14): **deferred experiment**
 
 ## Goal
 

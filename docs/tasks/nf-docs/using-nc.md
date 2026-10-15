@@ -1,4 +1,15 @@
+---
+title: Bring the guide up to the new flow
+status: done
+deps: [nf-core/default-flip]
+tags: [new-flow]
+done: 2026-09-30
+---
 # Bring the guide up to the new flow
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-30.** The per-knob tasks had already reshaped the guide around the chain; every command and quoted message was re-run on the fixtures, and five had drifted
+>
+> **Dependency note** (migrated 2026-10-14): verified against the binary, never against a diff
 
 > **Done (2026-09-30), as a re-verification, not a rewrite.** The tasks that shipped each
 > knob had already moved the guide onto the chain; every command was re-run on the

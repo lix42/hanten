@@ -1,3 +1,10 @@
+---
+title: NC Film RGB Working-Space Mapping
+status: done
+deps: [algo/negative-reconstruction-density-curves, color/management]
+tags: [post-mvp]
+summary: map every film rendering through versioned NC film RGB v1 into typed linear ACEScg/D60
+---
 # NC Film RGB Working-Space Mapping
 
 ## Goal

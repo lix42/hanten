@@ -159,3 +159,25 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # The task plan (docs/tasks/) is checked by the tasks plugin's CLI, pinned by
+  # commit so a plugin change cannot break this gate unannounced. Bump the SHA
+  # deliberately after updating the plugin.
+  task-plan:
+    name: task plan (tasks check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/checkout@v6
+        with:
+          repository: lix42/claude-plugins
+          ref: 7ac09a2f898dafaa7ca7cbd28dd922a184bf696a
+          path: .tasks-plugin
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: tasks check
+        run: node .tasks-plugin/plugins/tasks/skills/task-tracking/cli/tasks.ts check --root docs

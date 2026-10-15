@@ -1,3 +1,8 @@
+---
+title: Exclude the holder from content-driven measurement
+status: closed
+deps: []
+---
 # Exclude the holder from content-driven measurement
 
 > **Retired 2026-09-19** — `DmaxSource::Auto` and the regional balance both

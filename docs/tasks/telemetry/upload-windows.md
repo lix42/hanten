@@ -1,4 +1,16 @@
+---
+title: Run the uploader's tests on Windows
+status: todo
+deps: [telemetry/upload]
+priority: low
+tags: [post-mvp]
+summary: run the uploader's tests on Windows; only a compile check covers it today
+---
 # Run the uploader's tests on Windows
+
+> **From TASKS.md** (migrated 2026-10-14): **low priority** (user, 2026-10-01). Only a compile check covers Windows today.
+>
+> **Dependency note** (migrated 2026-10-14): **low priority**
 
 **Low priority** (user, 2026-10-01).
 

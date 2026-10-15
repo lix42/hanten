@@ -1,4 +1,16 @@
+---
+title: The roll white as a tilt pinned at black
+status: done
+deps: [nf-scene-correction/lomo100-cast-vs-ccr, nf-scene-correction/midtone-neutral]
+tags: [new-flow]
+summary: "the two-point slope as a scene-correction grade: a neutral film base where today's gains tint it"
+done: 2026-10-13
+---
 # The roll white as a tilt pinned at black
+
+> **From TASKS.md** (migrated 2026-10-14): the two-point slope as a scene-correction grade: a neutral film base where today's gains tint it; one of the two changes in the Lomography 100 "TR" arm. **Done 2026-10-13**: opt-in (`--white-balance-form tilt`); black neutral on 9 of 10 rolls, a small preference on low-key frames, the gain stays the default
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-12 from `lomo100-cast-vs-ccr`'s TR arm: the roll white as a tilt pinned at black
 
 ## Goal
 

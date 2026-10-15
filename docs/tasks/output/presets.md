@@ -1,4 +1,13 @@
+---
+title: Output Presets and Guidance
+status: done
+deps: [output/iso-gain-map-metadata, output/hdr-avif-output, output/lossless-hdr-tiff, algo/reference-anchored-sigmoid, core/roll-conversion, core/conversion-versioning]
+tags: [post-mvp]
+done: 2026-08-09
+---
 # Output Presets and Guidance
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-08-09.** All twelve presets ship and `gain-map-hdr` is the default (`pipeline_version` **3**, measured in [reports/render-defaults-v3.md](reports/render-defaults-v3.md)). Shipped in five chunks: the dual-dialect `gain-map-hdr` preset (Apple-ImageIO verified; it also exposed and fixed libultrahdr's 8192-px packaging refusal, which the shipped `ultra-hdr-v1` had too); **roll is container-aware**, so no preset is `convert`-only any more and an explicit manifest `output` goes through `convert`'s own suffix rule; `custom` as the one non-atomic named preset; the default flip; and the inherited coded-TIFF ICC gaps closed (`chad` + `BToA0`, plus re-deriving the colorant matrix against ICC's *declared* PCS white). `--output-hdr`/`--output-sdr`/`output.hdr` were replaced by one `--out-depth u16|f32` / `output.depth` enum. **Known open, and deliberate:** the default gain map is *inert* at the default sigmoid (`GainMapMax` 1.0x — the HDR rendition peaks at reference white), so the default currently writes a valid HDR container carrying no HDR. That is a render gap, tracked for the follow-on tuning work and recorded in the v3 report
 
 ## Goal
 

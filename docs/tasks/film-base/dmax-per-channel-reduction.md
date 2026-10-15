@@ -1,3 +1,9 @@
+---
+title: Per-channel Dmax and the gray-mean reduction
+status: closed
+deps: []
+closed_into: nf-calibration/scale-gamma-loop
+---
 # Per-channel Dmax and the gray-mean reduction
 
 > **Superseded 2026-09-19 by `nf-calibration/scale-gamma-loop`** (and, for the

@@ -1,4 +1,16 @@
+---
+title: Float TIFFs in Apple's readers
+status: done
+deps: [analysis/viewer-interoperability]
+tags: [post-mvp]
+summary: "from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master"
+done: 2026-10-11
+---
 # Float TIFFs in Apple's readers
+
+> **From TASKS.md** (migrated 2026-10-14): from the viewer rubric: the HDR linear TIFF never displays as HDR (ImageIO reads its headroom as unknown), and Preview's sidebar has no thumbnail for it or the film master. **Done 2026-10-11: no signal exists** (ImageIO's own TIFF encoder drops a headroom), so the linear TIFF is an editor/interchange format; the sidebar gap is Preview's, Apple's own float TIFF included. No encoder change ([spike](spike/float-tiff-in-readers.md))
+>
+> **Dependency note** (migrated 2026-10-14): from the viewer rubric 2026-10-07
 
 ## Goal
 

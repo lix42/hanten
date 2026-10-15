@@ -1,4 +1,15 @@
+---
+title: Performance Instrumentation
+status: doing
+deps: [core/pipeline-orchestration]
+tags: [post-mvp]
+summary: "**parked**: the LAB criterion-benchmark approach was prototyped and parked on branch `prototype/perf-bench-instrumentation` (not merged"
+---
 # Performance Instrumentation
+
+> **From TASKS.md** (migrated 2026-10-14): **parked**: the LAB criterion-benchmark approach was prototyped and parked on branch `prototype/perf-bench-instrumentation` (not merged; see its `docs/prototypes/perf-bench-instrumentation.md`). The real, real-world direction shipped as `telemetry/perf-telemetry` below.
+>
+> **Dependency note** (migrated 2026-10-14): **parked** LAB criterion benches; prototyped and parked on git branch prototype/perf-bench-instrumentation, superseded by telemetry/perf-telemetry as the real (real-world, not lab) direction
 
 ## Goal
 

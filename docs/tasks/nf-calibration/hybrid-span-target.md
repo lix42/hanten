@@ -1,4 +1,16 @@
+---
+title: The hybrid's span target
+status: done
+deps: [nf-display-stages/midtone-contrast-toe]
+tags: [new-flow]
+summary: the hybrid's span R, 7 → 8 by review
+done: 2026-10-13
+---
 # The hybrid's span target
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-13** (`pipeline_version` 16): R 7 → 8 by review (09-20, 09-28); the envelope, not the dark floor, holds the dark end, so on a thin roll a higher R brightens
+>
+> **Dependency note** (migrated 2026-10-14): split from `midtone-contrast-toe` 2026-10-11: the hybrid's R, reviewed with a toe
 
 ## Goal
 

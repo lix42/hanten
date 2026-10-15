@@ -1,4 +1,15 @@
+---
+title: Mono input in the decode
+status: todo
+deps: [nf-reconstruction/mono-decode, io/gray-primary-decode]
+tags: [new-flow]
+summary: a gray scan, or a three-channel scan declared `--film-type silver`, decoded as one signal and carried as R = G = B
+---
 # Mono input in the decode
+
+> **From TASKS.md** (migrated 2026-10-14): a gray scan, or a three-channel scan declared `--film-type silver`, decoded as one signal and carried as R = G = B; the per-channel knobs that could only tint are refused
+>
+> **Dependency note** (migrated 2026-10-14): supersedes `algo/bw-support`'s input half: a gray scan, or a three-channel scan declared `--film-type silver`, becomes one signal in the decode; the gray reader is needed only for the one-channel half
 
 ## Goal
 

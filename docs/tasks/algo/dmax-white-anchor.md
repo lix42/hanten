@@ -1,4 +1,13 @@
+---
+title: Display-Range White Anchor (Dmax)
+status: done
+deps: [algo/density]
+tags: [post-mvp]
+summary: shipped legacy semantics
+---
 # Display-Range White Anchor (Dmax)
+
+> **From TASKS.md** (migrated 2026-10-14): shipped legacy semantics; the replacement density-curve stage owns its curve-specific placement/shape meaning
 
 > **Target-pipeline terminology:** this completed task records the shipped
 > legacy renderer, where `D' = Dmax` maps to `1.0`. In the replacement pipeline,

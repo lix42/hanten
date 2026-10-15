@@ -1,4 +1,15 @@
+---
+title: Parallel display stages
+status: done
+deps: [output/sdr-display-rendering, color/film-master-render-pipeline]
+tags: [post-mvp]
+summary: rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, byte-identical
+---
 # Parallel display stages
+
+> **From TASKS.md** (migrated 2026-10-14): rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, byte-identical; measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
+>
+> **Dependency note** (migrated 2026-10-14): byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 
 **Done:** 2026-09-16 — see `docs/progress/output.md`.
 

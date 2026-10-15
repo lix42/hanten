@@ -1,4 +1,15 @@
+---
+title: Drop AVIF output
+status: done
+deps: [output/hdr-avif-output]
+tags: [post-mvp]
+done: 2026-10-01
+---
 # Drop AVIF output
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-01.** The `hdr / pq|hlg / bt2020 / avif` destinations, `io::avif` and `libaom-sys` are gone, so the native build is a C compiler only (no CMake, C++ or NASM). The PQ/HLG TIFFs keep the same Rec.2100 signal and the gain-map JPEG the compact HDR file. `avif` is refused by name as a flag, a recipe value, an `.avif` suffix and through `--output-preset hdr-pq|hdr-hlg`; the upload contract keeps `"avif"` for older clients. No `pipeline_version` change. Why, and how to bring it back: [design/avif-removal.md](design/avif-removal.md)
+>
+> **Dependency note** (migrated 2026-10-14): **done** 2026-10-01 remove the AVIF destinations and `libaom-sys`, so the build needs no CMake or NASM
 
 **Done:** 2026-10-01 — see `docs/progress/output.md`. The decision, and how to bring
 AVIF back, is [`docs/design/avif-removal.md`](../../design/avif-removal.md).

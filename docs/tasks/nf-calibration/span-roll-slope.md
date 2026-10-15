@@ -1,4 +1,16 @@
+---
+title: The roll's slope from its span, and where its white lands
+status: done
+deps: [nf-calibration/level-target-zero, nf-scene-correction/midtone-neutral, nf-look/contrast-on-luminance]
+tags: [new-flow]
+summary: the roll's slope spreads its span, white to dark end, over 9.049 stops with mid-grey pinned
+done: 2026-10-09
+---
 # The roll's slope from its span, and where its white lands
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-09 (`pipeline_version` 11).** The roll's slope spreads its span, white to dark end (`roll.dark_stops` / `--roll-dark`), over 9.049 stops, mid-grey pinned, within 1.237–3.5 (1.56–1.74 on the archive); chosen by review over holding the white at L* 91 or 94, so there is no white target: the white renders where slope and exposure put it. A white without its dark end is refused
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-09 (split from `envelope-hybrid-placement`, absorbing `display-white`): the per-roll slope from the roll's span, and the display white it maps to
 
 ## Goal
 

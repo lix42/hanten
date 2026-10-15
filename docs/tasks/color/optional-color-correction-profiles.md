@@ -1,4 +1,15 @@
+---
+title: Optional Color-Correction Profiles
+status: todo
+deps: [color/film-rgb-working-space, color/film-master-render-pipeline]
+tags: [post-mvp]
+summary: "**optional / deferred** measured neutralization with explicit selection and provenance"
+---
 # Optional Color-Correction Profiles
+
+> **From TASKS.md** (migrated 2026-10-14): **optional / deferred** measured neutralization with explicit selection and provenance; blocks no output task
+>
+> **Dependency note** (migrated 2026-10-14): **optional / deferred** ; no downstream blockers
 
 ## Goal
 

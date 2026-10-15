@@ -1,4 +1,15 @@
+---
+title: Value-domain terminology & Dmin/Dmax clarity
+status: todo
+deps: [core/pipeline-orchestration]
+tags: [post-mvp, cleanup]
+summary: extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear
+---
 # Value-domain terminology & Dmin/Dmax clarity
+
+> **From TASKS.md** (migrated 2026-10-14): extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
+>
+> **Dependency note** (migrated 2026-10-14): **preserves data flow**
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Flip the default to the new flow
+status: done
+deps: [nf-core/minimal-end-to-end, nf-core/knob-availability-audit, nf-retire/sigmoid-and-simple, nf-retire/display-tones, nf-retire/dmax-machinery, nf-destinations/gain-map-destination, nf-calibration/roll-white-rule]
+tags: [new-flow]
+done: 2026-09-27
+---
 # Flip the default to the new flow
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-27.** The new chain is the only one: `--new-flow` is a removed-flag error, the old chain, its presets, print stage, recipe, sidecar and `ultrahdr-sys` are deleted, and `pipeline_version` 8 defaults to an SDR Display P3 16-bit TIFF — v7's `--new-flow` render byte for byte (`docs/reports/default-flip.md`). Supersedes the flip half of `algo/split-default-migration`
+>
+> **Dependency note** (migrated 2026-10-14): the default resolves the new chain; version bump, drift row, before/after report. Supersedes the flip half of `algo/split-default-migration`
 
 ## Goal
 

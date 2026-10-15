@@ -1,4 +1,15 @@
+---
+title: Raise the roll's brightness target to 0
+status: done
+deps: [nf-calibration/roll-exposure, nf-calibration/taste-vs-quality]
+tags: [new-flow]
+summary: "`measure-roll` puts the median frame at mid-grey, not 0.6 stop under it"
+---
 # Raise the roll's brightness target to 0
+
+> **From TASKS.md** (migrated 2026-10-14): `measure-roll` puts the median frame at mid-grey, not 0.6 stop under it; midtones then match SilverFast CCR, and review preferred it on 09-18 Gold and 09-29 Ektar
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-03: the colour-cast spike found target 0 matches SilverFast CCR's midtones, and review preferred it on a good and a poorly developed roll
 
 ## Goal
 

@@ -1,4 +1,15 @@
+---
+title: Viewer interoperability
+status: done
+deps: [nf-core/default-flip]
+tags: [post-mvp]
+summary: the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set
+---
 # Viewer interoperability
+
+> **From TASKS.md** (migrated 2026-10-14): the manual viewer rubric on macOS, iPhone, Chrome and an SDR-only reader, over a small fixed file set; Android split out below
+>
+> **Dependency note** (migrated 2026-10-14): split from `display-output-acceptance` 2026-10-01; absorbed `output/gain-map-dialect-activation`; whose Android check moved to `analysis/android-gain-map-check` 2026-10-04
 
 ## Goal
 

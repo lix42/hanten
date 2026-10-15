@@ -1,4 +1,13 @@
+---
+title: The new stage module tree
+status: done
+deps: [nf-core/new-flow-flag]
+tags: [new-flow]
+summary: the modules and typed boundaries, written fresh rather than extracted
+---
 # The new stage module tree
+
+> **From TASKS.md** (migrated 2026-10-14): the modules and typed boundaries, written fresh rather than extracted; every stage an identity pass when it landed; CLI-reachable since `minimal-end-to-end`
 
 ## Goal
 

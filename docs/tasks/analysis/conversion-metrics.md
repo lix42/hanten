@@ -1,4 +1,14 @@
+---
+title: Conversion Metrics & Photographic Analysis
+status: done
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+summary: ": `nctool metrics {image,roll,table}`"
+done: 2026-09-03
+---
 # Conversion Metrics & Photographic Analysis
+
+> **From TASKS.md** (migrated 2026-10-14): **Done 2026-09-03**: `nctool metrics {image,roll,table}` — declared colour space, fractional regions, endpoint + tone + colour statistics, per-roll spread rollup and Markdown table; verified against nc's `loss.*` and `output_stats`. Colorimetry is transcribed from `definitions.rs` and cross-checked against it by test — the first tooling that reads pixels **out of an output image** rather than out of nc's report, so any producer's conversion can be measured: tone/color distributions, shadow/highlight occupancy, range and endpoint behavior, on a declared color space and a recorded region, as deterministic diff-friendly JSON/Markdown
 
 ## Background
 

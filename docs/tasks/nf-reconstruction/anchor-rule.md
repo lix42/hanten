@@ -1,4 +1,15 @@
+---
+title: One anchor rule, with a value for `d`
+status: done
+deps: [nf-reconstruction/fixed-decode, nf-reconstruction/anchor-spike]
+tags: [new-flow]
+done: 2026-09-22
+---
 # One anchor rule, with a value for `d`
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-22.** `mid-at-base-offset` is the only rule; `d = 0.62` is hand-frozen as `generic-c41`'s mid aim, rounded, and never read from a datasheet at runtime. Which white the anchor references is `nf-calibration/anchor-comparison`'s
+>
+> **Dependency note** (migrated 2026-10-14): `mid-at-base-offset` as the only rule, `d` hand-frozen as `generic-c41`'s mid aim; which white it references moved to `nf-calibration/anchor-comparison`
 
 ## Goal
 

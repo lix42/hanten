@@ -1,3 +1,9 @@
+---
+title: Make `characteristic-generic` what a bare `hanten convert` resolves
+status: closed
+deps: []
+closed_into: nf-core/default-flip
+---
 # Make `characteristic-generic` what a bare `hanten convert` resolves
 
 > **Superseded 2026-09-19 by `nf-core/default-flip` and

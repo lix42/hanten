@@ -1,4 +1,13 @@
+---
+title: Settle the midtone line's fit range against the chart
+status: todo
+deps: [nf-scene-correction/midtone-neutral, analysis/calibration-frame-capture]
+tags: [new-flow]
+summary: fit range and fade width chosen on the ColorChecker's neutral row, not patch medians
+---
 # Settle the midtone line's fit range against the chart
+
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-07: the fit range and fade width the spike could not settle by eye
 
 ## Goal
 

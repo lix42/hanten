@@ -1,4 +1,13 @@
+---
+title: Sanitized panic telemetry
+status: done
+deps: [telemetry/upload]
+tags: [post-mvp]
+summary: publish persistent-managed-consent panic events as isolated atomic ready files with only capped, normalized `nc` function/module frames
+---
 # Sanitized panic telemetry
+
+> **From TASKS.md** (migrated 2026-10-14): publish persistent-managed-consent panic events as isolated atomic ready files with only capped, normalized `nc` function/module frames; no per-run hook, shared append stream, payloads, source paths, or native-crash claim.
 
 ## Goal
 

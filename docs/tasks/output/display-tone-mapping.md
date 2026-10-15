@@ -1,4 +1,15 @@
+---
+title: Display Tone Mapping
+status: done
+deps: [output/sdr-display-rendering, output/hdr-display-rendering]
+tags: [no-downstream-blockers]
+done: 2026-09-02
+---
 # Display Tone Mapping
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-02.** Each display renderer has a real tone-mapping operator with a stated white point: `--display-tone reinhard` / `print.display_tone`, a third value of `output/linear-render`'s selector rather than a parallel knob, with `--display-tone-headroom` defaulting to 6 stops. Opt-in — no default moved, and the drift gate is quiet. The knee pins over-range content at the ceiling with zero separation and moving it only hurts, which is what the operator replaces. Visual verdict 2026-09-02 on four frames: **shoulder-less reconstruction plus this operator preferred**, over both the shipped default and shoulder-less-under-the-old-knee. Two corrections the work produced, both of which had been recorded the other way: `W` ships as **display-referred stops**, *not* the density the earlier plan called for — mixing the two is what produced a "3 stops" figure for `W = 64`, which is 6; and `GainMapMax` does not measure the improvement (4.87x shouldered vs 4.79x unbounded, identical on every frame), the **plateau share** does — 6.6–15.2% of the frame on one gain code vs 0.26–0.61%. Left open by design: the operator's **1.000-stop cost at diffuse white** (0.239 at middle grey) is intrinsic to Reinhard and a rendering-intent call, and any default change needs its own `pipeline_version` bump
+>
+> **Dependency note** (migrated 2026-10-14): **done** 2026-09-02 replaced the fixed-ceiling Hermite knee with a real tone-mapping operator carrying a stated **white point** (`--display-tone reinhard` / `--display-tone-headroom`, default 6 stops), opt-in with no default moved. Measured 2026-08-28: the knee cannot hold content overshooting by more than ~a stop (20.8% of the frame pinned at the ceiling with zero separation, on both outputs), moving the knee makes it worse, and extended Reinhard at `W = 64` beat the shipped sigmoid on both metrics on both probe frames. Accepted by every display preset — the gain-map pair required ratioing against `min(sdr, 1)` first, and the HDR branch a *lifted* form over an asymptotic base. Two things a later task inherits: the operator costs ~1 stop at diffuse white on **both** branches (a rendering-intent question, left open), and `GainMapMax` is the wrong instrument for judging it — 4.87x shouldered vs 4.79x unbounded, identical on every frame, where the plateau share separates them 6.6–15.2% against 0.26–0.61%
 
 ## Goal
 

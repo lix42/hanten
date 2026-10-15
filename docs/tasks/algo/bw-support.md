@@ -1,4 +1,15 @@
+---
+title: Black & White Negative Support (Mono Color Model)
+status: closed
+deps: [algo/density, core/pipeline-orchestration, algo/dmax-white-anchor, io/gray-primary-decode]
+tags: [post-mvp]
+closed_into: nf-reconstruction/mono-input
+---
 # Black & White Negative Support (Mono Color Model)
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—superseded** (2026-10-09) by `nf-reconstruction/mono-input` and `nf-look/mono-mix`: its placement predates the new chain ([`design/mono.md`](design/mono.md)); retained as decision history
+>
+> **Dependency note** (migrated 2026-10-14): **closed—superseded** by `nf-reconstruction/mono-input` and `nf-look/mono-mix`; the deps below are decision history
 
 > **Closed—superseded (2026-10-09)** by
 > [`nf-reconstruction/mono-input`](../nf-reconstruction/mono-input.md) and

@@ -1,4 +1,13 @@
+---
+title: HDR Still-Output Spike
+status: done
+deps: [color/management]
+tags: [post-mvp, spike]
+summary: decided ISO HDR/gain-map container, encoder, metadata, reference-white, and cross-platform strategy
+---
 # HDR Still-Output Spike
+
+> **From TASKS.md** (migrated 2026-10-14): decided ISO HDR/gain-map container, encoder, metadata, reference-white, and cross-platform strategy; licensed-normative-text check waived at spike level and re-homed to the encoder tasks as a pre-merge gate (2026-07-24)
 
 ## Goal
 

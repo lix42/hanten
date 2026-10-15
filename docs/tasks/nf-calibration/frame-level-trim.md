@@ -1,4 +1,15 @@
+---
+title: A per-frame level trim
+status: done
+deps: [nf-calibration/roll-exposure]
+tags: [new-flow]
+summary: a small, bounded lift per frame on top of the roll's exposure, so low-key frames render a little brighter
+---
 # A per-frame level trim
+
+> **From TASKS.md** (migrated 2026-10-14): a small, bounded lift per frame on top of the roll's exposure, so low-key frames render a little brighter; bright ones are left alone. On by default, with an opt-out
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-29: `roll-exposure`'s round 2 split by frame, not by roll; the trim is measured around the roll's exposure
 
 ## Goal
 

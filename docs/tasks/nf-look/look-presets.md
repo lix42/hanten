@@ -1,4 +1,15 @@
+---
+title: Re-express the `--preset` bundles — retired, not rebuilt
+status: done
+deps: [nf-look/contrast, nf-look/per-channel-grade]
+tags: [new-flow]
+done: 2026-09-25
+---
 # Re-express the `--preset` bundles — retired, not rebuilt
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-25: retired, not rebuilt.** With a fixed decode nothing is coupled (contrast is the roll's, the grade corrects the roll), and a named look is a `--params` layer; `--preset` is a migration error, removed by `nf-retire/characteristic`
+>
+> **Dependency note** (migrated 2026-10-14): every `--preset` named a retiring curve and an exposure calibrated to the old chain; retired rather than rebuilt
 
 ## Goal
 

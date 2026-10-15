@@ -1,4 +1,15 @@
+---
+title: Parallel HDR stages
+status: done
+deps: [output/parallel-display-stages, output/hdr-display-rendering, output/gain-map-hdr-output]
+tags: [post-mvp]
+summary: HDR render with the MaxFALL reduction split out, transfer encode, gain-map build, quantize
+---
 # Parallel HDR stages
+
+> **From TASKS.md** (migrated 2026-10-14): HDR render with the MaxFALL reduction split out, transfer encode, gain-map build, quantize; memory model re-checked
+>
+> **Dependency note** (migrated 2026-10-14): the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
 
 **Done:** 2026-09-16 — see `docs/progress/output.md`.
 

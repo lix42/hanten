@@ -1,4 +1,15 @@
+---
+title: Per-frame side exports from `roll`
+status: done
+deps: [nf-verification/film-rgb-export]
+tags: [new-flow]
+done: 2026-10-08
+---
 # Per-frame side exports from `roll`
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-08.** `roll --export-film-rgb` writes `<input-stem>_film-rgb.tiff` beside each frame's output; `--export-ir` and `input.export_ir` retired
+>
+> **Dependency note** (migrated 2026-10-14): `roll` reuses `convert`'s film RGB export, one per frame
 
 ## Goal
 

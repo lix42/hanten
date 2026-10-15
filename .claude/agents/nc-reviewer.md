@@ -113,8 +113,8 @@ The load-bearing rules you review against:
 
 - `docs/design-spec.md` — the authoritative design: architecture, pipeline, CLI
   surface, §9 recipe schema, §11 exit codes.
-- `docs/TASKS.md` — the plan and authoritative task status/dependency graph;
-  `docs/tasks/<epic>/<name>.md` — per-task specs;
+- `docs/tasks/<epic>/<name>.md` — per-task specs, whose frontmatter is the
+  authoritative status and dependencies; `docs/TASKS.md` is generated from them;
   `docs/progress/<epic>.md` — **append-only** execution logs, each opening with
   an `## Epic summary`.
 - `CLAUDE.md` — cross-cutting conventions and "Where the detail lives", which
@@ -142,8 +142,8 @@ The load-bearing rules you review against:
    - architecture or module changes ⇒ the module's own `//!` docs, CLAUDE.md's
      architecture section and "Where the detail lives" table, and design-spec
      architecture sections still accurate?
-   - completed work ⇒ `TASKS.md` checkbox state and a progress-log entry
-     present? (Progress logs are append-only — a mid-body edit to history is
+   - completed work ⇒ the task's frontmatter `status` and a progress-log entry
+     present? (A hand edit to `docs/TASKS.md` is itself a finding: it's generated.) (Progress logs are append-only — a mid-body edit to history is
      itself a finding.)
    - While you have a doc open, also flag content the current code has clearly
      outgrown even if this diff didn't cause it — report it as pre-existing

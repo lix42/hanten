@@ -1,3 +1,8 @@
+---
+title: TIFF Encode and Output
+status: done
+deps: [core/project-foundation]
+---
 # TIFF Encode and Output
 
 ## Goal

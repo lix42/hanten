@@ -1,4 +1,14 @@
+---
+title: Conversion-analysis tooling (spike)
+status: done
+deps: [analysis/real-scan-verification]
+tags: [post-mvp, spike]
+summary: "grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison"
+done: 2026-07-23
+---
 # Conversion-analysis tooling (spike)
+
+> **From TASKS.md** (migrated 2026-10-14): grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 
 ## Goal
 

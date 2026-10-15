@@ -1,4 +1,15 @@
+---
+title: SDR Preset Follow-ups (carried-over findings)
+status: done
+deps: [output/presets]
+tags: [post-mvp, no-downstream-blockers]
+done: 2026-10-11
+---
 # SDR Preset Follow-ups (carried-over findings)
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-11.** Every finding resolved: adding or removing a telemetry enum member is not a schema bump, and a new `destination::Encoding` widens the upload contract with no consent bump (`SCHEMA_VERSION`'s doc, the contract README); the manifest's gamut comes from ICC primaries (#246). Its three design questions became the tasks below
+>
+> **Dependency note** (migrated 2026-10-14): **done** 2026-10-11
 
 ## Goal
 

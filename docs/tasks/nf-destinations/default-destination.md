@@ -1,4 +1,16 @@
+---
+title: Which destination the default resolves
+status: done
+deps: [nf-destinations/preset-set, nf-destinations/direct-preset]
+tags: [new-flow]
+summary: ", absorbed by `nf-core/default-flip`"
+done: 2026-09-29
+---
 # Which destination the default resolves
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-29, absorbed by `nf-core/default-flip`**: `pipeline_version` 8 moved chain and container in one bump, from the `gain-map-hdr` JPEG to the SDR Display P3 16-bit TIFF ([`docs/reports/default-flip.md`](reports/default-flip.md)). Supersedes `output/display-p3-default`
+>
+> **Dependency note** (migrated 2026-10-14): supersedes `output/display-p3-default`; one bump rather than two
 
 ## Goal
 

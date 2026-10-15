@@ -1,3 +1,9 @@
+---
+title: Regional (Shadow/Highlight) Color Balance
+status: done
+deps: [algo/density]
+tags: [post-mvp]
+---
 # Regional (Shadow/Highlight) Color Balance
 
 ## Goal

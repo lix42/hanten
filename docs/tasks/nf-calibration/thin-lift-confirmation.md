@@ -1,4 +1,15 @@
+---
+title: Confirm the thin lift on an independent roll
+status: closed
+deps: [nf-calibration/taste-vs-quality]
+tags: [new-flow]
+closed_into: nf-calibration/envelope-hybrid-placement
+---
 # Confirm the thin lift on an independent roll
+
+> **From TASKS.md** (migrated 2026-10-14): **closed 2026-10-11, superseded**: the hybrid placement replaced both lifts by default, so the thin lift renders only under `--placement roll`; the hybrid gives 09-29's two thin frames a steeper slope than the lift, and `hybrid-slope-bounds`' sweep measured its noise
+>
+> **Dependency note** (migrated 2026-10-14): **closed—superseded** 2026-10-11 by `nf-calibration/envelope-hybrid-placement`; the dep below is decision history filed 2026-10-02: thin-frame-lift's confirmation round and noise measurement, compared through the thin lift's own switch
 
 > **Closed, superseded, on 2026-10-11.** Since `envelope-hybrid-placement` the default
 > placement replaces both lifts; the thin lift renders only under `--placement roll`. The

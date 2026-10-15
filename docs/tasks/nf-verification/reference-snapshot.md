@@ -1,4 +1,15 @@
+---
+title: The frozen reference build
+status: done
+deps: [analysis/review-build-axis]
+tags: [new-flow]
+summary: "done: `reserve` (from tag `pre-new-flow`), built by `scripts/reference-snapshot/`"
+---
 # The frozen reference build
+
+> **From TASKS.md** (migrated 2026-10-14): done: `reserve` (from tag `pre-new-flow`), built by `scripts/reference-snapshot/` — this is what lets `nf-retire` run early
+>
+> **Dependency note** (migrated 2026-10-14): the `reserve` branch (from tag `pre-new-flow`), named by commit, keeps the old binary — this is what lets `nf-retire` run early
 
 ## Goal
 

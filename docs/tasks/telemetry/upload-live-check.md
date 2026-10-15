@@ -1,4 +1,13 @@
+---
+title: Check the uploader against the live endpoint and on macOS
+status: done
+deps: [telemetry/upload]
+tags: [post-mvp]
+summary: run the real flow on a Mac against production once
+---
 # Check the uploader against the live endpoint and on macOS
+
+> **From TASKS.md** (migrated 2026-10-14): run the real flow on a Mac against production once. Checked 2026-10-01: it works, and the macOS test run exposed a drain hand-off race, now fixed; `0.1.0` was already in `allowed_releases`.
 
 ## Goal
 

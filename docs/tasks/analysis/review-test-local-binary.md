@@ -1,4 +1,15 @@
+---
+title: "`nctool`'s default-binary test depends on the checkout"
+status: done
+deps: []
+tags: [post-mvp]
+summary: fails whenever `target/release/hanten` exists
+---
 # `nctool`'s default-binary test depends on the checkout
+
+> **From TASKS.md** (migrated 2026-10-14): fails whenever `target/release/hanten` exists; CI never builds one, so only local gates see it
+>
+> **Dependency note** (migrated 2026-10-14): none filed 2026-09-25: the `nctool` gate fails locally whenever a release binary is built, which every review set does
 
 ## Goal
 

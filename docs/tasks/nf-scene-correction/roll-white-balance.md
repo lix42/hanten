@@ -1,4 +1,16 @@
+---
+title: A roll-level white balance
+status: done
+deps: [nf-scene-correction/stage]
+tags: [new-flow]
+summary: measured once per roll from its own top percentile, removing the roll-constant cast and keeping the scene's light
+done: 2026-09-23
+---
 # A roll-level white balance
+
+> **From TASKS.md** (migrated 2026-10-14): measured once per roll from its own top percentile, removing the roll-constant cast and keeping the scene's light; `path-to-white`'s band needs it. **Done 2026-09-23**: `hanten measure-roll` (pooled p99, leader guard), and per-frame auto white balance retired on the new chain
+>
+> **Dependency note** (migrated 2026-10-14): one white balance per roll from the roll's own top percentile, keeping the scene's light; the desaturation band is placeable only behind it
 
 ## Goal
 

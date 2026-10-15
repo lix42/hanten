@@ -1,4 +1,13 @@
+---
+title: Input Data Semantics and Validation
+status: done
+deps: [core/pipeline-orchestration]
+tags: [post-mvp]
+summary: resolve transfer encoding independently from scanner-device versus colorimetric meaning
+---
 # Input Data Semantics and Validation
+
+> **From TASKS.md** (migrated 2026-10-14): resolve transfer encoding independently from scanner-device versus colorimetric meaning; report evidence and reject ambiguity instead of automatically applying an ICC transform before density conversion
 
 ## Goal
 

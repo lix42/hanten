@@ -1,4 +1,15 @@
+---
+title: Named conversion presets (`--preset`)
+status: done
+deps: [algo/film-stock-profiles]
+tags: [post-mvp]
+summary: "`--preset` selecting one of five reconstruction + display bundles by name, folding the coupled magic numbers (a per-reconstruction `print_exposure` from 1.59 to 2.17, the per-stock aim-matched red…"
+---
 # Named conversion presets (`--preset`)
+
+> **From TASKS.md** (migrated 2026-10-14): `--preset` selecting one of five reconstruction + display bundles by name, folding the coupled magic numbers (a per-reconstruction `print_exposure` from 1.59 to 2.17, the per-stock aim-matched red scale) into one name each. Every bundle carries the exposure that keeps brightness steady when you switch preset, calibrated on `portra-400` — a convenience that makes a comparison about reconstruction and tone, **not** a claim that the presets render alike or that mid-grey lands identically on every stock (decided 2026-09-16). **The default did not move with it** — making `characteristic-generic` the no-flag state is `algo/split-default-migration`
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-09. `--preset` names five reconstruction + display bundles, because every configuration worth shipping is a *bundle* whose numbers are meaningless separately: the `print_exposure` that matches one brightness runs 1.59–2.17 across reconstructions, and `sigmoid-knees` cannot use that knob at all (`--display-tone none` is bounded by the render ceiling, so a scalar gain after the curve is refused — its brightness comes from the anchor instead). Also the reason the default can move without breaking `film-master`: a preset does not set `output.preset`, and the non-display presets keep resolving their own tone and exposure.
 
 ## Goal
 

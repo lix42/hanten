@@ -1,3 +1,10 @@
+---
+title: Display P3 Output
+status: done
+deps: [color/management]
+tags: [post-mvp]
+summary: synthesize and embed a standards-conforming Display P3 ICC profile for the SDR/base rendition
+---
 # Display P3 Output
 
 ## Goal

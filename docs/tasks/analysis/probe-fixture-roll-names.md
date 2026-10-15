@@ -1,4 +1,13 @@
+---
+title: Re-key the asset probes to today's roll names
+status: done
+deps: [analysis/asset-manifest]
+tags: [post-mvp]
+summary: the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
+---
 # Re-key the asset probes to today's roll names
+
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-24: the `#[ignore]`d asset probes look rolls up by pre-rename names and panic
 
 ## Goal
 

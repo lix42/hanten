@@ -1,4 +1,16 @@
+---
+title: One dark frame brightens the whole roll
+status: done
+deps: [nf-calibration/envelope-hybrid-placement, nf-calibration/hybrid-span-target]
+tags: [new-flow]
+summary: ", no change"
+done: 2026-10-14
+---
 # One dark frame brightens the whole roll
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-14, no change**: not one frame but the envelope's floor on thin rolls, which lifts every frame; with the 5.5 dark target today's hybrid was kept (a deeper floor was too dark; flattening instead of lifting also moved reviewed rolls)
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-10-13 from the `2026-10-12-Gold200` review: one dark frame's low dark end pushes the whole roll up under the hybrid
 
 ## Goal
 

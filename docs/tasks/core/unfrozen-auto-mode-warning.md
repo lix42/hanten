@@ -1,4 +1,14 @@
+---
+title: Warn when a recipe's auto modes silently defeat a roll
+status: closed
+deps: [core/roll-conversion]
+tags: [post-mvp]
+---
 # Warn when a recipe's auto modes silently defeat a roll
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—moot 2026-09-30**: every auto mode retired (`dmax: "auto"` and `balance_range: "auto"` with the reference density and the regional balance, the per-frame white balance with `nf-scene-correction/roll-white-balance`), and the one per-frame measurement left, a `region` film base, is the one `roll` already warns about
+>
+> **Dependency note** (migrated 2026-10-14): **closed—moot**; the deps below are decision history; not a live prerequisite set
 
 > **Closed — moot (2026-09-30).** Every auto mode retired: `dmax: "auto"` in
 > `nf-retire/dmax-machinery`, `balance_range: "auto"` in `nf-retire/regional-balance`,

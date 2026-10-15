@@ -1,4 +1,13 @@
+---
+title: The neutrality release gate
+status: todo
+deps: [nf-calibration/scale-gamma-loop, analysis/calibration-frame-capture]
+tags: [new-flow]
+summary: the release gate
+---
 # The neutrality release gate
+
+> **From TASKS.md** (migrated 2026-10-14): the release gate — supersedes the gate half of `algo/split-default-migration`
 
 ## Goal
 

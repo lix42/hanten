@@ -1,4 +1,15 @@
+---
+title: Layered recipe composition
+status: done
+deps: [core/cli-framework, core/roll-conversion, core/calibration-recipe-section, nf-core/subcommands]
+tags: [post-mvp]
+summary: repeatable `--params` (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain `defaults < params A < params B < … < flags`
+---
 # Layered recipe composition
+
+> **From TASKS.md** (migrated 2026-10-14): repeatable `--params` (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain `defaults < params A < params B < … < flags`. Enables the look / roll-measurement split; layering needs no schema change, an in-recipe clamp table would
+>
+> **Dependency note** (migrated 2026-10-14): repeatable `--params` (file or `-`), `roll` gains convert's override flags, one precedence chain `defaults < params A < params B < … < flags`. Layering needs no schema change (verified 2026-08-11; re-verify under `recipe_version` 2), but an in-recipe table of per-frame clamps (roll-workflow open question 3) would be one. Implements [the roll workflow](design/roll-workflow.md)
 
 **Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
 

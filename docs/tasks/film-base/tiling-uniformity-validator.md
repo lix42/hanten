@@ -1,4 +1,15 @@
+---
+title: Validate reference frames by tiling
+status: done
+deps: [film-base/holder-masked-measurement, film-base/estimate-reuse-output]
+tags: [post-mvp]
+summary: "`measure-base` tiles the effective area 4x4 in the median's own scan (`pipeline::area_uniformity`): within-tile grain, outlier tiles set aside against the plane through the rest, and that plane's…"
+---
 # Validate reference frames by tiling
+
+> **From TASKS.md** (migrated 2026-10-14): `measure-base` tiles the effective area 4x4 in the median's own scan (`pipeline::area_uniformity`): within-tile grain, outlier tiles set aside against the plane through the rest, and that plane's edge-to-edge tilt, reported as `area_uniformity` with a self-describing verdict. A tilt over 0.05 or a tile over 0.03 warns; no unexposed frame does (tilt ≤ 0.030), Portra 160's leader does (0.114), Gold 200's does not. Absorbs `film-base/grid-verdict-enum`; diagnostics only, no pixel change
+>
+> **Dependency note** (migrated 2026-10-14): coarse tiling in the estimate's own pass, reporting within-tile (grain) separately from between-tile (gradient): measured 0.0081 on Gold 200 against 0.0390 on Portra 160, reproducing the baseline report's blue-gradient finding. Tiles the effective-area measurement, whose only check is one pooled spread (`--grid` already retired with `holder-masked-measurement`), and absorbs the removed `film-base/grid-verdict-enum`. Diagnostics only — no pixel change
 
 ## Goal
 

@@ -1,3 +1,10 @@
+---
+title: SDR Display Rendering
+status: done
+deps: [color/film-master-render-pipeline, output/display-p3-output, output/hdr-output-spike]
+tags: [post-mvp]
+summary: render intentional linear ACEScg film values into a valid Display P3 or sRGB SDR rendition with explicit reference-white, tone, and gamut policy
+---
 # SDR Display Rendering
 
 ## Goal

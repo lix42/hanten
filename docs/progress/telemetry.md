@@ -735,3 +735,10 @@ What shipped, and the parts the open tasks build on:
 - For dependents: `0.1.0` is analysed, not quarantined (delete dev events before a
   `0.1.0` release, per the Worker README); `status` keeps `last_error` as history;
   a drainer must re-check the queue after releasing the drain lock.
+
+## upload-windows
+
+**Status:** not started
+**Updated:** 2026-10-14
+
+- 2026-10-14: section added at the frontmatter migration. Filed 2026-10-01 out of `upload` (see its section): only a compile check covers the uploader on Windows; low priority.

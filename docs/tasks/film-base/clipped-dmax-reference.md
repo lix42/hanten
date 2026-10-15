@@ -1,3 +1,8 @@
+---
+title: Clipped Dmax Reference Handoff
+status: closed
+deps: []
+---
 # Clipped Dmax Reference Handoff
 
 > **Retired 2026-09-19** — its subject is the `Dmax` reference handoff, and

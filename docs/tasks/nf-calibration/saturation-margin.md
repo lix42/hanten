@@ -1,4 +1,15 @@
+---
+title: The saturation warning's margin, and frames near saturation
+status: todo
+deps: [nf-calibration/roll-white-rule, analysis/calibration-frame-capture]
+tags: [new-flow]
+summary: waits on the calibration shoot's +3/+4 frames
+---
 # The saturation warning's margin, and frames near saturation
+
+> **From TASKS.md** (migrated 2026-10-14): waits on the calibration shoot's +3/+4 frames. Measured 2026-09-29: the leader is no stock constant (it varies by up to 1.8 stops within a stock), and a frame's absolute white separates the verdicts the leader distance does not, so the bracket tests both references
+>
+> **Dependency note** (migrated 2026-10-14): filed 2026-09-25: the leader margin the warning keys on was set from one ambiguous frame. 2026-09-29: waits on the calibration shoot's +3/+4 frames, since the rolls hold one overexposed frame
 
 ## Goal
 

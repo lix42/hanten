@@ -1,4 +1,16 @@
+---
+title: Sequential encode slows after a wide rayon fan-out
+status: done
+deps: [output/parallel-hdr-stages]
+tags: [post-mvp]
+summary: "**a non-issue on an M3 Pro**: load-gated, shuffled runs show the `--film-master` encode flat across rayon thread counts, 1 included"
+done: 2026-10-13
+---
 # Sequential encode slows after a wide rayon fan-out
+
+> **From TASKS.md** (migrated 2026-10-14): **a non-issue on an M3 Pro**: load-gated, shuffled runs show the `--film-master` encode flat across rayon thread counts, 1 included; its slow writes are page-cache episodes that hit every arm. The M4 Pro that showed the effect and Linux were not measured. [reports/post-fanout-encode-slowdown.md](reports/post-fanout-encode-slowdown.md). **Done 2026-10-13.**
+>
+> **Dependency note** (migrated 2026-10-14): **done** 2026-10-13 investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section; a non-issue on an M3 Pro (no thread-count dependence; slow writes are page-cache episodes)
 
 **Done:** 2026-10-13 — see `docs/progress/output.md`.
 

@@ -1,4 +1,16 @@
+---
+title: Content-light levels per CTA-861.3
+status: done
+deps: [output/hdr-display-rendering]
+tags: [post-mvp]
+summary: "the HDR TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measured luminance, not each pixel's max(R, G, B): 391 vs 578 cd/m² on the scan fixture"
+done: 2026-10-01
+---
 # Content-light levels per CTA-861.3
+
+> **From TASKS.md** (migrated 2026-10-14): the HDR TIFF reports' `max_cll_nits` / `max_fall_nits` and the SDR-range warning measured luminance, not each pixel's max(R, G, B): 391 vs 578 cd/m² on the scan fixture. Found by `analysis/display-acceptance-harness`; no pixel changes. **Done 2026-10-01.** Both are now the peak and mean of each pixel's largest channel in the stored primaries, so they differ by gamut; names kept; the warning keeps MaxCLL as its trigger. `nctool acceptance` gained a `content_light` check holding the definition
+>
+> **Dependency note** (migrated 2026-10-14): measure MaxCLL/MaxFALL from each pixel's max(R, G, B) per CTA-861.3, not luminance; found by `analysis/display-acceptance-harness`
 
 ## Goal
 

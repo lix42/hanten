@@ -1,4 +1,16 @@
+---
+title: Scanner Density Calibration
+status: todo
+deps: [io/input-data-semantics, algo/film-stock-profiles, analysis/calibration-frame-capture]
+related: [algo/sigmoid-parameter-calibration, film-base/dmax-per-channel-reduction]
+tags: [post-mvp]
+summary: turn the density-scale question into a shipped, reusable scanner profile
+---
 # Scanner Density Calibration
+
+> **From TASKS.md** (migrated 2026-10-14): turn the density-scale question into a shipped, reusable scanner profile. Tier 1 (unexposed frame only, no new user action) is a **non-calibrating diagnostic**: a scan value is a code-value ratio against full scale, so absolute density needs a same-settings open-gate reference. Tier 2 needs a **calibrated transmission step wedge** (a photographed grey card is not a known density). `algo/reference-anchored-sigmoid` performs the first diagnostic measurement inside its own baseline harness and does not wait on this task; this task productises the result.
+>
+> **Dependency note** (migrated 2026-10-14): postponed 2026-09-12 pending the frames. Tier 1 (the non-calibrating diagnostic) is implementable without them, but tier 1 alone does not fulfil the task's goal — which is why this is a **hard edge** while `film-base/dmax-anchor-reliability`'s holder prerequisite is only prose. The rule: a hard edge when the task's *goal* is unreachable without the dependency (absolute density needs the frames, and tier 1 is explicitly non-calibrating); prose when only *one approach* needs it (roll-wide content is one of that task's four directions, and its establishing half is genuinely unblocked). Splitting tier 1 into its own task would buy back one diagnostic's worth of readiness and is not worth a task — `algo/reference-anchored-sigmoid` is now transitive via `algo/film-stock-profiles`. The registry is a real prerequisite: this task's verification needs the per-stock nominal `D-min` and its own spec forbids keeping a second copy. Note the sigmoid task runs its *own* diagnostic checks inside its baseline harness, so it is never blocked here and cannot end up validating defaults against a scale only this task could have measured. Tier 1 (unexposed frame) is non-calibrating; tier 2 needs a calibrated transmission step wedge
 
 > **Needs re-evaluation before pickup (2026-09-13).** The file carries two designs that
 > disagree. The `Design` section specifies a **transmission step wedge** and a profile "keyed

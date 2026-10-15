@@ -1,3 +1,9 @@
+---
+title: Curve endpoint validation (does this config place its endpoints usefully?)
+status: closed
+deps: []
+closed_into: nf-reconstruction/curve-endpoint-warning
+---
 # Curve endpoint validation (does this config place its endpoints usefully?)
 
 > **Superseded 2026-09-19 by `nf-reconstruction/curve-endpoint-warning`** —

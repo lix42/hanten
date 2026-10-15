@@ -1,4 +1,15 @@
+---
+title: Tune `scale` and `gamma` by review
+status: done
+deps: [nf-destinations/preset-set, nf-verification/reference-snapshot, nf-calibration/scale-ladder, nf-destinations/direct-preset, nf-display-stages/parametric-operator]
+tags: [new-flow]
+summary: the two knobs the decode owns, tuned against a held-fixed rendering
+---
 # Tune `scale` and `gamma` by review
+
+> **From TASKS.md** (migrated 2026-10-14): the two knobs the decode owns, tuned against a held-fixed rendering; one round, nothing moved, the calibrated re-run is `neutrality-gate`'s. Supersedes `algo/sigmoid-parameter-calibration` and `film-base/dmax-per-channel-reduction`
+>
+> **Dependency note** (migrated 2026-10-14): the two knobs the decode owns, tuned against a held-fixed rendering. Supersedes `algo/sigmoid-parameter-calibration` and `film-base/dmax-per-channel-reduction`
 
 ## Goal
 

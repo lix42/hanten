@@ -1,3 +1,8 @@
+---
+title: Stock-aware Dmax plausibility (dense-base stocks)
+status: closed
+deps: []
+---
 # Stock-aware Dmax plausibility (dense-base stocks)
 
 > **Retired 2026-09-19** — the `Dmax` floor goes with the anchor; the

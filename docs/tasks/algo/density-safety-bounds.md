@@ -1,4 +1,16 @@
+---
+title: Density Safety Bounds
+status: done
+deps: [algo/density, core/pipeline-orchestration]
+tags: [post-mvp]
+summary: ": a value no longer reaches fit range's internal errors"
+done: 2026-10-01
+---
 # Density Safety Bounds
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-10-01**: a value no longer reaches fit range's internal errors — `recipe::validate_render` probes the film base and the reachable scan range through the real decode and grade, and refuses (exit 2) naming each knob whose default alone would render; a channel written as 0 everywhere warns at the encode. Part 3 is the task below.
+>
+> **Dependency note** (migrated 2026-10-14): re-scoped 2026-10-01
 
 > **Re-scoped 2026-10-01** for the new chain (`nf-core/default-flip`). The original
 > file described the removed chain (`algo/density.rs`, `render_print`,

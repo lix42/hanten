@@ -1,4 +1,14 @@
+---
+title: Post-Reconstruction Characterization Runtime
+status: closed
+deps: [io/input-data-semantics, color/management, film-base/dmax-reference]
+tags: [post-mvp]
+---
 # Post-Reconstruction Characterization Runtime
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—superseded**; retained as decision history and replaced by `algo/negative-reconstruction-density-curves`, `color/film-rgb-working-space`, `color/film-master-render-pipeline`, and `color/optional-color-correction-profiles`
+>
+> **Dependency note** (migrated 2026-10-14): **closed—superseded**; the deps below are decision history; not a live prerequisite set
 
 **Status:** closed—superseded (2026-07-23)
 

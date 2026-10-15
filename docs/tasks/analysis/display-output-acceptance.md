@@ -1,4 +1,15 @@
+---
+title: Display-Output Acceptance
+status: todo
+deps: [output/presets, analysis/real-scan-verification, nf-core/default-flip, analysis/display-acceptance-harness, analysis/viewer-interoperability]
+tags: [post-mvp]
+summary: "*re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every destination row, the `direct` rendering and the film master"
+---
 # Display-Output Acceptance
+
+> **From TASKS.md** (migrated 2026-10-14): *re-scoped 2026-10-01*: the gate's specification and its run on real scans, over every destination row, the `direct` rendering and the film master; split into the two tasks below
+>
+> **Dependency note** (migrated 2026-10-14): re-scoped and split 2026-10-01 `output/presets` is history: its presets retired with the flip; the default it accepts is the one `nf-core/default-flip` ships
 
 > **Re-scoped 2026-10-01** for the new chain and **split in three**. The matrix named
 > the removed output presets (`gain-map-hdr`, `display-p3`, `compatibility`,

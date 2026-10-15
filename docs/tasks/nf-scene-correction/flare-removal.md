@@ -1,4 +1,14 @@
+---
+title: The scene-referred half of the black point
+status: closed
+deps: [nf-scene-correction/stage]
+tags: [new-flow]
+---
 # The scene-referred half of the black point
+
+> **From TASKS.md** (migrated 2026-10-14): **closed—not needed 2026-09-26**: base fog is already in the measured film base, lens glare is part of the photograph, and scanner veil is a highlight question; `--display-black` does the black point's one job
+>
+> **Dependency note** (migrated 2026-10-14): **closed—not needed**; the dep below is decision history
 
 **Closed — not needed (2026-09-26).** There is no scene-referred additive term left
 for scene correction to remove, and the one job the legacy black point did is display

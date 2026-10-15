@@ -1,4 +1,16 @@
+---
+title: Calibrate from a single part-exposed frame
+status: todo
+deps: [core/measure-base]
+related: [film-base/dmax-anchor-reliability]
+tags: [post-mvp, blocks-nothing]
+summary: "**deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both references (HP5 frame 1330 is one)"
+---
 # Calibrate from a single part-exposed frame
+
+> **From TASKS.md** (migrated 2026-10-14): **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both references (HP5 frame 1330 is one). Convenience over `core/measure-base`'s one-reference-per-frame path
+>
+> **Dependency note** (migrated 2026-10-14): **deferred** one frame that is part unexposed and part leader serving as both references (HP5 frame 1330). Convenience over the one-reference-per-frame path (`measure-base`, `measure-roll --unexposed`)
 
 **Design:** the roll workflow's open question 8 — whether `measure-roll --unexposed` takes a region of a part-exposed frame — is this task's ([doc](../../design/roll-workflow.md)).
 

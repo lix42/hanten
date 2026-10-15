@@ -1,4 +1,15 @@
+---
+title: Choose the white placement by rendering
+status: done
+deps: [nf-look/path-to-white, nf-reconstruction/anchor-spike]
+tags: [new-flow]
+done: 2026-09-25
+---
 # Choose the white placement by rendering
+
+> **From TASKS.md** (migrated 2026-10-14): **done 2026-09-25.** The roll's white is its brightest frame's white under a +2.0 cap, floored at +1.5 (scene stops above mid-grey), placed through `look.contrast` with mid-grey pinned; a warning near the leader. Chosen with a black point, which the chain lacks (`parametric-operator`); implemented by `roll-white-rule`
+>
+> **Dependency note** (migrated 2026-10-14): the spike costs the four white placements from the scans; only a render with a real highlight operator in the chain can rank them, and under the fixed anchor that operator has nothing to act on. Done 2026-09-25
 
 ## Goal
 

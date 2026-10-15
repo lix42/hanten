@@ -1,3 +1,10 @@
+---
+title: The look stage
+status: done
+deps: [nf-scene-correction/stage]
+tags: [new-flow]
+summary: scene-referred and before the SDR/HDR branch, because a gain map needs agreement below diffuse white
+---
 # The look stage
 
 ## Goal
