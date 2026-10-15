@@ -1,0 +1,33 @@
+---
+title: Export beside preview spike
+status: todo
+deps: []
+related: [app/preview-cache-spike]
+summary: "an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory"
+---
+# Export beside preview spike
+
+## Goal
+
+Check that an in-process export queue can run while the user drags sliders, without the
+preview stuttering ([desktop app design](../../design/desktop-app.md) §3.6).
+
+## What is known
+
+- Full-resolution `convert` took 0.33 s per frame in the prototype (warm cache); a
+  preview render is 24–35 ms.
+- The design runs export in the core process, not as a spawned binary, and gives the
+  preview priority.
+- Memory: a full-resolution export holds several full-frame buffers
+  (`pipeline/memory.rs`), on top of the preview cache.
+
+## Open questions
+
+1. Preview latency while a roll exports, with and without a priority scheme.
+2. How many exports run at once, given memory and cores.
+3. Whether export reuses the preview's decode or decodes again.
+
+## How to Verify
+
+- A report under `docs/spike/` with preview latency during export and peak memory, and a
+  recommended scheduling.
