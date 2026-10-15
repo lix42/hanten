@@ -21,7 +21,9 @@ schema 9. **`subcommands`** settled `roll`'s per-frame overrides: a frame resolv
 `convert` would, and an override that changes a roll-wide value (`cli::ROLL_WIDE`)
 warns naming both values. **`buffer-strategy`** settled the buffer rule and dropped
 the IR plane at the decode, and **`scan-type`** made that a type: only a `Scan` can
-carry one. Open: `three-step-pipeline`.
+carry one. **`three-step-pipeline`** (2026-10-14) kept the stages defined by
+operation: the decode supplies the image, and roll and style are combined into the
+stages' params (`Recipe::shared_params`); none is a stage. Open: `resolver-module`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -1431,13 +1433,37 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
 
 ## three-step-pipeline
 
-**Status:** not started
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-10-14
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`, unscheduled. Goal:
   decide whether the chain should be rebuilt as decode → roll → style, now that the
   roll's measurements live in rendering (`docs/design-update.md`, Part 2, "Two
   renderings").
+- 2026-10-14: **Decided: keep the stages defined by operation; decode, roll and style are
+  inputs, not stages** (user agreed 2026-10-14; no code change). The decode supplies the
+  image and the decoded film base (`chain::render`'s arguments); `Recipe::shared_params`
+  folds the applied `roll` section, the user's knobs and the rendering's `Base` (with the
+  decode's linearization) into each stage's params. Rebuilding the chain as roll and style stages was
+  rejected for three reasons:
+
+  - **Roll and style share each operator.** The roll's gains multiply the stated white
+    balance (a tilt, `roll.white_balance_form`, stays its own `RollColour` input to the
+    same stage), its slope is multiplied by `look.contrast` (and is the saturation base), and
+    its exposure adds to the stated one. Separate stages would apply each operator twice,
+    or hand a value for the next stage to re-grade, and add a pass over the pixels.
+  - **The order forbids it.** The roll now reaches three stages: scene correction (gains or
+    tilt, midtone line, roll and frame exposure), the look (base slope from the span, a thin
+    frame or the hybrid/`frame` placement) and fit range (the frame's dark-end target,
+    `tones.dark_stops`, graded by the look's slope and scene correction's exposure and
+    gains in `chain::display`). A roll stage before the look cannot own the last.
+  - **It costs a third migration** (`recipe_version` and the report's `chain` block) for
+    no change in pixels; being pixel-identical, it would not bump `pipeline_version`.
+
+  Recorded in design-spec §6 "Two renderings" and moved from §12's open list to its
+  resolved list. `docs/design/roll-workflow.md`'s "Three kinds of configuration" already
+  matches. Follow-up filed: `nf-core/resolver-module` (give the resolution its own module,
+  out of `recipe.rs`).
 
 ## scan-type
 
@@ -1482,3 +1508,11 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
 - **Done 2026-10-11.** For dependents: decode a scan with `decode_within` → `Scan`;
   anything that needs the IR plane after `fixed::decode` (IR dust removal) must take
   it from the `Scan` before the decode consumes it.
+
+## resolver-module
+
+**Status:** not started
+**Updated:** 2026-10-14
+
+- 2026-10-14: filed by `three-step-pipeline`. Goal: move `Recipe::shared_params` and
+  the `resolved_*` methods out of `recipe.rs`.
