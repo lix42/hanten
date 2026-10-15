@@ -82,7 +82,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > in place of the floor) §5's recipe `meta`, §7's fit-range table, report and dark-end
 > section were re-run against the binary (the floor's example now states
 > `--dark-floor 4.5`); the target's figures are from its review of the 2026-10-12
-> Gold200 roll. The staleness
+> Gold200 roll. At `nf-look/midtone-contrast-colour` (`pipeline_version` 17 unchanged)
+> §7's `--contrast 1.3 --saturation 1.15` pairing was re-run against the binary (colour's
+> slope is the roll's × 1.15 × 1.15, tone's the placement's × 1.3). The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -1325,7 +1327,10 @@ grade is off.
   target puts it back at 5.5 stops under mid-grey. Reviewed (with the 4.5 floor, before
   the target) under `--placement roll` and `frame` too, and
   acceptable under both: under `frame` it renders bright, its whites past `frame`'s L\* 93
-  (the brightest 1 % near L\* 97).
+  (the brightest 1 % near L\* 97). **Pair it with `--saturation 1.15`**: `--contrast` leaves
+  colour alone, and of colour held, `1.15` and `1.3` beside ×1.3, `1.15` was preferred
+  (`docs/spike/midtone-contrast-colour.md`). Bright colour that ×1.3 pushes toward white
+  (a sunlit beach, a sunset cloud) still loses chroma there; no saturation brings it back.
 - **Saturation is the colour's slope**: each pixel's ratios between channels are raised
   to the power `saturation slope` (a channel twice green's becomes 2^s times it) and its
   luminance is kept, so neutrals and the tone scale do not move. The saturation slope is
@@ -1333,7 +1338,7 @@ grade is off.
   never reaches colour: there the base is the roll's. The 1.15 is the default,
   chosen by review: 15% more colour than the base slope gave when contrast still acted
   on each channel. `direct` uses 1 there instead. Whatever `--contrast` is, colour stays
-  put.
+  put; to move it with a contrastier look, state `--saturation` too (above).
 - **The grade is for crossover** — a cast that differs between shadows and
   highlights, which one set of white-balance gains cannot remove. Each of red and blue
   becomes `0.18 · (v / 0.18)^R` (or `^B`), and the pixel's luminance is then put back,

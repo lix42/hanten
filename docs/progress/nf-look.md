@@ -132,6 +132,12 @@ The saturation slope is the colour's base slope × the rendering's saturation
 the fallback (`chain.look.saturation_base_from`). No flag gives an identity look under
 `default` any more.
 
+**`midtone-contrast-colour` is done (2026-10-15): pair `--contrast 1.3` with
+`--saturation 1.15`.** This is a documented suggestion (`docs/using-nc.md`,
+`docs/spike/midtone-contrast-colour.md`), not a coupling: `--contrast` still leaves colour
+alone. Held colour kept a frame's chroma except bright colour at the SDR top, which no
+saturation recovers; 1.15 won by eye.
+
 **`look-presets` is done (2026-09-25): there are no look presets.** Nothing in the look
 is coupled the way the old bundles were, and a named look is a `--params` layer
 (`core/recipe-composition`), so `--preset` retired with the `characteristic` curve
@@ -1057,8 +1063,8 @@ preset row; do not reuse the name.
 
 ## midtone-contrast-colour
 
-**Status:** not started
-**Updated:** 2026-10-11
+**Status:** done
+**Updated:** 2026-10-15
 
 - 2026-10-11: filed (user), split from `nf-display-stages/midtone-contrast-toe`, low
   priority: the placements hold colour at the roll's slope, so whether saturation follows
@@ -1066,3 +1072,8 @@ preset row; do not reuse the name.
 - 2026-10-11: re-scoped by `nf-display-stages/midtone-contrast-probe`: the default stays at
   ×1, so the steeper midtone is the opt-in `--contrast 1.3`; the question is whether
   saturation follows it.
+- 2026-10-14: started. Plan (user): review at --contrast 1.3 under the default hybrid placement and the 5.5-stop dark target (today's default dark end, not the 4.5 floor the task file names), arms ×1 / ×1.3 held / ×1.3 + --saturation 1.15 / ×1.3 + --saturation 1.3, on 09-18 Gold200, 09-29 Ektar and 09-20 Portra. C* measured per brightness band, not only per frame (holding channel ratios keeps C*/L* roughly constant, so highlights gain chroma and shadows lose it). If colour should follow, the answer is a documented pairing (--contrast 1.3 --saturation X), not a coupling in code.
+- 2026-10-14: set rendered (../temp/midtone-contrast-colour/, scripts/ rebuild it; pipeline_version 17, rolls re-measured whole with this build): 11 frames × ×1 / ×1.3 held / ×1.3 + --saturation 1.15 / ×1.3 + --saturation 1.3, SDR Display P3. Mean frame C* 14.17 / 14.06 / 15.97 / 17.83: held keeps the frame's chroma. By L* band (median over frames, held ÷ ×1): 1.03 under L* 25, 0.99 at 25–50, 1.02 at 50–75, 1.07 above 75, so ×1.3 does not wash colour out at any band. Marked colour patches 18.5 / 16.2 / 18.1 / 20.0; the held drop is all bright colour pushed to the SDR top (1820 sand beach L* 96→99, C* 15.4→4.0; 1883 sunset clouds 15–16→6), which no saturation arm brings back, and which is not highlight desaturation (C* 4.0 with it off). Out of sRGB rises with saturation (1774 5.7 % at ×1, 17 % held, 22 % full; 1904 0 / 3 / 13 %).
+- 2026-10-15: verdict (user, review app): at --contrast 1.3, --saturation 1.15 looks best overall; it becomes the suggested pairing, documented, not coupled in code (decided on the plan): --contrast keeps leaving colour alone and the default render does not move.
+- 2026-10-15: written up: docs/spike/midtone-contrast-colour.md; using-nc.md's --contrast 1.3 bullet now suggests --saturation 1.15 (re-run on 09-18 1791: colour slope 1.989 × 1.15 = 2.287, tone the placement's × 1.3) and the saturation bullet points at it; the probe report's colour line links the answer. No code, default render or pipeline_version moved.
+- 2026-10-15: done. Landed as a documented pairing, --contrast 1.3 --saturation 1.15 (docs/using-nc.md, docs/spike/midtone-contrast-colour.md); --contrast still leaves colour alone, so no code, default render, recipe or pipeline_version moved. Verified: the pairing re-run through the binary; gates green (cargo 841 + 291 + 32 + 1, nctool 642, clippy, doc, tasks check); reviewed by Codex (clean) and ship:diff-reviewer (one wording fix: held colour keeps a frame's chroma as a median per band, not at every lightness). For dependents: bright colour that ×1.3 pushes to the SDR top loses chroma at any saturation; that is the placement of ×1.3's highlights, not filed.
