@@ -103,9 +103,8 @@ than builds the measurement:
   left out until someone declares both by hand?
 - Which axes deserve a stated tolerance, and is that tolerance derived from the
   NLP→target spread rather than picked?
-- The side-by-side visual sheet: does it belong here, or does this task feed
-  pairs to [`comparison-review-tooling`](comparison-review-tooling.md) rather
-  than growing a second page builder? Visual review remains a required step —
+- Answered: the side-by-side visual sheet is `review generate`'s `references`
+  (`analysis/review-reference-cells`). Visual review remains a required step —
   the numbers support it, they do not replace it.
 - Which of `metrics`' axes belong in a comparison table at all? Thirteen plus two
   crossover terms is right for one roll's absolute numbers; a three-way delta over

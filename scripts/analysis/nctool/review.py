@@ -5,7 +5,8 @@ and the flags each one passes, so changing what is compared never means editing
 code. It replaces `scripts/preset-review/generate.py`, which stated its matrix as
 a Python list.
 
-Each cell of the matrix is one `hanten convert` of one frame with one configuration.
+Each cell of the matrix is one `hanten convert` of one frame with one configuration,
+or another producer's export of that frame (a reference cell, `nctool.reference`).
 Beside the rendered image the generator writes that image's **metric record**
 (`nctool metrics`), so the review app can draw the tone and cast charts next to
 the picture instead of only showing the picture. The record is derived numbers
@@ -56,6 +57,7 @@ from pathlib import Path
 
 from . import manifest as _manifest
 from . import metrics as _metrics
+from . import reference as _reference
 
 #: The matrix format this module reads. A future shape bumps it.
 SCHEMA = 1
@@ -465,6 +467,36 @@ def expand_args(args: list[str], values: dict[str, str]) -> list[str]:
     return out
 
 
+def load_references(value) -> list[dict]:
+    """The matrix's `references`: outside producers' exports as cells
+    (`nctool.reference`). A reference names a manifest producer, never a file."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not value:
+        raise ReviewError("references must list at least one reference")
+    out: list[dict] = []
+    for index, entry in enumerate(value):
+        at = f"references[{index}]"
+        if not isinstance(entry, dict):
+            raise ReviewError(f"{at} must be an object")
+        _known_keys(entry, {"id", "label", "note", "producer", "space"}, at)
+        rid = check_id(_string(entry.get("id"), f"{at}.id"), "reference id", f"{at}.id")
+        if any(r["id"] == rid for r in out):
+            raise ReviewError(f"references contains two entries with id {rid!r}")
+        space = _optional_string(entry.get("space"), f"{at}.space")
+        if space is not None and space not in _reference.EXPORT_SPACES:
+            raise ReviewError(f"{at}.space {space!r} is not one of "
+                              f"{', '.join(_reference.EXPORT_SPACES)}")
+        out.append({
+            "id": rid,
+            "label": _string(entry.get("label", rid), f"{at}.label"),
+            "note": _optional_string(entry.get("note"), f"{at}.note"),
+            "producer": _string(entry.get("producer"), f"{at}.producer"),
+            "space": space,
+        })
+    return out
+
+
 def load_matrix(path: Path) -> dict:
     """Read and validate a review matrix.
 
@@ -480,7 +512,7 @@ def load_matrix(path: Path) -> dict:
             "any `--film-stock` argument")
     _known_keys(raw, {"schema_version", "title", "description", "output_dir",
                       "output_preset", "destination", "common_args", "frames",
-                      "metrics", "builds", "configs"}, str(path))
+                      "metrics", "builds", "configs", "references"}, str(path))
     version = raw.get("schema_version")
     if version != SCHEMA:
         raise ReviewError(
@@ -542,6 +574,20 @@ def load_matrix(path: Path) -> dict:
             "builds": config_builds(entry.get("builds"), builds, f"{at}.builds"),
         })
 
+    expanded = expand_configs(builds, configs)
+    references = load_references(raw.get("references"))
+    clash = sorted({c["id"] for c in expanded} & {r["id"] for r in references})
+    if clash:
+        raise ReviewError(f"references reuse config id {', '.join(clash)}")
+    if references:
+        if preset is not None:
+            raise ReviewError(
+                "a matrix with references renders through destinations only: the "
+                "reference build has no SDR sRGB JPEG; remove output_preset")
+        fault = _reference.destination_fault(destination)
+        if fault:
+            raise ReviewError(fault)
+
     frames = raw.get("frames")
     if frames is not None:
         frames = _string_list(frames, "frames")
@@ -568,7 +614,8 @@ def load_matrix(path: Path) -> dict:
         # the render loop, `review.json` — wants one entry per rendered cell, and
         # having exactly one place turn the declaration into that list is what
         # keeps the three from disagreeing about how many cells there are.
-        "configs": expand_configs(builds, configs),
+        "configs": expanded,
+        "references": references,
         "frames": frames,
         "inset": float(inset),
         "output_dir": _optional_string(raw.get("output_dir"), "output_dir"),
@@ -1035,8 +1082,19 @@ def producer_block(build: dict | None, identity: dict | None) -> dict | None:
     }
 
 
+def reference_config(ref: dict, spaces: dict | None) -> dict:
+    """A reference's `configs` entry: an `external` producer whose note states the
+    spaces its cells were read in, as found rather than as declared."""
+    note = _reference.producer_note(spaces or {})
+    return {"id": ref["id"], "label": ref["label"],
+            **({"note": ref["note"]} if ref["note"] else {}),
+            "producer": {"kind": "external", "label": ref["producer"],
+                         **({"note": note} if note else {})}}
+
+
 def build_review(matrix: dict, images: list[dict],
-                 identities: dict[str, dict] | None = None) -> dict:
+                 identities: dict[str, dict] | None = None,
+                 reference_spaces: dict[str, dict] | None = None) -> dict:
     """The `review.json` document for a finished run.
 
     `identities` maps a build id to what that build reported about itself, so the
@@ -1057,7 +1115,8 @@ def build_review(matrix: dict, images: list[dict],
                                                identities.get((c.get("build") or {})
                                                               .get("id")))) else {})}
             for c in matrix["configs"]
-        ],
+        ] + [reference_config(r, (reference_spaces or {}).get(r["id"]))
+             for r in matrix.get("references", [])],
         "images": images,
     }
 
@@ -1220,16 +1279,37 @@ def cmd_generate(args) -> int:
 
         fixtures = _load_object(Path(args.fixtures), "fixtures")
         frames = _frames_to_render(matrix, fixtures, args.frames)
-        clashes = colliding_stems(frames, [c["id"] for c in matrix["configs"]])
+        clashes = colliding_stems(frames, [c["id"] for c in matrix["configs"]]
+                                  + [r["id"] for r in matrix["references"]])
         if clashes:
             raise ReviewError("; ".join(clashes))
 
         # From here on the faults are environmental.
         builds = resolve_binaries(matrix["builds"], overrides, args.nc)
+        if matrix["references"]:
+            presets = [b for b in builds if b["interface"] == "preset"]
+            if presets:
+                raise ReviewError(
+                    f"{presets[0]['nc']} takes output presets and has no SDR sRGB JPEG, "
+                    "which reference cells need beside them; drop the references or "
+                    "that build")
         check_interfaces(matrix, builds)
         assets = Path(args.asset_root).resolve()
         if not (assets / "manifest.json").is_file():
             raise ReviewError(f"no assets at {assets}")
+        manifest: dict = {}
+        exported: dict[str, list[dict]] = {}
+        if matrix["references"]:
+            manifest, problem = _manifest.load_manifest(str(assets / "manifest.json"))
+            if problem:
+                raise ReviewError(problem)
+            for ref in matrix["references"]:
+                exported[ref["id"]] = _reference.exports(manifest, ref["producer"])
+                if not exported[ref["id"]]:
+                    raise ReviewError(
+                        f"reference {ref['id']}: the manifest has no "
+                        f"converted/{ref['producer']}/ exports; its producers are "
+                        f"{', '.join(_reference.producers(manifest)) or 'none'}")
 
         out.mkdir(parents=True, exist_ok=True)
     except ReviewError as error:
@@ -1245,6 +1325,23 @@ def cmd_generate(args) -> int:
                   f"(sha256 {build['digest'][:12]})", file=sys.stderr)
     for warning in duplicate_binary_warnings(builds):
         print(f"note: {warning}", file=sys.stderr)
+
+    references = matrix["references"]
+    converting = bool(references)
+    if converting:
+        try:
+            _metrics.require_dependencies()
+        except _metrics.MetricsError as error:
+            print(f"note: no reference cells — {error}", file=sys.stderr)
+            converting = False
+    rolls = {fixtures["frames"][key]["roll"] for key in frames}
+    sources = _reference.source_frames(manifest)
+    for ref in references:
+        for batch, names in _reference.unpaired(exported[ref["id"]], rolls).items():
+            print(f"note: reference {ref['id']}: {len(names)} export(s) in {batch} name "
+                  f"no source_frame and cannot be paired ({name_some(sorted(names))}); "
+                  "set it in the manifest", file=sys.stderr)
+    reference_spaces: dict[str, dict] = {r["id"]: {} for r in references}
 
     # Only the interfaces some build renders through: an output stated for a build
     # this run does not have is not worth a note.
@@ -1367,6 +1464,75 @@ def cmd_generate(args) -> int:
         if drift:
             break
 
+        for ref in references:
+            cell = f"{key}/{ref['id']}"
+            dest = out / f"{rendition_stem(key, ref['id'])}.jpg"
+            matches = _reference.pair(exported[ref["id"]], f"rolls/{roll}/{frame['file']}")
+            if not matches:
+                print(f"{cell}: no {ref['producer']} export of this frame", file=sys.stderr)
+                notes.append(f"{ref['id']}: no export")
+                failures.append(cell)
+                continue
+            if len(matches) > 1:
+                print(f"{cell}: {len(matches)} {ref['producer']} exports of this frame "
+                      f"({name_some([m['file'] for m in matches])}); not guessing",
+                      file=sys.stderr)
+                notes.append(f"{ref['id']}: {len(matches)} exports, not paired")
+                failures.append(cell)
+                continue
+            if not converting:
+                notes.append(f"{ref['id']}: not converted — needs the metrics venv")
+                failures.append(cell)
+                continue
+            export = matches[0]
+            record_path = dest.with_name(dest.stem + ".reference.json")
+            written[dest_key(dest.resolve())] = dest.name
+            try:
+                conversion = _reference.convert(
+                    assets / export["file"], dest, ref["space"],
+                    {} if args.force else _stored_record(record_path),
+                    export.get("sha256"))
+            except _reference.ReferenceError as error:
+                print(f"{cell}: {export['file']}: {error}", file=sys.stderr)
+                notes.append(f"{ref['id']}: not converted — {error}")
+                failures.append(cell)
+                continue
+            _write_json(record_path, {**conversion, "producer": ref["producer"],
+                                      "source": export["file"]})
+            found = (conversion["space"], conversion["space_from"])
+            spaces = reference_spaces[ref["id"]]
+            spaces[found] = spaces.get(found, 0) + 1
+
+            rendition: dict[str, object] = {
+                "src": dest.name, "width": conversion["width"],
+                "height": conversion["height"]}
+            scan = sources.get(f"rolls/{roll}/{frame['file']}")
+            if scan is None:
+                notes.append(f"{ref['id']}: scan not in the manifest, no charts")
+            elif ((scan.get("width"), scan.get("height"))
+                    != (conversion["width"], conversion["height"])):
+                # A fractional inset of a different crop measures other scene content.
+                notes.append(f"{ref['id']}: cropped to {conversion['width']}x"
+                             f"{conversion['height']}, no charts")
+            elif measuring:
+                record_name = dest.name + ".metrics.json"
+                try:
+                    _measure(dest, out / record_name, "srgb", fraction, args.force)
+                except ReviewError as error:
+                    print(f"{cell}: metrics skipped — {error}", file=sys.stderr)
+                else:
+                    rendition["metrics"] = record_name
+            if conversion["clipped_fraction"] >= 0.001:
+                notes.append(f"{ref['id']}: {conversion['clipped_fraction']:.1%} "
+                             "clipped to sRGB")
+            broken = conversion["nonfinite_fraction"]
+            if broken:
+                share = f"{broken:.2%}" if broken >= 0.0001 else "<0.01%"
+                notes.append(f"{ref['id']}: {share} non-finite, shown black")
+            renditions[ref["id"]] = rendition
+            print(f"{key:4} {ref['id']:12} -> {dest.name} "
+                  f"({conversion['space']}, {conversion['space_from']})", file=sys.stderr)
+
         # Kept even when every cell failed. The set is the record of what was
         # compared, and a frame that silently vanishes tells a later reader
         # nothing; an empty rendition map draws the gaps the app already has.
@@ -1443,9 +1609,11 @@ def cmd_generate(args) -> int:
              for build in builds if build["id"]]):
         print(f"note: {warning}", file=sys.stderr)
 
-    _write_json(out / "review.json", build_review(matrix, images, identities))
+    _write_json(out / "review.json",
+                build_review(matrix, images, identities, reference_spaces))
     rendered = sum(len(image["renditions"]) for image in images)
-    print(f"\n{len(images)} frames x {len(matrix['configs'])} configs -> "
+    print(f"\n{len(images)} frames x "
+          f"{len(matrix['configs']) + len(references)} configs -> "
           f"{out}/review.json", file=sys.stderr)
     if failures:
         print(f"FAILED cells ({len(failures)}): {', '.join(failures)}", file=sys.stderr)
