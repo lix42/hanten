@@ -2382,9 +2382,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [x] [The hybrid's span target](tasks/nf-calibration/hybrid-span-target.md) — **done
   2026-10-13** (`pipeline_version` 16): R 7 → 8 by review (09-20, 09-28); the envelope, not
   the dark floor, holds the dark end, so on a thin roll a higher R brightens
-- [ ] [One dark frame brightens the whole roll](tasks/nf-calibration/envelope-dark-end.md) —
-  filed 2026-10-13: on `2026-10-12-Gold200` the hybrid's envelope, its dark end set by the
-  darkest frames, rendered the roll pushed up; reviewed `--placement frame` instead
+- [x] [One dark frame brightens the whole roll](tasks/nf-calibration/envelope-dark-end.md) —
+  **done 2026-10-14, no change**: not one frame but the envelope's floor on thin rolls,
+  which lifts every frame; with the 5.5 dark target today's hybrid was kept (a deeper floor
+  was too dark; flattening instead of lifting also moved reviewed rolls)
 - [x] [A steep frame refused by a sample no picture
   holds](tasks/nf-calibration/overflow-probe-scope.md) — **done 2026-10-13**: the scan
   floor is one 16-bit step (the overflow limit rises from slope ~4.4 to ~5.4–5.9), and the
