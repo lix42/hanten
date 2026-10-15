@@ -179,6 +179,15 @@ What other epics need to know about `analysis`:
   labelled on both Passport targets. Schema 4 also makes `generate` keep any frame or
   roll field it does not write, so the next hand-entered field needs no bump. Labels
   come from the review app's `/label` page (`pnpm label`) via `manifest charts import`.
+- **Calibration work reads the chart table, not the frames (2026-10-14).**
+  `<asset-root>/charts.json` (`nctool manifest charts table`, rebuilt after any charts
+  import) holds every labelled patch's median transmission (a 16-bit sample over
+  65535), density relative to the roll's film base (`hanten measure-base` on its
+  unexposed frame) and p10-p90 density spread, per channel, from the scan, with each
+  frame's shot facts and each roll's stock, conditions and film base. It refuses a scan
+  whose bytes no longer match the manifest and a chart whose check is stale. On
+  `2026-10-12-Gold200` the +2 EV frame took about half a step's less light than
+  nominal, so a fit against nominal offsets should not trust that frame's offset.
 
 
 ## real-scan-verification
@@ -1467,8 +1476,27 @@ What other epics need to know about `analysis`:
 
 ## chart-extraction
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-14
 
 - 2026-10-14: filed (user), split from `calibration-frame-capture`: one per-patch table
   every calibration consumer reads.
+- 2026-10-14: built `nctool manifest charts table` (`nctool/chart_table.py`), agreed with
+  the user: both units, the film base from `hanten measure-base`, the table beside the
+  manifest as `charts.json`. On `2026-10-12-Gold200` (350 patch rows, 7 frames x 2
+  targets) every neutral's density rises with exposure, the widest patch spread is 0.063
+  in density, and a rerun is byte-identical. The white flattens from +3 to +4 (the
+  shoulder) and the black sits near the base at -2 (the toe). **The +1 -> +2 step is
+  about half its neighbours for every patch** (mid grey: 0.11, 0.11, 0.065, 0.11): the
+  +2 frame seems to have had less light than nominal, which a consumer fitting
+  exposure should know before trusting the bracket's nominal offsets.
+- 2026-10-14: **done.** Review fixes before landing: each scan (and the unexposed frame)
+  is hashed against the manifest; an entry whose check failed or predates the current
+  rules or target layout is refused; `measure-base`'s report is validated through
+  `roll.py`'s helpers; the check and the table share one sampler (`charts.sample`);
+  neutral order uses the check's 0.1-stop tolerance and compares only a bracket's
+  distinct exposures; the archive test is opt-in (`NCTOOL_ARCHIVE_TESTS=1`). For
+  consumers: read `charts.json` and join on roll and frame; rendered or decoded values
+  are yours to derive from the density, and the roll's `film_base.hanten` names the
+  build whose Dmin the densities use.
+

@@ -1,6 +1,7 @@
 """`python -m nctool` entry point.
 
-Seven command groups: `manifest` (generate / validate / roles / patches / charts), `compare`
+Seven command groups: `manifest` (generate / validate / roles / patches / charts, incl. the
+chart table), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
 converted image, whatever produced it), `review` (render a described matrix
@@ -20,6 +21,7 @@ import argparse
 import sys
 
 from . import acceptance as _acceptance
+from . import chart_table as _chart_table
 from . import charts as _charts
 from . import compare as _compare
 from . import manifest as _manifest
@@ -122,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
     cimp.add_argument("--dry-run", action="store_true",
                       help="report what would change; do not write manifest.json")
     cimp.set_defaults(func=_charts.cmd_import)
+    ctab = csub_.add_parser("table", help="read every labelled chart's patches from the scans "
+                                          "into charts.json beside the manifest")
+    _add_root(ctab)
+    ctab.add_argument("--nc", help="the hanten binary for the film base (default: $NC, else "
+                                   "auto-discovery)")
+    ctab.add_argument("--out", help="write here instead of <asset-root>/charts.json")
+    ctab.add_argument("--dry-run", action="store_true",
+                      help="build and summarise the table; do not write it")
+    ctab.set_defaults(func=_chart_table.cmd_table)
 
     # --- compare: the conversion-versioning comparison harness ---------------
     cmp_ = sub.add_parser("compare",

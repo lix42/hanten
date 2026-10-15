@@ -759,26 +759,32 @@ def write_manifest(mpath: str, m: dict) -> None:
     leave a zero-length file, and the unique temp name (mkstemp) means two
     concurrent `generate` runs can't clobber each other's temp. Clean up the temp
     if serialization/replace fails, so no stray tempfile is left behind."""
-    d = os.path.dirname(mpath) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".manifest.", suffix=".tmp")
+    write_atomic(mpath, json.dumps(m, indent=2) + "\n", ".manifest.")
+
+
+def write_atomic(path: str, text: str, prefix: str) -> None:
+    """Write `text` through a temp file in the same directory and `os.replace` it in,
+    so a reader never sees half a file and concurrent writers can't clobber each
+    other's temp. The temp is removed if anything fails."""
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=prefix, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(m, f, indent=2)
-            f.write("\n")
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
         # mkstemp forces 0600; replacing an existing (possibly group/world-readable,
-        # e.g. 0664 on a shared Drive folder) manifest must not silently tighten its
+        # e.g. 0664 on a shared Drive folder) file must not silently tighten its
         # permissions. Preserve the existing mode; for a brand-new file fall back to
         # a umask-respecting default rather than the restrictive 0600.
         try:
-            mode = stat.S_IMODE(os.stat(mpath).st_mode)
+            mode = stat.S_IMODE(os.stat(path).st_mode)
         except FileNotFoundError:
             umask = os.umask(0)
             os.umask(umask)
             mode = 0o666 & ~umask
         os.chmod(tmp, mode)
-        os.replace(tmp, mpath)
+        os.replace(tmp, path)
     except Exception:
         try:
             os.remove(tmp)

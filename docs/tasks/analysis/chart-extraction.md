@@ -19,11 +19,16 @@ re-reading the frames its own way.
   stored in the manifest.
 - Never reads pixels into an agent's context; asset-gated like every real-scan check.
 
-## Open
+## Decided (user, 2026-10-14)
 
-- The table's units (transmission, density, or both) and whether a producer's output
-  (NLP, SilverFast, CCR, Hanten) is a column or a separate read.
-- What else a consumer needs per frame (aperture: 2132 and 2133 were shot wider than f/8).
+- Both units: median transmission (the decoder's scale) and density relative to the
+  roll's film base, measured by `hanten measure-base` on its unexposed frame; a p10-p90
+  density spread and pixel count per patch and channel. Decoded or rendered values stay
+  with the consumers that want them; no consumer asks for producers' outputs (NLP,
+  SilverFast, CCR, Hanten), so they are out of scope.
+- The table lives beside the manifest as `charts.json`, rebuilt by
+  `nctool manifest charts table`; each frame carries its shot facts (aperture included)
+  and each roll its stock, conditions and film base.
 
 ## How to Verify
 
