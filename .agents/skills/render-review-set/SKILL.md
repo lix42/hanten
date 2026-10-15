@@ -34,7 +34,8 @@ wrong one costs a full re-render:
   scripts/analysis/requirements.txt`. The generator is stdlib-only apart from measuring, so a
   set still renders without it — but then run `python3` in place of `.venv/bin/python`, since
   the command in step 4 names an interpreter that will not exist, and pass `--no-metrics`.
-  A set built that way has no charts.
+  A set built that way has no charts, and **no reference cells**: converting another
+  tool's export (step 5) needs the venv even with `--no-metrics`.
 - `../nc-assets` must resolve (machine-local symlink).
 - **The frames are the user's own photographs**: output goes outside the repo and is never
   committed or published anywhere public (a private claude.ai Artifact is allowed). `nctool review generate` refuses an output directory inside it.

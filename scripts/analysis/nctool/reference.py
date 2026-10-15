@@ -20,14 +20,14 @@ from . import icc as _icc
 from . import metrics as _metrics
 
 #: Bump when the conversion's pixels change, so stored conversions are redone.
-CONVERTER = 2
+CONVERTER = 3
 
 #: The JPEG every reference cell is written as.
 JPEG_QUALITY = 95
 
 #: Spaces an export may be in: the ones `profile_space` can recognise.
 EXPORT_SPACES = ("srgb", "linear-srgb", "adobe-rgb", "linear-adobe-rgb",
-                 "display-p3", "linear-display-p3", "prophoto")
+                 "display-p3", "linear-display-p3", "prophoto", "prophoto-gamma1.8")
 
 #: The destination a matrix with references must render Hanten's cells as.
 CELL_DESTINATION = {"range": "sdr", "transfer": "native", "gamut": "srgb",
@@ -100,8 +100,9 @@ def unpaired(entries: list[dict], rolls: set[str]) -> dict[str, list[str]]:
     for entry in entries:
         if entry.get("source_frame"):
             continue
+        # `converted/<producer>/[<version>/]<roll>/<file>`: the roll is not always parts[2].
         parts = str(entry.get("file", "")).split("/")
-        if len(parts) >= 4 and parts[2] in rolls:
+        if any(part in rolls for part in parts[2:-1]):
             out.setdefault(entry["batch"], []).append(parts[-1])
     return out
 
@@ -109,15 +110,29 @@ def unpaired(entries: list[dict], rolls: set[str]) -> dict[str, list[str]]:
 # -- colour space --------------------------------------------------------------
 
 
+#: Pure power-law TRCs by exponent: read exactly, since a sampled comparison
+#: cannot tell gamma 1.8 from ROMM's toed curve.
+POWER_TRANSFERS = {1.0: "linear", _metrics.ADOBE_RGB_GAMMA: "adobe-rgb",
+                   1.8: "gamma1.8"}
+
+
 def _transfer_of(curves: list[dict]) -> str | None:
     """The `metrics` transfer the three TRCs all decode as, or `None`."""
     import numpy as np
 
-    probe = np.linspace(0.0, 1.0, 65, dtype=np.float32)
+    if all(c["kind"] == "para" and c["function"] == 0 for c in curves):
+        gammas = {round(c["params"]["g"], 2) for c in curves}
+        found = {POWER_TRANSFERS.get(g) for g in POWER_TRANSFERS
+                 if all(abs(g - x) < 0.01 for x in gammas)}
+        return found.pop() if len(found) == 1 else None
+    # Tables and toed curves: sampled, with a relative bound near black, where the
+    # toes differ most.
+    probe = np.concatenate([np.linspace(0.0, 0.05, 41), np.linspace(0.05, 1.0, 65)])
     decoded = [np.asarray(_icc.curve_decode(c, probe)) for c in curves]
     for transfer in ("linear", "srgb", "adobe-rgb", "prophoto", "gamma1.8"):
-        expected = _metrics._decode_transfer(probe.copy(), transfer)
-        if all(np.max(np.abs(d - expected)) <= TRC_TOLERANCE for d in decoded):
+        expected = _metrics._decode_transfer(probe.astype(np.float32), transfer)
+        bound = np.where(probe < 0.05, 0.25 * expected + 1e-5, TRC_TOLERANCE)
+        if all(np.all(np.abs(d - expected) <= bound) for d in decoded):
             return transfer
     return None
 
@@ -219,6 +234,8 @@ def read_export(path: Path, pixels: bool = True):
                 raise ReferenceError("planar (separate-plane) samples, not contiguous")
             tag = page.tags.get(34675)
             embedded = bytes(tag.value) if tag is not None else None
+            orientation = page.tags.get(274)
+            orientation = int(orientation.value) if orientation is not None else 1
             array = page.asarray() if pixels else None
     except ReferenceError:
         raise
@@ -229,7 +246,7 @@ def read_export(path: Path, pixels: bool = True):
         return embedded, None
     if array.ndim != 3 or array.shape[2] < 3:
         raise ReferenceError(f"expected an RGB image, got shape {array.shape}")
-    array = array[:, :, :3]
+    array = orient(array[:, :, :3], orientation)
     if array.dtype.kind == "u":
         encoded = array.astype(np.float32) / np.float32(np.iinfo(array.dtype).max)
     elif array.dtype.kind == "f":
@@ -237,6 +254,19 @@ def read_export(path: Path, pixels: bool = True):
     else:
         raise ReferenceError(f"unsupported sample type {array.dtype}")
     return embedded, encoded
+
+
+def orient(array, orientation: int):
+    """Apply a TIFF Orientation tag (1-8), which `asarray` leaves to the reader."""
+    import numpy as np
+
+    steps = {1: lambda a: a, 2: np.fliplr, 3: lambda a: np.rot90(a, 2), 4: np.flipud,
+             5: lambda a: a.transpose(1, 0, 2), 6: lambda a: np.rot90(a, -1),
+             7: lambda a: np.rot90(a, 2).transpose(1, 0, 2),
+             8: lambda a: np.rot90(a, 1)}
+    if orientation not in steps:
+        raise ReferenceError(f"unknown TIFF orientation {orientation}")
+    return np.ascontiguousarray(steps[orientation](array))
 
 
 def to_srgb(encoded, space_name: str):

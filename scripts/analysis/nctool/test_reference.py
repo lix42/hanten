@@ -32,19 +32,20 @@ needs_deps = unittest.skipUnless(HAVE_DEPS, "needs the metrics venv")
 DESTINATION = {"display": dict(reference.CELL_DESTINATION)}
 
 
-def v2_profile(primaries: str = "adobe-rgb", gamma: float = 563 / 256) -> bytes:
-    """A v2 matrix/TRC profile: D50-adapted colorants, a D65 `wtpt`, no `chad` —
-    the shape SilverFast and Lightroom write."""
+def v2_profile(primaries: str = "adobe-rgb", gamma: float = 563 / 256,
+               white: str = "d65") -> bytes:
+    """A v2 matrix/TRC profile: D50-adapted colorants, the space's `wtpt`, no
+    `chad` — the shape SilverFast and Lightroom write."""
     m = _metrics
-    to_d50 = m._mat_mul(m.bradford_adaptation("d65", "d50"),
-                        m.rgb_to_xyz(primaries, "d65"))
+    to_d50 = m._mat_mul(m.bradford_adaptation(white, "d50"),
+                        m.rgb_to_xyz(primaries, white))
 
     def xyz(values):
         return b"XYZ \0\0\0\0" + b"".join(struct.pack(">i", round(v * 65536))
                                           for v in values)
 
     curve = b"curv\0\0\0\0" + struct.pack(">IH", 1, round(gamma * 256)) + b"\0\0"
-    tags = [(b"wtpt", xyz(m._xyz_of(m.WHITE["d65"])))]
+    tags = [(b"wtpt", xyz(m._xyz_of(m.WHITE[white])))]
     tags += [(name, xyz([to_d50[r][c] for r in range(3)]))
              for c, name in enumerate((b"rXYZ", b"gXYZ", b"bXYZ"))]
     tags += [(name, curve) for name in (b"rTRC", b"gTRC", b"bTRC")]
@@ -63,7 +64,8 @@ def v2_profile(primaries: str = "adobe-rgb", gamma: float = 563 / 256) -> bytes:
 
 
 def write_export(path: Path, rgb=(0.5, 0.5, 0.5), size=(8, 6), profile=None,
-                 preview: bool = False, extra_page: bool = False) -> None:
+                 preview: bool = False, extra_page: bool = False,
+                 orientation: int | None = None) -> None:
     import numpy as np
     import tifffile
 
@@ -72,6 +74,8 @@ def write_export(path: Path, rgb=(0.5, 0.5, 0.5), size=(8, 6), profile=None,
     array = np.empty((height, width, 3), np.uint16)
     array[:] = [round(c * 65535) for c in rgb]
     tags = [(34675, 7, len(profile), profile, True)] if profile else []
+    if orientation is not None:
+        tags.append((274, 3, 1, orientation, True))
     with tifffile.TiffWriter(str(path)) as tif:
         tif.write(array, photometric="rgb", extratags=tags)
         if preview or extra_page:
@@ -102,6 +106,10 @@ class TestProfileSpace(unittest.TestCase):
         header[36:40] = b"acsp"
         with self.assertRaisesRegex(reference.ReferenceError, "unreadable ICC profile"):
             reference.profile_space(bytes(header) + struct.pack(">I", 1))
+
+    def test_a_pure_gamma_prophoto_profile_is_not_read_as_romm(self):
+        self.assertEqual(reference.profile_space(v2_profile("prophoto", 1.8, "d50")),
+                         "prophoto-gamma1.8")
 
     def test_names_what_an_unknown_profile_is(self):
         with self.assertRaisesRegex(reference.ReferenceError, "bt2020"):
@@ -164,6 +172,18 @@ class TestConversion(unittest.TestCase):
         with self.assertRaisesRegex(reference.ReferenceError, "FileNotFoundError"):
             reference.convert(self.dir / "gone.tif", self.dir / "gone.jpg", None, {}, None)
 
+    def test_the_tiff_orientation_is_applied(self):
+        import numpy as np
+        import tifffile
+        array = np.zeros((2, 3, 3), np.uint16)
+        array[0, 0] = 65535  # top-left as stored
+        path = self.dir / "o.tif"
+        tifffile.imwrite(str(path), array, photometric="rgb",
+                         extratags=[(274, 3, 1, 6, True)])  # rotate 90 degrees clockwise
+        encoded = reference.read_export(path)[1]
+        self.assertEqual(encoded.shape[:2], (3, 2))
+        self.assertEqual(encoded[0, 1].tolist(), [1.0, 1.0, 1.0])  # now top-right
+
     def test_a_reduced_resolution_preview_is_accepted_a_second_image_is_not(self):
         write_export(self.dir / "p.tif", profile=v2_profile(), preview=True)
         self.assertIsNotNone(reference.read_export(self.dir / "p.tif")[1])
@@ -217,6 +237,11 @@ class TestPairing(unittest.TestCase):
         sf = reference.exports(self.MANIFEST, "sf")
         self.assertEqual(reference.unpaired(sf, {"R"}), {"sf/R": ["9.tif"]})
         self.assertEqual(reference.unpaired(sf, {"other"}), {})
+
+    def test_finds_the_roll_in_a_versioned_layout(self):
+        entries = [{"file": "converted/sf/v2/R/9.tif", "source_frame": None,
+                    "batch": "sf/v2"}]
+        self.assertEqual(reference.unpaired(entries, {"R"}), {"sf/v2": ["9.tif"]})
 
 
 class TestMatrix(unittest.TestCase):
