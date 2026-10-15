@@ -4,6 +4,10 @@ import {
   chooseByAnchor,
   failingIds,
   insideQuad,
+  labelProblems,
+  mergeChecked,
+  seedLabels,
+  type CheckResult,
   fitLongSide,
   homography,
   orderClockwise,
@@ -107,6 +111,37 @@ describe("labels", () => {
     expect(chooseByAnchor(classic, [upsideDown], click)).toBeUndefined();
     expect(insideQuad(CORNERS, [0.5, 0.5])).toBe(true);
     expect(insideQuad(CORNERS, [0.9, 0.5])).toBe(false);
+  });
+
+  it("refuses a label the labels file could not hold", () => {
+    const label = { target: "ccpp2-classic", card: "ccpp2", corners: CORNERS };
+    expect(labelProblems(label)).toEqual([]);
+    const crossed: Quad = [CORNERS[0], CORNERS[2], CORNERS[1], CORNERS[3]];
+    expect(labelProblems({ ...label, corners: crossed })[0]).toMatch(/convex/);
+    const outside: Quad = [[1.2, 0], CORNERS[1], CORNERS[2], CORNERS[3]];
+    expect(labelProblems({ ...label, corners: outside })[0]).toMatch(/inside the frame/);
+    expect(labelProblems({ ...label, card: " " })).toEqual(["card must not be empty"]);
+  });
+
+  it("merges a check's corners only into the labels that were sent", () => {
+    const sent = [{ target: "ccpp2-classic", card: "ccpp2", corners: CORNERS }];
+    const turned = rotate(rotate(CORNERS));
+    const result = { corners: turned } as unknown as CheckResult;
+    expect(mergeChecked(sent, sent, [result])).toEqual({
+      labels: [{ ...sent[0], corners: turned }],
+      clean: true,
+    });
+    // A corner moved while the check ran: keep it, and stay unsaved.
+    const moved = [{ ...sent[0]!, corners: rotate(CORNERS) }];
+    expect(mergeChecked(sent, moved, [result])).toEqual({ labels: moved, clean: false });
+  });
+
+  it("seeds a frame from the previous one on its first visit only", () => {
+    const prev = [{ target: "ccpp2-classic", card: "ccpp2", corners: CORNERS }];
+    expect(seedLabels(true, [], prev)).toEqual(prev);
+    expect(seedLabels(false, [], prev)).toBeUndefined(); // cleared on purpose
+    expect(seedLabels(true, prev, prev)).toBeUndefined(); // already labelled
+    expect(seedLabels(true, [], undefined)).toBeUndefined();
   });
 
   it("lays the target's long side along the outline's, in frame pixels", () => {

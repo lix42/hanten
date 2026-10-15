@@ -29,7 +29,9 @@ from .conditions import is_number, is_text
 
 TARGETS_DIR = os.path.join(os.path.dirname(__file__), "targets")
 ENTRY_FIELDS = {"target", "card", "corners", "source", "check"}
-LABEL_FIELDS = {"target", "card", "corners"}
+# `oriented`: the user chose which way up (the anchor click), so the check verifies
+# that orientation only instead of searching.
+LABEL_FIELDS = {"target", "card", "corners", "oriented"}
 
 # The check's rules, versioned so a stored result names the rules it passed.
 CHECK_VERSION = 1
@@ -210,6 +212,8 @@ def check_label(e: object, fields: set[str] = LABEL_FIELDS) -> list[str]:
         errs.append("corners must lie inside the frame (fractions 0-1)")
     elif not is_convex(c):
         errs.append("corners must be in order around a convex quadrilateral")
+    if "oriented" in e and e["oriented"] is not True:
+        errs.append("oriented, when present, must be true")
     return errs
 
 
@@ -234,7 +238,8 @@ def check_frame_charts(fr: dict) -> list[str]:
     if not isinstance(cs, list):
         return [f"charts is not a list ({type(cs).__name__})"]
     errs = [f"chart {i}: {e}" for i, c in enumerate(cs) for e in check_entry(c)]
-    keys = [(c.get("target"), c.get("card")) for c in cs if isinstance(c, dict)]
+    keys = [(c["target"], c["card"]) for c in cs if isinstance(c, dict)
+            and isinstance(c.get("target"), str) and isinstance(c.get("card"), str)]
     errs += [f"chart {t} on card {c!r} appears twice" for t, c in sorted(set(keys))
              if keys.count((t, c)) > 1]
     return errs
@@ -243,13 +248,13 @@ def check_frame_charts(fr: dict) -> list[str]:
 # ------------------------------------------------------------------ the check
 
 def read_scan(path: str):
-    """The scan's colour channels as float transmission (IR dropped)."""
-    import numpy as np
+    """The scan's colour channels as stored (IR dropped); `_region` converts only the
+    pixels it samples, since a full frame in float64 is gigabytes."""
     import tifffile
     img = tifffile.imread(path)
     if img.ndim != 3 or img.shape[2] < 3:
         raise ValueError(f"{path}: not an RGB scan (shape {img.shape})")
-    return np.asarray(img[:, :, :3], dtype=np.float64)
+    return img[:, :, :3]
 
 
 def _mask(shape: tuple[int, int], quad_px: list[list[float]]):
@@ -276,15 +281,16 @@ def _median(xs: list[float]) -> float:
     return (s[len(s) // 2] + s[(len(s) - 1) // 2]) / 2
 
 
-def _region(scan, h, rect) -> "tuple[list[float], list[float], int]":
-    """(median log2 transmission per channel, p10-p90 spread per channel, pixels)."""
+def _region(scan, h, rect) -> "tuple[list[float], list[float], int] | None":
+    """(median log2 transmission per channel, p10-p90 spread per channel, pixels), or
+    None when the region lies outside the scan."""
     import numpy as np
     rows, cols = scan.shape[:2]
     quad = [project(h, p) for p in rect_quad(rect)]
     yy, xx = _mask((rows, cols), [[x * cols, y * rows] for x, y in quad])
     if len(yy) == 0:
-        return [float("nan")] * 3, [float("inf")] * 3, 0
-    v = np.log2(np.maximum(scan[yy, xx], 1.0))
+        return None
+    v = np.log2(np.maximum(scan[yy, xx].astype(np.float64), 1.0))
     p10, p50, p90 = np.percentile(v, [10, 50, 90], axis=0)
     return [float(x) for x in p50], [float(x) for x in p90 - p10], int(len(yy))
 
@@ -293,13 +299,20 @@ def check_placement(scan, target: dict, corners: list[list[float]]) -> dict:
     """The placement check of one target in one scan. Scene-brighter means *lower*
     transmission on a negative, so the neutral series (white to black) must rise."""
     h = target_to_frame(target, corners)
+    regions = {p["id"]: _region(scan, h, shrink(p["rect"], INNER)) for p in target["patches"]}
+    outside = [pid for pid, r in regions.items() if r is None]
+    if outside:
+        return {"pass": False, "rules": CHECK_VERSION, "target_version": target.get("version"),
+                "worst_spread": None, "worst_gap": None, "neutral_steps": [],
+                "bright_gaps": 0, "warnings": [], "patches": {},
+                "failures": [f"{', '.join(outside)} lie outside the scan"]}
     patches, failures, med_of = {}, [], {}
     for p in target["patches"]:
-        med, spread, n = _region(scan, h, shrink(p["rect"], INNER))
+        med, spread, n = regions[p["id"]]
         med_of[p["id"]] = med
         patches[p["id"]] = {"level": round(sum(med) / 3, 3), "spread": round(max(spread), 3),
                             "pixels": n}
-        if n == 0 or max(spread) > UNIFORM_STOPS:
+        if max(spread) > UNIFORM_STOPS:
             failures.append(f"{p['id']} not uniform (spread {max(spread):.2f} stops)")
     neutral_levels = [patches[i]["level"] for i in target["neutrals"]]
     # The film's channel balance (its mask) read off the neutrals, so chroma is what a
@@ -314,10 +327,12 @@ def check_placement(scan, target: dict, corners: list[list[float]]) -> dict:
     black = max(neutral_levels)
     gaps, bright = {}, []
     for name, rect in gap_strips(target):
-        med, _, n = _region(scan, h, rect)
-        level = sum(med) / 3
+        region = _region(scan, h, rect)
+        if region is None:  # an outer strip past the scan's edge says nothing
+            continue
+        level = sum(region[0]) / 3
         gaps[name] = round(level - black, 3)
-        if n == 0 or level < black - GAP_STOPS:
+        if level < black - GAP_STOPS:
             bright.append(f"gap {name} reads {black - level:.2f} stops brighter than black")
     warnings = []
     if len(bright) > GAP_SHARE * len(gaps):
@@ -345,16 +360,19 @@ def orientations(corners: list[list[float]]) -> list[list[list[float]]]:
     return turns + [flipped[i:] + flipped[:i] for i in range(4)]
 
 
-def find_placement(scan, target: dict, corners: list[list[float]]) -> dict:
+def find_placement(scan, target: dict, corners: list[list[float]],
+                   oriented: bool = False) -> dict:
     """The check of the one orientation of `corners` that passes, with the corners in
     the target's own order (`corners`, `reoriented`). The labelling page lets the
     corners be clicked in any order, so which one is the target's top left is the
     scan's to say: a wrong turn runs the neutrals backwards or puts a saturated patch
     on grey. When none passes, the result is the given orientation's. When several
     pass, nothing is guessed: the result fails with every passing orientation in
-    `candidates`, and the user names the target's `anchor` patch to choose one."""
+    `candidates`, and the user names the target's `anchor` patch to choose one; the
+    label then says `oriented`, and only its own order is checked."""
+    quads = [corners] if oriented else orientations(corners)
     results = [check_placement(scan, target, quad) | {"corners": quad, "reoriented": i > 0}
-               for i, quad in enumerate(orientations(corners))]
+               for i, quad in enumerate(quads)]
     passing = [r for r in results if r["pass"]]
     if len(passing) == 1:
         return passing[0]
@@ -422,40 +440,47 @@ def check_frames(asset_root: str, labels: dict, roll: dict,
         fr = frame_entry(roll.get("frames", []), stem)
         if fr is None:
             raise ValueError(f"roll {labels['roll']!r} has no frame {stem!r}")
-        scan = read_scan(os.path.join(asset_root, fr["file"]))
-        out[stem] = [find_placement(scan, load_target(e["target"]), e["corners"])
+        found = labels["frames"].get(stem, [])
+        scan = read_scan(os.path.join(asset_root, fr["file"])) if found else None
+        out[stem] = [find_placement(scan, load_target(e["target"]), e["corners"],
+                                    e.get("oriented", False))
                      | {"target": e["target"], "card": e["card"]}
-                     for e in labels["frames"].get(stem, [])]
+                     for e in found]
     return out
 
 
 def cmd_check(args) -> int:
-    """Print the placement check of every label (or `--frame`'s) as JSON."""
-    from .metrics import require_dependencies
-    require_dependencies("chart check")
+    """Print the placement check of every label (or `--frame`'s) as JSON. Exit 1 means
+    a label failed and the JSON is complete; anything else operational is exit 2."""
+    from .metrics import MetricsError, require_dependencies
     try:
+        require_dependencies("chart check")
         _, _, labels, roll = _open(args.asset_root, args.labels)
         stems = [args.frame] if args.frame else sorted(labels["frames"])
         results = check_frames(os.path.abspath(args.asset_root), labels, roll, stems)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, MetricsError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    json.dump({"roll": labels["roll"], "frames": results}, sys.stdout, indent=2)
+    json.dump({"roll": labels["roll"], "frames": results}, sys.stdout, indent=2,
+              allow_nan=False)
     print()
     return 0 if all(r["pass"] for rs in results.values() for r in rs) else 1
 
 
 def cmd_import(args) -> int:
-    """Check every label and fold the frames into the manifest, replacing each listed
-    frame's entries for the same (target, card). Nothing is written if any fails."""
+    """Check every label and fold the frames into the manifest. Each listed frame loses
+    its entries from the same `--source` (and any for the same target and card) and
+    gains the file's, so a label removed or re-carded in the tool goes from the manifest
+    too; a frame listed with no labels keeps only other sources'. Nothing is written if
+    any label fails."""
     from . import manifest as _manifest
-    from .metrics import require_dependencies
-    require_dependencies("chart import")
+    from .metrics import MetricsError, require_dependencies
     try:
+        require_dependencies("chart import")
         mpath, data, labels, roll = _open(args.asset_root, args.labels)
-        stems = sorted(s for s, ls in labels["frames"].items() if ls)
+        stems = sorted(labels["frames"])
         results = check_frames(os.path.abspath(args.asset_root), labels, roll, stems)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, MetricsError) as e:
         print(f"error: {e}; nothing was written", file=sys.stderr)
         return 2
     failed = [f"{s} {r['target']}: " + "; ".join(r["failures"])
@@ -475,8 +500,13 @@ def cmd_import(args) -> int:
                 "source": args.source, "check": stored_check(r, date)}
                for e, r in zip(labels["frames"][stem], results[stem])]
         replaced = {(e["target"], e["card"]) for e in new}
-        fr["charts"] = [c for c in fr.get("charts", [])
-                        if (c.get("target"), c.get("card")) not in replaced] + new
+        kept = [c for c in fr.get("charts", []) if not isinstance(c, dict) or (
+            c.get("source") != args.source
+            and (c.get("target"), c.get("card")) not in replaced)]
+        if kept or new:
+            fr["charts"] = kept + new
+        else:
+            fr.pop("charts", None)
         print(f"{fr['file']}: {len(new)} chart(s)")
     data["schema_version"] = _manifest.SCHEMA
     if args.dry_run:

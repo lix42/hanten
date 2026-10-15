@@ -90,6 +90,14 @@ class TestSchema(unittest.TestCase):
         for want, label in cases.items():
             self.assertTrue(any(want in e for e in charts.check_label(label)), want)
 
+    def test_a_malformed_entry_is_reported_not_raised(self):
+        ok = dict(self.LABEL, source="s", check={"pass": True})
+        for bad in ({"card": "ccpp2"}, dict(ok, target=["x"]), dict(ok, card=None)):
+            errs = charts.check_frame_charts({"charts": [ok, bad]})
+            self.assertTrue(errs, bad)
+        self.assertIn("oriented, when present, must be true",
+                      charts.check_label(dict(self.LABEL, oriented="yes")))
+
     def test_an_entry_needs_a_passed_check_and_one_per_target_and_card(self):
         entry = dict(self.LABEL, source="s", check={"pass": False})
         self.assertIn("check must be a placement check that passed", charts.check_entry(entry))
@@ -181,6 +189,27 @@ class TestPlacementCheck(unittest.TestCase):
         self.assertGreater(len(r["candidates"]), 1)
         self.assertIn("click the white patch (A4)", r["failures"][0])
 
+    def test_an_oriented_label_checks_only_its_own_order(self):
+        t = dict(self.t, neutrals=["A4"], saturated=[])
+        r = charts.find_placement(self.scan, t, CORNERS, oriented=True)
+        self.assertTrue(r["pass"], r["failures"])
+        self.assertNotIn("candidates", r)
+        upside_down = CORNERS[2:] + CORNERS[:2]
+        self.assertFalse(charts.find_placement(self.scan, self.t, upside_down, True)["pass"])
+
+    def test_a_patch_outside_the_scan_fails_and_a_strip_outside_is_skipped(self):
+        off = [[x, y - 0.5] for x, y in CORNERS]
+        r = charts.check_placement(self.scan, self.t, off)
+        self.assertFalse(r["pass"])
+        self.assertIn("lie outside the scan", r["failures"][0])
+        json.dumps(r, allow_nan=False)  # nothing non-finite reaches the JSON
+        # The array's top edge on the frame's: the outer "top" strips fall off it.
+        flush = [[0.2, 0.0], [0.8, 0.0], [0.8, 0.6], [0.2, 0.6]]
+        scan = synthetic_negative(self.t, flush).astype(float)
+        r = charts.check_placement(scan, self.t, flush)
+        self.assertTrue(r["pass"], r["failures"])
+        self.assertEqual(r["bright_gaps"], 0)  # the off-frame strips were not counted
+
     def test_a_misplaced_label_fails_in_every_orientation(self):
         bad = [list(c) for c in CORNERS]
         bad[2][0] += 0.05
@@ -240,6 +269,30 @@ class TestImport(unittest.TestCase):
         rc, m, err = self.run_import(CORNERS[2:] + CORNERS[:2])
         self.assertEqual(rc, 0, err)
         self.assertEqual(m["rolls"]["R"]["frames"][0]["charts"][1]["corners"], CORNERS)
+
+    def test_a_cleared_or_re_carded_label_leaves_the_manifest(self):
+        rc, m, err = self.run_import(CORNERS)
+        self.assertEqual(rc, 0, err)
+        # Re-carded in the tool: the same source's old entry goes.
+        path = os.path.join(self.A, "labels.json")
+        with open(path, "w") as f:
+            json.dump({"roll": "R", "frames": {"2127": [
+                {"target": CLASSIC, "card": "ccpp2-b", "corners": CORNERS}]}}, f)
+        args = argparse.Namespace(asset_root=self.A, labels=path, source="test",
+                                  date="2026-10-14", dry_run=False)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(charts.cmd_import(args), 0)
+        with open(os.path.join(self.A, "manifest.json")) as f:
+            cards = [c["card"] for c in json.load(f)["rolls"]["R"]["frames"][0]["charts"]]
+        self.assertEqual(cards, ["other", "ccpp2-b"])  # another source's entry stays
+        # Cleared in the tool: listed with no labels.
+        with open(path, "w") as f:
+            json.dump({"roll": "R", "frames": {"2127": []}}, f)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(charts.cmd_import(args), 0)
+        with open(os.path.join(self.A, "manifest.json")) as f:
+            cards = [c["card"] for c in json.load(f)["rolls"]["R"]["frames"][0]["charts"]]
+        self.assertEqual(cards, ["other"])
 
     def test_a_failing_label_writes_nothing(self):
         bad = [list(c) for c in CORNERS]

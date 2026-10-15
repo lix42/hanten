@@ -37,6 +37,69 @@ export interface ChartLabel {
   readonly target: string;
   readonly card: string;
   readonly corners: Quad;
+  /** The user chose the way up (the anchor click): the check verifies only this order. */
+  readonly oriented?: true;
+}
+
+/**
+ * Every way `label` breaks `nctool.charts.check_label`'s shape rules, which every check
+ * and import applies to the whole labels file: one bad label saved would break them
+ * for every frame, so the server refuses it first.
+ */
+export function labelProblems(label: ChartLabel): string[] {
+  const c = label.corners as readonly (readonly number[])[];
+  if (c.length !== 4 || !c.every((p) => p.length === 2 && p.every(Number.isFinite))) {
+    return ["corners must be four [x, y] points"];
+  }
+  if (!c.every((p) => p.every((v) => v >= 0 && v <= 1))) {
+    return ["corners must lie inside the frame"];
+  }
+  const turn = (i: number) => {
+    const [a, b, d] = [c[i]!, c[(i + 1) % 4]!, c[(i + 2) % 4]!];
+    return (b[0]! - a[0]!) * (d[1]! - a[1]!) - (b[1]! - a[1]!) * (d[0]! - a[0]!);
+  };
+  const turns = [0, 1, 2, 3].map(turn);
+  if (!(turns.every((t) => t > 0) || turns.every((t) => t < 0))) {
+    return ["corners must go round a convex quadrilateral (a corner was dragged across)"];
+  }
+  return label.card.trim() === "" ? ["card must not be empty"] : [];
+}
+
+const sameLabels = (a: readonly ChartLabel[], b: readonly ChartLabel[]) =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * A frame's labels once a save's check returns: the corners the check settled on,
+ * marked clean — but only if the frame still holds what was sent. A corner dragged
+ * while the check ran (seconds) is kept, and the frame stays unsaved.
+ */
+export function mergeChecked(
+  sent: readonly ChartLabel[],
+  current: readonly ChartLabel[],
+  results: readonly CheckResult[],
+): { readonly labels: readonly ChartLabel[]; readonly clean: boolean } {
+  if (!sameLabels(sent, current)) return { labels: current, clean: false };
+  return {
+    labels: sent.map((l, i) => ({ ...l, corners: results[i]?.corners ?? l.corners })),
+    clean: true,
+  };
+}
+
+/**
+ * What an unlabelled frame starts from: the previous frame's labels, copied, the first
+ * time the frame is opened only — a frame cleared on purpose stays clear.
+ */
+export function seedLabels(
+  firstVisit: boolean,
+  current: readonly ChartLabel[],
+  previous: readonly ChartLabel[] | undefined,
+): readonly ChartLabel[] | undefined {
+  if (!firstVisit || current.length > 0 || !previous || previous.length === 0) return undefined;
+  return previous.map((l) => ({
+    target: l.target,
+    card: l.card,
+    corners: l.corners.map((p) => [p[0], p[1]] as const) as unknown as Quad,
+  }));
 }
 
 /** One frame's check, as `nctool manifest charts check` prints it per label. */

@@ -163,15 +163,16 @@ export function readLabels(config: LabelConfig): LabelsFile {
   return data;
 }
 
-/** The labels file with one frame's labels replaced (an empty list removes it). */
+/**
+ * The labels file with one frame's labels replaced. A cleared frame stays, with no
+ * labels, so `charts import` removes what it had imported for it before.
+ */
 export function withFrame(
   file: LabelsFile,
   stem: string,
   labels: readonly ChartLabel[],
 ): LabelsFile {
-  const frames = { ...file.frames };
-  if (labels.length > 0) frames[stem] = labels;
-  else delete frames[stem];
+  const frames = { ...file.frames, [stem]: labels };
   const sorted = Object.fromEntries(
     Object.keys(frames)
       .sort()
@@ -220,8 +221,9 @@ export function runCheck(config: LabelConfig, stem: string): Promise<readonly Ch
       try {
         const parsed = JSON.parse(out) as { frames: Record<string, CheckResult[]> };
         resolve(parsed.frames[stem] ?? []);
-      } catch (cause) {
-        reject(new Error(`could not read nctool's output: ${String(cause)}`));
+      } catch {
+        // An uncaught exception also exits 1, with no JSON: say what nctool said.
+        reject(new Error(err.trim() || "nctool printed no result"));
       }
     });
   });

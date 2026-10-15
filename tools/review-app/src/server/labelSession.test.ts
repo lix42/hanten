@@ -56,11 +56,11 @@ describe("withFrame", () => {
     ],
   } as const;
 
-  it("replaces one frame, keeps the others, and sorts", () => {
+  it("replaces one frame, keeps the others (a cleared one too), and sorts", () => {
     const file = { roll: "R", frames: { "2128": [label] } };
     const next = withFrame(file, "2127", [label]);
     expect(Object.keys(next.frames)).toEqual(["2127", "2128"]);
-    expect(withFrame(next, "2127", []).frames).toEqual({ "2128": [label] });
+    expect(withFrame(next, "2127", []).frames).toEqual({ "2127": [], "2128": [label] });
   });
 });
 

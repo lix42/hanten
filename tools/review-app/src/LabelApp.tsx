@@ -5,7 +5,16 @@
  * the check in `server/labelSession.ts`.
  */
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onMount,
+  untrack,
+} from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { css } from "../styled-system/css";
 import {
@@ -13,8 +22,10 @@ import {
   fitLongSide,
   orderClockwise,
   failingIds,
+  mergeChecked,
   projectPatches,
   rotate,
+  seedLabels,
   type ChartLabel,
   type CheckResult,
   type Point,
@@ -113,12 +124,6 @@ const styles = {
   }),
 };
 
-const copyLabel = (l: ChartLabel): ChartLabel => ({
-  target: l.target,
-  card: l.card,
-  corners: l.corners.map((p) => [p[0], p[1]] as const) as unknown as Quad,
-});
-
 export function LabelApp(props: { session: LabelSessionPayload }) {
   return (
     <Show
@@ -154,27 +159,45 @@ function Labeller(props: { session: Session }) {
   const frameLabels = () => labels[frame().stem] ?? [];
   const labelOf = (t: string) => frameLabels().find((l) => l.target === t);
 
-  // A bracket on a tripod: an unlabelled frame starts from the previous one's corners.
+  // A bracket on a tripod: an unlabelled frame starts from the previous one's corners,
+  // on its first visit only. Runs on a frame change alone (`untrack`): clearing a
+  // frame must not bring the copy back.
+  const visited = new Set<string>();
   createEffect(() => {
     const i = index();
-    const stem = s.frames[i]!.stem;
-    const prev = s.frames[i - 1]?.stem;
-    if ((labels[stem]?.length ?? 0) === 0 && prev && (labels[prev]?.length ?? 0) > 0) {
-      // A plain copy: `structuredClone` cannot clone a store's proxy.
-      setLabels(stem, labels[prev]!.map(copyLabel));
-      setSeededFrom(stem, prev);
-      setDirty(stem, true);
-    }
+    untrack(() => {
+      const stem = s.frames[i]!.stem;
+      const prev = s.frames[i - 1]?.stem;
+      const seed = seedLabels(
+        !visited.has(stem),
+        labels[stem] ?? [],
+        prev === undefined ? undefined : labels[prev],
+      );
+      visited.add(stem);
+      if (seed && prev !== undefined) {
+        setLabels(stem, [...seed]);
+        setSeededFrom(stem, prev);
+        setDirty(stem, true);
+      }
+    });
     setPlacing([]);
   });
 
-  const setCorners = (corners: Quad, t: string = targetId()) => {
+  // `oriented`: true when the user chose the way up (the anchor click), false when the
+  // order is no longer theirs (a rotate); left out, a label keeps what it had.
+  const setCorners = (corners: Quad, t: string = targetId(), oriented?: boolean) => {
     const stem = frame().stem;
     setLabels(
       produce((all) => {
         const list = all[stem] ?? [];
         const i = list.findIndex((l) => l.target === t);
-        const next = { target: t, card: list[i]?.card ?? card(), corners };
+        const keep = oriented ?? list[i]?.oriented === true;
+        const next: ChartLabel = {
+          target: t,
+          card: list[i]?.card ?? card(),
+          corners,
+          ...(keep ? { oriented: true as const } : {}),
+        };
         all[stem] = i >= 0 ? list.map((l, k) => (k === i ? next : l)) : [...list, next];
       }),
     );
@@ -216,7 +239,7 @@ function Labeller(props: { session: Session }) {
         setStatus(`that is not ${p.target.anchor.prompt} in any way up that passed; try again`);
         return;
       }
-      setCorners(chosen, p.target.id);
+      setCorners(chosen, p.target.id, true);
       void save();
       return;
     }
@@ -255,16 +278,16 @@ function Labeller(props: { session: Session }) {
     const stem = frame().stem;
     setBusy(true);
     setStatus(`checking ${stem} against its scan…`);
+    // What is sent, as plain data: the frame on screen may change while the check runs.
+    const sent = JSON.parse(JSON.stringify(labels[stem] ?? [])) as ChartLabel[];
     try {
-      const r = await saveLabels({ data: { stem, labels: frameLabels() } });
+      const r = await saveLabels({ data: { stem, labels: sent } });
       if (r.ok) {
         setResults(stem, r.results);
         // The check may have turned a label to the orientation that passed.
-        setLabels(
-          stem,
-          frameLabels().map((l, i) => ({ ...l, corners: r.results[i]?.corners ?? l.corners })),
-        );
-        setDirty(stem, false);
+        const merged = mergeChecked(sent, labels[stem] ?? [], r.results);
+        setLabels(stem, [...merged.labels]);
+        setDirty(stem, !merged.clean);
         const failed = r.results.filter((x) => !x.pass).length;
         const turned = r.results.some((x) => x.reoriented)
           ? " (turned to the way up that passed)"
@@ -294,7 +317,7 @@ function Labeller(props: { session: Session }) {
       else if (e.key === "s" && !busy()) void save();
       else if (e.key === "r") {
         const l = labelOf(targetId());
-        if (l) setCorners(rotate(l.corners));
+        if (l) setCorners(rotate(l.corners), targetId(), false);
       } else if (e.key === "x") clearTarget();
       else if (e.key === "z") setNatural((n) => !n);
       else if (e.key === "Escape") setPlacing([]);
@@ -343,7 +366,7 @@ function Labeller(props: { session: Session }) {
           class={css(styles.button)}
           onClick={() => {
             const l = labelOf(targetId());
-            if (l) setCorners(rotate(l.corners));
+            if (l) setCorners(rotate(l.corners), targetId(), false);
           }}
         >
           r rotate

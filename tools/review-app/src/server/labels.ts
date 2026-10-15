@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/solid-start";
 import { statSync } from "node:fs";
-import type { ChartLabel, CheckResult, Target } from "../chart";
+import { labelProblems, type ChartLabel, type CheckResult, type Target } from "../chart";
 import { bootId } from "./boot";
 import {
   labelConfig,
@@ -105,6 +105,10 @@ export const saveLabels = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<SaveResult> => {
     const config = labelConfig(process.env);
     if (typeof config === "string") return { ok: false, error: config };
+    // Refused before writing: nctool validates the whole file, so one bad label saved
+    // would break the check and import of every frame.
+    const problems = data.labels.flatMap((l) => labelProblems(l).map((p) => `${l.target}: ${p}`));
+    if (problems.length > 0) return { ok: false, error: problems.join("; ") };
     try {
       writeLabels(config, withFrame(readLabels(config), data.stem, data.labels));
       const results = data.labels.length > 0 ? await runCheck(config, data.stem) : [];
