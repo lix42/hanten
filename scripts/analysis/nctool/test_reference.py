@@ -235,13 +235,23 @@ class TestPairing(unittest.TestCase):
 
     def test_lists_exports_that_name_no_source_frame(self):
         sf = reference.exports(self.MANIFEST, "sf")
-        self.assertEqual(reference.unpaired(sf, {"R"}), {"sf/R": ["9.tif"]})
-        self.assertEqual(reference.unpaired(sf, {"other"}), {})
+        self.assertEqual(reference.unpaired(sf, {"R"}, {"R"}), {"sf/R": ["9.tif"]})
+        self.assertEqual(reference.unpaired(sf, {"other"}, {"R", "other"}), {})
 
-    def test_finds_the_roll_in_a_versioned_layout(self):
-        entries = [{"file": "converted/sf/v2/R/9.tif", "source_frame": None,
-                    "batch": "sf/v2"}]
-        self.assertEqual(reference.unpaired(entries, {"R"}), {"sf/v2": ["9.tif"]})
+    # The roll is inferred as `manifest.build_manifest` does, for every layout it walks.
+    def test_infers_the_roll_for_every_converted_layout(self):
+        from nctool import manifest
+        nlp_roll = manifest.NLP_SOURCE_ROLL
+        entries = [
+            {"file": "converted/sf/v2/R/1.tif", "roll": "R", "batch": "sf/v2"},
+            {"file": "converted/sf/R/2.tif", "batch": "sf/R"},
+            {"file": "converted/nlp/2026-07-23/3.tif", "batch": "nlp/2026-07-23"}]
+        for entry in entries:
+            entry["source_frame"] = None
+        self.assertEqual(reference.unpaired(entries, {"R"}, {"R", nlp_roll}),
+                         {"sf/v2": ["1.tif"], "sf/R": ["2.tif"]})
+        self.assertEqual(reference.unpaired(entries, {nlp_roll}, {"R", nlp_roll}),
+                         {"nlp/2026-07-23": ["3.tif"]})
 
 
 class TestMatrix(unittest.TestCase):

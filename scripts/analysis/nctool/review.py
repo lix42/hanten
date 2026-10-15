@@ -1337,7 +1337,8 @@ def cmd_generate(args) -> int:
     rolls = {fixtures["frames"][key]["roll"] for key in frames}
     sources = _reference.source_frames(manifest)
     for ref in references:
-        for batch, names in _reference.unpaired(exported[ref["id"]], rolls).items():
+        for batch, names in _reference.unpaired(exported[ref["id"]], rolls,
+                                                set(manifest.get("rolls") or {})).items():
             print(f"note: reference {ref['id']}: {len(names)} export(s) in {batch} name "
                   f"no source_frame and cannot be paired ({name_some(sorted(names))}); "
                   "set it in the manifest", file=sys.stderr)

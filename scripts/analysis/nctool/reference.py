@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 from . import icc as _icc
+from . import manifest as _manifest
 from . import metrics as _metrics
 
 #: Bump when the conversion's pixels change, so stored conversions are redone.
@@ -94,15 +95,27 @@ def pair(entries: list[dict], source: str) -> list[dict]:
     return [e for e in entries if e.get("source_frame") == source]
 
 
-def unpaired(entries: list[dict], rolls: set[str]) -> dict[str, list[str]]:
+def export_roll(entry: dict, roll_names: set[str]) -> str | None:
+    """The roll an export belongs to, as `manifest.build_manifest` infers it: a
+    `<roll>` subdirectory, else a version directory named after a roll, else the
+    NLP source roll."""
+    parts = str(entry.get("file", "")).split("/")
+    if entry.get("roll"):
+        return entry["roll"]
+    if len(parts) < 4:
+        return None
+    return parts[2] if parts[2] in roll_names else _manifest.NLP_SOURCE_ROLL
+
+
+def unpaired(entries: list[dict], rolls: set[str],
+             roll_names: set[str]) -> dict[str, list[str]]:
     """Per batch, the exports of these rolls that name no `source_frame`."""
     out: dict[str, list[str]] = {}
     for entry in entries:
         if entry.get("source_frame"):
             continue
-        # `converted/<producer>/[<version>/]<roll>/<file>`: the roll is not always parts[2].
         parts = str(entry.get("file", "")).split("/")
-        if any(part in rolls for part in parts[2:-1]):
+        if export_roll(entry, roll_names) in rolls:
             out.setdefault(entry["batch"], []).append(parts[-1])
     return out
 
