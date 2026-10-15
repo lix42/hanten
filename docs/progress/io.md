@@ -755,3 +755,17 @@ pre-change binary: byte-identical primary, sidecar differing only in
   CI's. For a dependent task: the model's retention terms now over-count big blocks,
   and the calibration table predates the allocator — refit both together if the model
   is ever tightened.
+
+## camera-scan-input
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: accept camera-scanned negatives (raw/DNG first); a release gate for the desktop app
+
+## truncated-file-fault
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: a file shorter than its own header declares (a cloud file still downloading) gets its own fault, not a decode error

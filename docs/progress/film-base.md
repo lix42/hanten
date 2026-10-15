@@ -1932,3 +1932,10 @@ So nothing in the march changed. Done instead:
 `0` on all four edges, so the 5% inset alone did not reach it. That is the march
 *missing* a holder (the unstated all-zero premise recorded on `EffectiveArea::holder`),
 not a cap, and it remains unowned.
+
+## content-base-rebate
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases

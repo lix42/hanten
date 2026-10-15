@@ -127,7 +127,11 @@ graph TD
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
+- [ ] [Crop and rotate](tasks/core/crop-rotate.md) — crop and rotate as flags and recipe keys; a crop also narrows the measurement region
+- [ ] [Key roll frames by relative path](tasks/core/frame-keys-by-path.md) — roll.frames is keyed by file name, so two frames with one name share an entry
+- [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame
 - [ ] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
+- [ ] [Stable codes for warnings and errors](tasks/core/message-codes.md) — every warning and error carries a code and facts; the CLI formats its prose from them, the app maps codes to its own handling
 - [ ] [Release Readiness](tasks/core/release-readiness.md) — from the release-readiness review: (1) correct public docs that misstate the product (README "pre-implementation" + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in…
 - [ ] [Rename the decode and look misnomers (--density-gamma, reconstruction.anchor, look stage "contrast")](tasks/core/rename-decode-look-misnomers.md) — public names that say the wrong quantity in the decode and the look
 - [ ] [Rename the fit-range and HDR misnomers (--display-tone-headroom, --display-black, linear_headroom)](tasks/core/rename-fit-range-misnomers.md) — the highlight range gets its own public name; display black and the duplicated display peak
@@ -155,10 +159,12 @@ graph TD
 > `pipeline/input_semantics.rs` (the resolver that interprets the SilverFast XMP
 > packet), and the buffer/atomicity strategy for whole-image and streamed I/O.
 
+- [ ] [Read camera scans](tasks/io/camera-scan-input.md) — accept camera-scanned negatives (raw/DNG first); a release gate for the desktop app
 - [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — accept a 16-bit grayscale primary (IR page unchanged); nc refuses these HP5 scans today · **low priority**
 - [ ] [Scanner Density Calibration](tasks/io/scanner-density-calibration.md) — turn the density-scale question into a shipped, reusable scanner profile · **waits on** `analysis/calibration-frame-capture`
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — convert positive (E-6) film: no film base or decode, enters at the working space; no slide scans to verify against yet · **low priority**
 - [ ] [Streaming / Tiled I/O](tasks/io/streaming-tiled-io.md) — strip/tile decode for very large inputs; STEP 0 evaluated no-go (2026-10-13), revisit only if the input envelope grows · **low priority**
+- [ ] [Name a truncated input file](tasks/io/truncated-file-fault.md) — a file shorter than its own header declares (a cloud file still downloading) gets its own fault, not a decode error
 - [x] [Input Data Semantics and Validation](tasks/io/input-data-semantics.md) — resolve transfer encoding independently from scanner-device versus colorimetric meaning
 - [x] [Memory Preflight & In-Place Transform](tasks/io/memory-preflight.md) — from the memory-safety review (Phase A, cheap): predict peak allocation and fail loudly over a budget before allocating (reconciling the dishonest 4 GiB input limit), and drop the whole-image clone…
 - [x] [Multi-frame runs outgrow the per-frame memory model](tasks/io/multi-frame-memory-growth.md) — macOS malloc kept freed full-frame blocks resident, so a roll's peak climbed with every slightly larger frame
@@ -173,6 +179,7 @@ graph TD
 > roll-fixed `Dmax` density anchor. `Dmin` and `Dmax` are **different quantities**
 > (design-spec §4) that happen to share this code.
 
+- [ ] [Can the content base use the rebate?](tasks/film-base/content-base-rebate.md) — spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases
 - [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) — **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both references (HP5 frame 1330 is one)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
 - [x] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — shipped as `measure-roll --base-content` and `roll --base-content`: the pooled p99 of the picture frames' effective areas, written as an explicit base with `content_base` evidence

@@ -61,7 +61,8 @@ The deterministic core owns the image science. Any future ML assistance (see
   is decided ([`design/mono.md`](design/mono.md)); the implementation is not.
 - Camera RAW (Bayer/X-Trans) input, DNG processing.
 - ML/AI assistance of any kind (auto-crop, neutral-patch detection, inpainting).
-- GUI, scanner ICC profiling workflow.
+- Scanner ICC profiling workflow. (A desktop app is designed separately:
+  [`design/desktop-app.md`](design/desktop-app.md).)
 - Output beyond the destination set (§5): PNG/EXR and HEIC gain maps are roadmap items.
 
 ## 3. Design principles

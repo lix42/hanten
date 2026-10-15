@@ -1650,3 +1650,30 @@ new path. No pixel moved.
 **Updated:** 2026-10-15
 
 - 2026-10-15: filed. Goal: Rust identifiers, constants and remaining doc comments: apply_contrast(slope), *_LUMA, headroom_*, fit range's "lift", test helpers using contrast for linearization
+## message-codes
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: every warning and error carries a code and facts; the CLI formats its prose from them, the app maps codes to its own handling
+
+## frame-keys-by-path
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: roll.frames is keyed by file name, so two frames with one name share an entry
+
+## crop-rotate
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: crop and rotate as flags and recipe keys; a crop also narrows the measurement region
+
+## half-frame-split
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: one file holding two half-frames becomes two pictures, each its own frame
