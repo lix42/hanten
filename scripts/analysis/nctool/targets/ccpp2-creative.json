@@ -1,0 +1,301 @@
+{
+  "id": "ccpp2-creative",
+  "version": 1,
+  "name": "ColorChecker Passport Photo 2 — Creative Enhancement target",
+  "corners": "The outer corners of the patch array, upright as the card prints it (the calibrite logo readable at the bottom): the colour column on the left, the neutral column on the right.",
+  "units": "mm",
+  "size": [
+    54.8,
+    100.8
+  ],
+  "geometry_source": "Measured 2026-10-14 from a photo of the user's card beside a ruler, about +/-0.5 mm, made symmetric about the card's centre line. The middle patches have cut corners and notches; their rectangles are the bounding boxes, and the check samples only their middle.",
+  "patches": [
+    {
+      "id": "L1",
+      "name": "pink",
+      "rect": [
+        0.0,
+        0.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "purple",
+      "rect": [
+        0.0,
+        13.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "blue",
+      "rect": [
+        0.0,
+        26.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L4",
+      "name": "cyan",
+      "rect": [
+        0.0,
+        39.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L5",
+      "name": "green",
+      "rect": [
+        0.0,
+        52.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L6",
+      "name": "yellow",
+      "rect": [
+        0.0,
+        65.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L7",
+      "name": "orange",
+      "rect": [
+        0.0,
+        78.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "L8",
+      "name": "red",
+      "rect": [
+        0.0,
+        91.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "M1a",
+      "name": "warm/cool row 1 left",
+      "rect": [
+        13.3,
+        11.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M1b",
+      "name": "warm/cool row 1 right",
+      "rect": [
+        28.4,
+        11.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M2a",
+      "name": "warm/cool row 2 left",
+      "rect": [
+        13.3,
+        27.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M2b",
+      "name": "warm/cool row 2 right",
+      "rect": [
+        28.4,
+        27.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M3a",
+      "name": "warm/cool row 3 left",
+      "rect": [
+        13.3,
+        43.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M3b",
+      "name": "warm/cool row 3 right",
+      "rect": [
+        28.4,
+        43.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M4a",
+      "name": "warm/cool row 4 left",
+      "rect": [
+        13.3,
+        59.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M4b",
+      "name": "warm/cool row 4 right",
+      "rect": [
+        28.4,
+        59.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M5a",
+      "name": "warm/cool row 5 left",
+      "rect": [
+        13.3,
+        75.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "M5b",
+      "name": "warm/cool row 5 right",
+      "rect": [
+        28.4,
+        75.8,
+        13.1,
+        13.3
+      ]
+    },
+    {
+      "id": "N1",
+      "name": "neutral 1 (light)",
+      "rect": [
+        45.0,
+        0.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N2",
+      "name": "neutral 2 (light)",
+      "rect": [
+        45.0,
+        13.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N3",
+      "name": "neutral 3 (light)",
+      "rect": [
+        45.0,
+        26.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N4",
+      "name": "neutral 4 (light)",
+      "rect": [
+        45.0,
+        39.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N5",
+      "name": "neutral 5 (dark)",
+      "rect": [
+        45.0,
+        52.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N6",
+      "name": "neutral 6 (dark)",
+      "rect": [
+        45.0,
+        65.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N7",
+      "name": "neutral 7 (dark)",
+      "rect": [
+        45.0,
+        78.0,
+        9.8,
+        9.8
+      ]
+    },
+    {
+      "id": "N8",
+      "name": "neutral 8 (dark)",
+      "rect": [
+        45.0,
+        91.0,
+        9.8,
+        9.8
+      ]
+    }
+  ],
+  "neutrals": [
+    "N1",
+    "N2",
+    "N3",
+    "N4",
+    "N5",
+    "N6",
+    "N7",
+    "N8"
+  ],
+  "reference": null,
+  "neutral_note": "Top to bottom, lightest to darkest: four near-white steps, then four near-black. Calibrite publishes no reference values for this target.",
+  "saturated": [
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "L6",
+    "L7",
+    "L8"
+  ],
+  "saturated_note": "The colour column.",
+  "anchor": {
+    "patch": "L1",
+    "prompt": "the pink patch (top of the colour column)"
+  }
+}

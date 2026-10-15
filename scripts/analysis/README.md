@@ -55,18 +55,20 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest roles \
   --asset-root ../nc-assets
 PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
   --review ../temp/<set>/review.json --roll <roll> --source '<set> <date>' --kind white
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts import \
+  ../temp/chart-labels/<roll>.json --source 'chart-labels <date>'
 ```
 
 - `generate` inventories source rolls, samples, and converted outputs; obtains
   derived metadata from `hanten inspect`; and streams files through SHA-256. Existing
-  human fields such as roles, stock names, notes, patches, shot facts and roll
-  conditions are preserved. It refuses to drop a missing frame's patches or shot
+  human fields such as roles, stock names, notes, patches, shot facts, charts and roll
+  conditions are preserved (any frame or roll field `generate` does not write itself). It refuses to drop a missing frame's patches or shot
   facts, or a missing roll's conditions, without `--drop-annotations`; a roll renamed
   whole keeps them. `--carry-from <manifest>` takes a restored frame's fields, and any
   roll field the current manifest lacks, from another manifest.
 - `validate` reports checksum drift, missing files, misplaced/orphaned TIFFs,
-  integrity gaps, roles outside `manifest.ROLES`, and malformed patches, shot facts or
-  conditions. It never deletes or moves anything.
+  integrity gaps, roles outside `manifest.ROLES`, and malformed patches, shot facts,
+  charts or conditions. It never deletes or moves anything.
 - `roles` emits the unexposed/leader/real-frame grouping consumed by the legacy
   real-scan harness.
 - `patches import` folds the review app's **Copy all** text into frames' `patches`

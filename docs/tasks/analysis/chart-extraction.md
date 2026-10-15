@@ -14,7 +14,7 @@ re-reading the frames its own way.
 - Reads the scan, not a render: a bracket's over end is clipped by any render (on
   `2026-10-12-Gold200` +3/+4 lose 6% and 21% under `--placement frame`).
 - Each frame carries two neutral series: the Classic's six and the Creative target's
-  bottom row (⅓-stop steps by design).
+  column of eight (four near-white, four near-black; Calibrite publishes no values).
 - Patch positions are projected from the chart entries at read time; nothing per patch is
   stored in the manifest.
 - Never reads pixels into an agent's context; asset-gated like every real-scan check.

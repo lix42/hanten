@@ -134,13 +134,15 @@ label prefixed `W:` / `G:` / `C:` sets that patch's kind; `--kind` covers the re
 Each listed frame's patches from the same `--source` are replaced; others stay.
 Hand edits are kept like roles.
 
-**`generate` refuses to drop annotations** (`patches`, `shot`, a roll's
-`conditions`): when a frame that carries them is gone from disk, or a roll with
-conditions is, it writes nothing (exit 2) until `--drop-annotations` says to. A roll
+**`generate` refuses to drop annotations** (`patches`, `shot`, `charts`, a roll's
+`conditions` — since schema 4, any frame or roll field it does not write itself): when
+a frame that carries them is gone from disk, or a roll with conditions is, it writes
+nothing (exit 2) until `--drop-annotations` says to. A roll
 renamed whole keeps its conditions, stock and note (its frames are matched by
 checksum); a roll split or merged does not — rename its key in `manifest.json` by
 hand, or copy its `conditions` into the entry it merged into. A frame whose bytes
-changed at the same path keeps its patches with a warning — check they still sit on their subject.
+changed at the same path keeps its patches and charts with a warning — check they
+still sit on their subject.
 
 ## Shot facts and roll conditions
 
@@ -153,6 +155,31 @@ empty `shot` or `conditions` is refused. Enter them by editing
 `manifest.json`; the rules are `nctool/conditions.py`, and `validate` reports a
 field that breaks them. The bump to 3 keeps an older `nctool` from regenerating the
 manifest and dropping them.
+
+## Charts
+
+Schema 4 adds a frame's `charts`: where each colour target sits, one entry per
+(`target`, `card`) — `target` names a definition in `nctool/targets/` (the patch
+layout, which corners it means, the neutral series, reference values), `card` which
+physical card, `corners` the patch array's four outer corners as fractions of the scan
+(the target's own top left first, then clockwise in the target's orientation),
+`source`, and the `check` the placement passed. Patch positions are never stored: they
+are projected from the corners, so a refined target layout moves no label.
+
+Label in the review app's labelling page (`pnpm label`, see its README), which writes a
+labels file and checks each frame against its scan on save; then import:
+
+```bash
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts import \
+  ../temp/chart-labels/<roll>.json --source 'chart-labels <date>'
+```
+
+`import` re-runs the check and writes nothing if any label fails. Each frame the file
+lists loses its entries from the same `--source` (and any for a (target, card) it
+brings) and gains the file's, so a label cleared or re-carded in the tool leaves the
+manifest too; other sources' entries stay. `charts check <labels>` prints the check without
+writing. Both read pixels (the venv). From schema 4 on, `generate` keeps any frame or
+roll field it does not write itself, so the next hand-entered field needs no bump.
 
 ## Where the assets live
 

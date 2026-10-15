@@ -275,6 +275,43 @@ degenerate cases a real record rarely carries at once — a sparse band, a band
 with no pixels, a channel running past the top of the range. It needs no review
 set, no assets and no venv.
 
+## Chart labelling
+
+A second page, `/label`, marks where each colour target sits in a roll's chart
+frames — the asset manifest's `charts` (the `asset-manifest` skill). It is its own
+entry point, because it needs no review set:
+
+```sh
+pnpm label --roll 2026-10-12-Gold200 \
+  --renders ../nc-assets/converted/nc/2026-10-13/2026-10-12-Gold200 \
+  --labels ../temp/chart-labels/2026-10-12-Gold200.json
+```
+
+then open `/label` on the printed address. `--frames 2127,2128` names frames (default:
+the roll's `chart` frames), `--card` the card id (default `ccpp2`), `--asset-root` the
+assets (default `$NC_ASSET_ROOT`, else `../nc-assets`). The renders must be the scans'
+own size — Hanten's are — since a label is fractions of the frame; a TIFF render is
+shown as a JPEG with its ICC profile kept.
+
+Pick a target (`1`, `2`) and click its patch array's four outer corners, **in any
+order**; the projected patches appear: the outline of each patch, its sampled middle
+filled, neutrals dashed. The page sorts the clicks round the outline and lays the
+target's long side along it, but cannot tell the target from the same target upside
+down — the check on save does, from the scan: it tries every way up and keeps the one
+that passes. If several pass, it guesses none: the panel asks you to click the target's
+anchor patch (the Classic's white), and the way up that puts it under the click is
+saved. Drag a corner to adjust; `r` turns the grid a quarter turn by hand, `x` clears
+it. An unlabelled frame
+starts from the previous frame's corners, which is what a bracket on a tripod wants.
+
+`s` saves the frame to the labels file and runs `nctool manifest charts check` on its
+**scan**: each patch's middle uniform, the gaps and the card's surround dark, the
+neutrals in order, the saturated patches coloured. Failing patches turn red and the
+panel lists why. A few bright gaps alone are a warning, not a failure: camera shake or
+flare lifts one or two, while a grid that is off lifts many. `j` / `k` step frames, `z` toggles 1:1. When every frame passes,
+`nctool manifest charts import` (which checks again) writes the manifest; the page
+never does.
+
 ## Thumbnails
 
 The preview strip shows the same file as the stage, in a 104x70 box. On a set of

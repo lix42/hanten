@@ -321,16 +321,16 @@ class TestLoadManifest(Base):
             self.assertIsNotNone(err, payload)
             self.assertIn("not a JSON object", err)
 
-    def test_schema_v4_rejected(self):
+    def test_schema_v5_rejected(self):
         p = os.path.join(self.A, "manifest.json")
-        self.write_manifest({"schema_version": 4, "rolls": {}})
+        self.write_manifest({"schema_version": 5, "rolls": {}})
         data, err = manifest.load_manifest(p)
         self.assertEqual(data, {})
-        self.assertIn("unsupported schema_version 4", err)
+        self.assertIn("unsupported schema_version 5", err)
 
-    def test_schema_v2_and_v3_read(self):
+    def test_schema_v2_to_v4_read(self):
         p = os.path.join(self.A, "manifest.json")
-        for version in (2, 3):
+        for version in (2, 3, 4):
             self.write_manifest({"schema_version": version, "rolls": {}})
             data, err = manifest.load_manifest(p)
             self.assertIsNone(err)
@@ -462,13 +462,13 @@ class TestBuild(Base):
         self.assertEqual(fr["file"], "rolls/RollA/renamed.tif")
         self.assertEqual(fr["role"], "leader")
 
-    def test_patches_preserved_by_path_and_written_as_v3(self):
+    def test_patches_preserved_by_path_and_written_as_v4(self):
         self.put("rolls/RollA/r1.tif")
         pts = [dict(PATCH)]
         prev = {"schema_version": 1, "rolls": {"RollA": {"frames": [
             {"file": "rolls/RollA/r1.tif", "role": "real", "patches": pts}]}}}
         m, diag = self.build(prev=prev)
-        self.assertEqual(m["schema_version"], 3)
+        self.assertEqual(m["schema_version"], 4)
         self.assertEqual(m["rolls"]["RollA"]["frames"][0]["patches"], pts)
         self.assertEqual(diag["dropped_annotations"], [])
 
@@ -534,6 +534,26 @@ class TestBuild(Base):
         self.assertNotIn("conditions", m["rolls"]["RollB"])
         self.assertNotIn("conditions", m["rolls"]["RollC"])
         self.assertEqual(diag["dropped_conditions"], ["RollA"])
+
+    def test_an_unknown_frame_or_roll_field_is_kept_and_never_dropped_silently(self):
+        self.put("rolls/RollA/k.tif")
+        prev = {"rolls": {"RollA": {"future": {"x": 1}, "frames": [
+            {"file": "rolls/RollA/k.tif", "role": "chart", "charts": [{"target": "t"}]},
+            {"file": "rolls/RollA/gone.tif", "role": "real", "later": "y"}]},
+            "Gone": {"later": "z", "frames": []}}}
+        m, diag = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["future"], {"x": 1})
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["charts"], [{"target": "t"}])
+        self.assertEqual(diag["dropped_annotations"], [("rolls/RollA/gone.tif", ["later"])])
+        self.assertEqual(diag["dropped_conditions"], ["Gone"])
+
+    def test_a_rescanned_frame_with_charts_is_reported(self):
+        self.put("rolls/RollA/k.tif", data=b"new scan")
+        prev = {"rolls": {"RollA": {"frames": [{
+            "file": "rolls/RollA/k.tif", "role": "chart", "charts": [{"target": "t"}],
+            "sha256": "0" * 64, "bytes": 3}]}}}
+        _, diag = self.build(prev=prev)
+        self.assertEqual(diag["rescanned"], ["rolls/RollA/k.tif"])
 
     def test_a_partly_moved_roll_keeps_no_conditions(self):
         a = self.put("rolls/RollB/1.tif", data=b"one")
@@ -952,7 +972,7 @@ class TestValidate(Base):
         self.assertIn("no manifest.json", err)
 
     def test_bad_schema_is_exit2(self):
-        self.write_manifest({"schema_version": 4, "rolls": {}})
+        self.write_manifest({"schema_version": 5, "rolls": {}})
         rc, _, err = self.validate()
         self.assertEqual(rc, 2)
         self.assertIn("unsupported schema_version", err)

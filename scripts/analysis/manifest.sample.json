@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "generated": "2026-07-24",
   "note": "SAMPLE / trimmed illustration of nc-assets/manifest.json (the live file lives at the assets root). Shows every schema shape; not exhaustive. Generate the real one with scripts/analysis/generate_manifest.py.",
   "rolls": {
@@ -113,7 +113,47 @@
             "bracket": "ektar-a",
             "aperture": 8,
             "metered": "incident at the card"
-          }
+          },
+          "charts": [
+            {
+              "target": "ccpp2-classic",
+              "card": "ccpp2",
+              "corners": [
+                [
+                  0.62,
+                  0.55
+                ],
+                [
+                  0.63,
+                  0.88
+                ],
+                [
+                  0.21,
+                  0.89
+                ],
+                [
+                  0.2,
+                  0.56
+                ]
+              ],
+              "source": "chart-labels 2026-10-14",
+              "check": {
+                "pass": true,
+                "rules": 1,
+                "target_version": 1,
+                "worst_spread": 0.18,
+                "worst_gap": -0.21,
+                "neutral_steps": [
+                  0.61,
+                  0.58,
+                  0.6,
+                  0.66,
+                  0.71
+                ],
+                "date": "2026-10-14"
+              }
+            }
+          ]
         }
       ],
       "conditions": {
@@ -156,7 +196,7 @@
           "sha256": "769cc7261f078378f2d833cd4b61a97c0d48abfc8cd091cd09ff6a2e8a3bec48",
           "megapixels": 18.66
         },
-        "\u2026 (trimmed)"
+        "… (trimmed)"
       ]
     }
   },
@@ -226,7 +266,7 @@
           "source_frame": "rolls/Ektar/20260713-nikon-971.tif",
           "encoding": "f32-linear"
         },
-        "\u2026 (trimmed)"
+        "… (trimmed)"
       ]
     },
     "nc/V0": {
@@ -250,7 +290,7 @@
           "source_frame": "rolls/Ektar/20260713-nikon-971.tif",
           "encoding": "u16-srgb"
         },
-        "\u2026 (trimmed)"
+        "… (trimmed)"
       ]
     },
     "nlp/2026-07-23": {
@@ -274,7 +314,7 @@
           "note": "cropped + float vs source; no pixel registration",
           "encoding": "f32"
         },
-        "\u2026 (trimmed)"
+        "… (trimmed)"
       ]
     }
   },
