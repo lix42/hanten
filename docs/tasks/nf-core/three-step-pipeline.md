@@ -3,7 +3,7 @@ title: Rethink the pipeline as decode → roll → style
 status: done
 deps: [nf-core/default-flip, nf-calibration/roll-section, nf-destinations/direct-preset]
 tags: [new-flow]
-summary: unscheduled, after the default flip
+summary: "decided: stages stay defined by operation; roll and style combine in Recipe::shared_params"
 ---
 # Rethink the pipeline as decode → roll → style
 

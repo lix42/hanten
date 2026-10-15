@@ -336,7 +336,7 @@ graph TD
 - [x] [A scan type that ends at the decode](tasks/nf-core/scan-type.md) — split the scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce that the IR plane stops at `fixed::decode`
 - [x] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the modules and typed boundaries, written fresh rather than extracted
 - [x] [`roll`'s per-frame overrides under the new chain](tasks/nf-core/subcommands.md) — a frame's override resolves as `convert` would, and an override that changes a roll-wide value warns (`roll.white_stops` per frame is legitimate)
-- [x] [Rethink the pipeline as decode → roll → style](tasks/nf-core/three-step-pipeline.md) — unscheduled, after the default flip
+- [x] [Rethink the pipeline as decode → roll → style](tasks/nf-core/three-step-pipeline.md) — decided: stages stay defined by operation; roll and style combine in Recipe::shared_params
 
 ### nf-reconstruction — [progress](progress/nf-reconstruction.md)
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,

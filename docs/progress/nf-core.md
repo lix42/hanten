@@ -1448,7 +1448,8 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
   rejected for three reasons:
 
   - **Roll and style share each operator.** The roll's gains multiply the stated white
-    balance, its slope is multiplied by `look.contrast` (and is the saturation base), and
+    balance (a tilt, `roll.white_balance_form`, stays its own `RollColour` input to the
+    same stage), its slope is multiplied by `look.contrast` (and is the saturation base), and
     its exposure adds to the stated one. Separate stages would apply each operator twice,
     or hand a value for the next stage to re-grade, and add a pass over the pixels.
   - **The order forbids it.** The roll now reaches three stages: scene correction (gains or
@@ -1456,8 +1457,8 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
     frame or the hybrid/`frame` placement) and fit range (the frame's dark-end target,
     `tones.dark_stops`, graded by the look's slope and scene correction's exposure and
     gains in `chain::display`). A roll stage before the look cannot own the last.
-  - **It costs a third migration** (`recipe_version`, `pipeline_version`, the report's
-    `chain` block) for no change in pixels.
+  - **It costs a third migration** (`recipe_version` and the report's `chain` block) for
+    no change in pixels; being pixel-identical, it would not bump `pipeline_version`.
 
   Recorded in design-spec §6 "Two renderings" and moved from §12's open list to its
   resolved list. `docs/design/roll-workflow.md`'s "Three kinds of configuration" already

@@ -448,8 +448,9 @@ The measured values live in their own recipe section, `roll` (§8), so a measure
 value is never mistaken for a chosen one. The three are not stages of their own
 (`nf-core/three-step-pipeline`). The decode supplies the image, and the decoded film
 base beside it (`chain::render`). The roll's values and the user's are combined into
-each stage's parameters (`Recipe::shared_params`), since they act through one operator:
-the roll's gains times the stated white balance, its slope times `look.contrast`, its
+the parameters of scene correction, the look and fit range (`Recipe::shared_params`),
+since they act through one operator: the roll's gains times the stated white balance (a
+tilt is applied beside them, in the same stage), its slope times `look.contrast`, its
 exposure plus the stated one. A frame's measured dark end (`tones.dark_stops`) is
 placed in fit range, after the frame is graded. `--rendering` chooses the base every stage
 knob starts from, and each has one principle (`crate::rendering`):
