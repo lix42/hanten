@@ -156,7 +156,7 @@ renders to *black* in the positive.
 - **The film base** (alias `Dmin`) — a per-channel **transmission**: the unexposed
   film. This is the `--film-base R,G,B` value.
 - **The anchor** — a **scalar** in **density** units: the corrected density that
-  renders to film RGB `1.0` (diffuse white decodes to ≈0.80, below it). It is placed from the film base: mid-grey sits
+  renders to film RGB `1.0` (diffuse white decodes below it, ≈0.80 at the default decode). It is placed from the film base: mid-grey sits
   `--anchor-mid-offset` (default 0.62) density above it (§6).
 
 They are not two ends of one scale; don't conflate them.
