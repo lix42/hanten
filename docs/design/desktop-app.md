@@ -105,7 +105,8 @@ are Hanten features not yet implemented in the CLI (§4).
 - Non-destructive by construction: output is always re-rendered from negatives + config.
 - An unwritable folder is a write error; the app asks for another folder.
 - A cloud file not fully downloaded (spike unknown 11) is a named fault, which the handler
-  can retry. Tested, though an edge case.
+  can retry. Treated as an edge case but tested; on a streamed folder it can hit most of
+  a roll.
 
 ### 2.9 Versioning
 
@@ -125,8 +126,9 @@ are Hanten features not yet implemented in the CLI (§4).
 
 ### 2.11 Pricing
 
-- Paid per roll: one base, one leader, at most 40 frames.
-- At the first export each exported frame's **content** hash is recorded (never file
+- Paid per roll: one base, one leader, at most 40 scan files. The cap counts files, not
+  pictures, so a split half-frame file counts once.
+- At the first export each exported file's **content** hash is recorded (never file
   names). Adding frames up to the cap is free; replacing exported frames with different
   content is refused (that is a new roll), except a limited number of replacements, e.g. a
   rescan for dust or focus.
@@ -255,8 +257,10 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 ## 5. Open questions
 
 - The exact tier-3 list and the named steps for each number knob.
-- How a frame offset applies to a multiplicative knob (contrast, saturation): a ratio, or
-  an offset in stops?
+- What a frame override means per kind of knob: a ratio or a step for contrast and
+  saturation (each frame has its own base slope), a per-channel offset for the colour
+  controls, and for tier-3 switches and named steps probably a plain override, since an
+  offset has no meaning there.
 - After a lift, what happens to other frames' overrides of that knob, and to the source
   frame's.
 - The replacement limit per roll (§2.11).

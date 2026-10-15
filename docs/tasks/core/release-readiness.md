@@ -76,6 +76,10 @@ be cross-compiled and packaged. State the tested/supported tiers explicitly.
 
 ### Packaging binaries
 
+> **Revisit** (2026-10-15): the desktop app design keeps the CLI internal and
+> unpublished, since a free public binary would bypass the app's per-roll payment
+> (`docs/design/desktop-app.md` §1, §3.6). Decide what this section still ships.
+
 Add a release workflow that builds and publishes binaries per supported platform
 (e.g. a tag-triggered GitHub Actions job producing archives + checksums). Sequence
 this **after** `display-output-acceptance` so binaries ship only once the default

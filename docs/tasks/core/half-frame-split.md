@@ -1,8 +1,7 @@
 ---
 title: Split a two-half-frame file
 status: todo
-deps: []
-related: [core/crop-rotate, core/frame-keys-by-path]
+deps: [core/crop-rotate, core/frame-keys-by-path]
 summary: one file holding two half-frames becomes two pictures, each its own frame
 ---
 # Split a two-half-frame file
@@ -19,8 +18,8 @@ A flag and recipe key first, as with every knob.
 - Crop and rotate come first or alongside (`core/crop-rotate`); a split is two crops of
   one file.
 - Each half needs its own `roll.frames` key (`core/frame-keys-by-path`).
-- Pricing counts a roll as at most 40 frames, so a 40-file half-frame roll stays within
-  it (desktop app design §2.11).
+- The pricing cap counts scan files, not pictures, so a split file counts once
+  (desktop app design §2.11).
 
 ## Open questions
 

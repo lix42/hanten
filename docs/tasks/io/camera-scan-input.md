@@ -15,7 +15,7 @@ for the app ([desktop app design](../../design/desktop-app.md) §2.12).
 ## What is known
 
 - Today only SilverFast HDR/HDRi is read. `--input-meaning colorimetric` is recognized
-  and refused, and camera RAW / DNG is out of scope in the design spec (§1, roadmap
+  and refused, and camera RAW / DNG is out of scope in the design spec (§2, roadmap
   item 4).
 - A camera file has no IR plane, so holder detection falls back to the static inset
   alone, and IR dust removal (when it exists) cannot apply.

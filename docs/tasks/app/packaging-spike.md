@@ -1,7 +1,7 @@
 ---
 title: Packaging and file access spike
 status: todo
-deps: []
+deps: [app/webkit-display-spike]
 summary: sign and notarize a Tauri app with the Rust core; write the project file into any user-picked folder
 ---
 # Packaging and file access spike

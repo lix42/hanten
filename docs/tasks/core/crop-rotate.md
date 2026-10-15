@@ -15,8 +15,9 @@ re-measures that frame and can shift the roll's measurements.
 
 ## What is known
 
-- Every knob is a flag and a recipe key (the project's knob rule); a per-frame value lives
-  in `roll.frames`.
+- Every knob is a flag and a recipe key (the project's knob rule). `roll.frames` holds
+  only measured values; a user's per-frame setting goes in a `roll --frames` manifest's
+  `params`, which is where a crop belongs.
 - The effective area (`pipeline/film_base.rs`) is the IR holder cut then a static inset;
   a crop would be a third cut.
 - Not in scope: straighten (arbitrary angles), auto-crop.

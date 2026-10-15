@@ -10,8 +10,8 @@ summary: a file shorter than its own header declares (a cloud file still downloa
 
 A file shorter than its own header declares fails with a fault that says so, instead of
 a generic decode error (`advancing to the next IFD: failed to fill whole buffer`, exit 3).
-A cloud-synced folder (Google Drive streaming, iCloud) hands the decoder such files
-routinely; the desktop app's message handler retries or tells the user the file is not
+A cloud-synced folder (Google Drive streaming, iCloud) can hand the decoder such files
+for most of a roll; the desktop app's message handler retries or tells the user the file is not
 downloaded yet ([desktop app design](../../design/desktop-app.md) §2.8).
 
 ## What is known
