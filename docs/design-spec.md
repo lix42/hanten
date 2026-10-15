@@ -445,12 +445,13 @@ style    the user's taste
 ```
 
 The measured values live in their own recipe section, `roll` (§8), so a measured
-value is never mistaken for a chosen one. The three are combined into each stage's
-parameters (`Recipe::shared_params`), not run as stages of their own: a roll value and
-the user's act through one operator — the roll's gains times the stated white balance,
-its slope times `look.contrast`, its exposure plus the stated one — and a frame's
-measured dark end (`tones.dark_stops`) is placed in fit range, after the frame is
-graded (`nf-core/three-step-pipeline`). `--rendering` chooses the base every stage
+value is never mistaken for a chosen one. The three are not stages of their own
+(`nf-core/three-step-pipeline`). The decode supplies the image, and the decoded film
+base beside it (`chain::render`). The roll's values and the user's are combined into
+each stage's parameters (`Recipe::shared_params`), since they act through one operator:
+the roll's gains times the stated white balance, its slope times `look.contrast`, its
+exposure plus the stated one. A frame's measured dark end (`tones.dark_stops`) is
+placed in fit range, after the frame is graded. `--rendering` chooses the base every stage
 knob starts from, and each has one principle (`crate::rendering`):
 
 - **`direct` loses as little information as possible and applies only what the
@@ -2527,6 +2528,6 @@ reinhard over a parametric shoulder (§6); a separate contrast and per-channel g
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
 (§6); one dark end, fit range's target, floor or display black (§6); the fallback slope without a
 roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
-stands (`nf-calibration/white-rule-hdr`); stages defined by operation, with decode, roll
-and style combined into their parameters rather than rebuilt as stages (§6,
+stands (`nf-calibration/white-rule-hdr`); stages defined by operation, with roll and
+style combined into their parameters rather than rebuilt as stages (§6,
 `nf-core/three-step-pipeline`).

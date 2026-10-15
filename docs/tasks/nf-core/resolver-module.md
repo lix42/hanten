@@ -9,9 +9,11 @@ summary: move Recipe::shared_params and the resolved_* methods out of recipe.rs
 
 ## Goal
 
-Give the step that combines a render's three inputs — decode, roll, style — one home in
-code. `nf-core/three-step-pipeline` kept the stages defined by operation and made that
-combination the place the three meet (design-spec §6, "Two renderings"); today it is
+Give the step that combines the roll's measurements and the user's style into stage
+params one home in code. `nf-core/three-step-pipeline` kept the stages defined by
+operation and made that combination where the two meet (design-spec §6, "Two
+renderings"); the decode is not part of it — it supplies the image and the decoded film
+base (`chain::render`'s arguments). Today the combination is
 `Recipe::shared_params` and the `resolved_*` / `applied_*` methods spread through
 `src/recipe.rs`, which also parses, merges and validates.
 

@@ -30,8 +30,9 @@ What is known (`docs/design-update.md`, Part 2, "Two renderings", 2026-09-27):
   (`nf-calibration/roll-section`) and `--rendering direct|default`
   (`nf-destinations/direct-preset`).
 
-**Decided 2026-10-14** (progress log): the stages stay defined by operation; decode,
-roll and style are combined into their params in `Recipe::shared_params`. Follow-up:
+**Decided 2026-10-14** (progress log): the stages stay defined by operation; the decode
+supplies the image, and roll and style are combined into their params in
+`Recipe::shared_params`. Follow-up:
 `nf-core/resolver-module`.
 
 ## How to Verify

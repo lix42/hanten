@@ -22,8 +22,8 @@ schema 9. **`subcommands`** settled `roll`'s per-frame overrides: a frame resolv
 warns naming both values. **`buffer-strategy`** settled the buffer rule and dropped
 the IR plane at the decode, and **`scan-type`** made that a type: only a `Scan` can
 carry one. **`three-step-pipeline`** (2026-10-14) kept the stages defined by
-operation: decode, roll and style are combined into the stages' params
-(`Recipe::shared_params`), not run as stages. Open: `resolver-module`.
+operation: the decode supplies the image, and roll and style are combined into the
+stages' params (`Recipe::shared_params`); none is a stage. Open: `resolver-module`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -1440,11 +1440,11 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
   decide whether the chain should be rebuilt as decode → roll → style, now that the
   roll's measurements live in rendering (`docs/design-update.md`, Part 2, "Two
   renderings").
-- 2026-10-14: **Decided: keep the stages defined by operation; decode, roll and style are the inputs
-  parameter resolution combines, not stages** (user agreed 2026-10-14; no code change).
-  The three-way split already exists where it is needed — `Recipe::shared_params` folds
-  the decode's facts, the applied `roll` section, the user's knobs and the rendering's
-  `Base` into each stage's params. Rebuilding the chain as roll and style stages was
+- 2026-10-14: **Decided: keep the stages defined by operation; decode, roll and style are
+  inputs, not stages** (user agreed 2026-10-14; no code change). The decode supplies the
+  image and the decoded film base (`chain::render`'s arguments); `Recipe::shared_params`
+  folds the applied `roll` section, the user's knobs and the rendering's `Base` (with the
+  decode's linearization) into each stage's params. Rebuilding the chain as roll and style stages was
   rejected for three reasons:
 
   - **Roll and style share each operator.** The roll's gains multiply the stated white
