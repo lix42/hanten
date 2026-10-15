@@ -370,7 +370,6 @@ graph TD
 > white, contrast, look presets, and the film-stock data that outlives the decode's
 > `characteristic` curve.
 
-- [ ] [Colour under a steeper midtone](tasks/nf-look/midtone-contrast-colour.md) — whether saturation follows the opt-in `--contrast 1.3` · **low priority**
 - [ ] [Mono as a rendering](tasks/nf-look/mono-mix.md) — a dye negative (colour or chromogenic B&W) rendered mono: a weighted pool first in the look, after white balance · **waits on** `nf-reconstruction/mono-decode`
 - [x] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of `gamma`
 - [x] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — a multiplier on the base slope
@@ -379,6 +378,7 @@ graph TD
 - [x] [Re-fit the highlight-desaturation band under the chosen white and black](tasks/nf-look/desaturation-band-refit.md) — the band was fitted under a hand-set contrast
 - [x] [Spike: what form should highlight desaturation take?](tasks/nf-look/desaturation-spike.md) — per-channel curve against a hue-preserving chroma pull
 - [x] [Re-express the `--preset` bundles — retired, not rebuilt](tasks/nf-look/look-presets.md)
+- [x] [Colour under a steeper midtone](tasks/nf-look/midtone-contrast-colour.md) — suggest `--saturation 1.15` with the opt-in `--contrast 1.3` (a documented pairing, no code) · **low priority**
 - [x] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes whites read clean, made a deliberate control instead of a side effect of the sigmoid's shoulder
 - [x] [A per-channel grade with a mid-grey pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the decode's `scale`
 - [x] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the SDR/HDR branch, because a gain map needs agreement below diffuse white

@@ -55,5 +55,7 @@ Roll medians, 09-18 / 09-29, rendered L\* over a 5 % inset:
   `frame` pins each white at L\* 93 before the multiplier, which moves it off.
   Checked after the toe exists.
 - **Colour.** It stayed at the roll's slope in every arm
-  (`nf-look/midtone-contrast-colour`).
+  (`nf-look/midtone-contrast-colour`; answered in
+  [`midtone-contrast-colour.md`](midtone-contrast-colour.md): pair ×1.3 with
+  `--saturation 1.15`).
 - **Noise.** A steeper slope raises grain in stops; not measured here.

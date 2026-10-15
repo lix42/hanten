@@ -1,10 +1,11 @@
 ---
 title: Colour under a steeper midtone
-status: todo
+status: done
 deps: [nf-display-stages/midtone-contrast-toe]
 priority: low
 tags: [new-flow]
-summary: whether saturation follows the opt-in `--contrast 1.3`
+summary: suggest `--saturation 1.15` with the opt-in `--contrast 1.3` (a documented pairing, no code)
+done: 2026-10-15
 ---
 # Colour under a steeper midtone
 
@@ -25,14 +26,20 @@ Known:
 - Colour stays at the roll's slope whatever `--contrast` is (`look.saturation` multiplies
   the colour's base slope; `contrast-on-luminance`; `docs/using-nc.md`, the look).
 
-Open:
+Settled (2026-10-15, review and the user;
+[`docs/spike/midtone-contrast-colour.md`](../../spike/midtone-contrast-colour.md)):
 
-- Whether `--contrast 1.3` looks undersaturated next to the default, and if so whether
-  colour should follow the frame's slope, a share of it, or stay at the roll's.
+- With colour held, ×1.3 keeps a frame's chroma (median per lightness band), except bright
+  colour (below). Even so, **`--saturation 1.15` looked best beside it**, ahead of held
+  and 1.3.
+- It is a **documented pairing** (`docs/using-nc.md`), not a coupling in code: `--contrast`
+  still leaves colour alone, and no render or recipe moved.
+- Bright colour that ×1.3 pushes toward white loses chroma at the SDR top whatever the
+  saturation. That depends on where ×1.3 places the highlights, so it is not this task's.
 
 ## How to Verify
 
-- A review of renders at `--contrast 1.3` (with the toe), colour held at the roll's slope
+- A review of renders at `--contrast 1.3` (under the default dark end), colour held at the roll's slope
   against colour following the contrast.
 
 ## Dependencies
