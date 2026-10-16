@@ -85,9 +85,12 @@ can WKWebView show what the app needs?
 
 ### Q3 — Slider to frame on screen: the render dominates
 
-Each setting was run as a scripted sweep: 60 input events/s for 3 s, on exposure. There
+Each setting was run as a scripted sweep on exposure for 3 s, one input per animation frame
+(about 72/s on the external monitor, more on the XDR, so the input rate is not fixed across
+runs). There
 were two runs. Before run 2 the page was fixed: it never draws a frame older than one
-already drawn, its draw time waits for the GPU, and it also times the frame after the change.
+already drawn, its HDR draw time waits for the GPU, and it also times the frame after the
+change.
 The SDR rows ran on the external monitor; the HDR row ran on the XDR in run 1 and the
 external monitor in run 2.
 
@@ -98,15 +101,17 @@ external monitor in run 2.
 | SDR, direct sRGB curve, coalesce | 37–54 ms | 2.3–2.8 ms | 1 ms | 56–70 / 69–97 ms | 84 / 112 ms |
 | HDR (f32 to WebGPU), coalesce | 35–40 ms | 6.5–7.1 ms | 3–6 ms | 67–70 / 70–81 ms | 83 / 94 ms |
 
+SDR draw is only the `putImageData` call; its upload and composite fall into the frame times.
 "Next frame" is the next animation frame after the draw, a lower bound. "Presented" is
 the one after it, which starts once the changed frame is on screen, an upper bound. The
 renders vary between runs by up to 1.5×, so read the ranges, not the digits.
 
-- **WebKit's share is small.** IPC for the 7.3 MB RGBA8 frame takes 2–4 ms, and
-  `putImageData` takes 1 ms. The HDR frame in f32 is 29 MB and takes 6–13 ms of IPC;
-  half-floats would halve that.
-- **The render is over the budget the design quoted.** At a 2048 edge it splits into
-  6 ms decode, 28 ms chain and 34 ms for the lcms2 display-curve transform.
+- **WebKit's share is small.** IPC for the 7.3 MB RGBA8 frame takes 2–5 ms. The HDR frame
+  in f32 is 29 MB and takes ~7 ms of IPC plus 3–6 ms of GPU draw; half-floats would halve
+  the IPC.
+- **The render is over the budget the design quoted.** At a 2048 edge, timed in the
+  core's example outside the app, it splits into 6 ms decode, 28 ms chain and 34 ms for the
+  lcms2 display-curve transform.
   - The chain alone matches the prototype's 24–35 ms.
   - The lcms2 transform is serial and costs as much as the chain.
   - Applying the sRGB curve directly in parallel (`pipeline::pixels`) gives 37 ms. Only
@@ -125,7 +130,8 @@ renders vary between runs by up to 1.5×, so read the ranges, not the digits.
 ### Q4 — Canvas against the exported file: equal
 
 - The canvas reads back exactly the bytes that were put, in `display-p3`: 0 of 5,481,048
-  samples differ. With the factor-1 equality above, the canvas shows the export's pixels.
+  samples differ. With the factor-1 equality above, the canvas holds the export's pixels;
+  readback cannot see compositing, which the next check covers by eye.
 - By eye, the canvas beside `1675-sdr-p3.tif` in Preview matches in colour and tone.
 
 ## Unknowns this spike turned up

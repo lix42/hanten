@@ -20,13 +20,14 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## webkit-display-spike
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-10-15
 
 - 2026-10-15: filed. Goal: Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron
 - 2026-10-15: Started. Plan: real nc preview on a throwaway branch spike/webkit-display-core (lib target + preview module, never merged), Tauri 2 shell in ../temp/webkit-display-spike/shell, test page committed under docs/spike/webkit-display/. Checks: P3 canvas, HDR candidates, slider round trip with real renders, canvas vs export; Safari/Chrome for comparison.
 - 2026-10-15: Done: report docs/spike/webkit-display.md, test page docs/spike/webkit-display/. Verdict: stay on Tauri. P3 canvas unclipped (readback + by eye on XDR); HDR via WebGPU extended canvas, gain-map/PQ images also HDR; slider-to-screen 96 ms p50 with lcms2 encode, 56 ms with the direct sRGB curve (IPC+draw ~3 ms); canvas readback equals the put bytes, factor-1 preview equals the export. Gotchas: WebKit cuts HDR headroom for an unfocused window (Safari too, Chrome not); no float16 2D canvas in WebKit; Chrome ignores toneMapping standard on WebGPU and loads no TIFF in img.
 - 2026-10-15: Review fixes: the test page now probes each float16 2D option on a fresh canvas (WebKit still offers none), never draws an older frame than one drawn, waits on the GPU before timing the draw, and times both the next and the following animation frame. Re-ran in WKWebView: renders vary up to 1.5x between runs, so the report gives ranges (direct curve 56-70 ms to the next frame, 84 ms presented); sending every input was 1.5x slower than coalescing in run 2.
+- 2026-10-15: Closed. Shipped review wording fixes: the sweep runs one input per animation frame (not a fixed 60/s), SDR draw time is only putImageData, HDR IPC ~7 ms. For packaging-spike: the shell pattern (plain Cargo crate, devUrl + remote.urls capability, ipc::Response for pixels) is in the report's How to rebuild.
 
 ## preview-cache-spike
 

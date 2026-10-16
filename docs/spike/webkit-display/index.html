@@ -68,7 +68,7 @@ them as HDR.</p>
 
 <h2>Q3 — slider to drawn frame, with real renders</h2>
 <p class="hint">Needs the Tauri shell. Open the frame, then drag a slider, or run the scripted
-sweep (60 input events per second for 3 seconds). "Coalesce" keeps one request in flight
+sweep (one input per animation frame for 3 seconds). "Coalesce" keeps one request in flight
 and sends only the newest value when it returns; "every input" sends each event, and the
 core skips any request older than the newest.</p>
 <div>

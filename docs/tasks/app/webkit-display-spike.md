@@ -1,8 +1,9 @@
 ---
 title: WebKit display spike
-status: doing
+status: done
 deps: []
 summary: Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron
+done: 2026-10-15
 ---
 # WebKit display spike
 
