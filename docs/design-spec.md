@@ -1039,7 +1039,7 @@ changed output pixel.
   `scripts/real-scan-verify/` and `nctool compare` are the tools for that half.
 - `params_hash` — a stable 64-bit FNV-1a hash of the canonical resolved-recipe
   JSON: the report's `recipe` as hanten pretty-prints it (the `params` body
-  `--save-recipe` writes, dedented, but with `roll.frames` keys absolute), so an agent can
+  `--save-recipe` writes, dedented, but with per-frame keys absolute), so an agent can
   reproduce it and identical
   configurations are detectable across frames and versions. Omitted for
   `inspect`/`measure-base`, which resolve no full recipe. `hanten roll` stamps one
@@ -1407,7 +1407,7 @@ A crop and an orientation, for every frame and per frame (`pipeline::geometry`,
 | `geometry.crop` | `--crop X,Y,W,H` | the picture, in the scan's own pixels before any turn — the `--base-region` convention, so a stated crop keeps its meaning whatever the orientation |
 | `geometry.flip` | `--flip none\|horizontal\|vertical` | a mirror, applied before the turn; `none` is stated, so a frame can undo the roll's |
 | `geometry.rotate` | `--rotate 0\|90\|180\|270` | a clockwise quarter turn |
-| `geometry.frames` | — | a frame's own `crop` / `flip` / `rotate`, keyed by file name like `roll.frames`, over the section's |
+| `geometry.frames` | — | a frame's own `crop` / `flip` / `rotate`, keyed like `roll.frames` (path relative to the recipe), over the section's |
 
 - **The crop is applied twice.** It is the effective area's third cut (above), so every
   command that measures reads only the picture: `measure-base` (`--crop`),
@@ -1694,6 +1694,8 @@ naming the new key, with no alias.
   `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`
   before any flag, and a `--frames`
   manifest's `params` beat it; a manifest may not state `roll.frames` itself.
+  `geometry.frames` is keyed, resolved, written and warned on the same way, on every
+  command that reads it (`measure-roll` and roll's measure mode included).
 
 The report's `chain.roll` states each value (`midtone_line`, `envelope_stops` and
 `frame_tones` among them), the `slope` derived, the `placement` asked for and, when it
@@ -2241,7 +2243,7 @@ it two f32 TIFFs (the film master, a linear HDR TIFF) are indistinguishable.
 `conversion.output_depth` names the **primary** artifact's depth (`u8` for the gain-map
 JPEG), not the optional IR TIFF's.
 `params_hash` is a stable hash (`Recipe::params_hash`) of the resolved recipe — the
-`params` body `--save-recipe` writes, dedented, with `roll.frames` keys absolute — the
+`params` body `--save-recipe` writes, dedented, with per-frame keys absolute — the
 same value as the report's
 `identity.params_hash`, so identical
 conversions share a hash without the record carrying the recipe. The value shown is

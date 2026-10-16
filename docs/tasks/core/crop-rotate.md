@@ -17,7 +17,7 @@ re-measures that frame and can shift the roll's measurements.
 ## What is known
 
 - Every knob is a flag and a recipe key (the project's knob rule). A frame's own crop goes
-  in the shared recipe's `geometry.frames` table, keyed by file name like `roll.frames`,
+  in the shared recipe's `geometry.frames` table, keyed like `roll.frames`,
   so `measure-roll` (which never reads a `roll --frames` manifest) measures it too.
 - The effective area (`pipeline/film_base.rs`) is the IR holder cut, then a static inset,
   then the crop as a third cut.

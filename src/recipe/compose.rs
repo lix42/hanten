@@ -138,7 +138,9 @@ pub fn for_frame(mut r: Recipe, input: &Path) -> Recipe {
             r.roll.frame_tones = Some(tones);
         }
     }
-    r.geometry.take_frame(input);
+    if let Some(key) = input.to_str() {
+        r.geometry.take_frame(key);
+    }
     r
 }
 

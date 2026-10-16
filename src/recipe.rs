@@ -2871,7 +2871,7 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 
 impl Recipe {
     /// The recipe's `params_hash` (`version::stable_hash`) over its pretty JSON — the
-    /// `params` `--save-recipe` writes, dedented, with `roll.frames` keys absolute as
+    /// `params` `--save-recipe` writes, dedented, with per-frame keys absolute as
     /// loaded — so a dumped recipe, once loaded, hashes to the run it came from. The report's `identity` and the telemetry record carry the same value.
     pub fn params_hash(&self) -> String {
         // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
@@ -5580,7 +5580,8 @@ mod tests {
             rotate: Some(geometry::Rotation::R90),
             flip: None,
         };
-        stated.geometry.frames.insert("a.tif".into(), entry);
+        const KEY: &str = "/roll/a.tif";
+        stated.geometry.frames.insert(KEY.into(), entry);
         let frames = |knobs: ConversionFlags| merge(stated.clone(), &knobs).geometry.frames;
         let crop = frames(ConversionFlags {
             crop: CropOverride {
@@ -5588,8 +5589,8 @@ mod tests {
             },
             ..Default::default()
         });
-        assert_eq!(crop["a.tif"].crop, None);
-        assert_eq!(crop["a.tif"].rotate, Some(geometry::Rotation::R90));
+        assert_eq!(crop[KEY].crop, None);
+        assert_eq!(crop[KEY].rotate, Some(geometry::Rotation::R90));
         let both = frames(ConversionFlags {
             crop: CropOverride {
                 crop: Some([1, 1, 5, 5]),
@@ -5601,7 +5602,7 @@ mod tests {
             ..Default::default()
         });
         assert!(both.is_empty(), "an entry left with nothing is dropped");
-        assert_eq!(frames(ConversionFlags::default())["a.tif"], entry);
+        assert_eq!(frames(ConversionFlags::default())[KEY], entry);
         // The measurement's lookup now agrees with the render's.
         let knobs = ConversionFlags {
             crop: CropOverride {
@@ -5609,10 +5610,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let input = Path::new("/roll/a.tif");
         assert_eq!(
-            merge(stated.clone(), &knobs).geometry.of(input),
-            merge(for_frame(stated.clone(), input), &knobs)
+            merge(stated.clone(), &knobs).geometry.of(KEY),
+            merge(for_frame(stated.clone(), Path::new(KEY)), &knobs)
                 .geometry
                 .shared()
         );

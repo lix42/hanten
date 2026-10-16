@@ -20380,11 +20380,14 @@ fn a_crop_past_the_scan_refuses_before_anything_is_written() {
 #[test]
 fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
     let tmp = TempDir::new("crop-table");
+    // Keyed by path, as `roll.frames` is: the fixture lives outside the recipe's folder.
+    let key = serde_json::to_string(fixture("hdr-48bit.tif").to_str().unwrap()).unwrap();
     let recipe = write_file(
         &tmp.path("geometry.json"),
-        r#"{"recipe_version": 3, "geometry": {"rotate": 90, "frames": {
-            "hdr-48bit.tif": {"crop": [0, 0, 100, 50]},
-            "other.tif": {"crop": [0, 0, 10, 10], "rotate": 0}}}}"#,
+        &format!(
+            r#"{{"recipe_version": 3, "geometry": {{"rotate": 90, "frames": {{
+            {key}: {{"crop": [0, 0, 100, 50]}}}}}}}}"#
+        ),
     );
     let params = ["--params", recipe.to_str().unwrap()];
     let (report, size, _) = convert_geometry(&tmp, "own.tif", &params);
@@ -20398,7 +20401,9 @@ fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
     // A bad entry is named as the entry, not as `--crop`.
     let bad = write_file(
         &tmp.path("bad.json"),
-        r#"{"recipe_version": 3, "geometry": {"frames": {"hdr-48bit.tif": {"crop": [0, 0, 0, 5]}}}}"#,
+        &format!(
+            r#"{{"recipe_version": 3, "geometry": {{"frames": {{{key}: {{"crop": [0, 0, 0, 5]}}}}}}}}"#
+        ),
     );
     let (code, _, err) = run(&[
         "convert",
@@ -20410,7 +20415,7 @@ fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`") && !err.contains("--crop"),
+        err.contains("hdr-48bit.tif\".crop`") && !err.contains("--crop"),
         "{err}"
     );
     // On `roll`, a typed `--crop` does not erase the bad entry before it is checked.
@@ -20427,18 +20432,17 @@ fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
         "0,0,20,20",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(
-        err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`"),
-        "{err}"
-    );
+    assert!(err.contains("hdr-48bit.tif\".crop`"), "{err}");
     // So too on `measure-roll` and on `roll`'s measure mode, with a recipe that
     // would otherwise measure.
     let bad_measured = write_file(
         &tmp.path("bad-measured.json"),
-        r#"{"recipe_version": 3,
-            "input": {"transfer": "linear", "meaning": "scanner-device"},
-            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
-            "geometry": {"frames": {"hdr-48bit.tif": {"crop": [0, 0, 0, 5]}}}}"#,
+        &format!(
+            r#"{{"recipe_version": 3,
+            "input": {{"transfer": "linear", "meaning": "scanner-device"}},
+            "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+            "geometry": {{"frames": {{{key}: {{"crop": [0, 0, 0, 5]}}}}}}}}"#
+        ),
     );
     let frame = fixture("hdr-48bit.tif").display().to_string();
     let out = tmp.path("measured-roll").display().to_string();
@@ -20454,11 +20458,79 @@ fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
     ] {
         let (code, _, err) = run(&[command, &typed[..]].concat());
         assert_eq!(code, 2, "{command:?}: {err}");
-        assert!(
-            err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`"),
-            "{command:?}: {err}"
-        );
+        assert!(err.contains("hdr-48bit.tif\".crop`"), "{command:?}: {err}");
     }
+}
+
+#[test]
+fn geometry_frames_keys_two_same_named_scans_apart_and_writes_them_relative() {
+    // Keyed by path relative to the recipe (`recipe::frame_keys`), as `roll.frames` is.
+    let tmp = TempDir::new("crop-same-name");
+    for dir in ["a", "b"] {
+        std::fs::create_dir_all(tmp.path(dir)).unwrap();
+        std::fs::copy(fixture("hdr-48bit.tif"), tmp.path(&format!("{dir}/x.tif"))).unwrap();
+    }
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "geometry": {"frames": {"a/x.tif": {"crop": [0, 0, 40, 30]}}}}"#,
+    );
+    let saved = tmp.path("saved/recipe.json");
+    std::fs::create_dir_all(tmp.path("saved")).unwrap();
+    let convert = |dir: &str, extra: &[&str]| {
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                tmp.path(&format!("{dir}/x.tif")).to_str().unwrap(),
+                "-o",
+                tmp.path(&format!("{dir}.tif")).to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                recipe.to_str().unwrap(),
+            ][..],
+            &MEASURED[..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let a = convert("a", &[]);
+    assert_eq!(a["geometry"]["width"], 40, "{a}");
+    let b = convert("b", &["--save-recipe", saved.to_str().unwrap()]);
+    assert!(b.get("geometry").is_none(), "the same name elsewhere: {b}");
+    // A key naming no file warns, as a `roll.frames` one does.
+    let stale = write_file(
+        &tmp.path("stale.json"),
+        r#"{"recipe_version": 3, "geometry": {"frames": {"gone.tif": {"rotate": 90}}}}"#,
+    );
+    let (code, stdout, err) = run(&[
+        &[
+            "convert",
+            tmp.path("a/x.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("stale.tif").to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--params",
+            stale.to_str().unwrap(),
+        ][..],
+        &MEASURED[..],
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        stdout.contains("`geometry.frames` key \\\"gone.tif\\\" names no file"),
+        "{stdout}"
+    );
+    // Written relative to the saved recipe's own folder.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+    assert_eq!(
+        written["params"]["geometry"]["frames"]["../a/x.tif"]["crop"],
+        serde_json::json!([0, 0, 40, 30]),
+        "{written}"
+    );
 }
 
 #[test]

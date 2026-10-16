@@ -858,7 +858,7 @@ pub struct CropOverride {
     /// Crop to `X,Y,W,H`, in the scan's own pixels before any rotation (the
     /// `--base-region` convention). It also narrows every measurement: the effective
     /// area is cut to it, so the film base, the roll's white and white balance read only
-    /// the picture. A frame's own crop is its `geometry.frames` entry, keyed by file name.
+    /// the picture. A frame's own crop is its `geometry.frames` entry, keyed by its path.
     #[arg(long, value_name = "X,Y,W,H", value_parser = parse_region)]
     pub crop: Option<[u32; 4]>,
 }
@@ -1660,7 +1660,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<ChainResult>,
     /// The resolved recipe (`convert`): the `params` of a `--save-recipe` file, with
-    /// `roll.frames` keys absolute, so it reloads through `--params` to this run. `identity.params_hash` hashes it.
+    /// per-frame keys absolute, so it reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
     /// What the linear HDR TIFF encoder wrote (`--transfer linear`), and the
@@ -1972,7 +1972,8 @@ fn compose_layers(bodies: &[serde_json::Value]) -> Result<Recipe> {
     })
 }
 
-/// What a load does with each layer's `roll.frames`.
+/// What a load does with each layer's `roll.frames`. `geometry.frames` is resolved on
+/// every load: each command that reads it measures or renders by it.
 #[derive(Clone, Copy)]
 enum FrameKeys {
     /// Resolve the keys ([`resolve_frame_keys`]).
@@ -2007,6 +2008,13 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
         };
         let mut layer = read_layer(&txt, &name)?;
         layer_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
+        // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on stdin.
+        let folder = if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
+            collision_key(Path::new("."))
+        } else {
+            let key = collision_key(p);
+            key.parent().map_or(key.clone(), Path::to_path_buf)
+        };
         match frames {
             FrameKeys::Keep => {}
             FrameKeys::Drop => {
@@ -2014,19 +2022,19 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
                     roll.remove("frames");
                 }
             }
-            FrameKeys::Resolve => {
-                // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on
-                // stdin.
-                let folder =
-                    if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
-                        collision_key(Path::new("."))
-                    } else {
-                        let key = collision_key(p);
-                        key.parent().map_or(key.clone(), Path::to_path_buf)
-                    };
-                layer_warnings.extend(resolve_frame_keys(&mut layer.body, &folder, &name)?);
-            }
+            FrameKeys::Resolve => layer_warnings.extend(resolve_frame_keys(
+                &mut layer.body,
+                "roll.frames",
+                &folder,
+                &name,
+            )?),
         }
+        layer_warnings.extend(resolve_frame_keys(
+            &mut layer.body,
+            "geometry.frames",
+            &folder,
+            &name,
+        )?);
         layers.push(layer.body);
         names.push(name);
     }
@@ -2037,47 +2045,47 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
     })
 }
 
-/// Rewrite a layer's `roll.frames` keys, each relative to `folder` (the recipe's), to the
-/// frames' resolved paths ([`recipe::frame_keys`]); one warning per key naming no file.
+/// Rewrite a layer's `table` keys (`roll.frames` or `geometry.frames`), each relative to
+/// `folder` (the recipe's), to the frames' resolved paths ([`recipe::frame_keys`]); one
+/// warning per key naming no file.
 fn resolve_frame_keys(
     body: &mut serde_json::Value,
+    table: &str,
     folder: &Path,
     name: &str,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
-    recipe::frame_keys::rebase(body, |key| {
+    recipe::frame_keys::rebase(body, table, |key| {
         if key.is_empty() {
-            return Err("a `roll.frames` key is empty: key each frame by its path".into());
+            return Err(format!(
+                "a `{table}` key is empty: key each frame by its path"
+            ));
         }
         let path = folder.join(key);
         if !path.is_file() {
             warnings.push(format!(
-                "recipe {name}: `roll.frames` key {key:?} names no file (looked for {}), so \
+                "recipe {name}: `{table}` key {key:?} names no file (looked for {}), so \
                  its values reach no frame. A key is the frame's path relative to the \
                  recipe's folder: move the recipe with its scans, or correct the key",
                 path.display()
             ));
         }
-        frame_key(&path).ok_or_else(|| {
-            format!("`roll.frames` key {key:?} resolves to a path that is not UTF-8")
-        })
+        frame_key(&path)
+            .ok_or_else(|| format!("`{table}` key {key:?} resolves to a path that is not UTF-8"))
     })
     .map_err(|e| NcError::Usage(format!("recipe {name}: {e}")))?;
     Ok(warnings)
 }
 
-/// The key a frame's `roll.frames` entry has once loaded: its resolved path
-/// ([`collision_key`]); `None` when that is not UTF-8, which no key can name.
+/// The key a frame's `roll.frames` and `geometry.frames` entries have once loaded: its
+/// resolved path ([`collision_key`]); `None` when that is not UTF-8, which no key can name.
 fn frame_key(input: &Path) -> Option<String> {
     collision_key(input).to_str().map(str::to_owned)
 }
 
 /// `frames` as a recipe written to `path` states them: relative to the folder of the file
 /// the staged writer writes — a symlink's referent ([`staged::resolve_target`]).
-fn frames_written_to(
-    frames: &BTreeMap<String, recipe::FrameRoll>,
-    path: &Path,
-) -> BTreeMap<String, recipe::FrameRoll> {
+fn frames_written_to<T: Clone>(frames: &BTreeMap<String, T>, path: &Path) -> BTreeMap<String, T> {
     // A target that does not resolve fails the write itself.
     let written = staged::resolve_target(path).unwrap_or_else(|_| path.to_path_buf());
     let key = collision_key(&written);
@@ -5441,6 +5449,7 @@ fn convert_attempt(
         .map(|path| {
             let mut written = recipe.clone();
             written.roll.frames = frames_written_to(&recipe.roll.frames, path);
+            written.geometry.frames = frames_written_to(&recipe.geometry.frames, path);
             stage_json(path, &RecipeEnvelope::new(&written))
         })
         .transpose()?;
@@ -7451,6 +7460,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
                 &RecipeEnvelope::new(&{
                     let mut saved = saved_roll_recipe(&shared, &args.knobs.roll);
                     saved.roll.frames = frames_written_to(&saved.roll.frames, path);
+                    saved.geometry.frames = frames_written_to(&saved.geometry.frames, path);
                     saved
                 }),
             )
@@ -8125,6 +8135,9 @@ fn write_recipe_out(path: &Path, recipe: &MeasuredRecipe, log: &Log) -> Result<(
     if let Some(roll) = &mut written.roll {
         roll.frames = frames_written_to(&roll.frames, path);
     }
+    if let Some(geometry) = &mut written.geometry {
+        geometry.frames = frames_written_to(&geometry.frames, path);
+    }
     let mut json = serde_json::to_string_pretty(&RecipeEnvelope::new(&written))
         .map_err(|e| NcError::Other(format!("serializing recipe: {e}")))?;
     json.push('\n');
@@ -8690,7 +8703,12 @@ fn decode_for_roll_white<T>(
     // A crop is the picture's: the leader is read whole, like the unexposed frame.
     let crop = match scan {
         RollScan::Leader => None,
-        RollScan::Frame | RollScan::ContentFrame => recipe.geometry.of(input).crop,
+        RollScan::Frame | RollScan::ContentFrame => {
+            recipe
+                .geometry
+                .of(&frame_key(input).unwrap_or_default())
+                .crop
+        }
     };
     let area = film_base::effective_area(&scanned, recipe.measure.inset, crop);
     if scan == RollScan::Frame
@@ -9005,7 +9023,7 @@ fn pool_content(
                 ))
             })
         };
-        let crop = geometry.of(input).crop;
+        let crop = geometry.of(&frame_key(input).unwrap_or_default()).crop;
         let counts = film_base::AreaCounts::of(&scan.image, area_of(crop)?.region)?;
         // The pool reads the crop; a leader is classified over the whole frame, as
         // `measure_areas` reads it.

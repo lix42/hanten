@@ -23,7 +23,6 @@
 //! per pixel to mark what has moved.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -174,7 +173,7 @@ impl GeometryReport {
 }
 
 /// The recipe's `geometry` section: the crop and orientation for every frame, and each
-/// frame's own, keyed by file name like `roll.frames`. Written with its nulls.
+/// frame's own, keyed like `roll.frames` (`recipe::frame_keys`). Written with its nulls.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GeometrySection {
@@ -195,13 +194,11 @@ impl GeometrySection {
         }
     }
 
-    /// The geometry `input` is converted and measured with: its entry over the shared.
-    pub fn of(&self, input: &Path) -> Geometry {
-        let entry = input
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| self.frames.get(n));
-        self.shared().under(entry.copied().unwrap_or_default())
+    /// The geometry the frame keyed `key` (its resolved path, `recipe::frame_keys`) is
+    /// converted and measured with: its entry over the shared.
+    pub fn of(&self, key: &str) -> Geometry {
+        let entry = self.frames.get(key).copied().unwrap_or_default();
+        self.shared().under(entry)
     }
 
     /// Set the typed flags' values. A flag beats every frame's entry, so the value it
@@ -224,11 +221,10 @@ impl GeometrySection {
         self.flip = f.or(self.flip);
     }
 
-    /// Move `input`'s entry, if any, into the shared values, removing it — as
-    /// `Recipe::for_frame` does with `roll.frames`.
-    pub fn take_frame(&mut self, input: &Path) {
-        let name = input.file_name().and_then(|n| n.to_str());
-        if let Some(entry) = name.and_then(|n| self.frames.remove(n)) {
+    /// Move the entry keyed `key`, if any, into the shared values, removing it — as
+    /// `recipe::for_frame` does with `roll.frames`.
+    pub fn take_frame(&mut self, key: &str) {
+        if let Some(entry) = self.frames.remove(key) {
             let g = self.shared().under(entry);
             self.crop = g.crop;
             self.rotate = g.rotate;
@@ -238,7 +234,7 @@ impl GeometrySection {
 }
 
 /// Check the section as stated: a crop of positive size whose far edge a `u32` holds,
-/// and an entry per file name that states something.
+/// and an entry per frame that states something.
 pub fn validate(section: &GeometrySection, crop_name: &str) -> Result<()> {
     check_crop_shape(section.crop, crop_name)?;
     validate_frames(section)
@@ -247,11 +243,6 @@ pub fn validate(section: &GeometrySection, crop_name: &str) -> Result<()> {
 /// Check the `geometry.frames` table, each entry by its own name.
 pub fn validate_frames(section: &GeometrySection) -> Result<()> {
     for (name, entry) in &section.frames {
-        if name.is_empty() || Path::new(name).file_name() != Some(name.as_ref()) {
-            return Err(NcError::Usage(format!(
-                "recipe `geometry.frames` keys are file names, not paths: got {name:?}"
-            )));
-        }
         if *entry == Geometry::default() {
             return Err(NcError::Usage(format!(
                 "recipe `geometry.frames.\"{name}\"` states nothing: give it a `crop`, a \
@@ -622,18 +613,24 @@ mod tests {
             rotate: Some(Rotation::R90),
             ..Default::default()
         };
+        // Keyed by the frame's resolved path, as a loaded recipe is.
         s.frames.insert(
-            "a.tif".into(),
+            "/scans/a.tif".into(),
             Geometry {
                 rotate: Some(Rotation::R180),
                 ..Default::default()
             },
         );
-        let g = s.of(Path::new("/scans/a.tif"));
+        let g = s.of("/scans/a.tif");
         assert_eq!(g.crop, Some([0, 0, 10, 10]));
         assert_eq!(g.rotate, Some(Rotation::R180));
-        assert_eq!(s.of(Path::new("b.tif")).rotate, Some(Rotation::R90));
-        s.take_frame(Path::new("/scans/a.tif"));
+        assert_eq!(s.of("/scans/b.tif").rotate, Some(Rotation::R90));
+        assert_eq!(
+            s.of("/other/a.tif").rotate,
+            Some(Rotation::R90),
+            "a path, not a name"
+        );
+        s.take_frame("/scans/a.tif");
         assert!(s.frames.is_empty());
         assert_eq!(s.shared(), g);
     }
@@ -650,14 +647,16 @@ mod tests {
 
     #[test]
     fn validation_names_the_bad_entry() {
+        // A key is a path, as `roll.frames`' are (`recipe::frame_keys`).
         let mut s = GeometrySection::default();
-        s.frames.insert("dir/a.tif".into(), Geometry::default());
-        assert!(
-            validate(&s, "--crop")
-                .unwrap_err()
-                .to_string()
-                .contains("file names")
+        s.frames.insert(
+            "dir/a.tif".into(),
+            Geometry {
+                rotate: Some(Rotation::R90),
+                ..Default::default()
+            },
         );
+        validate(&s, "--crop").unwrap();
         let mut s = GeometrySection::default();
         s.frames.insert("a.tif".into(), Geometry::default());
         assert!(

@@ -2516,9 +2516,9 @@ hanten convert scan.tif -o out --params roll.json --crop 40,30,400,300 --rotate 
 - **The turn only moves pixels.** It runs after every rendering stage, so a turned output
   is the upright one rearranged, sample for sample. `--export-film-rgb` is cropped but
   **not turned**: it is the decode, before the turn.
-- **One frame's own crop** goes in the shared recipe's `geometry.frames`, keyed by file
-  name like `roll.frames`, with any of `crop`, `rotate` and `flip`; unset ones are the
-  section's:
+- **One frame's own crop** goes in the shared recipe's `geometry.frames`, keyed like
+  `roll.frames` by the frame's path relative to the recipe's folder, with any of `crop`,
+  `rotate` and `flip`; unset ones are the section's:
 
   ```json
   { "recipe_version": 3,
