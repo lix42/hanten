@@ -1406,6 +1406,76 @@ fn the_retired_ir_export_is_refused_by_flag_and_by_key_on_both_commands() {
 }
 
 #[test]
+fn the_renamed_density_gamma_is_refused_naming_linearization_on_every_command() {
+    let tmp = TempDir::new("density-gamma-renamed");
+    let input = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tiff");
+    let (input, out, dir) = (
+        input.to_str().unwrap(),
+        out.to_str().unwrap(),
+        tmp.0.to_str().unwrap(),
+    );
+    let base = ["--film-base", "0.9,0.55,0.42"];
+    for (args, remedy) in [
+        (
+            [
+                &["convert", input, "-o", out, "--density-gamma", "1.7"][..],
+                &base,
+            ]
+            .concat(),
+            "pass --linearization 1.7",
+        ),
+        (
+            [
+                &["roll", input, "--out-dir", dir, "--density-gamma", "1.7"][..],
+                &base,
+            ]
+            .concat(),
+            "pass --linearization 1.7",
+        ),
+        (
+            vec!["profile", "--density-gamma", "1.7"],
+            "pass --linearization 1.7",
+        ),
+        // The bare flag reaches the same message rather than clap's.
+        (
+            [
+                &["convert", input, "-o", out][..],
+                &base,
+                &["--density-gamma"],
+            ]
+            .concat(),
+            "pass --linearization SLOPE",
+        ),
+        // A value-less flag it swallows is not echoed as the slope, nor is a slope
+        // `--linearization` would refuse.
+        (
+            vec!["profile", "--density-gamma", "--strict"],
+            "pass --linearization SLOPE",
+        ),
+        (
+            vec!["profile", "--density-gamma", "-1"],
+            "pass --linearization SLOPE",
+        ),
+    ] {
+        let (code, _stdout, err) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(
+            err.contains("--density-gamma was renamed to --linearization"),
+            "{args:?}: {err}"
+        );
+        assert!(err.contains(remedy), "{args:?}: {err}");
+        let tail = err.split("pass --linearization").nth(1).unwrap_or_default();
+        assert!(!tail.contains("--strict"), "{args:?}: {err}");
+    }
+    assert!(!Path::new(out).exists());
+    // The new spelling reaches the recipe.
+    let (code, stdout, err) = run(&["profile", "--linearization", "1.7"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(stdout.contains(r#""linearization": 1.7"#), "{stdout}");
+}
+
+#[test]
 fn export_film_rgb_is_guarded_and_takes_no_path_on_roll() {
     let tmp = TempDir::new("film-rgb");
     let out = tmp.path("out.tiff");
@@ -1722,7 +1792,7 @@ fn bad_params_are_usage_errors() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--density-gamma",
+        "--linearization",
         "0",
     ]);
     assert_eq!(code, 2, "invalid params must exit 2");
@@ -1802,7 +1872,7 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
         &tmp.path("look.json"),
         r#"{"recipe_version":3,
             "reconstruction":{"scale":[1.0,0.84,0.73],"linearization":1.8,
-                              "anchor":{"mid-at-base-offset":0.62}},
+                              "anchor_rule":{"mid-at-base-offset":0.62}},
             "look":{"contrast":1.2}}"#,
     );
     let (code, _, err) = run(&[
@@ -3457,7 +3527,7 @@ fn telemetry_params_hash_matches_identical_conversions() {
     let c = tmp.path("c.tiff");
     let ra = convert(&a, &[]);
     let rb = convert(&b, &[]);
-    let rc = convert(&c, &["--density-gamma", "1.5"]);
+    let rc = convert(&c, &["--linearization", "1.5"]);
 
     let ha = ra["conversion"]["params_hash"].as_str().unwrap();
     let hb = rb["conversion"]["params_hash"].as_str().unwrap();
@@ -3622,7 +3692,7 @@ fn telemetry_params_hash_covers_the_decode() {
         json(&stdout)
     };
     let ra = convert(&tmp.path("a.tiff"), &[]);
-    let rb = convert(&tmp.path("b.tiff"), &["--density-gamma", "1.5"]);
+    let rb = convert(&tmp.path("b.tiff"), &["--linearization", "1.5"]);
 
     assert_ne!(
         ra["conversion"]["params_hash"], rb["conversion"]["params_hash"],
@@ -4465,7 +4535,7 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
         // This asserts the master is *unclamped*, which needs samples above 1.0: a
         // steep slope with mid-grey just above the base puts the anchor at
         // `0.05 + 0.745/5 ≈ 0.2`, pushing plenty of content past it.
-        "--density-gamma",
+        "--linearization",
         "5",
         "--anchor-mid-offset",
         "0.05",
@@ -4514,7 +4584,7 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
         &tmp.path("master.json"),
         r#"{"recipe_version":3,
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
-            "reconstruction":{"linearization":5.0,"anchor":{"mid-at-base-offset":0.05}},
+            "reconstruction":{"linearization":5.0,"anchor_rule":{"mid-at-base-offset":0.05}},
             "output":"film-master"}"#,
     );
     let again = tmp.path("master2.tiff");
@@ -8523,7 +8593,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             applied,
             [
                 "identity",
-                "contrast+saturation+highlight-desaturation",
+                "tone-slope+saturation-slope+highlight-desaturation",
                 "reinhard-peak-lifted-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
@@ -8827,8 +8897,8 @@ fn the_fixed_decodes_own_knobs_reach_the_decode() {
     assert_eq!(code, 0, "{err}");
     assert!(close(&d["anchor"], 0.7 + 0.744_727_5 / 1.8), "{d}");
 
-    // `--density-gamma` sets `reconstruction.linearization` directly.
-    let (code, d, err) = decode_of(&["--density-gamma", "1.7"], "bare-gamma.tiff");
+    // `--linearization` sets `reconstruction.linearization` directly.
+    let (code, d, err) = decode_of(&["--linearization", "1.7"], "bare-gamma.tiff");
     assert_eq!(code, 0, "{err}");
     assert!(close(&d["linearization"], 1.7), "{d}");
 
@@ -8962,7 +9032,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
     let (code, err) = run_with(
         r#"{"recipe_version": 3,
             "reconstruction": {"scale": [1, 0.9, 0.8], "linearization": 1.7,
-                               "anchor": {"mid-at-base-offset": 0.6}},
+                               "anchor_rule": {"mid-at-base-offset": 0.6}},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "measure": {"inset": 0.05},
             "look": {}}"#,
@@ -9363,7 +9433,7 @@ fn the_anchor_guard_recommends_only_a_slope() {
         tmp.path("out").to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
-        "--density-gamma",
+        "--linearization",
         "2e-39",
         "--anchor-mid-offset",
         "0.62",
@@ -9374,7 +9444,7 @@ fn the_anchor_guard_recommends_only_a_slope() {
     // The guard checks the decode's recipe (`crate::recipe::validate`), and its remedy
     // names only the slope and the offset, which is what this command line can change.
     assert!(err.contains("the decode's anchor is not usable"), "{err}");
-    assert!(err.contains("Use a larger --density-gamma"), "{err}");
+    assert!(err.contains("Use a larger --linearization"), "{err}");
     assert!(
         !err.contains("which needs no such division"),
         "the remedy must not recommend a placement it never checked: {err}"
@@ -9773,6 +9843,94 @@ fn roll_refuses_a_pre_flip_shared_recipe() {
 }
 
 #[test]
+fn the_renamed_anchor_key_is_refused_at_every_value_and_the_new_one_is_written() {
+    let tmp = TempDir::new("anchor-renamed");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let out = tmp.path("out.tiff").display().to_string();
+    let base = ["--film-base", "0.9,0.55,0.42", "--report", "none"];
+    let refusal = "`reconstruction.anchor` is not a recipe key any more: it is \
+                   `reconstruction.anchor_rule`";
+    // Every value, the old default every earlier recipe wrote included, and a version 2
+    // document too.
+    for (name, doc) in [
+        (
+            "default.json",
+            r#"{"recipe_version": 3, "reconstruction": {"anchor": {"mid-at-base-offset": 0.62}}}"#,
+        ),
+        (
+            "other.json",
+            r#"{"recipe_version": 3, "reconstruction": {"anchor": {"mid-at-base-offset": 0.5}}}"#,
+        ),
+        (
+            "v2.json",
+            r#"{"recipe_version": 2, "reconstruction": {"anchor": {"mid-at-base-offset": 0.62}}}"#,
+        ),
+    ] {
+        let recipe = write_file(&tmp.path(name), doc).display().to_string();
+        let (code, _stdout, err) = run(&[
+            &["convert", &input, "-o", &out, "--params", &recipe][..],
+            &base,
+        ]
+        .concat());
+        assert_eq!(code, 2, "{name}: {err}");
+        assert!(err.contains(refusal), "{name}: {err}");
+    }
+    // A roll's per-frame override reaches the same refusal.
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {input:?}, "params":
+                 {{ "reconstruction": {{ "anchor": {{ "mid-at-base-offset": 0.5 }} }} }} }} ] }}"#
+        ),
+    );
+    let dir = tmp.path("roll").display().to_string();
+    let (code, _stdout, err) = run(&[
+        &[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            &dir,
+        ][..],
+        &base,
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("per-frame `params` override"), "{err}");
+    assert!(err.contains(refusal), "{err}");
+    assert!(!Path::new(&out).exists());
+
+    // The new key is read, and a saved recipe states only it.
+    let recipe = write_file(
+        &tmp.path("new.json"),
+        r#"{"recipe_version": 3, "reconstruction": {"anchor_rule": {"mid-at-base-offset": 0.5}}}"#,
+    )
+    .display()
+    .to_string();
+    let saved = tmp.path("saved.json");
+    let (code, _stdout, err) = run(&[
+        &[
+            "convert",
+            &input,
+            "-o",
+            &out,
+            "--params",
+            &recipe,
+            "--save-recipe",
+            saved.to_str().unwrap(),
+        ][..],
+        &base,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    let saved = std::fs::read_to_string(&saved).unwrap();
+    let decode =
+        &serde_json::from_str::<serde_json::Value>(&saved).unwrap()["params"]["reconstruction"];
+    assert_eq!(decode["anchor_rule"]["mid-at-base-offset"], 0.5, "{saved}");
+    assert!(decode.get("anchor").is_none(), "{saved}");
+}
+
+#[test]
 fn roll_refuses_the_removed_chains_keys_from_either_recipe_site() {
     // Roll accepts no conversion flags, so what it can reach arrives in a recipe —
     // and it reads recipes in **two** places. Both are pinned, because a check composed
@@ -9848,9 +10006,9 @@ fn roll_refuses_the_removed_chains_keys_from_either_recipe_site() {
     );
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("`reconstruction.linearization`"), "{err}");
-    // It names the frame, and only the recipe key: `roll` accepts no `--density-gamma`.
+    // It names the frame, and only the recipe key: a `params` override has no flag.
     assert!(err.contains("per-frame `params` override"), "{err}");
-    assert!(!err.contains("--density-gamma"), "{err}");
+    assert!(!err.contains("--linearization"), "{err}");
     // …and a valid one resolves and reaches the frame's render — the frame's own
     // recipe, not the shared one, which is what the decode reads.
     let good = manifest_with(
@@ -14103,7 +14261,7 @@ fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
     let (code, _, err) = run(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
-        "--density-gamma",
+        "--linearization",
         "0",
         "--params",
         sound.to_str().unwrap(),
@@ -14474,18 +14632,22 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     let (plain, report) = convert("plain.tiff", &[]);
     assert_eq!(
         look(&report)["applied"],
-        "contrast+saturation+highlight-desaturation",
+        "tone-slope+saturation-slope+highlight-desaturation",
         "{report}"
     );
     assert_eq!(
         report["chain"]["look"]["highlight_desaturation"],
         serde_json::json!({"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]})
     );
-    // Strength 0 is off: the look then runs its contrast alone, different from the
+    // Strength 0 is off: the look then runs its two slopes alone, different from the
     // default, and with the other two knobs inert — a moved band or start changes
     // nothing when off.
     let (off, report) = convert("off.tiff", &["--highlight-desaturation", "0"]);
-    assert_eq!(look(&report)["applied"], "contrast+saturation", "{report}");
+    assert_eq!(
+        look(&report)["applied"],
+        "tone-slope+saturation-slope",
+        "{report}"
+    );
     assert_ne!(plain, off, "the default must move the fixture's highlights");
     let (off_moved, _) = convert(
         "off-moved.tiff",
@@ -14630,7 +14792,7 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     let fallback = (1.0_f64 / 0.18).log2() / 1.75;
 
     let (default, report) = convert("default.tiff", &[]);
-    assert_eq!(applied(&report), "contrast+saturation", "{report}");
+    assert_eq!(applied(&report), "tone-slope+saturation-slope", "{report}");
     let (k, base, from, slope) = look(&report);
     assert!(
         k == 1.0 && (base - fallback).abs() < 1e-6 && from == "fallback",
@@ -14765,7 +14927,7 @@ fn contrast_leaves_colour_alone_and_saturation_reaches_the_pixels() {
     // Saturation stretches every ratio by its multiplier.
     let (rich, report) = convert("rich.tiff", &["--saturation", "1.3"]);
     assert_eq!(
-        report["chain"]["stages"][1]["applied"], "contrast+saturation",
+        report["chain"]["stages"][1]["applied"], "tone-slope+saturation-slope",
         "{report}"
     );
     let stretched: Vec<f32> = a.iter().map(|r| r * 1.3).collect();
@@ -14835,12 +14997,12 @@ fn the_look_contrast_refuses_a_value_it_cannot_apply() {
     for (gamma, contrast) in [("1e30", "1e10"), ("1e-30", "1e-20")] {
         let (code, _, err) = run(&[
             &base[..],
-            &["--density-gamma", gamma, "--contrast", contrast],
+            &["--linearization", gamma, "--contrast", contrast],
         ]
         .concat());
         assert_eq!(code, 2, "{gamma} × {contrast}: {err}");
         assert!(
-            err.contains("--density-gamma (recipe `reconstruction.linearization`)")
+            err.contains("--linearization (recipe `reconstruction.linearization`)")
                 && err.contains("--contrast (recipe `look.contrast`)"),
             "{err}"
         );

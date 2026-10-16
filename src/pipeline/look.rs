@@ -347,24 +347,24 @@ impl LookParams {
     /// same edit.
     pub fn applied(&self) -> &'static str {
         // The controls that ran, joined in the order the stage applies them, indexed by
-        // a bit per control: contrast 1, saturation 2, grade 4, desaturation 8.
+        // a bit per control: tone slope 1, saturation slope 2, grade 4, desaturation 8.
         const JOINED: [&str; 16] = [
             "identity",
-            "contrast",
-            "saturation",
-            "contrast+saturation",
+            "tone-slope",
+            "saturation-slope",
+            "tone-slope+saturation-slope",
             "channel-grade",
-            "contrast+channel-grade",
-            "saturation+channel-grade",
-            "contrast+saturation+channel-grade",
+            "tone-slope+channel-grade",
+            "saturation-slope+channel-grade",
+            "tone-slope+saturation-slope+channel-grade",
             "highlight-desaturation",
-            "contrast+highlight-desaturation",
-            "saturation+highlight-desaturation",
-            "contrast+saturation+highlight-desaturation",
+            "tone-slope+highlight-desaturation",
+            "saturation-slope+highlight-desaturation",
+            "tone-slope+saturation-slope+highlight-desaturation",
             "channel-grade+highlight-desaturation",
-            "contrast+channel-grade+highlight-desaturation",
-            "saturation+channel-grade+highlight-desaturation",
-            "contrast+saturation+channel-grade+highlight-desaturation",
+            "tone-slope+channel-grade+highlight-desaturation",
+            "saturation-slope+channel-grade+highlight-desaturation",
+            "tone-slope+saturation-slope+channel-grade+highlight-desaturation",
         ];
         let s = &self.section;
         let ran = [
@@ -1129,9 +1129,9 @@ mod tests {
         assert_eq!(params.applied(), "identity");
         params.section.slope = 1.3;
         assert!(!params.is_empty());
-        assert_eq!(params.applied(), "contrast");
+        assert_eq!(params.applied(), "tone-slope");
         params.section.highlight_desaturation.strength = 0.5;
-        assert_eq!(params.applied(), "contrast+highlight-desaturation");
+        assert_eq!(params.applied(), "tone-slope+highlight-desaturation");
 
         // Unity is an identity because the stage *skips* the operator there, not because
         // the operator is one: `0.18 · (x / 0.18)^1` rounds twice and moves some samples
@@ -1239,11 +1239,11 @@ mod tests {
         assert!(!params.is_empty());
         assert_eq!(params.applied(), "channel-grade");
         params.section.slope = 1.3;
-        assert_eq!(params.applied(), "contrast+channel-grade");
+        assert_eq!(params.applied(), "tone-slope+channel-grade");
         params.section.highlight_desaturation.strength = 0.5;
         assert_eq!(
             params.applied(),
-            "contrast+channel-grade+highlight-desaturation"
+            "tone-slope+channel-grade+highlight-desaturation"
         );
         params.section.slope = 1.0;
         assert_eq!(params.applied(), "channel-grade+highlight-desaturation");

@@ -113,13 +113,13 @@ A slope is a power on linear values: a multiplier on stops or decades.
 
 | Term | Meaning | Stage | Kind | Public spellings |
 |---|---|---|---|---|
-| **linearization** | the decode's straight-line slope in `10^(lin·(D′ − A))`; it undoes film gamma. Default 1.8 | decode | public | `reconstruction.linearization`, `chain.decode.linearization`; `--density-gamma` (misnomer) |
-| **tone slope** | the look's luminance power about mid-grey: base slope × contrast | look | public | `chain.look.slope` |
+| **linearization** | the decode's straight-line slope in `10^(lin·(D′ − A))`; it undoes film gamma. Default 1.8 | decode | public | `--linearization`, `reconstruction.linearization`, `chain.decode.linearization` |
+| **tone slope** | the look's luminance power about mid-grey: base slope × contrast | look | public | `chain.look.slope`; look stage `tone-slope` |
 | **base slope** | the tone slope before the contrast knob; from roll, fallback, direct, thin or placement | look | public | `chain.look.base_slope`, `base_from` |
 | **roll slope** | the roll's span (dark end to white, scene stops) mapped onto 9.049 look stops, clamped to ≈1.237–3.5 | measure-roll | public | `chain.roll.slope` |
 | **fallback slope** | the base slope when no roll is measured (≈1.414); `direct` pins it | look | public | `base_from: fallback` |
 | **thin slope, placement slope** | per-frame replacements of the base slope | roll | public | `roll.thin_slope`, `frames[].hybrid.slope` |
-| **saturation slope** | the power on colour ratios: the roll's or fallback slope (never a frame's own) × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope` |
+| **saturation slope** | the power on colour ratios: the roll's or fallback slope (never a frame's own) × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope`; look stage `saturation-slope` |
 | **whole slope** | linearization × tone slope (≈2.54) — what the retired single "gamma" meant | validation | public (usage messages) | — |
 | **colour slope** | linearization × saturation slope, used by highlight desaturation | look | internal | — |
 | **midtone-line slope** | the cast's change per scene stop, as a log2 ratio | scene correction | public (positional) | — |
@@ -140,7 +140,7 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | Term | Meaning | Space | Kind | Public spellings |
 |---|---|---|---|---|
 | **mid-grey** | 0.18: the look's pivot and the origin of scene stops | film RGB, ACEScg | internal | — |
-| **mid-grey density above base `d`** | the corrected density where mid-grey lands, default 0.62: its height above the film base while the density offset is 0 (the default). The anchor rule's input. A convention, not a per-stock value | `D′` | public | `--anchor-mid-offset`, `reconstruction.anchor` (misnomer) |
+| **mid-grey density above base `d`** | the corrected density where mid-grey lands, default 0.62: its height above the film base while the density offset is 0 (the default). The anchor rule's input. A convention, not a per-stock value | `D′` | public | `--anchor-mid-offset`, `reconstruction.anchor_rule` |
 | **anchor `A`** | the corrected density that renders to film RGB 1.0, derived as `d + log10(1/0.18) / linearization` ≈ 1.034. A scalar (a per-channel anchor would be a white balance). Reported, never an input; not scene white | `D′` | public | `chain.decode.anchor` |
 | **diffuse white** | graded ACEScg 1.0, a convention. The datasheets' diffuse white (`d + 0.36`) decodes to ≈0.80 in film RGB at the default decode; where it grades depends on the tone slope | graded | public | `--highlight-desaturation-start` help |
 | **reference white** | display-linear 1.0; 203 cd/m² in an HDR destination (an SDR file states no absolute level). Diffuse white renders below it (≈0.55 at the default highlight range) | display | public | `reference_white_nits`, `reference_white_sample` |
@@ -244,16 +244,12 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 ## Known public misnomers
 
 Each changes the scripting contract, so it waits for a migration
-(`core/rename-decode-look-misnomers`, `core/rename-fit-range-misnomers`,
-`core/rename-roll-report-misnomers`). Prose names the right concept and quotes the
-public name once. Internal identifiers that contradict this doc are
-`core/internal-term-renames`.
+(`core/rename-fit-range-misnomers`, `core/rename-roll-report-misnomers`). Prose names
+the right concept and quotes the public name once. Internal identifiers that
+contradict this doc are `core/internal-term-renames`.
 
 | | Public name | What it really is |
 |---|---|---|
-| P1 | `--density-gamma` | linearization |
-| P2 | `reconstruction.anchor` (holds `d`) vs `chain.decode.anchor` (holds `A`) | two quantities under one leaf name |
-| P3 | look stage string `"contrast"` | fires on tone slope ≠ 1, even at `look.contrast` 1 |
 | P4 | `--display-tone-headroom`, `fit_range.headroom_stops` | the highlight range (and a retired stage name) |
 | P5 | `--display-black`, `{"black"}` | places the film base in display stops; sets no black level |
 | P6 | `roll.frames.*.exposure` | the small lift, `roll.frame_exposure` |

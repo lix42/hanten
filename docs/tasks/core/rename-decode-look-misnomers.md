@@ -1,8 +1,9 @@
 ---
 title: Rename the decode and look misnomers (--density-gamma, reconstruction.anchor, look stage "contrast")
-status: todo
+status: done
 deps: [core/value-domain-terminology]
 summary: public names that say the wrong quantity in the decode and the look
+done: 2026-10-15
 ---
 # Rename the decode and look misnomers
 
@@ -20,9 +21,10 @@ Give three public names the quantity they actually carry (`docs/terminology.md`,
 
 ## Design
 
-Open: the new spellings, and whether the stage string is a report-only change
-(no recipe migration). Each key follows CLAUDE.md's retire-a-key rule; a version
-reset before ship may make some of this cheaper.
+Decided (2026-10-15): `--linearization`; `reconstruction.anchor_rule`, the old key
+refused at every value, its old default included (a user decision against the
+strip-the-default rule); the look's stage strings `tone-slope` and `saturation-slope`,
+report-only. No version reset is planned; no `pipeline_version` bump.
 
 ## How to Verify
 

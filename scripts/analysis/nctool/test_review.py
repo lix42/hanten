@@ -28,7 +28,7 @@ MATRIX = {
     "common_args": ["--exposure", "0.5"],
     "metrics": {"inset": 0.1},
     "configs": [
-        {"id": "generic", "label": "generic", "args": ["--density-gamma", "2.2"]},
+        {"id": "generic", "label": "generic", "args": ["--linearization", "2.2"]},
         {"id": "stock", "label": "stock", "args": ["--film-base", "{dmin}"]},
     ],
 }
@@ -153,7 +153,7 @@ class TestUnknownKeys(unittest.TestCase):
     # labels, identical pixels, exit 0.
     def test_refuses_a_mistyped_config_key(self):
         with self.assertRaisesRegex(review.ReviewError, "unknown key arg;"):
-            load(configs=[{"id": "a", "arg": ["--density-gamma", "2.2"]}])
+            load(configs=[{"id": "a", "arg": ["--linearization", "2.2"]}])
 
     # `insets` measures the whole frame — the film holder included, which is the
     # one thing the inset exists to keep out of the statistics.
@@ -185,8 +185,8 @@ class TestExpansion(unittest.TestCase):
             ["--film-base", "0.5,0.2,0.1"])
 
     def test_leaves_an_argument_with_no_placeholder_alone(self):
-        self.assertEqual(review.expand_args(["--density-gamma", "2.2"], {"dmin": "x"}),
-                         ["--density-gamma", "2.2"])
+        self.assertEqual(review.expand_args(["--linearization", "2.2"], {"dmin": "x"}),
+                         ["--linearization", "2.2"])
 
 
 class TestMetricsSpace(unittest.TestCase):
@@ -556,7 +556,7 @@ class TestBuildAxis(unittest.TestCase):
 
     def test_the_args_come_from_the_config_not_the_build(self):
         for cell in load(builds=BUILDS)["configs"][:2]:
-            self.assertEqual(cell["args"], ["--density-gamma", "2.2"])
+            self.assertEqual(cell["args"], ["--linearization", "2.2"])
 
     # The join is injective because `@` is outside `SAFE_ID`: an author's id can
     # never contain one, so a composed id splits exactly one way. That is what

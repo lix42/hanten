@@ -725,7 +725,7 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
         "curve",
         "there is one curve: its slope is `reconstruction.linearization` (the picture's \
          contrast is `look.contrast`) and its placement \
-         `reconstruction.anchor` (`{\"mid-at-base-offset\": <d>}`)",
+         `reconstruction.anchor_rule` (`{\"mid-at-base-offset\": <d>}`)",
     ),
     (
         "density",
@@ -735,7 +735,7 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Keys retired before the removed chain was: each names where its knob lives now.
+/// Retired keys: each names where its knob lives now.
 /// A path is top-level (`["density"]`) or one level down (`["input", "color"]`).
 const RETIRED_KEYS: &[(&[&str], &str)] = &[
     (
@@ -756,7 +756,7 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
         &["sigmoid"],
         "there is one curve: its slope is `reconstruction.linearization` (the picture's \
          contrast is `look.contrast`) and its placement \
-         `reconstruction.anchor`",
+         `reconstruction.anchor_rule`",
     ),
     (
         &["simple"],
@@ -783,6 +783,14 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
         "it conflated transfer encoding with measurement meaning; use the independent \
          keys `input.transfer` (auto|linear) and `input.meaning` \
          (auto|scanner-device|colorimetric)",
+    ),
+    // Refused at every value, the old default included (a user decision: a knowing
+    // departure from stripping the old default, `core/rename-decode-look-misnomers`).
+    (
+        &["reconstruction", "anchor"],
+        "it is `reconstruction.anchor_rule`, the rule that derives the anchor (the \
+         report's `chain.decode.anchor`). Rename the key and keep its value, e.g. \
+         `\"anchor_rule\": {\"mid-at-base-offset\": 0.62}`",
     ),
 ];
 
@@ -1283,19 +1291,19 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(f) = args.measure.measure_inset {
         r.measure.inset = f;
     }
-    // The decode's own knobs. `--density-gamma` is the decode's linearization — a
-    // calibration; how contrasty the picture is is `--contrast`, the look's.
+    // The decode's own knobs. `--linearization` is a calibration; how contrasty the
+    // picture is is `--contrast`, the look's.
     if let Some(v) = args.density.density_scale {
         r.reconstruction.scale = v;
     }
     if let Some(v) = args.density.density_offset {
         r.reconstruction.offset = v;
     }
-    if let Some(v) = args.density.density_gamma {
+    if let Some(v) = args.density.linearization {
         r.reconstruction.linearization = v;
     }
     if let Some(d) = args.anchor.anchor_mid_offset {
-        r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
+        r.reconstruction.anchor_rule = AnchorRule::MidAboveBase(d);
     }
     // The roll's measurements (`hanten measure-roll`); whether they apply is the
     // rendering's.
@@ -1471,31 +1479,34 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
         ),
         Err(DecodeFault::Linearization(v)) => format!(
             "{} must be finite and positive, got {v}",
-            name("--density-gamma", "linearization")
+            name("--linearization", "linearization")
         ),
         Err(DecodeFault::MidAboveBase(v)) => format!(
             "{} must be finite and positive, got {v}",
-            name("--anchor-mid-offset", "anchor")
+            name("--anchor-mid-offset", "anchor_rule")
         ),
         Err(DecodeFault::Anchor {
             anchor,
             linearization,
         }) => {
-            let AnchorRule::MidAboveBase(mid) = d.anchor;
+            let AnchorRule::MidAboveBase(mid) = d.anchor_rule;
             // Two routes, and opposite remedies: a tiny linearization overflows the
             // anchor itself (`0.745 / linearization`), while a huge offset overflows only
             // the exponent `linearization · anchor`, where a larger one makes it worse.
             let remedy = if anchor.is_finite() {
-                format!("Use a smaller {}", name("--anchor-mid-offset", "anchor"))
+                format!(
+                    "Use a smaller {}",
+                    name("--anchor-mid-offset", "anchor_rule")
+                )
             } else {
-                format!("Use a larger {}", name("--density-gamma", "linearization"))
+                format!("Use a larger {}", name("--linearization", "linearization"))
             };
             format!(
                 "the decode's anchor is not usable at {} {linearization:e} and {} {mid:e}: \
                  it derives an anchor of {anchor:e}, whose exponent overflows f32 and would \
                  render every sample as exactly 0.0. {remedy}",
-                name("--density-gamma", "linearization"),
-                name("--anchor-mid-offset", "anchor"),
+                name("--linearization", "linearization"),
+                name("--anchor-mid-offset", "anchor_rule"),
             )
         }
     };
@@ -1702,11 +1713,11 @@ fn validate_whole_slope(
     if whole.is_normal() {
         return Ok(());
     }
-    let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
+    let linearization_name = knob_name(names, "reconstruction", "--linearization", "linearization");
     let overflows = whole.is_infinite();
     let what = if overflows { "overflows" } else { "underflows" };
     let toward = if overflows { "smaller" } else { "larger" };
-    let mut remedy = format!("Use a {toward} {gamma}");
+    let mut remedy = format!("Use a {toward} {linearization_name}");
     if let Some(contrast) = contrast_name {
         remedy += &format!(" or {contrast}");
     }
@@ -1716,7 +1727,7 @@ fn validate_whole_slope(
         remedy += &format!(", or a {toward} {slope}");
     }
     Err(NcError::Usage(format!(
-        "the whole slope, {gamma} {linearization:e} times {what_slope} {slope:e} \
+        "the whole slope, {linearization_name} {linearization:e} times {what_slope} {slope:e} \
          ({slope_parts}), {what} f32{why}. {remedy}"
     )))
 }
@@ -2185,7 +2196,7 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
     },
     ProbeKnob {
         section: "reconstruction",
-        flag: "--density-gamma",
+        flag: "--linearization",
         key: "linearization",
         stated: |r| r.reconstruction.linearization != LINEARIZATION,
         reset: |r| r.reconstruction.linearization = LINEARIZATION,
@@ -2193,9 +2204,9 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
     ProbeKnob {
         section: "reconstruction",
         flag: "--anchor-mid-offset",
-        key: "anchor",
-        stated: |r| r.reconstruction.anchor != AnchorRule::MidAboveBase(MID_ABOVE_BASE),
-        reset: |r| r.reconstruction.anchor = AnchorRule::MidAboveBase(MID_ABOVE_BASE),
+        key: "anchor_rule",
+        stated: |r| r.reconstruction.anchor_rule != AnchorRule::MidAboveBase(MID_ABOVE_BASE),
+        reset: |r| r.reconstruction.anchor_rule = AnchorRule::MidAboveBase(MID_ABOVE_BASE),
     },
     ProbeKnob {
         section: "look",
@@ -3376,7 +3387,7 @@ mod tests {
         // (`0.8399999737739563`), while the written document spells `0.84`.
         assert_eq!(
             serde_json::to_string(&Recipe::default().reconstruction).unwrap(),
-            r#"{"scale":[1.0,0.84,0.73],"offset":[0.0,0.0,0.0],"linearization":1.8,"anchor":{"mid-at-base-offset":0.62}}"#
+            r#"{"scale":[1.0,0.84,0.73],"offset":[0.0,0.0,0.0],"linearization":1.8,"anchor_rule":{"mid-at-base-offset":0.62}}"#
         );
         // No reference density in the new calibration section.
         let json = serde_json::to_value(Recipe::default()).unwrap();
@@ -3537,7 +3548,7 @@ mod tests {
             &[
                 "--rendering",
                 "direct",
-                "--density-gamma",
+                "--linearization",
                 "10",
                 "--saturation",
                 "1e38",
@@ -3848,19 +3859,19 @@ mod tests {
                 .contains("reconstruction.linearization")
         );
         assert!(
-            with(|d| d.anchor = AnchorRule::MidAboveBase(0.0))
+            with(|d| d.anchor_rule = AnchorRule::MidAboveBase(0.0))
                 .unwrap_err()
-                .contains("reconstruction.anchor")
+                .contains("reconstruction.anchor_rule")
         );
         // A linearization small enough that `0.745 / linearization` overflows.
         // The remedy follows the route: here the anchor itself overflows, so a
         // larger linearization is the fix…
         let err = with(|d| d.linearization = 1e-39).unwrap_err();
         assert!(err.contains("anchor is not usable"), "{err}");
-        assert!(err.contains("Use a larger --density-gamma"), "{err}");
+        assert!(err.contains("Use a larger --linearization"), "{err}");
         // A finite anchor whose exponent still overflows.
         // …and here only the exponent does, where a larger linearization makes it worse.
-        let err = with(|d| d.anchor = AnchorRule::MidAboveBase(2e38)).unwrap_err();
+        let err = with(|d| d.anchor_rule = AnchorRule::MidAboveBase(2e38)).unwrap_err();
         assert!(err.contains("anchor is not usable"), "{err}");
         assert!(err.contains("Use a smaller --anchor-mid-offset"), "{err}");
         assert!(!err.contains("larger"), "{err}");
@@ -3875,7 +3886,7 @@ mod tests {
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
         assert!(msg.contains("`reconstruction.linearization`"), "{msg}");
-        assert!(!msg.contains("--density-gamma"), "{msg}");
+        assert!(!msg.contains("--linearization"), "{msg}");
         let mut r = Recipe::default();
         r.look.contrast = 0.0;
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
@@ -4021,7 +4032,7 @@ mod tests {
             let (code, msg) = with(linearization, contrast, KnobNames::FlagAndKey).unwrap_err();
             assert_eq!(code, 2, "{msg}");
             assert!(
-                msg.contains("--density-gamma (recipe `reconstruction.linearization`)")
+                msg.contains("--linearization (recipe `reconstruction.linearization`)")
                     && msg.contains("--contrast (recipe `look.contrast`)"),
                 "{msg}"
             );
@@ -4032,7 +4043,7 @@ mod tests {
                 "{msg}"
             );
             assert!(
-                !msg.contains("--density-gamma") && !msg.contains("--contrast"),
+                !msg.contains("--linearization") && !msg.contains("--contrast"),
                 "{msg}"
             );
         }
@@ -5275,13 +5286,13 @@ mod tests {
             ("--density-offset", &["--density-offset", "0,0.1,0"], |r| {
                 r.reconstruction.offset == [0.0, 0.1, 0.0]
             }),
-            ("--density-gamma", &["--density-gamma", "1.9"], |r| {
+            ("--linearization", &["--linearization", "1.9"], |r| {
                 r.reconstruction.linearization == 1.9
             }),
             (
                 "--anchor-mid-offset",
                 &["--anchor-mid-offset", "0.5"],
-                |r| r.reconstruction.anchor == AnchorRule::MidAboveBase(0.5),
+                |r| r.reconstruction.anchor_rule == AnchorRule::MidAboveBase(0.5),
             ),
             ("--white-balance", &["--white-balance", "1.1,1,0.9"], |r| {
                 r.scene_correction.white_balance == WhiteBalance::Explicit([1.1, 1.0, 0.9])
@@ -5500,8 +5511,8 @@ mod tests {
         for (flag, value, key) in [
             ("--density-offset", "-30,-30,-30", "reconstruction.offset"),
             ("--density-offset", "1e6,1e6,1e6", "reconstruction.offset"),
-            ("--density-gamma", "100", "reconstruction.linearization"),
-            ("--anchor-mid-offset", "30", "reconstruction.anchor"),
+            ("--linearization", "100", "reconstruction.linearization"),
+            ("--anchor-mid-offset", "30", "reconstruction.anchor_rule"),
             ("--contrast", "100", "look.contrast"),
         ] {
             // `direct`, whose pinned display black reads the base without being stated.

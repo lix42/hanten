@@ -153,6 +153,11 @@ What other epics need to know about `core`:
   gate**: a run that fails writes none, and a path it cannot write, or one landing on
   another artifact through a symlink, fails up front. `staged::stage` now refuses a
   directory, read-only or non-regular target at staging, for every staged write.
+- **Decode and look renames** (`core/rename-decode-look-misnomers`): `--density-gamma`
+  is `--linearization`; `reconstruction.anchor` is `reconstruction.anchor_rule`,
+  refused at **every** value, the old default included, so every recipe written earlier
+  (`measure-roll --out` files too) needs that one key renamed. The look's
+  `chain.stages` strings are `tone-slope` and `saturation-slope`.
 
 
 ## product-naming
@@ -1625,10 +1630,15 @@ new path. No pixel moved.
 
 ## rename-decode-look-misnomers
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-15
 
 - 2026-10-15: filed. Goal: migrate public names that say the wrong quantity: P1–P3 in docs/terminology.md's misnomer list
+- 2026-10-15: Started. Decisions (user): --density-gamma → --linearization; reconstruction.anchor → reconstruction.anchor_rule (value shape unchanged), refused at every value including the old default; look stage strings contrast → tone-slope and saturation → saturation-slope (report-only). No pipeline_version or recipe_version bump; the recipe fingerprint is refreshed in place. Coordinated with core-internal-term-renames, rename-fit-range-misnomers and rename-roll-report-misnomers: a retired key whose old default was null is stripped, every non-null value refused; removed flags are hidden args refused in reject_removed_flags; each PR deletes only its own misnomer rows; the second to merge recomputes the recipe hash.
+- 2026-10-15: Chunk 1 (P1) done: --density-gamma is --linearization; the old spelling is a hidden arg refused first in reject_removed_flags, echoing the typed value only when it is a finite number (else SLOPE), so a swallowed next flag never lands in the remedy. Only convert, roll and profile take decode flags. Review: Codex could not run (workspace spend cap), so a cold feature-dev:code-reviewer stood in as the second engine beside nc-reviewer; findings were Low only, all fixed (design-spec's retired list gains a 'Renamed' bullet).
+- 2026-10-15: Chunk 2 (P2) done: reconstruction.anchor is reconstruction.anchor_rule (field DecodeParams::anchor_rule); the old key is a RETIRED_KEYS row refused at every value, its old default included. That departs knowingly from CLAUDE.md's strip-the-old-default rule (user decision, re-confirmed after the sibling rename sessions raised it), so every recipe written before this change needs the one-key edit. The v17 recipe fingerprint was refreshed in place: shape change only, render and base unmoved. Gotcha: a sed over the diff missed three binary tests whose recipes spelled the compact "anchor":{ form; both reviewers caught them. Note: the report's chain.decode.anchor_rule is the rule's name (a string) while the recipe's anchor_rule is the rule with its parameter (an object): one concept, two shapes. Rebased onto c40951c (nf-core/resolver-module) with no conflicts and nothing dropped.
+- 2026-10-15: Chunk 3 (P3) done: the look's chain.stages[].applied strings are tone-slope and saturation-slope (both bits test the slopes, not the knobs, so the default reports both at --contrast 1); report-only, and nothing outside the Rust code and docs reads them. terminology.md has lost P1-P3 and this task from the misnomer intro; using-nc.md was re-verified against the binary (update-usingnc-doc). All three chunks went through review-fix-loop (nc-reviewer plus a cold stand-in, since Codex hit its spend cap every round); every CI gate and tasks check are green. Ready to ship; status left at doing.
+- 2026-10-15: Closed (2026-10-15). Landed: --linearization (the old --density-gamma refused naming it), reconstruction.anchor_rule (the old key refused at every value), and look stage strings tone-slope / saturation-slope. Verified through the binary and by every CI gate; using-nc.md re-verified. Rebased twice before ship (c40951c resolver-module, b927f2d internal-term-renames part 1), nothing dropped either time. For dependents: core/internal-term-renames is holding its last sweep over recipe.rs, recipe/resolve.rs and tests/pipeline.rs until this merges; the sibling rename PRs strip null old defaults, while this key refuses its non-null default.
 
 ## rename-fit-range-misnomers
 
