@@ -87,6 +87,8 @@ pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
 pub struct LinearHdrMetadata {
     pub reference_white_nits: f32,
     pub target_peak_nits: f32,
+    /// The display peak as a sample value, `target_peak_nits / reference_white_nits`.
+    #[serde(rename = "peak_sample")]
     pub linear_headroom: f32,
     pub tone_curve: &'static str,
     pub gamut_mapping: &'static str,
@@ -270,7 +272,7 @@ pub fn linear_labels(gamut: Gamut) -> LinearLabels {
                     "the embedded ICC profile states the ",
                     $primaries,
                     " primaries and the linear transfer only; its PCS stops at the media \
-                     white, so the reference-white, peak and headroom values in this block \
+                     white, so the reference-white and peak values in this block \
                      — not the profile — define the luminance semantics of these samples"
                 ),
             }
@@ -585,9 +587,9 @@ mod tests {
         assert_eq!(
             bt2020.interoperability,
             "the embedded ICC profile states the BT.2020/D65 primaries and the linear \
-             transfer only; its PCS stops at the media white, so the reference-white, peak \
-             and headroom values in this block — not the profile — define the luminance \
-             semantics of these samples"
+             transfer only; its PCS stops at the media white, so the reference-white and \
+             peak values in this block — not the profile — define the luminance semantics of \
+             these samples"
         );
         for gamut in [
             Gamut::DisplayP3,

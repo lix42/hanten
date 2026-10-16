@@ -586,7 +586,7 @@ impl From<&FilmBaseSource> for FilmBaseProvenance {
     }
 }
 
-/// Default highlight range for fit range (`fit_range.headroom_stops`), in stops.
+/// Default highlight range for fit range (`fit_range.highlight_range_stops`), in stops.
 ///
 /// `6` stops is `W = 64`, the value measured to beat the shipped sigmoid on both
 /// highlight metrics on all seven fixture frames at matched brightness. `W = 256`

@@ -158,13 +158,13 @@ impl Fault {
                 "the frame is placed so bright its black cannot approach black: the curve \
                  puts its middle {} and its dark end (ACEScg luminance p1) {}, before the dark end is \
                  moved. This is where the look places the frame's measured tones, with \
-                 display black off: {LOWER_EXPOSURE}",
+                 the dark base off: {LOWER_EXPOSURE}",
                 from_mid(middle),
                 from_mid(dark),
             ),
             Fault::Base { stops } => format!(
                 "the film base renders {}, where black needs it at least \
-                 {MIN_FILM_BASE_STOPS} stops under mid-grey, so with display black off \
+                 {MIN_FILM_BASE_STOPS} stops under mid-grey, so with the dark base off \
                  nothing in the frame can approach black. The frame is placed very bright: \
                  {LOWER_EXPOSURE}",
                 from_mid(-stops),

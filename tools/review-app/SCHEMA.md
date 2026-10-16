@@ -18,8 +18,8 @@ nc-adjacent scripts, not JavaScript.
   "description": "Same reconstruction on both; only the display stage differs.",
 
   "configs": [
-    { "id": "w6", "label": "6 stops", "note": "the default headroom" },
-    { "id": "w0", "label": "identity", "note": "--display-tone-headroom 0" }
+    { "id": "w6", "label": "6 stops", "note": "the default highlight range" },
+    { "id": "w0", "label": "identity", "note": "--highlight-range 0" }
   ],
 
   "images": [

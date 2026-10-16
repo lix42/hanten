@@ -141,28 +141,29 @@ impl<'de> Deserialize<'de> for RecipeVersion {
     }
 }
 
-/// Fit range's section: the headroom and display black, each unset meaning the
+/// Fit range's section: the highlight range and the dark end, each unset meaning the
 /// rendering's base (`crate::rendering`).
 ///
 /// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
 /// stage's other parameter, the display's peak, is the **destination's** to state, and
-/// [`resolve::chain_params`] adds it. The headroom is shared by every rendition of a
+/// [`resolve::chain_params`] adds it. The highlight range is shared by every rendition of a
 /// frame, the peak is not (`pipeline::chain`'s branch contract).
 ///
 /// [`FitRangeParams`]: crate::pipeline::fit_range::FitRangeParams
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FitRangeSection {
-    /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
-    /// `0` turns the compression off.
+    /// The highlight range, in stops above diffuse white: reinhard's white point is
+    /// `2^headroom_stops`, and `0` turns the compression off.
+    #[serde(rename = "highlight_range_stops")]
     pub headroom_stops: Option<f32>,
     /// Where the dark end renders: `{"target": stops}`, `{"floor": stops}`,
-    /// `{"black": stops}` or `"off"` (`pipeline::fit_range`'s dark end).
+    /// `{"base": stops}` or `"off"` (`pipeline::fit_range`'s dark end).
     pub dark_end: Option<DarkEnd>,
 }
 
 impl FitRangeSection {
-    /// Whether the user asked for a fit — a headroom, or a dark end, that is neither its
+    /// Whether the user asked for a fit — a highlight range, or a dark end, that is neither its
     /// default nor its identity (`0`, `"off"`). The one predicate a
     /// destination that runs no fit range (`film-master`) reads to refuse
     /// ([`destination()`]), as the look's is [`LookKeys::asks_for_a_look`]: the
@@ -701,11 +702,11 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
     "print",
     "white balance and exposure are `scene_correction.white_balance` and \
          `scene_correction.exposure`; the display tone is fit range, whose one \
-         operator is reinhard and whose highlight range is `fit_range.headroom_stops`; the \
-         black point's surviving half is display black, `fit_range.dark_end` \
-         `{\"black\": <stops>}` (where the film base renders); and `linear_range`, the \
+         operator is reinhard and whose highlight range is `fit_range.highlight_range_stops`; the \
+         black point's surviving half is the dark base, `fit_range.dark_end` \
+         `{\"base\": <stops>}` (where the film base renders); and `linear_range`, the \
          levels remap, retired: its gain is `scene_correction.exposure` and its black is \
-         display black",
+         the dark base",
 )];
 
 /// The removed chain's `output` keys: a destination is its axes here.
@@ -773,10 +774,15 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
     (
         &["fit_range", "display_black"],
-        "display black is now one setting of the dark end, `fit_range.dark_end`: \
-         `{\"black\": <stops>}` for the old number. The old `\"off\"` is `\"off\"` there, \
+        "the film base's placement is now one setting of the dark end, `fit_range.dark_end`: \
+         `{\"base\": <stops>}` for the old number. The old `\"off\"` is `\"off\"` there, \
          which also turns off the target that places a frame's darkest 1 % (the default, \
          `{\"target\": 5.5}`); drop the key for the default",
+    ),
+    (
+        &["fit_range", "headroom_stops"],
+        "it is `fit_range.highlight_range_stops`, the same number: the stops above diffuse \
+         white that fit range compresses",
     ),
     (
         &["input", "color"],
@@ -844,11 +850,13 @@ fn frame_lift_remedy(body: &serde_json::Value) -> Option<String> {
 
 /// Drop the retired keys where an earlier build wrote their default, `null`, which
 /// still means the rendering's base: `input.export_ir`, `fit_range.display_black`,
-/// `roll.frame_slope`, `roll.frame_lift` and a `roll.frames` entry's `slope`.
+/// `fit_range.headroom_stops`, `roll.frame_slope`, `roll.frame_lift` and a `roll.frames`
+/// entry's `slope`.
 /// `display_black`'s base moved (to the floor, `pipeline_version` 15), as a default does;
 /// refusing its `null` would refuse every recipe written before it, and the replay's
 /// version warning already says the output will not match. [`check_body`] refuses any
-/// other value; every recipe body runs this first. Returns whether it dropped any.
+/// other value. A whole recipe runs this first; a `--frames` override is hand-written,
+/// so its `null` is refused. Returns whether it dropped any.
 pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
     let mut stripped = false;
     if let Some(input) = body.get_mut("input").and_then(|i| i.as_object_mut())
@@ -857,11 +865,13 @@ pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
         input.remove("export_ir");
         stripped = true;
     }
-    if let Some(fit) = body.get_mut("fit_range").and_then(|f| f.as_object_mut())
-        && fit.get("display_black").is_some_and(|v| v.is_null())
-    {
-        fit.remove("display_black");
-        stripped = true;
+    if let Some(fit) = body.get_mut("fit_range").and_then(|f| f.as_object_mut()) {
+        for key in ["display_black", "headroom_stops"] {
+            if fit.get(key).is_some_and(|v| v.is_null()) {
+                fit.remove(key);
+                stripped = true;
+            }
+        }
     }
     let Some(roll) = body.get_mut("roll").and_then(|r| r.as_object_mut()) else {
         return stripped;
@@ -1105,6 +1115,13 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                 path.join(".")
             ));
         }
+    }
+    if body.pointer("/fit_range/dark_end/black").is_some() {
+        return usage(
+            "`fit_range.dark_end` `{\"black\": <stops>}` is now `{\"base\": <stops>}`, the \
+             same number: it places the film base, and sets no black level"
+                .into(),
+        );
     }
     if body.pointer("/roll/frame_slope").is_some() {
         return usage(thin_pair_moved(
@@ -2289,7 +2306,7 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
     },
     ProbeKnob {
         section: "fit_range",
-        flag: "--display-black",
+        flag: "--dark-base",
         key: "dark_end",
         // Only display black reads the base, so the rendering's (the target under
         // `default`) clears it.
@@ -2413,7 +2430,7 @@ fn render_fault_message(
     let fault = match fault {
         RenderFault::Base(luminance) => format!(
             "the film base renders to luminance {} after the decode, scene correction and \
-             the look, and display black needs a positive, finite one to place black \
+             the look, and the dark base needs a positive, finite one to place black \
              against.",
             if luminance == 0.0 {
                 "0".into()
@@ -2547,8 +2564,8 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
     let name = knob_name(
         names,
         "fit_range",
-        "--display-tone-headroom",
-        "headroom_stops",
+        "--highlight-range",
+        "highlight_range_stops",
     );
     Err(NcError::Usage(crate::types::headroom_fault_message(
         fault, &name,
@@ -2666,21 +2683,21 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
     if r.fit_range.asks_for_a_fit() {
         // The asked setting's own flag: another dark-end flag beside a typed one conflicts.
         let identity = match r.fit_range.dark_end {
-            Some(DarkEnd::Target(_)) => "--display-tone-headroom 0 --dark-target off",
-            Some(DarkEnd::Black(_)) => "--display-tone-headroom 0 --display-black off",
-            Some(DarkEnd::Floor(_)) => "--display-tone-headroom 0 --dark-floor off",
-            // Unset or `off`: only the headroom asks.
-            None | Some(DarkEnd::Off) => "--display-tone-headroom 0",
+            Some(DarkEnd::Target(_)) => "--highlight-range 0 --dark-target off",
+            Some(DarkEnd::Black(_)) => "--highlight-range 0 --dark-base off",
+            Some(DarkEnd::Floor(_)) => "--highlight-range 0 --dark-floor off",
+            // Unset or `off`: only the highlight range asks.
+            None | Some(DarkEnd::Off) => "--highlight-range 0",
         };
         asked.push(pick(
             (
-                "fit range (--display-tone-headroom, --dark-floor, --dark-target, \
-                 --display-black, recipe `fit_range`)",
+                "fit range (--highlight-range, --dark-floor, --dark-target, \
+                 --dark-base, recipe `fit_range`)",
                 identity,
             ),
             (
                 "fit range (`fit_range`)",
-                "`fit_range.headroom_stops` 0, `fit_range.dark_end` \"off\"",
+                "`fit_range.highlight_range_stops` 0, `fit_range.dark_end` \"off\"",
             ),
         ));
     }
@@ -3344,7 +3361,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob is present as an empty object, not absent or `null`. A
         // knob whose base is the rendering's (`crate::rendering`) is written `null`,
-        // unstated — highlight desaturation, fit range's headroom and display black — and
+        // unstated — highlight desaturation, fit range's highlight range and dark end — and
         // so is the roll section; the rest are written at their identity (scene
         // correction, the look's contrast and saturation multipliers, the grade). Keys are written, never left out, so a
         // per-frame override merges. (Fit gamut's map runs at every setting; it simply
@@ -3363,7 +3380,7 @@ mod tests {
         );
         assert_eq!(
             json["fit_range"],
-            serde_json::json!({"headroom_stops": null, "dark_end": null})
+            serde_json::json!({"highlight_range_stops": null, "dark_end": null})
         );
         assert_eq!(
             json["roll"],
@@ -4054,7 +4071,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_refuses_an_unusable_fit_range_headroom() {
+    fn validate_refuses_an_unusable_highlight_range() {
         let with = |stops: f32, names| {
             let mut r = Recipe::default();
             r.fit_range.headroom_stops = Some(stops);
@@ -4065,14 +4082,17 @@ mod tests {
         for bad in [-1.0, f32::NAN, f32::INFINITY] {
             let err = with(bad, KnobNames::FlagAndKey).unwrap_err();
             assert!(
-                err.contains("--display-tone-headroom (recipe `fit_range.headroom_stops`)")
+                err.contains("--highlight-range (recipe `fit_range.highlight_range_stops`)")
                     && err.contains("non-negative"),
                 "{bad}: {err}"
             );
         }
         let err = with(25.0, KnobNames::KeyOnly).unwrap_err();
-        assert!(err.contains("`fit_range.headroom_stops` is 25"), "{err}");
-        assert!(!err.contains("--display-tone-headroom"), "{err}");
+        assert!(
+            err.contains("`fit_range.highlight_range_stops` is 25"),
+            "{err}"
+        );
+        assert!(!err.contains("--highlight-range"), "{err}");
     }
 
     /// `convert` with `extra`, merged over the recipe `json`.
@@ -4606,14 +4626,15 @@ mod tests {
         let old = r#"{"recipe_version": 3, "rendering": "direct",
             "look": {"highlight_desaturation": {"strength": 0.8, "start_stops": -1.0,
                                                 "band": [0.015, 0.025]}},
-            "fit_range": {"headroom_stops": 6.0, "dark_end": {"black": 6.0}}}"#;
+            "fit_range": {"highlight_range_stops": 6.0, "dark_end": {"base": 6.0}}}"#;
         let w = parse(old).unwrap().recipe_warnings(TypedStyle::default());
         assert_eq!(w.len(), 1, "{w:?}");
-        // Only what moves the base is named: the headroom and black match it.
+        // Only what moves the base is named: the highlight range and black match it.
         assert!(
             w[0].contains("`look.highlight_desaturation.strength` 0.8")
                 && !w[0].contains("`look.contrast`")
-                && !w[0].contains("headroom")
+                && !w[0].contains("highlight_range")
+                && !w[0].contains("highlight range")
                 && w[0].contains("`null`"),
             "{}",
             w[0]
@@ -4631,7 +4652,7 @@ mod tests {
             r#"{"recipe_version": 3, "rendering": "direct",
                 "look": {"highlight_desaturation": {"strength": 0.5, "start_stops": -2.0,
                                                     "band": [0.01, 0.03]}},
-                "fit_range": {"headroom_stops": 4.0, "dark_end": "off"}}"#,
+                "fit_range": {"highlight_range_stops": 4.0, "dark_end": "off"}}"#,
             // A contrast or white balance with no roll section is the user's own.
             r#"{"recipe_version": 3, "rendering": "direct", "look": {"contrast": 1.3},
                 "scene_correction": {"white_balance": {"explicit": [1.1, 1, 1]}}}"#,
@@ -5094,7 +5115,7 @@ mod tests {
         with(DarkEnd::Floor(MAX_DARK_END_STOPS), KnobNames::FlagAndKey).unwrap();
         for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
             for (dark_end, flag) in [
-                (DarkEnd::Black(bad), "--display-black"),
+                (DarkEnd::Black(bad), "--dark-base"),
                 (DarkEnd::Floor(bad), "--dark-floor"),
                 (DarkEnd::Target(bad), "--dark-target"),
             ] {
@@ -5108,14 +5129,14 @@ mod tests {
         }
         let err = with(DarkEnd::Black(-1.0), KnobNames::KeyOnly).unwrap_err();
         assert!(err.contains("`fit_range.dark_end`"), "{err}");
-        assert!(!err.contains("--display-black"), "{err}");
+        assert!(!err.contains("--dark-base"), "{err}");
     }
 
     #[test]
     fn the_dark_end_reads_from_a_recipe() {
         for (json, want) in [
             (r#""off""#, DarkEnd::Off),
-            (r#"{"black": 5}"#, DarkEnd::Black(5.0)),
+            (r#"{"base": 5}"#, DarkEnd::Black(5.0)),
             (r#"{"floor": 4}"#, DarkEnd::Floor(4.0)),
             (r#"{"target": 5.5}"#, DarkEnd::Target(5.5)),
         ] {
@@ -5143,14 +5164,14 @@ mod tests {
             let err = check(&json, true).unwrap_err();
             assert!(
                 err.contains("`fit_range.display_black` is not a recipe key any more")
-                    && err.contains(r#"`{"black": <stops>}`"#)
+                    && err.contains(r#"`{"base": <stops>}`"#)
                     && err.contains(r#"`{"target": 5.5}`"#),
                 "{value}: {err}"
             );
         }
         // Its old default, `null`, means the rendering's base, as `dark_end`'s does.
         let mut v: serde_json::Value = serde_json::from_str(
-            r#"{"recipe_version": 3, "fit_range": {"headroom_stops": 4, "display_black": null}}"#,
+            r#"{"recipe_version": 3, "fit_range": {"highlight_range_stops": 4, "display_black": null}}"#,
         )
         .unwrap();
         assert!(strip_retired_nulls(&mut v));
@@ -5158,6 +5179,49 @@ mod tests {
         let r: Recipe = serde_json::from_value(v).unwrap();
         assert_eq!(r.fit_range.dark_end, None);
         assert_eq!(r.fit_range.headroom_stops, Some(4.0));
+    }
+
+    #[test]
+    fn the_old_dark_end_black_is_refused_naming_the_base() {
+        for value in ["6", "0.5"] {
+            let json = format!(
+                r#"{{"recipe_version": 3, "fit_range": {{"dark_end": {{"black": {value}}}}}}}"#
+            );
+            let err = check(&json, true).unwrap_err();
+            assert!(
+                err.contains(
+                    r#"`fit_range.dark_end` `{"black": <stops>}` is now `{"base": <stops>}`"#
+                ),
+                "{value}: {err}"
+            );
+        }
+        let r = parse(r#"{"recipe_version": 3, "fit_range": {"dark_end": {"base": 6}}}"#).unwrap();
+        assert_eq!(r.fit_range.dark_end, Some(DarkEnd::Black(6.0)));
+    }
+
+    #[test]
+    fn the_renamed_headroom_key_is_refused_naming_the_highlight_range() {
+        for value in ["4", "0", "6.0"] {
+            let json =
+                format!(r#"{{"recipe_version": 3, "fit_range": {{"headroom_stops": {value}}}}}"#);
+            let err = check(&json, true).unwrap_err();
+            assert!(
+                err.contains("`fit_range.headroom_stops` is not a recipe key any more")
+                    && err.contains("`fit_range.highlight_range_stops`"),
+                "{value}: {err}"
+            );
+        }
+        // Every earlier `--save-recipe` wrote its default, `null`: the rendering's base,
+        // as the new key's `null` is.
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"recipe_version": 3, "fit_range": {"headroom_stops": null, "dark_end": "off"}}"#,
+        )
+        .unwrap();
+        assert!(strip_retired_nulls(&mut v));
+        check_body(&v, true, "recipe r.json").unwrap();
+        let r: Recipe = serde_json::from_value(v).unwrap();
+        assert_eq!(r.fit_range.headroom_stops, None);
+        assert_eq!(r.fit_range.dark_end, Some(DarkEnd::Off));
     }
 
     #[test]
@@ -5433,12 +5497,10 @@ mod tests {
             ("--film-master", &["--film-master"], |r| {
                 r.output == OutputSection::FilmMaster
             }),
-            (
-                "--display-tone-headroom",
-                &["--display-tone-headroom", "4"],
-                |r| r.fit_range.headroom_stops == Some(4.0),
-            ),
-            ("--display-black", &["--display-black", "5"], |r| {
+            ("--highlight-range", &["--highlight-range", "4"], |r| {
+                r.fit_range.headroom_stops == Some(4.0)
+            }),
+            ("--dark-base", &["--dark-base", "5"], |r| {
                 r.fit_range.dark_end == Some(DarkEnd::Black(5.0))
             }),
             ("--dark-floor", &["--dark-floor", "5"], |r| {
@@ -5531,15 +5593,11 @@ mod tests {
         }
         // A display black stated under `default` is named too: its default, the target,
         // reads no base.
-        let err = render_err(
-            V3,
-            &["--display-black", "6", "--density-offset=-30,-30,-30"],
-        )
-        .unwrap();
+        let err = render_err(V3, &["--dark-base", "6", "--density-offset=-30,-30,-30"]).unwrap();
         assert!(
             err.ends_with(
                 "It renders with any one of --density-offset (recipe `reconstruction.offset`), \
-                 --display-black (recipe `fit_range.dark_end`) at its default"
+                 --dark-base (recipe `fit_range.dark_end`) at its default"
             ),
             "{err}"
         );
@@ -5559,11 +5617,7 @@ mod tests {
         // The region clause belongs to a base read from a region only.
         assert!(!err.contains("region"), "{err}");
         // Display black off reads no base, but the overflow is still the render's.
-        let err = render_err(
-            V3,
-            &["--display-black", "off", "--density-offset=1e6,1e6,1e6"],
-        )
-        .unwrap();
+        let err = render_err(V3, &["--dark-base", "off", "--density-offset=1e6,1e6,1e6"]).unwrap();
         assert!(err.starts_with("the densest sample"), "{err}");
     }
 
@@ -5633,10 +5687,7 @@ mod tests {
         // Extreme but rendering: black output, which the encoder warns about.
         assert_eq!(render_err(V3, &["--exposure=-100"]), None);
         assert_eq!(
-            render_err(
-                V3,
-                &["--display-black", "off", "--density-offset=-30,-30,-30"]
-            ),
+            render_err(V3, &["--dark-base", "off", "--density-offset=-30,-30,-30"]),
             None
         );
         // The film master runs no rendering stage.

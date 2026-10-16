@@ -145,8 +145,8 @@ pub const MAX_PUSH_SHARE: f64 = 2.0 / 3.0;
 pub const MAX_LIFT_SHARE: f64 = 1.0 / 3.0;
 
 /// Where the dark end renders on the display — the recipe's `fit_range.dark_end`, set by
-/// `--dark-floor`, `--dark-target` or `--display-black`: `"off"`, `{"floor": stops}`,
-/// `{"target": stops}` or `{"black": stops}`, stops below mid-grey.
+/// `--dark-floor`, `--dark-target` or `--dark-base`: `"off"`, `{"floor": stops}`,
+/// `{"target": stops}` or `{"base": stops}`, stops below mid-grey.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DarkEnd {
@@ -157,6 +157,7 @@ pub enum DarkEnd {
     /// The frame's measured dark end placed at `0.18 · 2^−stops`, lifted or pushed down.
     Target(f32),
     /// The film base pushed down to `0.18 · 2^−stops`.
+    #[serde(rename = "base")]
     Black(f32),
 }
 
@@ -204,7 +205,7 @@ impl DarkEnd {
             DarkEnd::Off => None,
             DarkEnd::Floor(_) => Some(("--dark-floor", "dark floor")),
             DarkEnd::Target(_) => Some(("--dark-target", "dark target")),
-            DarkEnd::Black(_) => Some(("--display-black", "display black")),
+            DarkEnd::Black(_) => Some(("--dark-base", "dark base")),
         }
     }
 
@@ -213,7 +214,7 @@ impl DarkEnd {
         matches!(self, DarkEnd::Floor(_) | DarkEnd::Target(_))
     }
 
-    /// `--display-black`'s spelling, as [`DarkEnd::parse_floor`].
+    /// `--dark-base`'s spelling, as [`DarkEnd::parse_floor`].
     pub fn parse_black(s: &str) -> std::result::Result<Self, String> {
         Self::parse(s, DarkEnd::Black, REVIEWED_DISPLAY_BLACK_STOPS)
     }
@@ -396,9 +397,11 @@ pub struct ResolvedDarkEnd {
     pub curve: &'static str,
     /// Where the film base renders without the dark end placed, in stops below mid-grey
     /// on the display.
+    #[serde(rename = "film_base_below_mid_stops")]
     pub film_base_stops: f32,
     /// Where the frame's measured dark end renders without it, likewise; `null`
     /// without measured tones.
+    #[serde(rename = "frame_dark_below_mid_stops")]
     pub frame_dark_stops: Option<f32>,
     /// The shift applied at the reference, in stops (negative darkens); `0` when left
     /// alone.
@@ -444,20 +447,20 @@ impl ResolvedDarkEnd {
         let (depth, what) = if self.curve == IDENTITY {
             (
                 format!("{:.2} stops above", -self.film_base_stops),
-                "a shift that holds mid-grey cannot reach it, so display black was skipped",
+                "a shift that holds mid-grey cannot reach it, so the dark base was skipped",
             )
         } else {
             (
                 format!("only {:.2} stops under", self.film_base_stops),
-                "so display black squeezed its whole shift into that narrow band, crushing \
+                "so the dark base squeezed its whole shift into that narrow band, crushing \
                  the shadows below mid-grey",
             )
         };
         Some(format!(
             "the film base renders {depth} mid-grey, closer than the {MIN_FILM_BASE_STOPS} \
-             stops under it display black needs: {what}. The frame is placed very bright: \
+             stops under it the dark base needs: {what}. The frame is placed very bright: \
              lower `--exposure` (recipe `scene_correction.exposure`), or pass \
-             `--display-black off` (recipe `fit_range.dark_end` \"off\") to leave black \
+             `--dark-base off` (recipe `fit_range.dark_end` \"off\") to leave black \
              where the grade puts it"
         ))
     }
@@ -486,6 +489,8 @@ pub fn display_stops(headroom_stops: f32, luminance: f32) -> f32 {
 pub struct FitRange {
     /// [`OPERATOR`], or `"identity"` when the headroom leaves nothing to compress.
     pub operator: &'static str,
+    /// The highlight range, in stops.
+    #[serde(rename = "highlight_range_stops")]
     pub headroom_stops: f32,
     /// Reinhard's white point, `2^headroom_stops`.
     pub white_point: f32,
@@ -550,7 +555,7 @@ impl fmt::Debug for RangeFittedImage {
 pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedImage> {
     if let Some(fault) = headroom_fault(params.headroom_stops) {
         return Err(NcError::Other(format!(
-            "fit range was handed an unusable headroom ({fault:?}); the recipe's \
+            "fit range was handed an unusable highlight range ({fault:?}); the recipe's \
              validation should have refused it"
         )));
     }
@@ -1204,7 +1209,7 @@ mod tests {
         assert_eq!(r.curve, DARK_END_CURVE, "{r:?}");
         let w = r.warning().expect("warned");
         assert!(w.contains("crushing") && w.contains("--exposure"), "{w}");
-        assert!(w.contains("--display-black off"), "{w}");
+        assert!(w.contains("--dark-base off"), "{w}");
         // At mid-grey and above: skipped — warned, not silent.
         for base in [0.18_f32, 0.5] {
             let r = with_black(BLACK, base, 1.0).resolved().dark_end;
@@ -1253,7 +1258,7 @@ mod tests {
         assert!(DarkEnd::parse_floor("none").is_err());
         for (json, value) in [
             (r#"{"floor": 4.5}"#, DarkEnd::Floor(4.5)),
-            (r#"{"black": 6}"#, DarkEnd::Black(6.0)),
+            (r#"{"base": 6}"#, DarkEnd::Black(6.0)),
             (r#"{"target": 5.5}"#, DarkEnd::Target(5.5)),
             (r#""off""#, DarkEnd::Off),
         ] {
@@ -1268,7 +1273,8 @@ mod tests {
             r#""none""#,
             "true",
             "6",
-            r#"{"floor": 4, "black": 6}"#,
+            r#"{"floor": 4, "base": 6}"#,
+            r#"{"black": 6}"#,
             r#"{"floor": "off"}"#,
         ] {
             assert!(serde_json::from_str::<DarkEnd>(bad).is_err(), "{bad}");

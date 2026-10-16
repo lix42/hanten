@@ -240,8 +240,8 @@ can carry an in-gamut display colour outside the cube (`pipeline::hdr::encode_tr
 resolved `recipe`, which reloads through `--params`, and its `identity`. A sidecar an
 earlier build left beside the output is removed, and the report says so
 (`chain.removed_sidecar`). The HDR TIFF reports' `hdr_linear_tiff` /
-`hdr_coded_tiff` blocks are **authoritative** for reference white, peak and
-headroom, which no ICC profile can express, nor any TIFF field Apple's readers act
+`hdr_coded_tiff` blocks are **authoritative** for reference white and peak, which no
+ICC profile can express, nor any TIFF field Apple's readers act
 on. The SDR TIFF and the gain-map JPEG need no such block: an SDR encoding states no
 absolute luminance, so its profile and `chain.destination` define it, and the gain
 map's headroom is in the file's own ISO 21496-1 metadata and `chain`. The recipe is
@@ -326,7 +326,7 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   the midtones, which grows away from the roll's p99 where the gains are exact — one line
   per roll against scene stops (`nf-scene-correction/midtone-neutral`). There is no
   flare or fog subtraction: base fog is in the measured
-  film base, lens glare is part of the photograph, and display black does the black
+  film base, lens glare is part of the photograph, and the dark base does the black
   point's one job (`nf-scene-correction/flare-removal`).
 - **The look** owes four controls the old chain never had as controls:
   - **Contrast** — the print-contrast half of the old single `gamma`, as a slope
@@ -367,13 +367,13 @@ The formulas and each knob's range are in §9; this is what each stage is for.
     frame keeps its light shadows. Without measured tones it cannot act.
   - **The floor** (`nf-display-stages/midtone-contrast-toe`, `default`'s before the
     target): the same reference, only **raised**, to no deeper than 4.5 stops (L\* ≈ 7).
-  - **Display black, `direct`'s**: the decoded film base, graded with the frame, is
+  - **The dark base, `direct`'s**: the decoded film base, graded with the frame, is
     **pushed down** to its target (6 stops), never raised. It was `default`'s while the
     roll's slope came from its white alone and left the base pale; with the slope from
     the roll's span and the hybrid placement, it darkened low-key frames throughout
     (`nf-calibration/envelope-hybrid-placement`).
 
-  Without display black, a frame too washed out to approach black warns
+  Without the dark base, a frame too washed out to approach black warns
   (`pipeline::black_endpoint`): a look slope under any placement's, or a frame placed
   too bright — its measured middle and dark end, or without them its film base (a
   roll's exposure alone exempt).
@@ -420,17 +420,17 @@ knob starts from, and each has one principle (`crate::rendering`):
 | base slope (`look.contrast` multiplies it) | ≈1.414, pinned | the roll's, else the fallback with a warning: the roll's white placed as if +1.75 stops, ≈1.414 |
 | saturation over the base slope's colour (`look.saturation` multiplies it) | 1, pinned | 1.15 |
 | highlight desaturation | off | 0.8 |
-| dark end | display black, 6 stops below mid-grey, pinned | the target, 5.5 stops below mid-grey |
+| dark end | the dark base, 6 stops below mid-grey, pinned | the target, 5.5 stops below mid-grey |
 | fit range | reinhard at a 6-stop highlight range, pinned | 6 stops |
 | unset destination axes | HDR, `linear`, Adobe RGB, TIFF, container first (§5) | SDR, `native`, Display P3, TIFF |
 
-- **Display black is on in `direct`** because it does not compress: a monotone
+- **The dark base is on in `direct`** because it does not compress: a monotone
   stretch below mid-grey loses almost nothing at 16 bits. Its reference is each
   frame's decoded film base, so in the calibration loop it evens out part of a shadow
   difference between two decode candidates.
 - **`direct` defaults to HDR** (range matters more than gamut): the linear float TIFF
   has no transfer and no quantization. It differs from the film master by what
-  rendering does — the contrast, fit range at the HDR peak, display black, the gamut
+  rendering does — the contrast, fit range at the HDR peak, the dark base, the gamut
   map — and it clamps at the peak, counted. Its SDR form is the one viewed by eye.
 - **"Pinned" means `direct`'s own constants** (`rendering::DIRECT`), never today's
   defaults read through, so moving a default does not move the rendering the
@@ -782,7 +782,7 @@ pub fn decode(scan: Scan, base: &FilmBase, params: &DecodeParams)
 pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage;
 
 // The rendering chain (pipeline::chain). `film_base` is the decoded film base, one
-// pixel through the same decode and 3×3, graded beside the frame for display black.
+// pixel through the same decode and 3×3, graded beside the frame for the dark base.
 pub fn render(image: AcesCgImage, film_base: AcesCgImage, params: &ChainParams,
     clock: &mut impl StageClock) -> Result<Rendered>;
 pub fn render_pair(image: AcesCgImage, film_base: AcesCgImage, shared: &SharedParams,
@@ -859,7 +859,7 @@ top level, one section per stage in chain order, the destination last:
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": null, "start_stops": null, "band": null}
   },
-  "fit_range": {"headroom_stops": null, "dark_end": null},
+  "fit_range": {"highlight_range_stops": null, "dark_end": null},
   "fit_gamut": {},
   "output": {"display": {"gamut": "adobe-rgb"}}
 }
@@ -969,10 +969,10 @@ re-derives it from the recipe:
               "saturation_base_from": "fallback",
               "slope": 1.413675, "saturation_slope": 1.6257261, "channel_grade": [1.0, 1.0],
               "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] } },
-    "fit_range": { "operator": "reinhard-peak-lifted-v1", "headroom_stops": 6.0, "white_point": 64.0,
+    "fit_range": { "operator": "reinhard-peak-lifted-v1", "highlight_range_stops": 6.0, "white_point": 64.0,
                    "display_peak": 1.0,
                    "dark_end": { "setting": { "target": 5.5 }, "curve": "identity",
-                                 "film_base_stops": 4.96, "frame_dark_stops": null,
+                                 "film_base_below_mid_stops": 4.96, "frame_dark_below_mid_stops": null,
                                  "shift_stops": 0.0 } },
     "destination": { "display": { "range": "sdr", "transfer": "native", "gamut": "display-p3",
                                   "container": "tiff" } }
@@ -1685,9 +1685,9 @@ The report's `chain.decode` states every resolved parameter and the derived `anc
 renders: its own `roll.frames` entry, never another frame's), since legal values can multiply to zero or overflow. The film base and the
 corners of the reachable scan range (each channel at the scan floor or at 1) run through
 the decode, scene correction and the look; a sample that overflows f32, or (with
-display black on) a base that grades to a luminance display black cannot place black
+the dark base on) a base that grades to a luminance it cannot place black
 against, is a usage error naming each stated knob whose default alone would render,
-display black's included. A base read from a region is taken
+the dark base's included. A base read from a region is taken
 at 1. A combination that renders but writes a channel as 0 everywhere is a warning at
 the encode instead, and so is a rendered channel whose 99.9th percentile sits more than
 10 stops below diffuse white before the encode (`pipeline::near_black`).
@@ -1787,7 +1787,7 @@ operator's one per-destination argument — the destination states it, never the
 recipe (`1.0` for SDR, `1000/203 ≈ 4.926` for HDR). One operator, reinhard:
 `Y′ = r(Y)·(1 + (P − 1)·s(Y))` on ACEScg luminance, all three channels scaled by
 `Y′/Y`, where `r` is the mid-grey-preserving extended reinhard
-`u·(1 + u/W²)/(1 + u)` over `u = gain·Y` at `W = 2^headroom_stops`, the gain solved so
+`u·(1 + u/W²)/(1 + u)` over `u = gain·Y` at `W = 2^highlight_range_stops`, the gain solved so
 scene mid-grey (`0.18`) is preserved exactly, and `s` a smoothstep in stops from
 diffuse white (`1.0`) to `W`. So `P = 1` is exactly reinhard, and every peak agrees bit
 for bit below diffuse white. Preserving mid-grey costs the family its property of
@@ -1796,17 +1796,18 @@ above it exceeds the peak on every branch, clamped and counted at the encode. A
 non-finite sample is refused, naming the pixel; a pixel with luminance ≤ 0 is scaled
 by the curve's limit at black, so the scale is continuous there.
 
-- `--display-tone-headroom <stops>` ⇒ `fit_range.headroom_stops` — finite, `0`–`24`
+- `--highlight-range <stops>` ⇒ `fit_range.highlight_range_stops` — finite, `0`–`24`
   (a value rule, so `roll` and per-frame overrides refuse it before any frame is
   decoded), unset `6` (`W = 64`); `0` turns the compression off (the dark end still applies). Beyond ~8 stops the operator
-  converges on plain reinhard and a wider range buys nothing.
+  converges on plain reinhard and a wider range buys nothing. It was
+  `--display-tone-headroom` / `fit_range.headroom_stops`, both refused naming the new
+  spelling (the key's `null` read as unset).
 - `fit_range.dark_end` — `{"target": stops}` (`--dark-target`), `{"floor": stops}`
-  (`--dark-floor`), `{"black": stops}` (`--display-black`), or `"off"` (any flag's
+  (`--dark-floor`), `{"base": stops}` (`--dark-base`), or `"off"` (any flag's
   `off`); stops `(0, 16]` below mid-grey on the display; unset, the rendering's
-  (`default` the target at 5.5, `direct` black at 6). The three flags set one key, so
-  they are refused together;
-  `fit_range.display_black` retired into it (refused naming `{"black": …}`, its `null`
-  read as unset). One curve on reinhard's output `y`, before the peak's lift:
+  (`default` the target at 5.5, `direct` the dark base at 6). The three flags set one
+  key, so they are refused together; `fit_range.display_black` retired into it
+  (refused naming `{"base": …}`, its `null` read as unset). One curve on reinhard's output `y`, before the peak's lift:
   `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running over `log2 y` from the
   reference's rendered level `b` to mid-grey, `shift = log2(0.18 · 2^−stops / b)`.
   Mid-grey and above are untouched, the slope is 1 below `b`, and the channels scale
@@ -1824,7 +1825,7 @@ by the curve's limit at black, so the scale is continuous there.
     two thirds of the stops from `b` to mid-grey, which keeps the slope at or below 2,
     and is not warned about. A `b` at or above mid-grey is left alone. Unmeasured and
     under `direct` as the floor (`--dark-target`).
-  - **Display black** (`nf-display-stages/parametric-operator`): `b` is the decoded
+  - **The dark base** (`nf-display-stages/parametric-operator`): `b` is the decoded
     film base (`algo::fixed::decode_film_base`) graded with the frame
     (`chain::render`). Only a push down; a base already at or below the target is left
     alone. A base rendering less than 2 stops under mid-grey (only a strong exposure
@@ -1834,8 +1835,8 @@ by the curve's limit at black, so the scale is continuous there.
 The report's `chain.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
 `identity` at a zero highlight range) with its highlight range, white point and display peak, and
 `dark_end` with its setting, curve (`log-shift-to-mid-grey-v1` or `identity`), where
-the film base and the frame's darkest 1 % render without it (`film_base_stops`,
-`frame_dark_stops`, `null` without tones) and the shift applied (`shift_stops`).
+the film base and the frame's darkest 1 % render without it (`film_base_below_mid_stops`,
+`frame_dark_below_mid_stops`, `null` without tones) and the shift applied (`shift_stops`).
 
 ### Fit gamut (`fit_gamut`)
 No knob; the section is empty. It changes primaries into the destination's gamut
@@ -1949,7 +1950,7 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   linear ICC profile of that gamut: `1.0` is the 203 cd/m² reference white, the peak
   `1000/203 ≈ 4.926108`. Because the ICC PCS stops at the media white, no profile can
   state the luminance mapping, so the report's `hdr_linear_tiff` block is
-  authoritative for reference white, peak, headroom and the frame's measured
+  authoritative for reference white, peak (`peak_sample`) and the frame's measured
   content-light levels — CTA-861.3's MaxCLL and MaxFALL, the peak and frame mean of
   each pixel's largest linear component in the stored primaries (so they differ by
   gamut), never luminance. The profile carries **no** `cicpTag`: H.273's full-range flag
@@ -1978,14 +1979,15 @@ would cost a Unix-only code path for output that is reproducible by re-running.
 ### Retired flags and keys
 
 Each is a usage error (exit 2) naming its replacement — a migration error, never an
-alias, on flags and recipe keys alike. The reference build
-(`scripts/reference-snapshot/`) reproduces what they did.
+alias, on flags and recipe keys alike. Where an earlier build wrote a retired key's
+default as `null`, that `null` is dropped from a recipe and refused in a `--frames`
+override. The reference build (`scripts/reference-snapshot/`) reproduces what they did.
 
 - **The print stage and the presets** (`nf-core/default-flip`): `--output-preset` and
   `output.preset` (→ the four axes or `--film-master`), `--print-exposure` (→
-  `--exposure`), `--black-point` (→ `--display-black`), `--auto-wb` (→ `measure-roll`
+  `--exposure`), `--black-point` (→ `--dark-base`), `--auto-wb` (→ `measure-roll`
   and `--roll-white-balance`), `--linear-range` (retired: its gain is `--exposure`,
-  its black `--display-black` — `nf-scene-correction/levels-knob`), the whole `print`
+  its black `--dark-base` — `nf-scene-correction/levels-knob`), the whole `print`
   section, `--new-flow`, and the sidecar. Earlier still, `--output-hdr` and
   `--output-sdr`, the names before the presets. Earlier:
   `--out-depth`, `--output-profile`, `--bigtiff` with the `legacy` and `custom` presets
@@ -2007,6 +2009,10 @@ alias, on flags and recipe keys alike. The reference build
 - **Renamed** (`core/rename-decode-look-misnomers`): `--density-gamma` (→
   `--linearization`) and `reconstruction.anchor` (→ `reconstruction.anchor_rule`,
   refused at every value, its old default included).
+- **Renamed to the quantity they set** (`core/rename-fit-range-misnomers`):
+  `--display-tone-headroom` → `--highlight-range` and `fit_range.headroom_stops` →
+  `fit_range.highlight_range_stops`; `--display-black` → `--dark-base` and
+  `fit_range.dark_end` `{"black": …}` → `{"base": …}`.
 
 ### Global
 - `--params <json>` (repeatable), `--save-recipe <path>`
@@ -2230,7 +2236,7 @@ src/
     ├── correction_confidence.rs  # measure-roll: how far to trust the white balance and line
     ├── look.rs             # contrast, saturation, per-channel grade, highlight desaturation
     ├── fit_range.rs        # reinhard to the display's peak, the dark end
-    ├── black_endpoint.rs   # the washed-out-black warning, without display black
+    ├── black_endpoint.rs   # the washed-out-black warning, without the dark base
     ├── near_black.rs       # the near-black collapse warning's measure, before the encode
     ├── fit_gamut.rs        # into the destination's gamut, radial to its boundary
     ├── hdr.rs              # the HDR hand-off: peak clamp, PQ/HLG transfer
@@ -2481,7 +2487,7 @@ Resolved, kept as a record: the SilverFast HDRi layout (§4); linear ACEScg for 
 film master (§6); the recipe travels in the report, not the image container (§5);
 reinhard over a parametric shoulder (§6); a separate contrast and per-channel grade
 rather than one CDL object (§9 Look); `direct` as a rendering rather than a preset
-(§6); one dark end, fit range's target, floor or display black (§6); the fallback slope without a
+(§6); one dark end, fit range's target, floor or the dark base (§6); the fallback slope without a
 roll measurement, a white +1.75 stops up (§9 Look); the roll's white rule on HDR, which
 stands (`nf-calibration/white-rule-hdr`); stages defined by operation, with roll and
 style combined into their parameters rather than rebuilt as stages (§6,

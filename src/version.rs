@@ -65,7 +65,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 14 | a hybrid frame the ±1 EV limit holds flattens until its ends stay inside the roll's envelope (2026-10-11, `nf-calibration/hybrid-slope-bounds`); no archive frame is held, so no measured archive render moves. `render`, `base` and `recipe` are unmoved — the guard acts after the gate — so the row was added by hand. |
 /// | 15 | the dark floor is on by default (2026-10-12, `nf-display-stages/midtone-contrast-toe`): a frame whose measured darkest 1 % (its `roll.frames` entry `tones`) renders deeper than 4.5 stops below mid-grey is lifted there, the lift fading to nothing at mid-grey. Display black became the other setting of the same key, `fit_range.dark_end` (`fit_range.display_black` retired; `direct` keeps its pinned black 6). At the default slope no reviewed frame is lifted; frames wider than the placement fits, and `--contrast 1.3`, are. `render` and `base` are unmoved; `recipe` moved with the key and the `default` rendering's base. |
 /// | 16 | the hybrid's span target R 7 → **8** look stops (2026-10-13, `nf-calibration/hybrid-span-target`): a measured roll's hybrid frames steepen inside the envelope (192 of 226 archive frames; by 8/7 where the span already set the slope), so on a thin roll they brighten rather than deepen. `render` and `base` are unmoved — R acts after the gate — so the row was added by hand; `recipe` was refreshed in place for the opt-in `roll.white_balance_form` and `roll.white_balance_stops`. |
-/// | 17 | **current** — the dark **target** in place of the floor (2026-10-14, `nf-display-stages/frame-dark-target`): a frame's measured darkest 1 % is placed 5.5 stops below mid-grey, lifted (capped at a third of the way to mid-grey, as the floor's) or pushed down (capped at two thirds). Every measured frame's shadows move, most of them deeper: on 2026-10-12 Gold200 `--placement frame` lands at 5.5 from 4.26, and the hybrid is held by the cap at 3.4 from 2.0. `render` and `base` are unmoved; `recipe` moved with the `default` rendering's base, and was refreshed in place by `core/rename-decode-look-misnomers` (`reconstruction.anchor` → `anchor_rule`, no value moved). |
+/// | 17 | **current** — the dark **target** in place of the floor (2026-10-14, `nf-display-stages/frame-dark-target`): a frame's measured darkest 1 % is placed 5.5 stops below mid-grey, lifted (capped at a third of the way to mid-grey, as the floor's) or pushed down (capped at two thirds). Every measured frame's shadows move, most of them deeper: on 2026-10-12 Gold200 `--placement frame` lands at 5.5 from 4.26, and the hybrid is held by the cap at 3.4 from 2.0. `render` and `base` are unmoved; `recipe` moved with the `default` rendering's base, and was refreshed in place by `core/rename-decode-look-misnomers` (`reconstruction.anchor` → `anchor_rule`, no value moved) and `core/rename-fit-range-misnomers` (`fit_range.headroom_stops` → `highlight_range_stops`, no value moved). |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -160,11 +160,12 @@ pub const PIPELINE_VERSION: u32 = 17;
 /// **A recorded row is history, not a scratchpad.** Editing an existing row's `render`
 /// or `base` because a default moved would make one version label two different
 /// behaviors — silently destroying the very attribution the table exists to provide.
-/// Add a row instead. Two edits in place are sanctioned, both for a **current** row
+/// Add a row instead. Three edits in place are sanctioned, all for a **current** row
 /// whose default pixels did not move: refreshing `recipe` for a new opt-in knob with a
-/// neutral default (see [`PipelineFingerprint`]), and refreshing a hash whose own
-/// definition changed (v8's `render`). A bump for either would falsely tell a user
-/// replaying an old recipe that the output will not match.
+/// neutral default (see [`PipelineFingerprint`]) or for a key renamed or moved, where an
+/// old document replays or is refused with a migration error (v5, v17); and refreshing a
+/// hash whose own definition changed (v8's `render`). A bump for any would falsely tell
+/// a user replaying an old recipe that the output will not match.
 ///
 /// Test-only: nothing at runtime reads it, and gating it on `cfg(test)` keeps it
 /// out of the shipped binary without needing a `dead_code` allow.
@@ -557,12 +558,14 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
     // v17 — the dark end placed at a 5.5-stop target, lifted or pushed, in place of the
     // 4.5-stop floor (2026-10-14, `nf-display-stages/frame-dark-target`).
     // `recipe` refreshed in place by `core/rename-decode-look-misnomers` (was
-    // `bb01d83b037d9f91`): `reconstruction.anchor` renamed `anchor_rule`, no value moved.
+    // `bb01d83b037d9f91`): `reconstruction.anchor` renamed `anchor_rule`, no value moved;
+    // and by `core/rename-fit-range-misnomers` (was `587435112f061c76`):
+    // `fit_range.headroom_stops` renamed `highlight_range_stops`, no value moved.
     PipelineFingerprint {
         pipeline_version: 17,
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
-        recipe: "587435112f061c76",
+        recipe: "00c0144665fa1587",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

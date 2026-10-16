@@ -142,8 +142,8 @@ pub const NOTES: &[Note] = &[
         "compresses the range into the display; null: the rendering's",
     ),
     value(
-        "fit_range.headroom_stops",
-        "--display-tone-headroom",
+        "fit_range.highlight_range_stops",
+        "--highlight-range",
         "highlight range: stops above diffuse white; 0 turns the compression off",
     ),
     value(
@@ -151,7 +151,7 @@ pub const NOTES: &[Note] = &[
         "--dark-target",
         "{\"target\": S}, the frame's darkest 1 % at S display stops below mid-grey, \
          raised or pushed down; {\"floor\": S}, it no deeper than S (--dark-floor); \
-         {\"black\": S}, the film base at S (--display-black); or \"off\"",
+         {\"base\": S}, the film base at S (--dark-base); or \"off\"",
     ),
     section("fit_gamut", "no settings yet"),
     section(
@@ -832,8 +832,8 @@ mod tests {
         let placed = removed_flag_message("pass `--roll-white-balance R,G,B`.".into());
         assert!(placed.ends_with("white balance and exposure"), "{placed}");
         assert!(!placed.contains(".."), "{placed}");
-        let untouched = removed_flag_message("use --display-black instead".into());
-        assert_eq!(untouched, "use --display-black instead");
+        let untouched = removed_flag_message("use --dark-base instead".into());
+        assert_eq!(untouched, "use --dark-base instead");
     }
 
     #[test]

@@ -168,7 +168,7 @@ binary, and both rules apply to it verbatim:
   collide with itself.)
 
 **Smoke-test unusual flag combinations on one frame first.** A configuration Hanten refuses
-(`--display-tone-headroom 0` on a frame with highlights above white, say) is worth finding in 15 seconds rather than after
+(`--highlight-range 0` on a frame with highlights above white, say) is worth finding in 15 seconds rather than after
 a full run.
 
 ## 5. References from another tool

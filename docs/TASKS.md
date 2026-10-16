@@ -134,7 +134,6 @@ graph TD
 - [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame · **waits on** `core/crop-rotate`, `core/frame-keys-by-path`
 - [ ] [Stable codes for warnings and errors](tasks/core/message-codes.md) — every warning and error carries a code and facts; the CLI formats its prose from them, the app maps codes to its own handling
 - [ ] [Release Readiness](tasks/core/release-readiness.md) — from the release-readiness review: (1) correct public docs that misstate the product (README "pre-implementation" + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in…
-- [ ] [Rename the fit-range and HDR misnomers (--display-tone-headroom, --display-black, linear_headroom)](tasks/core/rename-fit-range-misnomers.md) — the highlight range gets its own public name; display black and the duplicated display peak
 - [ ] [Rename the roll and report misnomers (frames.*.exposure, slope_bound, dark_stops sign, area tilt, neutral_balance, saturation_margin)](tasks/core/rename-roll-report-misnomers.md) — roll keys and report fields whose names collide, mislead or flip sign, plus American spellings
 - [x] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll, cross-frame agreement, provenance + confidence, a loud refusal
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section
@@ -149,6 +148,7 @@ graph TD
 - [x] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params` (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain `defaults < params A < params B < … < flags`
 - [x] [Recipe replay fidelity](tasks/core/recipe-replay-fidelity.md) — every recipe document hanten writes (`--dump-params`, `hanten params`, `measure-base`/`measure-roll --out`) is a `{meta, params}` envelope stamped with the build's identity, so a replay under…
 - [x] [Rename the decode and look misnomers (--density-gamma, reconstruction.anchor, look stage "contrast")](tasks/core/rename-decode-look-misnomers.md) — public names that say the wrong quantity in the decode and the look
+- [x] [Rename the fit-range and HDR misnomers (--display-tone-headroom, --display-black, linear_headroom)](tasks/core/rename-fit-range-misnomers.md) — the highlight range gets its own public name; display black and the duplicated display peak
 - [x] [Roll conversion (batch with a shared frozen recipe)](tasks/core/roll-conversion.md)
 - [x] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --unexposed <file|auto> [--leader L]` measures the base and the roll, then converts
 - [x] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed pipe (e.g
