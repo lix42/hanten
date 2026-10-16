@@ -85,9 +85,9 @@ class Standards(unittest.TestCase):
 
     def test_radial_pull_keeps_luminance_and_lands_on_the_cube(self):
         rgb = np.array([1.4, 0.2, 0.1])
-        y = rgb @ rec2100.BT2020_LUMA
+        y = rgb @ rec2100.BT2020_LUMINANCE
         out = rec2100.radial_to_cube(rgb, y, 1.0)
-        self.assertAlmostEqual(float(out @ rec2100.BT2020_LUMA), float(y), places=12)
+        self.assertAlmostEqual(float(out @ rec2100.BT2020_LUMINANCE), float(y), places=12)
         self.assertAlmostEqual(float(out.max()), 1.0, places=12)
         np.testing.assert_allclose(rec2100.radial_to_cube(rgb * 0.5, y * 0.5, 1.0),
                                    rgb * 0.5, rtol=1e-15)

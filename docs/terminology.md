@@ -83,7 +83,7 @@ A stops figure states its reference and its sign.
 | Kind | Meaning | Sign | Kind | Public spellings |
 |---|---|---|---|---|
 | **scene stops** | `log2(value / 0.18)` on the decode's output; the linearization is already in. The statistic varies: the roll white is in film RGB (see the whites below), a dark end or level is ACEScg luminance | dark is negative | public | `roll.white_stops`, `roll.dark_stops`, `envelope_stops` (`[dark end, white]`), `level_stops` |
-| **look stops** | scene stops × the tone slope (code also says "rendered stops") | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
+| **look stops** | scene stops × the tone slope | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
 | **display stops below mid-grey** | distance below mid-grey after fit range | **positive is darker** — the opposite of `roll.dark_stops` | public | `fit_range.dark_end`, `film_base_stops`, `frame_dark_stops` |
 | **stops from diffuse white** | relative to graded 1.0 | signed | public | `fit_range.headroom_stops` (+6), `highlight_desaturation.start_stops` (−1) |
 
@@ -174,12 +174,12 @@ density between two rolls of one stock) out of the render.
 ### Luminance — one word, three spaces
 
 "Luminance" is the one word for a linear Y and always names its space. "Luma" is a
-gamma-encoded sum, which Hanten never computes; the `*_LUMA` constants are luminance
-vectors (an internal misnomer).
+gamma-encoded sum, which Hanten never computes. The vectors are the `*_LUMINANCE`
+constants in `pipeline::colorimetry::pinned`.
 
 | Term | Meaning | Used by | Kind |
 |---|---|---|---|
-| **ACEScg luminance** (AP1 Y) | `dot(rgb, ACESCG_LUMA)` | look, fit range, scene stops, roll measures, midtone line | public |
+| **ACEScg luminance** (AP1 Y) | `dot(rgb, ACESCG_LUMINANCE)` | look, fit range, scene stops, roll measures, midtone line | public |
 | **destination luminance** | the Y row of the destination gamut | fit gamut's ceiling and gamut map, the HLG encode | public |
 | **display luminance** | absolute, in cd/m²: reference white 203, peak 1000 | HDR encode | public: `reference_white_nits`, `target_peak_nits` |
 | **content light level** | MaxCLL / MaxFALL: per-pixel `max(R,G,B)`, not a luminance | HDR report | public: `max_cll_nits`, `max_fall_nits` |

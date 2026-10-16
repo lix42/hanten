@@ -329,10 +329,9 @@ def luminance_weights(space: Space) -> tuple[float, float, float]:
     """The Y row of the D65-adapted primary matrix.
 
     Derived from the primaries, deliberately, even for BT.2020: that space's
-    *tabulated* `[0.2627, 0.6780, 0.0593]` is the non-constant-luminance luma
-    used on transfer-encoded values for Y'CbCr, not a linear-light luminance
-    weighting, and the two disagree by ~2e-6. See the note on
-    `definitions::BT2020_LUMA_TABULATED`.
+    *tabulated* `[0.2627, 0.6780, 0.0593]` is a table rounded to four decimals,
+    ~2e-6 from the derived row. See the note on
+    `definitions::BT2020_LUMINANCE_TABULATED`.
     """
     return rgb_to_xyz_d65(space)[1]
 

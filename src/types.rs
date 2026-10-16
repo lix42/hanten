@@ -436,7 +436,7 @@ pub enum FilmType {
 ///
 /// Its own section rather than a key under `film_base`, because the effective area
 /// governs **every** measurement path (`Dmin`, a roll's white balance, content exposure and
-/// contrast, tiling uniformity), not just the film base. Filing it under one
+/// roll slope, tiling uniformity), not just the film base. Filing it under one
 /// consumer would misplace it permanently: every recipe struct carries
 /// `deny_unknown_fields`, so a key's section is part of its identity.
 ///

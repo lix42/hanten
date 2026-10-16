@@ -28,9 +28,9 @@ use tiff::encoder::{TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard, TiffVa
 use tiff::tags::Tag;
 
 use crate::algo::FilmRgbImage;
+use crate::destination::Gamut;
 use crate::io::QUANTIZE_BAND_SAMPLES;
 use crate::io::staged::{self, Staged};
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::hdr::{ContentLightLevel, LinearHdr, LinearHdrMetadata};
 use crate::types::{
     BigTiff, EncodeOutcome, EncodeReport, LinearImage, NcError, OutDepth, OutputStats, Result,
@@ -271,7 +271,7 @@ const SAMPLE_FORMAT_IEEE_FLOAT: u16 = 3;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HdrLinearTiffSummary {
     /// The primaries the samples are in.
-    pub gamut: DestinationGamut,
+    pub gamut: Gamut,
     /// Stable identifier of the pixel contract written to the file.
     pub pixel_contract: &'static str,
     /// Whether the file was written as BigTIFF.
@@ -1175,13 +1175,9 @@ mod tests {
         let gain = exposure.exp2();
         let scaled = rgb.iter().map(|v| v * gain).collect();
         let image = LinearImage::new(w, h, scaled).unwrap();
-        let (hdr, clamp) = crate::pipeline::hdr::from_new_chain(
-            image,
-            DestinationGamut::Bt2020,
-            "reinhard",
-            "radial",
-        )
-        .unwrap();
+        let (hdr, clamp) =
+            crate::pipeline::hdr::from_new_chain(image, Gamut::Bt2020, "reinhard", "radial")
+                .unwrap();
         assert_eq!(clamp, crate::pipeline::hdr::PeakClamp::default());
         hdr
     }
@@ -1229,7 +1225,7 @@ mod tests {
         assert!(expected.contains(&0.0), "no black sample");
 
         let path = temp_path("roundtrip");
-        let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+        let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
         let (staged, outcome, summary) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
 
@@ -1263,7 +1259,7 @@ mod tests {
         // rather than by a tolerance.
         let render = render_linear_tiny(&[0.25, 0.25, 0.25], 1, 1, 2.0);
         let path = temp_path("linear");
-        let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+        let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
         let (staged, _, _) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
 
@@ -1282,7 +1278,7 @@ mod tests {
     fn hdr_linear_tiff_embeds_the_linear_bt2020_profile_verbatim() {
         let render = render_linear_tiny(&[0.4, 0.3, 0.2], 1, 1, 1.0);
         let path = temp_path("icc");
-        let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+        let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
         let (staged, _, summary) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
         assert_eq!(summary.icc_bytes, icc.len());
@@ -1304,7 +1300,7 @@ mod tests {
         for (policy, want_big) in [(BigTiff::Off, false), (BigTiff::On, true)] {
             let render = render_linear_tiny(&[0.5, 0.5, 0.5], 1, 1, 1.0);
             let path = temp_path(&format!("big-{policy:?}"));
-            let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+            let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
             let (staged, _, summary) = encode_hdr_linear_with(render, policy, &icc, &path).unwrap();
             staged.commit().unwrap();
             let bytes = std::fs::read(&path).unwrap();
@@ -1330,7 +1326,7 @@ mod tests {
         // value must still be written verbatim rather than quietly turned into 0.
         let image = img(2, 1, vec![f32::NAN, 0.5, f32::INFINITY, 0.5, 0.5, 0.5]);
         let mut buf = Cursor::new(Vec::new());
-        let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+        let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
         let outcome = encode_hdr_linear_to_writer(&mut buf, &image, false, &icc).unwrap();
         assert_eq!(outcome.loss.non_finite, 2);
         assert_eq!(outcome.loss.clipped_low, 0, "f32 must not clamp");
@@ -1505,7 +1501,7 @@ mod tests {
         // commits (so a later failure in the run leaves nothing behind), and two
         // encodes of the same render are byte-identical on this build.
         let path = temp_path("staged");
-        let icc = crate::pipeline::color::hdr_linear_icc(DestinationGamut::Bt2020).unwrap();
+        let icc = crate::pipeline::color::hdr_linear_icc(Gamut::Bt2020).unwrap();
         let first = {
             let render = render_linear_tiny(&[0.3, 0.6, 0.9], 1, 1, 1.5);
             let (staged, _, _) = encode_hdr_linear(render, &icc, &path).unwrap();

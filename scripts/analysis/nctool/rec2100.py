@@ -23,8 +23,9 @@ HLG_A = 0.17883277
 HLG_B = 1 - 4 * HLG_A
 HLG_C = 0.5 - HLG_A * np.log(4 * HLG_A)
 
-# BT.2020 non-constant-luminance luma.
-BT2020_LUMA = np.array([0.2627, 0.6780, 0.0593])
+# BT.2020's tabulated non-constant-luminance coefficients, which BT.2100 applies to
+# linear light.
+BT2020_LUMINANCE = np.array([0.2627, 0.6780, 0.0593])
 
 
 def pq_inverse_eotf(nits):
@@ -53,7 +54,7 @@ def hlg_inverse_ootf(display, gamma: float):
     """Display light normalized to the peak (`(..., 3)`) → scene light, inverting
     `F_D = Y_S^(γ-1) · E` for a zero-black display."""
     d = np.asarray(display, dtype=np.float64)
-    yd = d @ BT2020_LUMA
+    yd = d @ BT2020_LUMINANCE
     with np.errstate(divide="ignore", invalid="ignore"):
         scale = np.where(yd > 0, np.power(np.maximum(yd, 1e-300), (1 - gamma) / gamma), 0.0)
     return d * scale[..., None]
@@ -86,7 +87,7 @@ def hlg_signal(linear, reference_white_nits: float, peak_nits: float, gamma: flo
     the cube, then the OETF."""
     display = np.asarray(linear, dtype=np.float64) * (reference_white_nits / peak_nits)
     scene = hlg_inverse_ootf(display, gamma)
-    return hlg_oetf(radial_to_cube(scene, scene @ BT2020_LUMA, 1.0))
+    return hlg_oetf(radial_to_cube(scene, scene @ BT2020_LUMINANCE, 1.0))
 
 
 def round_half_away(x):
@@ -107,7 +108,7 @@ def hlg_display_nits(signal, peak_nits: float, gamma: float):
     """HLG signal (`(..., 3)`) → display light in cd/m² on a `peak_nits`, zero-black
     reference display: the inverse OETF, then the OOTF `F_D = L_W · Y_S^(γ-1) · E_S`."""
     scene = hlg_inverse_oetf(signal)
-    ys = scene @ BT2020_LUMA
+    ys = scene @ BT2020_LUMINANCE
     with np.errstate(divide="ignore", invalid="ignore"):
         scale = np.where(ys > 0, np.power(np.maximum(ys, 1e-300), gamma - 1), 0.0)
     return peak_nits * scene * scale[..., None]

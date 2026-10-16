@@ -1,11 +1,11 @@
 //! **Stage 2 of the new rendering chain — the look.**
 //!
-//! The creative stage: contrast, saturation, the per-channel grade and highlight desaturation
-//! today, and later print emulation and per-stock normalization. Scene-referred and
-//! linear. Each control lands here with its own task under `nf-look`, as its own key in
-//! the recipe's `look` section — not one CDL-style object, whose slope and offset would
-//! duplicate white balance, which scene correction owns, and display black, which fit
-//! range owns.
+//! The creative stage: the tone slope, the saturation slope, the per-channel grade and
+//! highlight desaturation today, and later print emulation and per-stock
+//! normalization. Scene-referred and linear. Each control lands here with its own
+//! task under `nf-look`, as its own key in the recipe's `look` section — not one
+//! CDL-style object, whose slope and offset would duplicate white balance, which scene
+//! correction owns, and display black, which fit range owns.
 //!
 //! **Its position is a constraint, not a preference.** The look sits after scene
 //! correction and *above* the SDR/HDR branch, because a gain map requires the two
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::pixels;
 use crate::pipeline::scene_correction::SceneReferredImage;
 use crate::pipeline::working_image::WorkingBuffer;
@@ -41,7 +41,7 @@ use crate::types::{NcError, Result};
 ///   `docs/spike/highlight-desaturation.md` found on one marked patch. `s`, the chroma
 ///   band's measure, is the graded log ratio over linearization ×
 ///   [`LookSection::saturation_slope`], so the band means the same on a flat roll and
-///   a contrasty one.
+///   a steep one.
 /// - **The band assumes a roll-level white balance ahead of it**
 ///   (`hanten measure-roll`): `s` measures distance from R = G = B, which is distance
 ///   from white only once the roll's cast is gone (`docs/spike/desaturation-band.md`).
@@ -116,8 +116,8 @@ impl HighlightDesaturation {
 }
 
 /// Mid-grey, the pivot [`LookSection::slope`] turns about: the value the decode's
-/// anchor rule pins a correctly exposed grey card at, so changing contrast pivots the
-/// picture instead of moving it.
+/// anchor rule pins a correctly exposed grey card at, so changing the tone slope pivots
+/// the picture instead of moving it.
 pub const MID_GREY: f32 = 0.18;
 
 /// The slope when no roll white gives one: the `default` rendering's fallback, placed as
@@ -148,8 +148,8 @@ pub struct ChannelGradeFault(pub [f32; 2]);
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LookSection {
-    /// **The slope**: the scene-to-output contrast about mid-grey, where 1 reproduces the
-    /// scene's own. The rendering's base times the `look.contrast` knob
+    /// **The tone slope**: the scene-to-output luminance power about mid-grey, where 1
+    /// reproduces the scene's own. The rendering's base times the `look.contrast` knob
     /// (`recipe::resolve::slope`); the decode's linearization is not part of it.
     ///
     /// ```text
@@ -159,7 +159,7 @@ pub struct LookSection {
     ///
     /// - **On luminance only** (`nf-look/contrast-on-luminance`): the pixel is scaled
     ///   whole, so its channel ratios — its colour — do not move with the slope. A
-    ///   per-channel power multiplied chroma with contrast (2.0 → 3.0 ≈ 1.5×), and steep
+    ///   per-channel power multiplied chroma with the slope (2.0 → 3.0 ≈ 1.5×), and steep
     ///   slopes lost on saturated frames for it (`docs/spike/poor-development.md`).
     ///   Colour is [`LookSection::saturation_slope`]'s.
     /// - **For a neutral this is a steeper decode** — `0.18 · (10^(L·(D′−A_L)) / 0.18)^k`
@@ -209,21 +209,22 @@ pub struct LookSection {
     ///   moves all three outputs: accurate, and unpredictable by hand. This addresses the
     ///   symptom rather than the error, on purpose, and grades a calibrated decode rather
     ///   than replacing the calibration.
-    /// - **Pivoted at [`MID_GREY`]**, the contrast's pivot: a neutral mid stays neutral
+    /// - **Pivoted at [`MID_GREY`]**, the tone slope's pivot: a neutral mid stays neutral
     ///   and the cast grows away from mid in both directions, which white balance cannot
     ///   do. It subsumes the retired regional balance (`nf-retire/regional-balance`).
-    /// - **Luminance is restored, so it never moves neutral contrast** — contrast owns
-    ///   that. A pivoted power alone, even with exponents whose luminance-weighted mean is
+    /// - **Luminance is restored, so it never moves a neutral's tone** — the tone slope
+    ///   owns that. A pivoted power alone, even with exponents whose luminance-weighted mean is
     ///   1, holds a neutral's slope only at mid and bends it into an S-curve elsewhere
     ///   (0.95 → 1.05 at a 0.4 exponent spread). With the restore a neutral's luminance
-    ///   is its input's, so the look's neutral slope is the contrast exactly and the grade
+    ///   is its input's, so the look's neutral slope is the tone slope exactly and the grade
     ///   is a colour operator. The cost: raising red also lowers green and blue a little.
     /// - **Green is fixed at 1.** Under the restore, equal exponents leave a neutral
     ///   alone but expand every colour's chroma — a saturation knob in disguise — so the
     ///   common part is not offered.
-    /// - **Runs after contrast and saturation**, and grows with both: a neutral's channel
-    ///   spread is `(g_c − ḡ) · log(x / mid)` on the value contrast has spread, and a
-    ///   crossover the decode leaves is a ratio the saturation slope stretches.
+    /// - **Runs after the tone and saturation slopes**, and grows with both: a neutral's
+    ///   channel spread is `(g_c − ḡ) · log(x / mid)` on the value the tone slope has
+    ///   spread, and a crossover the decode leaves is a ratio the saturation slope
+    ///   stretches.
     /// - **Runs before highlight desaturation**, whose band classifies the graded pixel:
     ///   the band assumes the cast was removed upstream, and a tone-dependent cast is
     ///   what this removes. A deliberate highlight cast is therefore partly pulled back.
@@ -403,8 +404,9 @@ impl fmt::Debug for GradedImage {
     }
 }
 
-/// Apply the look: contrast, saturation, the per-channel grade, then highlight
-/// desaturation, in one pass. An empty look returns the buffer untouched, bit for bit.
+/// Apply the look: the tone slope, the saturation slope, the per-channel grade, then
+/// highlight desaturation, in one pass. An empty look returns the buffer untouched,
+/// bit for bit.
 ///
 /// Nothing is clamped, and a non-finite sample passes through untouched for fit range
 /// to refuse by name.
@@ -433,7 +435,7 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
                 section.channel_grade
             )));
         }
-        let contrast = (section.slope != 1.0).then_some(section.slope);
+        let tone_slope = (section.slope != 1.0).then_some(section.slope);
         let saturation = (section.saturation_slope != 1.0).then_some(section.saturation_slope);
         let grade = (!section.channel_grade_is_identity()).then(|| {
             let [r, b] = section.channel_grade;
@@ -448,8 +450,8 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
             )?)
         };
         pixels::map_in_place(buffer.rgb_mut(), |px| {
-            if let Some(k) = contrast {
-                apply_contrast(px, k);
+            if let Some(k) = tone_slope {
+                apply_tone_slope(px, k);
             }
             if let Some(s) = saturation {
                 apply_saturation(px, s);
@@ -466,13 +468,13 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
 }
 
 /// [`LookSection::slope`] on one pixel: the whole pixel scaled by `Y′ / Y`.
-fn apply_contrast(px: &mut [f32; 3], contrast: f32) {
-    let y = dot(*px, ACESCG_LUMA);
+fn apply_tone_slope(px: &mut [f32; 3], slope: f32) {
+    let y = dot(*px, ACESCG_LUMINANCE);
     if !(y.is_finite() && y > 0.0) {
         return;
     }
-    let scale = MID_GREY * (y / MID_GREY).powf(contrast) / y;
-    *px = px.map(|c| c * scale);
+    let gain = MID_GREY * (y / MID_GREY).powf(slope) / y;
+    *px = px.map(|c| c * gain);
 }
 
 /// [`LookSection::saturation_slope`] on one pixel: `(x_c / Y)^s`, luminance restored.
@@ -487,13 +489,13 @@ fn apply_saturation(px: &mut [f32; 3], s: f32) {
     if !px.iter().all(|&c| usable(c)) {
         return;
     }
-    let y = dot(*px, ACESCG_LUMA);
+    let y = dot(*px, ACESCG_LUMINANCE);
     if !usable(y) {
         return;
     }
     let max = px[0].max(px[1]).max(px[2]);
     let stretched = px.map(|c| (c / max).powf(s));
-    let restore = y / dot(stretched, ACESCG_LUMA);
+    let restore = y / dot(stretched, ACESCG_LUMINANCE);
     let out = stretched.map(|c| c * restore);
     if out.iter().all(|c| c.is_finite()) {
         *px = out;
@@ -517,14 +519,14 @@ fn apply_channel_grade(px: &mut [f32; 3], exponents: [f32; 3]) {
     if !px.iter().all(|&c| usable(c)) {
         return;
     }
-    let y_in = dot(*px, ACESCG_LUMA);
+    let y_in = dot(*px, ACESCG_LUMINANCE);
     let mut graded = *px;
     for (channel, &g) in graded.iter_mut().zip(&exponents) {
         if g != 1.0 {
             *channel = MID_GREY * (*channel / MID_GREY).powf(g);
         }
     }
-    let y_out = dot(graded, ACESCG_LUMA);
+    let y_out = dot(graded, ACESCG_LUMINANCE);
     if !(usable(y_in) && usable(y_out)) {
         return;
     }
@@ -547,8 +549,7 @@ struct Pull {
     ratio_full: f32,
     ratio_none: f32,
     band: [f32; 2],
-    /// The whole slope that shaped the pixel's colour: the decode's linearization times
-    /// the saturation slope.
+    /// The colour slope: the decode's linearization times the saturation slope.
     colour_slope: f32,
 }
 
@@ -572,7 +573,7 @@ impl Pull {
     }
 
     fn apply(&self, px: &mut [f32; 3]) {
-        let y = dot(*px, ACESCG_LUMA);
+        let y = dot(*px, ACESCG_LUMINANCE);
         // A NaN luminance passes through untouched, for fit range to refuse.
         if y.is_nan() || y <= self.start_luminance {
             return;
@@ -621,11 +622,11 @@ mod tests {
     }
 
     fn luminance(px: [f32; 3]) -> f32 {
-        dot(px, ACESCG_LUMA)
+        dot(px, ACESCG_LUMINANCE)
     }
 
     /// A pixel at `y` stops relative to diffuse white whose max/min ratio sits at
-    /// `s` on the saturation measure (contrast 2): warm, red high and blue low.
+    /// `s` on the saturation measure (colour slope 2): warm, red high and blue low.
     fn pixel(stops: f32, s: f32) -> [f32; 3] {
         let ratio = 10f32.powf(2.0 * s);
         let raw = [ratio.sqrt(), 1.0, 1.0 / ratio.sqrt()];
@@ -749,21 +750,21 @@ mod tests {
     }
 
     #[test]
-    fn the_measure_is_the_negatives_spread_whatever_the_contrast() {
-        // One density spread rendered at two contrasts: the ratio differs, the key
+    fn the_measure_is_the_negatives_spread_whatever_the_colour_slope() {
+        // One density spread rendered at two colour slopes: the ratio differs, the key
         // does not.
         let spread = 0.02;
-        let at = |contrast: f32| {
-            let ratio = 10f32.powf(contrast * spread);
+        let at = |slope: f32| {
+            let ratio = 10f32.powf(slope * spread);
             let raw = [ratio.sqrt(), 1.0, 1.0 / ratio.sqrt()];
-            let scale = DIFFUSE_WHITE / luminance(raw);
-            let px = raw.map(|v| v * scale);
+            let gain = DIFFUSE_WHITE / luminance(raw);
+            let px = raw.map(|v| v * gain);
             let p = HighlightDesaturation {
                 strength: 1.0,
                 ..HighlightDesaturation::default()
             };
             let mut out = px;
-            Pull::new(&p, contrast).unwrap().apply(&mut out);
+            Pull::new(&p, slope).unwrap().apply(&mut out);
             1.0 - chroma(out) / chroma(px)
         };
         assert!(
@@ -789,7 +790,7 @@ mod tests {
         }
     }
 
-    // --- contrast ---------------------------------------------------------------
+    // --- tone slope -------------------------------------------------------------
 
     /// A scan through the fixed decode at `linearization`, the NC film RGB v1 mapping,
     /// an identity scene correction and the look `section` — the chain up to the
@@ -847,8 +848,8 @@ mod tests {
             .collect()
     }
 
-    /// The bundled decode's look: contrast carried by the decode, so the look's own is
-    /// the identity.
+    /// The bundled decode's look: the whole slope carried by the decode, so the look's
+    /// own is the identity.
     fn bundled_section(desaturation: HighlightDesaturation) -> LookSection {
         LookSection {
             slope: 1.0,
@@ -858,11 +859,11 @@ mod tests {
         }
     }
 
-    /// The look's half of the bundled contrast split at the linearization: the default
+    /// The look's half of the bundled whole slope, split at the linearization: the default
     /// slope until `nf-calibration/no-roll-defaults`, and still `direct`'s before it,
     /// with saturation held where a per-channel power at that slope put it.
     fn split_section(desaturation: HighlightDesaturation) -> LookSection {
-        let slope = crate::algo::fixed::BUNDLED_CONTRAST / crate::algo::fixed::LINEARIZATION;
+        let slope = crate::algo::fixed::BUNDLED_WHOLE_SLOPE / crate::algo::fixed::LINEARIZATION;
         LookSection {
             slope,
             saturation_slope: slope,
@@ -888,9 +889,13 @@ mod tests {
         // exactly 2.0 in f32, and the split takes two `powf`s where the bundled decode
         // takes one. Measured at most 3.6e-7 relative (a few ULP) over the ramp, from
         // the film base to 1.8 density; bounded at 2e-6.
-        use crate::algo::fixed::{BUNDLED_CONTRAST, LINEARIZATION};
+        use crate::algo::fixed::{BUNDLED_WHOLE_SLOPE, LINEARIZATION};
         let scan = scan_at(&DENSITIES, |t| [t; 3]);
-        let bundled = graded(&scan, BUNDLED_CONTRAST, bundled_section(off_desaturation()));
+        let bundled = graded(
+            &scan,
+            BUNDLED_WHOLE_SLOPE,
+            bundled_section(off_desaturation()),
+        );
         let split = graded(&scan, LINEARIZATION, split_section(off_desaturation()));
         for (i, (a, b)) in bundled.iter().zip(&split).enumerate() {
             let rel = ((a - b) / a).abs();
@@ -904,9 +909,13 @@ mod tests {
         // RGB v1 3×3, the look's after it, and a power does not commute with a matrix
         // that mixes channels. Stated rather than hidden — the difference exists, and
         // it is small: 2.5% on the worst channel of a pixel ±0.25 density off neutral.
-        use crate::algo::fixed::{BUNDLED_CONTRAST, LINEARIZATION};
+        use crate::algo::fixed::{BUNDLED_WHOLE_SLOPE, LINEARIZATION};
         let scan = scan_at(&[0.3, 0.62, 1.0], |t| [t + 0.25, t, t - 0.25]);
-        let bundled = graded(&scan, BUNDLED_CONTRAST, bundled_section(off_desaturation()));
+        let bundled = graded(
+            &scan,
+            BUNDLED_WHOLE_SLOPE,
+            bundled_section(off_desaturation()),
+        );
         let split = graded(&scan, LINEARIZATION, split_section(off_desaturation()));
         let widest = bundled
             .iter()
@@ -923,12 +932,12 @@ mod tests {
     #[test]
     fn highlight_desaturation_sees_the_same_neutral_highlights_either_way() {
         // The band divides by linearization × the saturation slope (here equal to the
-        // slope), so a roll whose contrast moves from the decode into the look keys the
-        // same pixels the same way. Near-white highlights, from half a stop under diffuse
-        // white to most of a stop over it, at three density spreads: 0.01 (s ≈ 0.007,
-        // below the band: full pull under any nearby divisor) and 0.025 / 0.03
-        // (s ≈ 0.018 / 0.021, on the ramp, where the key depends on the divisor).
-        use crate::algo::fixed::{BUNDLED_CONTRAST, LINEARIZATION};
+        // tone slope), so a roll whose whole slope is split between the decode and the look
+        // keys the same pixels the same way. Near-white highlights, from half a stop
+        // under diffuse white to most of a stop over it, at three density spreads: 0.01
+        // (s ≈ 0.007, below the band: full pull under any nearby divisor) and 0.025 /
+        // 0.03 (s ≈ 0.018 / 0.021, on the ramp, where the key depends on the divisor).
+        use crate::algo::fixed::{BUNDLED_WHOLE_SLOPE, LINEARIZATION};
         let ts = [0.9, 1.0, 1.1];
         let scan: Vec<f32> = [0.01_f32, 0.025, 0.03]
             .iter()
@@ -936,7 +945,7 @@ mod tests {
             .collect();
         let bundled = graded(
             &scan,
-            BUNDLED_CONTRAST,
+            BUNDLED_WHOLE_SLOPE,
             bundled_section(HighlightDesaturation::default()),
         );
         let widest = |split: &[f32]| {
@@ -965,7 +974,7 @@ mod tests {
 
     #[test]
     fn the_pivot_is_the_mid_grey_the_anchor_pins() {
-        // Contrast must pivot at the value the decode's anchor rule places mid-grey at
+        // The tone slope must pivot at the value the decode's anchor rule places mid-grey at
         // (`MID_GREY_OUTPUT_DECADES` below white), or changing it moves the picture.
         let decades = -MID_GREY.log10();
         let target = crate::types::MID_GREY_OUTPUT_DECADES;
@@ -976,15 +985,15 @@ mod tests {
     }
 
     #[test]
-    fn contrast_pivots_at_mid_grey_and_steepens_symmetrically() {
+    fn tone_slope_pivots_at_mid_grey_and_steepens_symmetrically() {
         for k in [0.5, 1.0, DEFAULT_SLOPE, 2.0, 3.7] {
             let mut px = [MID_GREY; 3];
-            apply_contrast(&mut px, k);
-            assert_eq!(px, [MID_GREY; 3], "mid-grey moved at contrast {k}");
+            apply_tone_slope(&mut px, k);
+            assert_eq!(px, [MID_GREY; 3], "mid-grey moved at slope {k}");
             // One stop either side of mid lands k stops either side.
             for stops in [-1.0_f32, 1.0] {
                 let mut px = [MID_GREY * stops.exp2(); 3];
-                apply_contrast(&mut px, k);
+                apply_tone_slope(&mut px, k);
                 let got = (px[0] / MID_GREY).log2();
                 assert!((got - k * stops).abs() < 1e-5, "k {k}, {stops} stop: {got}");
             }
@@ -997,13 +1006,13 @@ mod tests {
     }
 
     #[test]
-    fn contrast_moves_luminance_and_leaves_colour_alone() {
+    fn tone_slope_moves_luminance_and_leaves_colour_alone() {
         // The task's acceptance check: a coloured pixel's ratios do not move with the
         // slope, and its luminance lands where a neutral's would.
         for px in [[0.4, 0.2, 0.1], [0.05, 0.09, 0.2], [1.3, 1.1, 0.7]] {
             for k in [0.8, DEFAULT_SLOPE, 2.0, 3.0] {
                 let mut out = px;
-                apply_contrast(&mut out, k);
+                apply_tone_slope(&mut out, k);
                 let [a, b] = log_ratios(px);
                 let [c, d] = log_ratios(out);
                 assert!(
@@ -1050,7 +1059,7 @@ mod tests {
         for px in [[0.4, 0.2, 0.1], [0.05, 0.09, 0.2]] {
             let per_channel = px.map(|c| MID_GREY * (c / MID_GREY).powf(k));
             let mut out = px;
-            apply_contrast(&mut out, k);
+            apply_tone_slope(&mut out, k);
             apply_saturation(&mut out, k);
             let [a, b] = log_ratios(per_channel);
             let [c, d] = log_ratios(out);
@@ -1091,10 +1100,10 @@ mod tests {
     }
 
     #[test]
-    fn highlight_desaturation_keys_a_pixel_alike_at_any_contrast() {
-        // The band divides by the saturation slope, which contrast no longer touches, so
+    fn highlight_desaturation_keys_a_pixel_alike_at_any_tone_slope() {
+        // The band divides by the saturation slope, which the tone slope no longer touches, so
         // a near-white highlight on the band's ramp loses the same share of its chroma
-        // at a flat and a steep contrast.
+        // at a flat and a steep tone slope.
         use crate::algo::fixed::LINEARIZATION;
         let scan = scan_at(&[1.4], |t| [t + 0.015, t, t - 0.015]);
         let removed = |slope: f32| {
@@ -1115,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn contrast_one_is_a_bit_exact_identity_and_the_report_says_which_ran() {
+    fn tone_slope_one_is_a_bit_exact_identity_and_the_report_says_which_ran() {
         let mut params = LookParams::off();
         assert_eq!(params.applied(), "identity");
         params.section.slope = 1.3;
@@ -1149,7 +1158,7 @@ mod tests {
         let mut computed = unlooked.clone();
         for px in computed.chunks_mut(3) {
             let mut p = [px[0], px[1], px[2]];
-            apply_contrast(&mut p, 1.0);
+            apply_tone_slope(&mut p, 1.0);
             px.copy_from_slice(&p);
         }
         assert_ne!(
@@ -1160,14 +1169,14 @@ mod tests {
     }
 
     #[test]
-    fn contrast_scales_a_non_positive_channel_and_passes_a_non_finite_pixel_through() {
+    fn tone_slope_scales_a_non_positive_channel_and_passes_a_non_finite_pixel_through() {
         // A channel at or below zero is scaled with the rest, so the ratios hold.
         for px in [[0.0, 0.3, 0.3], [-0.01, 0.3, 0.3]] {
             let mut out = px;
-            apply_contrast(&mut out, 1.5);
+            apply_tone_slope(&mut out, 1.5);
             assert_ne!(out[1], px[1], "{px:?}: the pixel did not move");
-            let scale = out[1] / px[1];
-            assert_eq!(out[0], px[0] * scale, "{px:?}");
+            let gain = out[1] / px[1];
+            assert_eq!(out[0], px[0] * gain, "{px:?}");
             assert_eq!(out[2], out[1], "{px:?}");
         }
         // A luminance that is not finite and positive moves nothing.
@@ -1177,18 +1186,18 @@ mod tests {
             [-1.0, 0.1, 0.1],
         ] {
             let mut out = px;
-            apply_contrast(&mut out, 1.5);
+            apply_tone_slope(&mut out, 1.5);
             let bits = |p: [f32; 3]| p.map(f32::to_bits);
             assert_eq!(bits(out), bits(px), "{px:?}");
         }
         // An overflow stays visible, for fit range and the render probe to name.
         let mut out = [1e30; 3];
-        apply_contrast(&mut out, 1.5);
+        apply_tone_slope(&mut out, 1.5);
         assert!(out.iter().all(|c| c.is_infinite()), "{out:?}");
     }
 
     #[test]
-    fn an_unusable_contrast_is_refused() {
+    fn an_unusable_tone_slope_is_refused() {
         for k in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             let section = LookSection {
                 slope: k,
@@ -1240,8 +1249,8 @@ mod tests {
         assert_eq!(params.applied(), "channel-grade+highlight-desaturation");
 
         // Through the stage, at the identity grade with the other controls live: the
-        // same bits as contrast then highlight desaturation written out by hand — the
-        // stage before the grade existed.
+        // same bits as the tone slope, the saturation slope and highlight desaturation
+        // written out by hand — the stage before the grade existed.
         use crate::algo::fixed::{self, DecodeParams};
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
         use crate::types::{FilmBase, LinearImage};
@@ -1273,7 +1282,7 @@ mod tests {
         .unwrap();
         for px in by_hand.chunks_mut(3) {
             let mut p = [px[0], px[1], px[2]];
-            apply_contrast(&mut p, section.slope);
+            apply_tone_slope(&mut p, section.slope);
             apply_saturation(&mut p, section.saturation_slope);
             pull.apply(&mut p);
             px.copy_from_slice(&p);
@@ -1330,10 +1339,10 @@ mod tests {
     }
 
     #[test]
-    fn a_neutral_keeps_its_luminance_so_the_grade_never_moves_neutral_contrast() {
+    fn a_neutral_keeps_its_luminance_so_the_grade_never_moves_its_tone() {
         // The restore is what holds this: a neutral's luminance after the grade is its
         // luminance before it, at every level, so the look's neutral log-log slope is
-        // the contrast alone.
+        // the tone slope alone.
         for g in GRADES {
             for stops in [-8.0, -4.0, -1.0, 1.0, 3.0, 5.0] {
                 let px = neutral(stops);
@@ -1345,7 +1354,7 @@ mod tests {
         // Falsifiability: the restore-free form, even with the exponents' luminance-
         // weighted mean at 1, bends a neutral's slope away from mid — the S-curve that
         // ruled it out.
-        let [wr, wg, wb] = ACESCG_LUMA;
+        let [wr, wg, wb] = ACESCG_LUMINANCE;
         let (r, b) = (1.2, 0.8);
         let g = [r, (1.0 - wr * r - wb * b) / wg, b];
         let powered = |x: f32| {
@@ -1369,31 +1378,25 @@ mod tests {
     }
 
     #[test]
-    fn after_contrast_the_neutral_slope_is_the_contrast_and_the_cast_grows_with_it() {
-        let run = |contrast: f32, g: [f32; 2], px: [f32; 3]| {
+    fn the_grade_keeps_the_tone_slope_on_neutrals_and_its_cast_grows_with_it() {
+        let run = |k: f32, g: [f32; 2], px: [f32; 3]| {
             let mut out = px;
-            apply_contrast(&mut out, contrast);
+            apply_tone_slope(&mut out, k);
             apply_channel_grade(&mut out, [g[0], 1.0, g[1]]);
             out
         };
-        for contrast in [1.0, DEFAULT_SLOPE, 2.0] {
+        for k in [1.0, DEFAULT_SLOPE, 2.0] {
             for g in GRADES {
-                // Neutral luminance lands `contrast · stops` from mid.
-                let y = luminance(run(contrast, g, neutral(3.0)));
+                // Neutral luminance lands `k · stops` from mid.
+                let y = luminance(run(k, g, neutral(3.0)));
                 let got = (y / MID_GREY).log2();
-                assert!(
-                    (got - 3.0 * contrast).abs() < 1e-4,
-                    "{contrast} {g:?}: {got}"
-                );
-                // The red/blue split is `(r − b) · contrast · ln(x / mid)`: the restore
+                assert!((got - 3.0 * k).abs() < 1e-4, "{k} {g:?}: {got}");
+                // The red/blue split is `(r − b) · k · ln(x / mid)`: the restore
                 // scales both channels alike.
-                let px = run(contrast, g, neutral(-3.0));
+                let px = run(k, g, neutral(-3.0));
                 let split = (px[0] / px[2]).ln();
-                let want = (g[0] - g[1]) * contrast * (-3.0 * 2f32.ln());
-                assert!(
-                    (split - want).abs() < 1e-4,
-                    "{contrast} {g:?}: {split} vs {want}"
-                );
+                let want = (g[0] - g[1]) * k * (-3.0 * 2f32.ln());
+                assert!((split - want).abs() < 1e-4, "{k} {g:?}: {split} vs {want}");
             }
         }
     }
@@ -1488,7 +1491,7 @@ mod tests {
                         let y = luminance(px);
                         let rel = ((luminance(out) - y) / y).abs();
                         assert!(rel <= 4.0 * f32::EPSILON, "{px:?} {g:?}: {rel:e}");
-                        for (c, &w) in out.iter().zip(&ACESCG_LUMA) {
+                        for (c, &w) in out.iter().zip(&ACESCG_LUMINANCE) {
                             assert!(
                                 *c >= 0.0 && c * w <= y * (1.0 + 4.0 * f32::EPSILON),
                                 "{px:?} {g:?}: {out:?}"

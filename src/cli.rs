@@ -33,7 +33,6 @@ use crate::io::{encode, iso_gain_map, jpeg, staged};
 use crate::jsonc;
 use crate::pipeline::black_endpoint;
 use crate::pipeline::chain;
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range;
 use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
@@ -4463,7 +4462,7 @@ fn render_destination(
 /// One rendition out of the chain, as a single-rendition encoder receives it.
 struct OneRendition {
     linear: LinearImage,
-    gamut: DestinationGamut,
+    gamut: Gamut,
     /// Fit range's and fit gamut's `applied`, which an HDR report names.
     tone_curve: &'static str,
     gamut_mapping: &'static str,
@@ -4487,7 +4486,7 @@ fn render_one(
     clock: &mut impl StageClock,
     encode: impl FnOnce(OneRendition) -> Result<DestinationPixels>,
 ) -> Result<DestinationRender> {
-    let params = resolve::chain_params(recipe, d.range.peak()?, d.gamut.destination());
+    let params = resolve::chain_params(recipe, d.range.peak()?, d.gamut);
     let chain::Rendered {
         image,
         applied,
@@ -4541,7 +4540,7 @@ fn render_gain_map(
         aces,
         film_base,
         &resolve::shared_params(recipe),
-        d.gamut.destination(),
+        d.gamut,
         peak,
         clock,
     )?;
@@ -8274,7 +8273,7 @@ struct MeasuredThinLift {
     /// …with at least this share of its luminance within `near_base_stops` of the base.
     base_share: f32,
     near_base_stops: f32,
-    /// About how far the lift raises the white, in rendered stops, unless the slope bound
+    /// About how far the lift raises the white, in look stops, unless the slope bound
     /// holds it under.
     lift_stops: f32,
     slope_bound: f32,
@@ -12998,8 +12997,7 @@ mod tests {
         let pages = read_pre_encode(&export);
         assert_eq!(summary(&pages), [pair("sdr-linear", "adobe-rgb")]);
         let linear = LinearImage::new(pages[0].width, pages[0].height, f32s(&pages[0])).unwrap();
-        let (encoded, icc) =
-            color::encode_display_linear(linear, DestinationGamut::AdobeRgb).unwrap();
+        let (encoded, icc) = color::encode_display_linear(linear, Gamut::AdobeRgb).unwrap();
         let again = dir.join("sdr-again.tiff");
         let (staged, ..) = encode::encode_u16(&encoded, &icc, &again).unwrap();
         staged::commit_all(vec![staged]).unwrap();

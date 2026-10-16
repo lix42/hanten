@@ -333,10 +333,10 @@ the record — `domain`, `lstar_range`, `bins`, `bin_width_lstar`, and the
 consumer never has to infer the bins from the shape of the data, and never has to
 re-derive the L\* formula to place white.
 
-`luminance` uses the **declared space's own luma weighting**, the same one
+`luminance` uses the **declared space's own luminance weighting**, the same one
 `tone.percentiles_stops` is built from, so the histogram and the percentile curve
 describe one quantity and cannot disagree. That is also why luminance is emitted
-rather than left to be derived at draw time: luma is a weighted sum of linear
+rather than left to be derived at draw time: luminance is a weighted sum of linear
 channel values and is **not** recoverable from three independent per-channel
 histograms.
 

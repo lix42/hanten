@@ -143,7 +143,7 @@ Rules every stage keeps:
   `film_base`, gated on the *measured* `ir_separability`, never on `--film-type`;
   `algo::fixed::decode` then drops it, and nothing after reads it. IR dust removal
   would bring it back (design-spec §6.1).
-- **Every standards-based matrix, luma vector and transfer constant lives in
+- **Every standards-based matrix, luminance vector and transfer constant lives in
   `pipeline/colorimetry/`** — never a literal in a stage. Editing `REC709`,
   `DISPLAY_P3`, `ACESCG`, `ADOBE_RGB` or `BT2020` changes ICC bytes and pixels even with
   `pinned.rs` untouched, and no gate catches it.

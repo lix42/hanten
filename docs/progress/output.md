@@ -36,7 +36,7 @@ What other epics need to know about `output`:
   contract's `conversion.encoding` and redeploys the Worker in the same change, with no
   consent bump; the rule is in `telemetry::SCHEMA_VERSION`'s doc and the contract README.
 - **Adobe RGB (1998) is a destination gamut of the new chain (2026-09-24,
-  `output/adobe-rgb-gamut`), but nothing selects it yet.** `DestinationGamut::AdobeRgb`
+  `output/adobe-rgb-gamut`), but nothing selects it yet.** `destination::Gamut::AdobeRgb`
   maps and encodes it (`563/256` curve, v4 profile named
   `Adobe RGB (1998) compatible (Hanten)` — an identifier once written, see CLAUDE.md);
   choosing it is `nf-destinations/direct-preset`'s, the name `preset-set`'s.

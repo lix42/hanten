@@ -27,77 +27,38 @@
 
 use std::fmt;
 
+use crate::destination::Gamut;
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::{
-    ACESCG_TO_ADOBE_RGB, ACESCG_TO_BT2020, ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, ADOBE_RGB_LUMA,
-    BT2020_LUMA, DISPLAY_P3_LUMA, SRGB_LUMA,
+    ACESCG_TO_ADOBE_RGB, ACESCG_TO_BT2020, ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB,
+    ADOBE_RGB_LUMINANCE, BT2020_LUMINANCE, DISPLAY_P3_LUMINANCE, SRGB_LUMINANCE,
 };
 use crate::pipeline::fit_range::RangeFittedImage;
 use crate::pipeline::pixels;
 use crate::pipeline::working_image::WorkingBuffer;
 use crate::types::{LinearImage, NcError, Result};
 
-/// The gamut a destination renders into — which primaries the chain's output is in.
-///
-/// **Display-referred encodings with a bounded range only** — the cube fit gamut maps
-/// into ends at the display's peak. A scene-referred or unbounded working space
-/// (ACEScg, ProPhoto as nc used it) does not qualify, however often editors use it;
-/// `film-master` is the output for those. **Which destination renders into which gamut
-/// is the destination table's** (`crate::destination::ROWS`), not this type's. An enum rather than a matrix
-/// field so the value can travel with the image to the encoder, which reads it off
-/// [`DisplayReferredImage`] instead of re-deriving it from the destination.
-///
-/// **Adding a variant** means a pinned ACEScg → destination matrix and luminance row
-/// (`docs/colorimetry-maintenance.md`), an arm in each method here, and one in
-/// `color::encode_display_linear`, which owns the destination's transfer and ICC
-/// profile. Each match is exhaustive, so a missed arm fails to compile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DestinationGamut {
-    /// Display P3 primaries, D65 white.
-    DisplayP3,
-    /// Adobe RGB (1998) primaries, D65 white — Rec.709's red and blue with a wider
-    /// green. It qualifies as a display encoding (bounded at white, a fixed transfer);
-    /// that editors expect it is why `nf-destinations/direct-preset` wants it, not
-    /// why it belongs here.
-    AdobeRgb,
-    /// sRGB (Rec.709) primaries, D65 white — the gamut a viewer that ignores profiles
-    /// assumes.
-    Srgb,
-    /// ITU-R BT.2020 primaries, D65 white — the gamut of the Rec.2100 HDR signals (PQ,
-    /// HLG) and of the linear HDR interchange TIFF. Encoded only by the HDR encoders:
-    /// no SDR destination renders into it.
-    Bt2020,
-}
-
-impl DestinationGamut {
+/// The colorimetry fit gamut maps with. The type is the destination's gamut axis; this
+/// stage owns which pinned numbers each variant means.
+impl Gamut {
     /// Linear ACEScg → linear destination primaries, from `colorimetry::pinned`.
     fn acescg_matrix(self) -> [[f32; 3]; 3] {
         match self {
-            DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
-            DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
-            DestinationGamut::Srgb => ACESCG_TO_SRGB,
-            DestinationGamut::Bt2020 => ACESCG_TO_BT2020,
+            Gamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
+            Gamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
+            Gamut::Srgb => ACESCG_TO_SRGB,
+            Gamut::Bt2020 => ACESCG_TO_BT2020,
         }
     }
 
     /// The destination's luminance weights: the cube being fitted into is the
     /// destination's, so luminance is measured in its primaries.
-    pub(in crate::pipeline) fn luma(self) -> [f32; 3] {
+    pub(in crate::pipeline) fn luminance_row(self) -> [f32; 3] {
         match self {
-            DestinationGamut::DisplayP3 => DISPLAY_P3_LUMA,
-            DestinationGamut::AdobeRgb => ADOBE_RGB_LUMA,
-            DestinationGamut::Srgb => SRGB_LUMA,
-            DestinationGamut::Bt2020 => BT2020_LUMA,
-        }
-    }
-
-    /// The identifier the report states.
-    pub fn name(self) -> &'static str {
-        match self {
-            DestinationGamut::DisplayP3 => "display-p3",
-            DestinationGamut::AdobeRgb => "adobe-rgb",
-            DestinationGamut::Srgb => "srgb",
-            DestinationGamut::Bt2020 => "bt2020",
+            Gamut::DisplayP3 => DISPLAY_P3_LUMINANCE,
+            Gamut::AdobeRgb => ADOBE_RGB_LUMINANCE,
+            Gamut::Srgb => SRGB_LUMINANCE,
+            Gamut::Bt2020 => BT2020_LUMINANCE,
         }
     }
 }
@@ -106,7 +67,7 @@ impl DestinationGamut {
 /// state, and a default would let a chain render into primaries nobody chose.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FitGamutParams {
-    pub target: DestinationGamut,
+    pub target: Gamut,
 }
 
 impl FitGamutParams {
@@ -114,14 +75,10 @@ impl FitGamutParams {
     /// primaries, then the radial map.
     pub fn applied(&self) -> &'static str {
         match self.target {
-            DestinationGamut::DisplayP3 => {
-                "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
-            }
-            DestinationGamut::AdobeRgb => {
-                "acescg-to-adobe-rgb-matrix+neutral-axis-radial-boundary-v2"
-            }
-            DestinationGamut::Srgb => "acescg-to-srgb-matrix+neutral-axis-radial-boundary-v2",
-            DestinationGamut::Bt2020 => "acescg-to-bt2020-matrix+neutral-axis-radial-boundary-v2",
+            Gamut::DisplayP3 => "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2",
+            Gamut::AdobeRgb => "acescg-to-adobe-rgb-matrix+neutral-axis-radial-boundary-v2",
+            Gamut::Srgb => "acescg-to-srgb-matrix+neutral-axis-radial-boundary-v2",
+            Gamut::Bt2020 => "acescg-to-bt2020-matrix+neutral-axis-radial-boundary-v2",
         }
     }
 }
@@ -134,7 +91,7 @@ impl FitGamutParams {
 /// the pixels, so the encoder learns which primaries it holds from the image itself.
 ///
 /// [`into_parts`]: Self::into_parts
-pub struct DisplayReferredImage(WorkingBuffer, DestinationGamut);
+pub struct DisplayReferredImage(WorkingBuffer, Gamut);
 
 impl DisplayReferredImage {
     /// Leave the chain, handing the buffers and their gamut to the encoder.
@@ -142,7 +99,7 @@ impl DisplayReferredImage {
     /// `io::encode` takes `&LinearImage`, so this is how a destination gets one
     /// **without copying** a full-frame buffer. Consuming, mirroring
     /// `AcesCgImage::into_linear` at the other end of the chain.
-    pub(crate) fn into_parts(self) -> (LinearImage, DestinationGamut) {
+    pub(crate) fn into_parts(self) -> (LinearImage, Gamut) {
         (self.0.into_linear(), self.1)
     }
 }
@@ -166,7 +123,7 @@ pub fn apply(image: RangeFittedImage, params: &FitGamutParams) -> Result<Display
     let peak = image.peak().value();
     let mut buffer = image.into_buffer();
     let m = params.target.acescg_matrix();
-    let luma = params.target.luma();
+    let weights = params.target.luminance_row();
     pixels::try_map_in_place(buffer.rgb_mut(), |index, px| {
         let [r, g, b] = *px;
         let rgb = [
@@ -176,7 +133,7 @@ pub fn apply(image: RangeFittedImage, params: &FitGamutParams) -> Result<Display
         ];
         // Finite luminance implies finite channels: an infinite or NaN channel makes
         // the weighted sum infinite or NaN.
-        let luminance = dot(luma, rgb);
+        let luminance = dot(weights, rgb);
         if !luminance.is_finite() {
             return Err(NcError::Other(format!(
                 "fit gamut's change of primaries overflowed at pixel {index} ({px:?})"
@@ -266,22 +223,18 @@ mod tests {
     }
 
     fn render(film_rgb: &[f32], peak: DisplayPeak) -> (Vec<f32>, Vec<[f32; 3]>) {
-        render_into(film_rgb, peak, DestinationGamut::DisplayP3)
+        render_into(film_rgb, peak, Gamut::DisplayP3)
     }
 
     /// Fit gamut into `gamut`, and the destination values before the map — the pinned
     /// matrix written out here, independently of the stage.
-    fn render_into(
-        film_rgb: &[f32],
-        peak: DisplayPeak,
-        gamut: DestinationGamut,
-    ) -> (Vec<f32>, Vec<[f32; 3]>) {
+    fn render_into(film_rgb: &[f32], peak: DisplayPeak, gamut: Gamut) -> (Vec<f32>, Vec<[f32; 3]>) {
         let (image, aces) = fitted(film_rgb, peak);
         let m = match gamut {
-            DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
-            DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
-            DestinationGamut::Srgb => ACESCG_TO_SRGB,
-            DestinationGamut::Bt2020 => ACESCG_TO_BT2020,
+            Gamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
+            Gamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
+            Gamut::Srgb => ACESCG_TO_SRGB,
+            Gamut::Bt2020 => ACESCG_TO_BT2020,
         };
         let pre_map = aces
             .as_chunks::<3>()
@@ -324,19 +277,19 @@ mod tests {
         let cases = [
             (
                 film_for([0.9, 0.01, 0.01], DISPLAY_P3),
-                DestinationGamut::DisplayP3,
-                DestinationGamut::AdobeRgb,
+                Gamut::DisplayP3,
+                Gamut::AdobeRgb,
             ),
             (
                 film_for([0.06, 0.8, 0.1], ADOBE_RGB),
-                DestinationGamut::AdobeRgb,
-                DestinationGamut::DisplayP3,
+                Gamut::AdobeRgb,
+                Gamut::DisplayP3,
             ),
             // A green Adobe RGB holds is past sRGB's, which shares its red and blue.
             (
                 film_for([0.06, 0.8, 0.1], ADOBE_RGB),
-                DestinationGamut::AdobeRgb,
-                DestinationGamut::Srgb,
+                Gamut::AdobeRgb,
+                Gamut::Srgb,
             ),
         ];
         for (film, holds, cannot) in cases {
@@ -357,8 +310,11 @@ mod tests {
             let mapped: [f32; 3] = mapped.try_into().unwrap();
             assert!(mapped.iter().all(|v| (0.0..=1.0).contains(v)), "{mapped:?}");
             assert!(mapped.contains(&0.0) || mapped.contains(&1.0), "{mapped:?}");
-            let y = dot(cannot.luma(), outside);
-            assert!((dot(cannot.luma(), mapped) - y).abs() < 1e-6, "{mapped:?}");
+            let y = dot(cannot.luminance_row(), outside);
+            assert!(
+                (dot(cannot.luminance_row(), mapped) - y).abs() < 1e-6,
+                "{mapped:?}"
+            );
             let scales: Vec<f32> = (0..3).map(|c| (mapped[c] - y) / (outside[c] - y)).collect();
             assert!(
                 scales
@@ -438,7 +394,7 @@ mod tests {
         let (image, aces) = fitted(&input, DisplayPeak::SDR);
         assert!(aces.iter().all(|v| v.is_finite()), "{aces:?}");
         let params = FitGamutParams {
-            target: DestinationGamut::DisplayP3,
+            target: Gamut::DisplayP3,
         };
         let err = apply(image, &params).expect_err("an overflow");
         assert!(err.message().contains("pixel 1"), "{}", err.message());
@@ -454,7 +410,7 @@ mod tests {
     }
 
     fn luminance(rgb: [f32; 3]) -> f32 {
-        dot(DISPLAY_P3_LUMA, rgb)
+        dot(DISPLAY_P3_LUMINANCE, rgb)
     }
 
     /// Out-of-gamut against a unit cube: a negative channel, one above the ceiling,

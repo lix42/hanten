@@ -253,43 +253,44 @@ pub const BRADFORD_D65_TO_ICC_PCS: [[f64; 3]; 3] = [
 /// `pipeline::hdr` and fit gamut's BT.2020 destination.
 ///
 /// **This one is a transcription of a normative table, not a derivation** — see
-/// [`BT2020_LUMA_TABULATED`](super::definitions::BT2020_LUMA_TABULATED). Its
+/// [`BT2020_LUMINANCE_TABULATED`](super::definitions::BT2020_LUMINANCE_TABULATED). Its
 /// verification rule is exact equality with the tabulated value, narrowed to
 /// `f32`. Deriving it from the BT.2020 primaries instead would give
 /// `[0.262_700_21, 0.677_998_1, 0.059_301_716]`, differing by ~2e-6 — about 17
 /// `f32` ulps, i.e. a *different number*, not a rounding of the same one. The
 /// standard rounds and encoders are expected to use the rounded form.
-pub const BT2020_LUMA: [f32; 3] = [0.2627, 0.6780, 0.0593];
+pub const BT2020_LUMINANCE: [f32; 3] = [0.2627, 0.6780, 0.0593];
 
 /// Display P3 luminance weights, used by `pipeline::fit_gamut`.
 ///
-/// Unlike [`BT2020_LUMA`] this has no tabulated form: it **is** derived, as the
+/// Unlike [`BT2020_LUMINANCE`] this has no tabulated form: it **is** derived, as the
 /// luminance (Y) row of the Display P3 normalized primary matrix at D65. All
 /// three entries reproduce the canonical derivation exactly.
-pub const DISPLAY_P3_LUMA: [f32; 3] = [0.228_974_57, 0.691_738_55, 0.079_286_91];
+pub const DISPLAY_P3_LUMINANCE: [f32; 3] = [0.228_974_57, 0.691_738_55, 0.079_286_91];
 
 /// Adobe RGB (1998) luminance weights, used by `pipeline::fit_gamut`.
 ///
-/// Derived like [`DISPLAY_P3_LUMA`]: the luminance (Y) row of the Adobe RGB
+/// Derived like [`DISPLAY_P3_LUMINANCE`]: the luminance (Y) row of the Adobe RGB
 /// normalized primary matrix at D65. Adobe's encoding specification prints a
 /// rounded form of the same row (`0.29734, 0.62736, 0.07529`); this is the
 /// derivation, and all three entries reproduce it exactly.
-pub const ADOBE_RGB_LUMA: [f32; 3] = [0.297_344_98, 0.627_363_56, 0.075_291_455];
+pub const ADOBE_RGB_LUMINANCE: [f32; 3] = [0.297_344_98, 0.627_363_56, 0.075_291_455];
 
 /// ACEScg luminance weights: every stage that reads ACEScg luminance (scene
 /// correction, the look, fit range, the roll measurements).
 ///
-/// Derived like [`DISPLAY_P3_LUMA`]: the luminance (Y) row of the ACEScg (AP1, ACES
+/// Derived like [`DISPLAY_P3_LUMINANCE`]: the luminance (Y) row of the ACEScg (AP1, ACES
 /// white) normalized primary matrix. Fit range measures luminance **before** fit
 /// gamut changes primaries, so it needs the working space's own row rather than a
 /// destination's. All three entries reproduce the canonical derivation exactly.
-pub const ACESCG_LUMA: [f32; 3] = [0.272_228_72, 0.674_081_74, 0.053_689_517];
+pub const ACESCG_LUMINANCE: [f32; 3] = [0.272_228_72, 0.674_081_74, 0.053_689_517];
 
 /// Rec.709 / sRGB luminance weights, used by fit gamut's sRGB destination.
 ///
 /// **A third provenance kind — neither of the other two kinds' rule applies.**
-/// [`BT2020_LUMA`] is a normative table; [`DISPLAY_P3_LUMA`] and [`ACESCG_LUMA`] are
-/// exact derivations. This one is the derivation **rounded to six decimals**:
+/// [`BT2020_LUMINANCE`] is a normative table; [`DISPLAY_P3_LUMINANCE`] and
+/// [`ACESCG_LUMINANCE`] are exact derivations. This one is the derivation
+/// **rounded to six decimals**:
 ///
 /// | | value |
 /// |---|---|
@@ -308,4 +309,4 @@ pub const ACESCG_LUMA: [f32; 3] = [0.272_228_72, 0.674_081_74, 0.053_689_517];
 /// by it, not a correction. No script recording the 6-decimal rounding was
 /// committed, so its exact origin is unrecoverable — the same situation as the
 /// two 1-ulp matrix entries, with a larger number.
-pub const SRGB_LUMA: [f32; 3] = [0.212_639, 0.715_169, 0.072_192];
+pub const SRGB_LUMINANCE: [f32; 3] = [0.212_639, 0.715_169, 0.072_192];

@@ -786,7 +786,7 @@ pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage;
 pub fn render(image: AcesCgImage, film_base: AcesCgImage, params: &ChainParams,
     clock: &mut impl StageClock) -> Result<Rendered>;
 pub fn render_pair(image: AcesCgImage, film_base: AcesCgImage, shared: &SharedParams,
-    gamut: DestinationGamut, hdr_peak: DisplayPeak, clock: &mut impl StageClock)
+    gamut: Gamut, hdr_peak: DisplayPeak, clock: &mut impl StageClock)
     -> Result<RenderedPair>;
 ```
 

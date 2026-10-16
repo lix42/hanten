@@ -135,13 +135,13 @@ pub fn rgb_to_rgb(source: ColorSpace, destination: ColorSpace, cone: ConeRespons
     multiply(dst_inverse, multiply(cat, src))
 }
 
-/// The luminance (Y) row of a space's normalized primary matrix — i.e. the luma
-/// weights implied by its primaries and white.
+/// The luminance (Y) row of a space's normalized primary matrix: the weights its
+/// primaries and white imply.
 ///
-/// Only meaningful for spaces whose standard does *not* tabulate rounded luma
+/// Only meaningful for spaces whose standard does *not* tabulate rounded luminance
 /// coefficients. BT.2020 does tabulate them; see
-/// [`definitions::BT2020_LUMA_TABULATED`](super::definitions::BT2020_LUMA_TABULATED).
-pub fn luma_row(space: ColorSpace) -> [f64; 3] {
+/// [`definitions::BT2020_LUMINANCE_TABULATED`](super::definitions::BT2020_LUMINANCE_TABULATED).
+pub fn luminance_row(space: ColorSpace) -> [f64; 3] {
     normalized_primary_matrix(space)[1]
 }
 

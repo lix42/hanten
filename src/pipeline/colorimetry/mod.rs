@@ -1,6 +1,6 @@
 //! The single source of truth for NC's standards-based RGB colorimetry.
 //!
-//! Every standards-derived matrix and luma vector the pipeline multiplies by
+//! Every standards-derived matrix and luminance vector the pipeline multiplies by
 //! lives here, next to the source data it came from and a test that re-derives
 //! it. Before this module the same coefficients were spread across
 //! `working_space`, `sdr`, `hdr`, and `gain_map` as bare literals with no
@@ -14,7 +14,7 @@
 //!    vectors, each with its standard and edition. Editing one of these is how a
 //!    colour-space update starts.
 //! 2. **Derived artifacts** ([`pinned`]) — the reviewed, checked-in RGB↔RGB
-//!    matrices and luma weights the runtime actually uses.
+//!    matrices and luminance weights the runtime actually uses.
 //! 3. **Product policy** — reference white, peak luminance, display tone, gamut
 //!    policy, gain-map limits. These deliberately **stay with the stage that owns
 //!    them** (`pipeline::hdr`, `pipeline::fit_range`, `pipeline::gain_encode`); they
@@ -43,9 +43,9 @@
 //! ## The one runtime arithmetic helper
 //!
 //! [`dot`] is arithmetic over these numbers, not a derivation: every luminance a
-//! stage takes against a pinned luma vector goes through it, so the f32 order of a
-//! luminance is written once. `derive` keeps its own binary64 copy on purpose — a
-//! check that shared this one would validate nothing.
+//! stage takes against a pinned luminance vector goes through it, so the f32
+//! order of a luminance is written once. `derive` keeps its own binary64 copy on
+//! purpose — a check that shared this one would validate nothing.
 
 pub mod definitions;
 pub mod pinned;
@@ -61,11 +61,10 @@ mod tests;
 
 /// `a · b` in f32, summed left to right: `a[0]·b[0] + a[1]·b[1] + a[2]·b[2]`.
 ///
-/// Luminance is `dot(rgb, LUMA)` against a vector in [`pinned`], but it is not
-/// luma-only: the `mul` helpers in `sdr`, `hdr` and `gain_map` apply every gamut
-/// matrix row through it, so do not specialise it for positive luma weights. The
-/// order is part of the output — the goldens pin it bit for bit — so do not
-/// reassociate or fuse it.
+/// Luminance against a vector in [`pinned`] goes through `dot`, but `dot` is
+/// general (tests apply matrix rows with it), so do not specialise it for positive
+/// weights. The order is part of the output — the goldens pin it bit for bit — so
+/// do not reassociate or fuse it.
 #[inline]
 pub fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]

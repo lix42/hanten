@@ -93,8 +93,8 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// puts it (`pipeline::roll_white::span_slope`). Against
 /// the datasheets' diffuse white: at the retired single gamma 2.0 it lands ≈0.08 stop from
 /// `1.0` (`tests::the_anchor_is_the_documented_number`); at the linearization alone it
-/// decodes a third of a stop under; a steeper tone slope carries it above, which is
-/// what print contrast does. Scene correction's exposure moves the picture, not this
+/// decodes a third of a stop under; a steeper tone slope carries it above, as a
+/// print's steeper slope does. Scene correction's exposure moves the picture, not this
 /// number.
 ///
 /// **The one definition every rendering stage keys on.** It is scene-referred and
@@ -124,13 +124,13 @@ pub const DIFFUSE_WHITE: f32 = 1.0;
 /// pick, expected to move with `scale`.
 pub const LINEARIZATION: f32 = 1.8;
 
-/// The single `gamma` nc shipped before the split: linearization and print contrast
-/// bundled into one number.
+/// The whole slope: the single `gamma` nc shipped before the split, linearization and
+/// tone slope bundled into one number.
 ///
-/// The tests that pin the split against it (the look's default contrast was this over
+/// The tests that pin the split against it (the look's default tone slope was this over
 /// the linearization until `nf-calibration/no-roll-defaults`).
 #[cfg(test)]
-pub(crate) const BUNDLED_CONTRAST: f32 = 2.0;
+pub(crate) const BUNDLED_WHOLE_SLOPE: f32 = 2.0;
 
 /// The per-channel density calibration — **one global value**, never varied per
 /// stock, roll or frame. What one value cannot reach is a rendering correction, not
@@ -231,7 +231,7 @@ pub struct DecodeParams {
     /// Per-channel density offset.
     pub offset: [f32; 3],
     /// The straight line's slope in density against log exposure — the calibrated
-    /// half of the retired single gamma ([`LINEARIZATION`]). Print contrast is the look's
+    /// half of the retired single gamma ([`LINEARIZATION`]). A print's slope is the look's
     /// tone slope, never this.
     pub linearization: f32,
     /// Which tone is pinned, and where.
@@ -574,12 +574,12 @@ mod tests {
         let report = decode(scan(), &base(), &DecodeParams::default()).unwrap().1;
         assert_eq!(report.anchor, 1.033_737_5);
         assert_eq!(report.anchor_rule, "mid-at-base-offset");
-        let bundled = AnchorRule::MidAboveBase(MID_ABOVE_BASE).anchor(BUNDLED_CONTRAST);
+        let bundled = AnchorRule::MidAboveBase(MID_ABOVE_BASE).anchor(BUNDLED_WHOLE_SLOPE);
         assert_eq!(bundled, 0.992_363_75);
 
         // And where that sits against the *other* white in the glossary: the
-        // datasheets' diffuse white, `d + 0.36`. At the bundled contrast — what the
-        // chain renders once the look's default contrast is applied — the gap is ~0.08
+        // datasheets' diffuse white, `d + 0.36`. At the bundled whole slope — what the
+        // chain renders once the look's default tone slope is applied — the gap is ~0.08
         // stops, the measured fact behind "nc anchors at diffuse white, spelled as a mid
         // anchor" — not an equality, and the two must not be conflated. At the
         // linearization alone the decode's own anchor is further off, which is why
@@ -591,10 +591,10 @@ mod tests {
 
     #[test]
     fn changing_the_anchor_is_a_pure_gain() {
-        // On a straight line the anchor factors out as `10^(−contrast·A)`, identical
-        // on every channel — which is why `d` is a calibration and brightness belongs
-        // to rendering. (It holds only without a shoulder, which is part of why the
-        // sigmoid's knees retired.)
+        // On a straight line the anchor factors out as `10^(−linearization·A)`,
+        // identical on every channel — which is why `d` is a calibration and brightness
+        // belongs to rendering. (It holds only without a shoulder, which is part of why
+        // the sigmoid's knees retired.)
         let (img, b) = (scan(), base());
         let a = decode(img.clone(), &b, &DecodeParams::default()).unwrap().0;
         let shifted = DecodeParams {
@@ -637,11 +637,11 @@ mod tests {
         // trips neither the clip counter nor the non-finite one, so it has to be
         // refused before the pass rather than counted after it. There are **two**
         // routes to it and one check does not cover both: a positive-but-tiny
-        // contrast overflows the *anchor* through the `0.745/contrast` division
+        // linearization overflows the *anchor* through the `0.745/linearization` division
         // (needs a subnormal — `f32::MIN_POSITIVE` divides to a finite 6.3e37), and a
-        // large-but-finite anchor overflows the *product* `contrast · anchor` at an
-        // ordinary contrast (so it has to clear f32::MAX/contrast, not merely look
-        // absurd — 1e38 at contrast 2.0 is still finite).
+        // large-but-finite anchor overflows the *product* `linearization · anchor` at an
+        // ordinary linearization (so it has to clear f32::MAX/linearization, not merely
+        // look absurd — 1e38 at linearization 2.0 is still finite).
         for (params, what) in [
             (
                 DecodeParams {

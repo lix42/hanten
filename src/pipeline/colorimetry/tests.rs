@@ -53,7 +53,7 @@
 
 use super::audit::ulps_f32;
 use super::definitions::{
-    ACESCG, ADOBE_RGB, BRADFORD, BRADFORD_PUBLISHED_INVERSE, BT2020, BT2020_LUMA_TABULATED,
+    ACESCG, ADOBE_RGB, BRADFORD, BRADFORD_PUBLISHED_INVERSE, BT2020, BT2020_LUMINANCE_TABULATED,
     Chromaticity, ColorSpace, D50, D65, DISPLAY_P3, ICC_PCS_WHITE_XYZ, PROPHOTO, REC709,
 };
 use super::derive::{self, Matrix3, inverse, multiply, rgb_to_rgb, transform};
@@ -342,36 +342,40 @@ fn shared_white_pairs_use_no_adaptation() {
     }
 }
 
-// -- luma vectors -------------------------------------------------------------
+// -- luminance vectors --------------------------------------------------------
 
 #[test]
-fn display_p3_luma_is_the_derived_luminance_row() {
-    let derived = derive::luma_row(DISPLAY_P3);
-    for (i, (&derived, &shipped)) in derived.iter().zip(&pinned::DISPLAY_P3_LUMA).enumerate() {
+fn display_p3_luminance_is_the_derived_y_row() {
+    let derived = derive::luminance_row(DISPLAY_P3);
+    for (i, (&derived, &shipped)) in derived
+        .iter()
+        .zip(&pinned::DISPLAY_P3_LUMINANCE)
+        .enumerate()
+    {
         let ulps = ulps_f32(derived as f32, shipped);
         assert!(
             ulps.abs() <= MAX_ULPS,
-            "DISPLAY_P3_LUMA[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
+            "DISPLAY_P3_LUMINANCE[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
             derived as f32,
         );
     }
 }
 
 #[test]
-fn adobe_rgb_luma_is_the_derived_luminance_row() {
-    let derived = derive::luma_row(ADOBE_RGB);
-    for (i, (&derived, &shipped)) in derived.iter().zip(&pinned::ADOBE_RGB_LUMA).enumerate() {
+fn adobe_rgb_luminance_is_the_derived_y_row() {
+    let derived = derive::luminance_row(ADOBE_RGB);
+    for (i, (&derived, &shipped)) in derived.iter().zip(&pinned::ADOBE_RGB_LUMINANCE).enumerate() {
         let ulps = ulps_f32(derived as f32, shipped);
         assert!(
             ulps.abs() <= MAX_ULPS,
-            "ADOBE_RGB_LUMA[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
+            "ADOBE_RGB_LUMINANCE[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
             derived as f32,
         );
     }
 }
 
 #[test]
-fn adobe_rgb_luma_matches_the_row_adobe_publishes() {
+fn adobe_rgb_luminance_matches_the_row_adobe_publishes() {
     // An anchor that shares no source with `definitions::ADOBE_RGB`: the Y row of
     // the RGB → XYZ matrix printed in Adobe RGB (1998) Color Image Encoding
     // (version 2005-05), to its five decimals. Re-typed from the document on
@@ -386,43 +390,43 @@ fn adobe_rgb_luma_matches_the_row_adobe_publishes() {
     // rounding of their own.
     const PUBLISHED_Y_ROW: [f64; 3] = [0.29734, 0.62736, 0.07529];
     const TOLERANCE: f64 = 5e-6 + 2.0 * f32::EPSILON as f64;
-    for (i, (&shipped, &published)) in pinned::ADOBE_RGB_LUMA
+    for (i, (&shipped, &published)) in pinned::ADOBE_RGB_LUMINANCE
         .iter()
         .zip(&PUBLISHED_Y_ROW)
         .enumerate()
     {
         assert!(
             (f64::from(shipped) - published).abs() <= TOLERANCE,
-            "ADOBE_RGB_LUMA[{i}] = {shipped}, Adobe publishes {published}"
+            "ADOBE_RGB_LUMINANCE[{i}] = {shipped}, Adobe publishes {published}"
         );
     }
 }
 
-/// Largest permitted disagreement for [`pinned::SRGB_LUMA`].
+/// Largest permitted disagreement for [`pinned::SRGB_LUMINANCE`].
 ///
 /// This vector gets its own tolerance because it is neither an exact derivation
 /// nor a normative table: it is the derivation rounded to six decimals, which
 /// puts the blue weight 43 ulps out. Relaxing the shared [`MAX_ULPS`] to cover it
 /// would blind every matrix check; a separate, named allowance keeps the strict
 /// bound where it belongs and documents the loose one where it is needed.
-const SRGB_LUMA_MAX_ULPS: i64 = 43;
+const SRGB_LUMINANCE_MAX_ULPS: i64 = 43;
 
 #[test]
-fn srgb_luma_is_the_derivation_rounded_to_six_decimals() {
+fn srgb_luminance_is_the_derivation_rounded_to_six_decimals() {
     // Pins the actual relationship rather than asserting a bound nobody checked:
     // each shipped entry must equal the canonical derivation rounded to 6 dp, and
     // must sit within the documented ulp allowance of it.
-    let derived = derive::luma_row(REC709);
-    for (i, (&d, &shipped)) in derived.iter().zip(&pinned::SRGB_LUMA).enumerate() {
+    let derived = derive::luminance_row(REC709);
+    for (i, (&d, &shipped)) in derived.iter().zip(&pinned::SRGB_LUMINANCE).enumerate() {
         let rounded_to_6dp = (d * 1e6).round() / 1e6;
         assert_eq!(
             shipped, rounded_to_6dp as f32,
-            "SRGB_LUMA[{i}] should be the derivation rounded to 6 decimals"
+            "SRGB_LUMINANCE[{i}] should be the derivation rounded to 6 decimals"
         );
         let ulps = ulps_f32(d as f32, shipped);
         assert!(
-            ulps.abs() <= SRGB_LUMA_MAX_ULPS,
-            "SRGB_LUMA[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
+            ulps.abs() <= SRGB_LUMINANCE_MAX_ULPS,
+            "SRGB_LUMINANCE[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
             d as f32,
         );
     }
@@ -431,51 +435,51 @@ fn srgb_luma_is_the_derivation_rounded_to_six_decimals() {
     // rather than left as a misleading comment.
     let worst = derived
         .iter()
-        .zip(&pinned::SRGB_LUMA)
+        .zip(&pinned::SRGB_LUMINANCE)
         .map(|(&d, &s)| ulps_f32(d as f32, s).abs())
         .max()
         .unwrap();
     assert_eq!(
-        worst, SRGB_LUMA_MAX_ULPS,
-        "the 6-decimal rounding gap moved; re-read pinned::SRGB_LUMA's docs"
+        worst, SRGB_LUMINANCE_MAX_ULPS,
+        "the 6-decimal rounding gap moved; re-read pinned::SRGB_LUMINANCE's docs"
     );
 }
 
 #[test]
-fn bt2020_luma_is_the_tabulated_vector_not_a_derivation() {
-    // The load-bearing distinction from `DISPLAY_P3_LUMA`. BT.2020 tabulates
-    // rounded luma coefficients and encoders are expected to use them, so the
+fn bt2020_luminance_is_the_tabulated_vector_not_a_derivation() {
+    // The load-bearing distinction from `DISPLAY_P3_LUMINANCE`. BT.2020 tabulates
+    // rounded coefficients and encoders are expected to use them, so the
     // rule for this vector is exact equality with the table...
-    for (i, (&shipped, &tabulated)) in pinned::BT2020_LUMA
+    for (i, (&shipped, &tabulated)) in pinned::BT2020_LUMINANCE
         .iter()
-        .zip(&BT2020_LUMA_TABULATED)
+        .zip(&BT2020_LUMINANCE_TABULATED)
         .enumerate()
     {
         assert_eq!(
             shipped, tabulated as f32,
-            "BT2020_LUMA[{i}] must equal the tabulated value exactly"
+            "BT2020_LUMINANCE[{i}] must equal the tabulated value exactly"
         );
     }
 
     // ...and *not* agreement with a derivation, which differs by ~2e-6. Asserting
     // that gap keeps anyone from "fixing" the tabulated vector to the derived one.
-    let derived = derive::luma_row(BT2020);
+    let derived = derive::luminance_row(BT2020);
     let gap = (0..3)
-        .map(|i| (derived[i] - BT2020_LUMA_TABULATED[i]).abs())
+        .map(|i| (derived[i] - BT2020_LUMINANCE_TABULATED[i]).abs())
         .fold(0.0_f64, f64::max);
     assert!(
         (1e-6..1e-5).contains(&gap),
-        "expected the tabulated and derived BT.2020 luma to differ by ~2e-6, got {gap:.2e}"
+        "expected the tabulated and derived BT.2020 luminance vectors to differ by ~2e-6, got {gap:.2e}"
     );
 }
 
 #[test]
-fn luma_vectors_sum_to_one() {
+fn luminance_vectors_sum_to_one() {
     for (name, v) in [
-        ("BT2020_LUMA", pinned::BT2020_LUMA),
-        ("DISPLAY_P3_LUMA", pinned::DISPLAY_P3_LUMA),
-        ("ADOBE_RGB_LUMA", pinned::ADOBE_RGB_LUMA),
-        ("SRGB_LUMA", pinned::SRGB_LUMA),
+        ("BT2020_LUMINANCE", pinned::BT2020_LUMINANCE),
+        ("DISPLAY_P3_LUMINANCE", pinned::DISPLAY_P3_LUMINANCE),
+        ("ADOBE_RGB_LUMINANCE", pinned::ADOBE_RGB_LUMINANCE),
+        ("SRGB_LUMINANCE", pinned::SRGB_LUMINANCE),
     ] {
         let sum: f32 = v.iter().sum();
         assert!(
@@ -742,13 +746,13 @@ fn every_defined_space_has_a_sane_gamut() {
             );
         }
         // Luminance weights are positive and sum to 1.
-        let luma = npm[1];
+        let y_row = npm[1];
         assert!(
-            luma.iter().all(|&w| w > 0.0),
-            "{}: negative luma weight {luma:?}",
+            y_row.iter().all(|&w| w > 0.0),
+            "{}: negative luminance weight {y_row:?}",
             space.name
         );
-        assert!((luma.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((y_row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
     }
 }
 
@@ -779,7 +783,7 @@ fn adobe_rgb_shares_the_srgb_green_row_and_moves_the_other_two() {
     // `acescg_to_srgb_matches_the_externally_published_matrix` anchors to a published
     // matrix, so a red, blue or white that drifted from Rec.709's in either space
     // fails here. A mistyped *green* moves only the rows this cannot compare;
-    // `adobe_rgb_luma_matches_the_row_adobe_publishes` is the anchor for that.
+    // `adobe_rgb_luminance_matches_the_row_adobe_publishes` is the anchor for that.
     assert_eq!(pinned::ACESCG_TO_ADOBE_RGB[1], pinned::ACESCG_TO_SRGB[1]);
     assert_ne!(pinned::ACESCG_TO_ADOBE_RGB[0], pinned::ACESCG_TO_SRGB[0]);
     assert_ne!(pinned::ACESCG_TO_ADOBE_RGB[2], pinned::ACESCG_TO_SRGB[2]);

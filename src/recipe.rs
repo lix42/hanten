@@ -51,7 +51,7 @@ use crate::algo::fixed::{
 use crate::destination::{self, Change, DisplayAxes, Fault, OutputSection, Resolved};
 use crate::pipeline::chain;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::fit_range::{DarkEnd, DarkEndFault, MAX_DARK_END_STOPS};
 use crate::pipeline::look::{
     ChannelGradeFault, DesaturationFault, HighlightDesaturation, IDENTITY_CHANNEL_GRADE,
@@ -2144,7 +2144,10 @@ fn render_fault(r: &Recipe) -> Result<Option<RenderFault>> {
     )?;
     let graded = chain::graded_pixels(map_nc_film_rgb_v1(film), &resolve::shared_params(r))?;
     if matches!(resolve::fit_range(r).1, DarkEnd::Black(_)) {
-        let luminance = dot([graded.rgb[0], graded.rgb[1], graded.rgb[2]], ACESCG_LUMA);
+        let luminance = dot(
+            [graded.rgb[0], graded.rgb[1], graded.rgb[2]],
+            ACESCG_LUMINANCE,
+        );
         if !(luminance.is_finite() && luminance > 0.0) {
             return Ok(Some(RenderFault::Base(luminance)));
         }

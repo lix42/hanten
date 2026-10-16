@@ -106,8 +106,8 @@ What other epics need to know about `color`:
   legitimately contains negative samples, so a frame whose trimmed-mean/percentile
   level goes non-positive fails loudly rather than neutrally. No task owns that.
 - **`pipeline/colorimetry/` is the single source of truth for every
-  standards-based matrix and luma vector.** No stage may define its own: import
-  from `colorimetry::pinned`. The runtime **never derives** — the binary64
+  standards-based matrix and luminance vector.** No stage may define its own:
+  import from `colorimetry::pinned`. The runtime **never derives** — the binary64
   derivation and the audit harness are `#[cfg(test)]`. Product policy (reference
   white, peak nits, shoulder, gain-map offsets) still belongs to the stage that
   owns it, but must refer to a *named* space rather than restate its colorimetry.
@@ -117,13 +117,14 @@ What other epics need to know about `color`:
   artifact and **only** that — never `pinned.rs`. Four things downstream epics
   trip on: **(a)** two Bradford conventions coexist on purpose — the frozen
   `nc-film-rgb-v1` mapping needs Lindbloom's published inverse and new artifacts
-  use the exact one; **(b)** the three luma vectors have three provenances and
-  three verification rules — `BT2020_LUMA` is a normative table (deliberately
-  *not* matching a derivation), `DISPLAY_P3_LUMA` an exact derivation,
-  `SRGB_LUMA` the derivation rounded to six decimals (43 ulps, its own
-  allowance); **(c)** the pinned-vs-derived tolerance is ±1 `f32` ulp, measured
-  against the chromaticities' own three-decimal rounding moving entries ~3,500
-  ulps; **(d) `pinned.rs` is not the only runtime consumer of a definition** —
+  use the exact one; **(b)** the luminance vectors have three provenances and
+  three verification rules — `BT2020_LUMINANCE` is a normative table
+  (deliberately *not* matching a derivation), `DISPLAY_P3_LUMINANCE`,
+  `ADOBE_RGB_LUMINANCE` and `ACESCG_LUMINANCE` exact derivations,
+  `SRGB_LUMINANCE` the derivation rounded to six decimals (43 ulps,
+  its own allowance); **(c)** the pinned-vs-derived tolerance is ±1 `f32` ulp,
+  measured against the chromaticities' own three-decimal rounding moving entries
+  ~3,500 ulps; **(d) `pinned.rs` is not the only runtime consumer of a definition** —
   `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, ADOBE_RGB,
   BT2020}` straight into Little CMS (BT2020 joined with `hdr-linear-tiff`,
   ADOBE_RGB with `output/adobe-rgb-gamut`; PROPHOTO left with `legacy`), and so do

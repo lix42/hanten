@@ -60,7 +60,7 @@ enum Source {
         cone: ConeResponse,
     },
     /// Luminance row of a space's normalized primary matrix.
-    LumaRow(ColorSpace),
+    LuminanceRow(ColorSpace),
     /// Transcribed from a normative table — *not* derived. Recorded so the audit
     /// file is complete and so the distinction stays visible in review.
     Tabulated([f64; 3]),
@@ -211,34 +211,34 @@ fn catalog() -> Vec<Artifact> {
             shipped: Shipped::matrix_f32(pinned::ACESCG_TO_BT2020),
         },
         Artifact {
-            name: "DISPLAY_P3_LUMA",
+            name: "DISPLAY_P3_LUMINANCE",
             description: "luminance row of display-p3/d65 normalized primary matrix (derived)",
-            source: Source::LumaRow(DISPLAY_P3),
-            shipped: Shipped::vector_f32(pinned::DISPLAY_P3_LUMA),
+            source: Source::LuminanceRow(DISPLAY_P3),
+            shipped: Shipped::vector_f32(pinned::DISPLAY_P3_LUMINANCE),
         },
         Artifact {
-            name: "ADOBE_RGB_LUMA",
+            name: "ADOBE_RGB_LUMINANCE",
             description: "luminance row of adobe-rgb/d65 normalized primary matrix (derived)",
-            source: Source::LumaRow(ADOBE_RGB),
-            shipped: Shipped::vector_f32(pinned::ADOBE_RGB_LUMA),
+            source: Source::LuminanceRow(ADOBE_RGB),
+            shipped: Shipped::vector_f32(pinned::ADOBE_RGB_LUMINANCE),
         },
         Artifact {
-            name: "ACESCG_LUMA",
+            name: "ACESCG_LUMINANCE",
             description: "luminance row of acescg (ap1/aces white) normalized primary matrix (derived)",
-            source: Source::LumaRow(ACESCG),
-            shipped: Shipped::vector_f32(pinned::ACESCG_LUMA),
+            source: Source::LuminanceRow(ACESCG),
+            shipped: Shipped::vector_f32(pinned::ACESCG_LUMINANCE),
         },
         Artifact {
-            name: "SRGB_LUMA",
+            name: "SRGB_LUMINANCE",
             description: "luminance row of rec709/d65 normalized primary matrix, SHIPPED ROUNDED TO 6 DECIMALS",
-            source: Source::LumaRow(REC709),
-            shipped: Shipped::vector_f32(pinned::SRGB_LUMA),
+            source: Source::LuminanceRow(REC709),
+            shipped: Shipped::vector_f32(pinned::SRGB_LUMINANCE),
         },
         Artifact {
-            name: "BT2020_LUMA",
-            description: "bt2020 non-constant-luminance luma, TABULATED by the standard (not derived)",
-            source: Source::Tabulated(definitions::BT2020_LUMA_TABULATED),
-            shipped: Shipped::vector_f32(pinned::BT2020_LUMA),
+            name: "BT2020_LUMINANCE",
+            description: "bt2020 non-constant-luminance coefficients, TABULATED by the standard (not derived)",
+            source: Source::Tabulated(definitions::BT2020_LUMINANCE_TABULATED),
+            shipped: Shipped::vector_f32(pinned::BT2020_LUMINANCE),
         },
     ]
 }
@@ -256,7 +256,7 @@ fn canonical(source: Source) -> Vec<(String, f64)> {
                 .flat_map(|i| (0..3).map(move |j| (format!("[{i}][{j}]"), m[i][j])))
                 .collect()
         }
-        Source::LumaRow(space) => derive::luma_row(space)
+        Source::LuminanceRow(space) => derive::luminance_row(space)
             .iter()
             .enumerate()
             .map(|(i, &v)| (format!("[{i}]"), v))
