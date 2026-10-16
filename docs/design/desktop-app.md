@@ -246,14 +246,22 @@ flowchart LR
 
 ### 3.5 Preview and cache
 
-- The cache point is the downsampled scan; a knob change then renders in 37–54 ms at a
-  2048 edge once the display curve skips lcms2, ~73 ms through it
-  (`docs/spike/webkit-display.md`). The costs are the first decode (~750 ms per cold cloud
-  file) and memory (~0.8 GB for 36 frames at a 2048 edge), so the cache needs a budget that
-  `pipeline/memory.rs` doesn't model today (spike unknown 7).
+- The cache point is the downsampled scan: decoded transmission before the film base,
+  box-averaged to a 2048 edge, stored as f16 (11 MB a frame, 0.4 GB for 36). A knob
+  change then renders in 37–54 ms once the display curve skips lcms2, ~73 ms through it
+  (`docs/spike/webkit-display.md`); widening f16 adds ~2 ms.
 - Newest request wins during a slider drag.
-- Measuring runs in the core, so a frame is decoded once for measuring and preview, not
-  twice (spike unknown 6).
+- Opening a roll (`docs/spike/preview-cache.md`):
+  - Two prepare workers, the current frame first, then outward: the first preview in
+    0.2–0.4 s and 34 frames in 2.3–3.2 s from a fast SSD.
+  - An unmeasured roll decodes each frame once, for its downsample and its measurement,
+    on the same workers. The measurements pool in input order, so the result equals
+    `measure-roll`'s. The base comes first, since the chain needs it to render.
+- Memory: the cache plus up to ~265 MB per frame decoding and ~300 MB for an export.
+  Over budget, the frame furthest from the current one goes first. `pipeline/memory.rs`
+  needs a session model of that sum.
+- A disk cache of the f16 scans in `~/Library/Caches`, keyed by the file's identity and
+  never by the recipe, reopens a roll in ~0.1 s and makes eviction from memory cheap.
 
 ### 3.6 Export (in-process)
 
@@ -344,7 +352,11 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 - The repository is public, so the CLI and the core can be built from source and the
   payment check removed: whether the core goes private before release, or light
   protection accepts this.
-- Memory-only cache, or also a disk cache of downsampled scans so a reopened roll is quick.
+- The preview cache's open questions (`docs/spike/preview-cache.md`):
+  - the priority of frame prepares beside an export;
+  - whether the current frame can come before the leader;
+  - the session memory model;
+  - the disk cache's size cap and eviction order.
 - Preview faithfulness: the downsample factor, and the HDR preview on an external HDR
   display (settled on the built-in XDR only).
 - How the export dialog presents the four destination axes.

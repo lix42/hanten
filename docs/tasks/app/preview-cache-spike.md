@@ -1,8 +1,9 @@
 ---
 title: Preview cache and memory spike
-status: todo
+status: done
 deps: []
 summary: "a whole roll: cold load, one decode shared by measuring and preview, a memory budget, a disk cache"
+done: 2026-10-16
 ---
 # Preview cache and memory spike
 
