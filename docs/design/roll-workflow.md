@@ -253,12 +253,12 @@ Each is owned by the task named; its answer is recorded here.
    the frame's `params` sit above the flags** (above), so a roll-wide flag cannot undo
    a clamp stated there. A clamp in `roll.frames` is recipe, and a flag beats it (3).
 3. ~~The clamps' shape in the recipe~~ **Resolved 2026-09-28: `roll.frames`**, a table
-   in the `roll` section from a frame's **file name** to its own
-   `{"white_stops": …}`, so the recipe survives the scans moving. `convert` and every
+   in the `roll` section from a frame's **path relative to the recipe's folder** to its
+   own `{"white_stops": …}`, so a roll folder holding its scans and recipe survives a
+   move (`core/frame-keys-by-path`; first keyed by file name). `convert` and every
    `roll` frame apply their input's entry before any flag; a `--frames` manifest's
    `params` beat it (and may not state the table). A typed `--roll-white` or a manifest's
-   white drops a thin frame's slope and exposure with it. `measure-roll --out` refuses two
-   inputs sharing a file name.
+   white drops a thin frame's slope and exposure with it.
 4. ~~`--out` over an existing file~~ **Resolved 2026-09-28: refused (exit 2, before
    anything is decoded) unless `--force`.** `core/profile-authoring` follows the same
    rule.

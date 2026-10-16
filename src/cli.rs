@@ -1618,8 +1618,8 @@ pub struct Report {
     /// stage and the destination. See [`ChainResult`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<ChainResult>,
-    /// The resolved recipe (`convert`): the `params` of a `--save-recipe` file, so it
-    /// reloads through `--params` to this run. `identity.params_hash` hashes it.
+    /// The resolved recipe (`convert`): the `params` of a `--save-recipe` file, with
+    /// `roll.frames` keys absolute, so it reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
     /// What the linear HDR TIFF encoder wrote (`--transfer linear`), and the
@@ -1838,14 +1838,14 @@ fn parse_floats<const N: usize>(s: &str) -> std::result::Result<[f32; N], String
 // Recipe load / merge / validate (pure, unit-tested without the pipeline)
 // ---------------------------------------------------------------------------
 
-/// A loaded recipe, and the `pipeline_version` an enveloped document records for the
-/// build that produced it.
+/// A loaded recipe, and what its layers warn about.
 #[derive(Debug)]
 struct LoadedRecipe {
     recipe: Recipe,
     /// One per layer whose envelope records another `pipeline_version`
-    /// ([`pipeline_version_warning`]). Provenance only — never applied.
-    provenance_warnings: Vec<String>,
+    /// ([`pipeline_version_warning`]), and one per `roll.frames` key naming no file
+    /// ([`resolve_frame_keys`]).
+    layer_warnings: Vec<String>,
 }
 
 /// The envelope every recipe document hanten writes is wrapped in — `--save-recipe`,
@@ -1902,11 +1902,11 @@ fn recipe_files(paths: &[PathBuf]) -> impl Iterator<Item = &PathBuf> {
 /// against its file, and then they compose, later winning ([`recipe::compose`]).
 ///
 /// `-` reads stdin, and only once: a second `-` is refused rather than read as empty.
-fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
-    let layers = load_layers(paths)?;
+fn load_recipes(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedRecipe> {
+    let layers = load_layers(paths, frames)?;
     Ok(LoadedRecipe {
         recipe: compose_layers(&layers.bodies)?,
-        provenance_warnings: layers.provenance_warnings,
+        layer_warnings: layers.layer_warnings,
     })
 }
 
@@ -1915,7 +1915,7 @@ struct LoadedLayers {
     bodies: Vec<serde_json::Value>,
     /// Each layer's name in messages: its path, or stdin.
     names: Vec<String>,
-    provenance_warnings: Vec<String>,
+    layer_warnings: Vec<String>,
 }
 
 /// Compose checked layers, later winning ([`recipe::compose`]).
@@ -1927,8 +1927,19 @@ fn compose_layers(bodies: &[serde_json::Value]) -> Result<Recipe> {
     })
 }
 
+/// What a load does with each layer's `roll.frames`.
+#[derive(Clone, Copy)]
+enum FrameKeys {
+    /// Resolve the keys ([`resolve_frame_keys`]).
+    Resolve,
+    /// Drop the table unread: a run that discards it must not warn or refuse over it.
+    Drop,
+    /// Keep the table raw, for a run that refuses it stated: no key fault refuses first.
+    Keep,
+}
+
 /// [`load_recipes`]'s reading half.
-fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
+fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
     if paths.iter().filter(|p| is_stdin_recipe(p)).count() > 1 {
         return Err(NcError::Usage(
             "--params - is given more than once, but stdin can be read only once: save \
@@ -1938,7 +1949,7 @@ fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
     }
     let mut layers = Vec::with_capacity(paths.len());
     let mut names = Vec::with_capacity(paths.len());
-    let mut provenance_warnings = Vec::new();
+    let mut layer_warnings = Vec::new();
     for p in paths {
         let (txt, name) = if is_stdin_recipe(p) {
             let txt = std::io::read_to_string(std::io::stdin())
@@ -1949,16 +1960,83 @@ fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
                 .map_err(|e| NcError::Usage(format!("cannot read recipe {}: {e}", p.display())))?;
             (txt, p.display().to_string())
         };
-        let layer = read_layer(&txt, &name)?;
-        provenance_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
+        let mut layer = read_layer(&txt, &name)?;
+        layer_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
+        match frames {
+            FrameKeys::Keep => {}
+            FrameKeys::Drop => {
+                if let Some(roll) = layer.body.get_mut("roll").and_then(|r| r.as_object_mut()) {
+                    roll.remove("frames");
+                }
+            }
+            FrameKeys::Resolve => {
+                // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on
+                // stdin.
+                let folder =
+                    if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
+                        collision_key(Path::new("."))
+                    } else {
+                        let key = collision_key(p);
+                        key.parent().map_or(key.clone(), Path::to_path_buf)
+                    };
+                layer_warnings.extend(resolve_frame_keys(&mut layer.body, &folder, &name)?);
+            }
+        }
         layers.push(layer.body);
         names.push(name);
     }
     Ok(LoadedLayers {
         bodies: layers,
         names,
-        provenance_warnings,
+        layer_warnings,
     })
+}
+
+/// Rewrite a layer's `roll.frames` keys, each relative to `folder` (the recipe's), to the
+/// frames' resolved paths ([`recipe::frame_keys`]); one warning per key naming no file.
+fn resolve_frame_keys(
+    body: &mut serde_json::Value,
+    folder: &Path,
+    name: &str,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    recipe::frame_keys::rebase(body, |key| {
+        if key.is_empty() {
+            return Err("a `roll.frames` key is empty: key each frame by its path".into());
+        }
+        let path = folder.join(key);
+        if !path.is_file() {
+            warnings.push(format!(
+                "recipe {name}: `roll.frames` key {key:?} names no file (looked for {}), so \
+                 its values reach no frame. A key is the frame's path relative to the \
+                 recipe's folder: move the recipe with its scans, or correct the key",
+                path.display()
+            ));
+        }
+        frame_key(&path).ok_or_else(|| {
+            format!("`roll.frames` key {key:?} resolves to a path that is not UTF-8")
+        })
+    })
+    .map_err(|e| NcError::Usage(format!("recipe {name}: {e}")))?;
+    Ok(warnings)
+}
+
+/// The key a frame's `roll.frames` entry has once loaded: its resolved path
+/// ([`collision_key`]); `None` when that is not UTF-8, which no key can name.
+fn frame_key(input: &Path) -> Option<String> {
+    collision_key(input).to_str().map(str::to_owned)
+}
+
+/// `frames` as a recipe written to `path` states them: relative to the folder of the file
+/// the staged writer writes — a symlink's referent ([`staged::resolve_target`]).
+fn frames_written_to(
+    frames: &BTreeMap<String, recipe::FrameRoll>,
+    path: &Path,
+) -> BTreeMap<String, recipe::FrameRoll> {
+    // A target that does not resolve fails the write itself.
+    let written = staged::resolve_target(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = collision_key(&written);
+    recipe::frame_keys::relative(frames, key.parent().unwrap_or(&key))
 }
 
 /// One `--params` layer as read: its recipe body, and `meta.pipeline_version` when the
@@ -4861,9 +4939,10 @@ fn render_frame(
              `--rendering default` and the roll's recipe"
         } else if measured {
             "the roll is measured, but no tones reach this frame: its `roll.frames` entry \
-             (keyed by file name) is missing or has no `tones` — a renamed file, one \
-             `hanten measure-roll` was not given, or an entry written before tones — or the \
-             roll was typed without `--roll-frame-tones`; measure it with its roll"
+             (keyed by its path, relative to the recipe) is missing or has no `tones` — a \
+             renamed or moved file, one `hanten measure-roll` was not given, or an entry \
+             written before tones — or the roll was typed without `--roll-frame-tones`; \
+             measure it with its roll"
         } else {
             "measure the roll with `hanten measure-roll` and render with its recipe"
         };
@@ -5143,10 +5222,14 @@ fn convert_attempt(
     // rule reasons about the values the recipe resolves.
     reject_removed_flags(&args.knobs, !args.recipe_in.is_empty(), false)?;
     // A recipe written for the removed chain is refused inside the load, by name.
-    let loaded = load_recipes(&args.recipe_in)?;
+    let loaded = load_recipes(&args.recipe_in, FrameKeys::Resolve)?;
     // The frame's own roll values first, then the flags win over every recipe.
     let stated_roll = loaded.recipe.roll.clone();
-    let recipe = recipe::merge(recipe::for_frame(loaded.recipe, &args.input), &args.knobs);
+    let key = frame_key(&args.input);
+    let recipe = recipe::merge(
+        recipe::for_frame(loaded.recipe, Path::new(key.as_deref().unwrap_or_default())),
+        &args.knobs,
+    );
     // Flag-presence rules, ahead of every value rule that could refuse first.
     reject_a_line_without_its_gains(&args.knobs, &recipe)?;
     reject_a_tilt_without_its_gains(&args.knobs, &recipe, false)?;
@@ -5215,11 +5298,7 @@ fn convert_attempt(
     validate_convert(&recipe, args)?;
     // Last of the value rules: whether the values combine into a render. The frame's own
     // entry is passed so a fault it causes is named as the entry.
-    let own = args
-        .input
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| (n, &stated_roll));
+    let own = key.as_deref().map(|k| (k, &stated_roll));
     recipe::validate_render(&recipe, own, KnobNames::FlagAndKey)?;
 
     // The path nc actually writes: `-o out` under the default becomes `out.tiff`.
@@ -5289,7 +5368,11 @@ fn convert_attempt(
     let dump = args
         .save_recipe
         .as_deref()
-        .map(|path| stage_json(path, &RecipeEnvelope::new(&recipe)))
+        .map(|path| {
+            let mut written = recipe.clone();
+            written.roll.frames = frames_written_to(&recipe.roll.frames, path);
+            stage_json(path, &RecipeEnvelope::new(&written))
+        })
         .transpose()?;
     // The guard above cannot resolve a dangling symlink, so a dump linked to an artifact
     // written before it commits (or one linked to the dump) is caught here, by where it
@@ -5316,16 +5399,10 @@ fn convert_attempt(
     // documented flag isn't rejected; nothing consumes it yet.
     let _ = args.seed;
 
-    // Replaying a recipe written under a *different* behavioral `pipeline_version`
-    // still applies its parameters, but the default render has changed underneath
-    // them — so the pixels won't match the original. Loud and `--strict`-promotable
-    // rather than a silently-different image: exposing exactly that mismatch is why
-    // `pipeline_version` exists. Pushed before the conversion so it is on stderr before
-    // any work happens; note that on a *failed* frame no report is emitted, so stderr
-    // is the only place it appears there. (`roll` differs: it records per-frame
-    // failures and still emits its report, so the roll-level warning survives a bad
-    // frame.)
-    for msg in loaded.provenance_warnings {
+    // What a `--params` layer states that will not replay as written (another
+    // `pipeline_version`, a `roll.frames` key naming no file). Pushed before the
+    // conversion, so a failed frame, which emits no report, still shows it on stderr.
+    for msg in loaded.layer_warnings {
         push_warning_buf(&mut attempt.warnings, log, msg);
     }
     // What the run's recipe falls back on, or states that nobody may have chosen — a fact
@@ -5785,19 +5862,18 @@ fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
 /// beats every flag, so no flag is a remedy.
 fn probe_planned_frames(planned: &[PlannedFrame], stated: &recipe::RollSection) -> Result<()> {
     for frame in planned {
-        let name = frame.input.file_name().and_then(|n| n.to_str());
+        let key = frame_key(&frame.input);
         let names = match frame.overrides {
             Some(_) => KnobNames::KeyOnly,
             None => KnobNames::FlagAndKey,
         };
-        recipe::validate_render(&frame.recipe, name.map(|n| (n, stated)), names).map_err(|e| {
-            match e {
+        recipe::validate_render(&frame.recipe, key.as_deref().map(|k| (k, stated)), names)
+            .map_err(|e| match e {
                 NcError::Usage(m) => {
                     NcError::Usage(format!("frame {}: {m}", frame.input.display()))
                 }
                 e => e,
-            }
-        })?;
+            })?;
     }
     Ok(())
 }
@@ -6061,7 +6137,13 @@ fn resolve_frames(
     roll_warnings: &mut Vec<String>,
     log: &Log,
 ) -> Result<Vec<PlannedFrame>> {
-    let own = |input: &Path| recipe::merge(recipe::for_frame(stated.clone(), input), &args.knobs);
+    let own = |input: &Path| {
+        let key = frame_key(input).unwrap_or_default();
+        recipe::merge(
+            recipe::for_frame(stated.clone(), Path::new(&key)),
+            &args.knobs,
+        )
+    };
     let from_cli = InputFromCli::of(&args.knobs.input_opts);
     let out_dir = args.out_dir.as_path();
     let film_rgb = |input: &Path, output: &Path| {
@@ -6916,9 +6998,14 @@ fn measure_for_roll(
     let planned = resolve_frames(args, Some(&inputs), &stated, &shared, &mut Vec::new(), log)?;
     // Every input is protected now. Under `auto` this plan still holds the frames the
     // measurement drops, whose outputs could collide falsely, so the frames' outputs are
-    // guarded on the final plan instead.
+    // guarded once the pictures are found (`pictures_found`), before they are measured.
     let auto = args.leader == Some(Reference::Auto) || args.unexposed == Some(Reference::Auto);
-    guard_roll_targets(args, &planned, &args.references(), !auto)?;
+    guard_roll_targets(args, &planned, &args.references(), |_| !auto)?;
+    let guard_pictures = |pictures: &[PathBuf]| {
+        guard_roll_targets(args, &planned, &args.references(), |pf| {
+            pictures.contains(&pf.input)
+        })
+    };
     // The output directories first when something is written before the frames: the
     // recipe, or a `--strict` refusal's report, may go into one. A path the recipe cannot
     // be written to fails before the measurement, not after it.
@@ -6929,7 +7016,7 @@ fn measure_for_roll(
         drop(staged::stage_bytes(path, b"")?);
     }
     let mut warnings = Vec::new();
-    for msg in &layers.provenance_warnings {
+    for msg in &layers.layer_warnings {
         push_warning_buf(&mut warnings, log, msg.clone());
     }
     let mut req = RollMeasureRequest {
@@ -6945,6 +7032,7 @@ fn measure_for_roll(
         },
         strict: args.strict,
         keyed: true,
+        pictures_found: Some(&guard_pictures),
         budget: args.memory.budget(),
         on_roll: true,
     };
@@ -6996,13 +7084,14 @@ fn measured_layer(recipe: &MeasuredRecipe) -> Result<serde_json::Value> {
 /// Guard every roll write target (per-frame outputs and exports, `--report-file`,
 /// `--save-recipe`) against every file the roll reads and against one another, before
 /// anything is decoded. `references` are measure mode's leader and unexposed scans.
-/// Without `frame_outputs`, the frames are guarded only as inputs. Outside measure mode,
-/// `--save-recipe` may replace a sole `--params` layer, as on `convert`.
+/// Only the frames `outputs` picks have their outputs guarded; every frame is guarded as
+/// an input. Outside measure mode, `--save-recipe` may replace a sole `--params` layer,
+/// as on `convert`.
 fn guard_roll_targets(
     args: &RollArgs,
     planned: &[PlannedFrame],
     references: &[(&Path, &str)],
-    frame_outputs: bool,
+    outputs: impl Fn(&PlannedFrame) -> bool,
 ) -> Result<()> {
     let save_key = args.save_recipe.as_deref().map(collision_key);
     let overwrites = |p: &Path| {
@@ -7042,7 +7131,7 @@ fn guard_roll_targets(
             .map(|p| (p.as_path(), "the --params recipe")),
     );
     let mut targets: Vec<(String, PathBuf, RollTarget)> = Vec::new();
-    for (i, pf) in planned.iter().enumerate().filter(|_| frame_outputs) {
+    for (i, pf) in planned.iter().enumerate().filter(|(_, pf)| outputs(pf)) {
         targets.push((
             format!("output for {}", pf.input.display()),
             pf.output.clone(),
@@ -7116,7 +7205,13 @@ fn run_roll(args: RollArgs) -> Result<()> {
         )));
     }
     reject_measure_mode_flags(&args)?;
-    let mut layers = load_layers(&args.recipe_in)?;
+    // Measure mode refuses a stated `roll.frames` by name (`refuse_stated_roll_values`).
+    let frames = if args.measures() {
+        FrameKeys::Keep
+    } else {
+        FrameKeys::Resolve
+    };
+    let mut layers = load_layers(&args.recipe_in, frames)?;
     reject_a_leader_without_measuring(&args, &layers)?;
     // Measure mode: the measurement joins the layers last, as `measure-roll --out`'s file
     // would. Under `--strict` a warning refuses before any frame is converted.
@@ -7179,12 +7274,11 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // recipe". Warn loudly (report + stderr, `--strict`-promotable) rather than
     // hard-failing, so a best-effort batch stays usable.
     let mut roll_warnings: Vec<String> = Vec::new();
-    // A frozen recipe replayed under a different behavioral `pipeline_version` than
-    // it was captured under is a roll-level fact (one shared recipe, N frames), so
-    // it rides `roll_warnings` rather than any single frame's list — or, in measure mode,
-    // the measurement's, which `--strict` checks before any frame converts.
+    // A `--params` layer's warnings (`load_layers`) are facts about the one shared
+    // recipe, so they ride `roll_warnings` — or, in measure mode, the measurement's,
+    // which `--strict` checks before any frame converts.
     if measurement.is_none() {
-        for msg in layers.provenance_warnings {
+        for msg in layers.layer_warnings {
             log.warn(&msg);
             roll_warnings.push(msg);
         }
@@ -7256,7 +7350,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
                 .map(|p| (p.as_path(), "an auto-found reference scan")),
         );
     }
-    guard_roll_targets(&args, &planned, &reads, true)?;
+    guard_roll_targets(&args, &planned, &reads, |_| true)?;
     // Now that the plan is known-good, and before the recipe is staged into one.
     create_roll_dirs(&args, &planned)?;
 
@@ -7269,7 +7363,11 @@ fn run_roll(args: RollArgs) -> Result<()> {
         .map(|path| {
             stage_json(
                 path,
-                &RecipeEnvelope::new(&saved_roll_recipe(&shared, &args.knobs.roll)),
+                &RecipeEnvelope::new(&{
+                    let mut saved = saved_roll_recipe(&shared, &args.knobs.roll);
+                    saved.roll.frames = frames_written_to(&saved.roll.frames, path);
+                    saved
+                }),
             )
         })
         .transpose()?;
@@ -7891,7 +7989,7 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
 /// `calibration`; `measure-roll` states `calibration`, `roll` and the decode its gains
 /// were measured through, plus `input` and `measure` when they are not the defaults.
 /// The decode is stated even at its default, so a moved default cannot change it.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct MeasuredRecipe {
     recipe_version: recipe::RecipeVersion,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7924,7 +8022,11 @@ fn check_out(out: Option<&Path>, force: bool) -> Result<()> {
 /// Write a `--out` recipe: pretty JSON with a trailing newline, staged so a failed
 /// write leaves no partial file.
 fn write_recipe_out(path: &Path, recipe: &MeasuredRecipe, log: &Log) -> Result<()> {
-    let mut json = serde_json::to_string_pretty(&RecipeEnvelope::new(recipe))
+    let mut written = recipe.clone();
+    if let Some(roll) = &mut written.roll {
+        roll.frames = frames_written_to(&roll.frames, path);
+    }
+    let mut json = serde_json::to_string_pretty(&RecipeEnvelope::new(&written))
         .map_err(|e| NcError::Other(format!("serializing recipe: {e}")))?;
     json.push('\n');
     for note in staged::stage_bytes(path, json.as_bytes())?.commit()? {
@@ -8608,8 +8710,9 @@ fn own_white(f: &MeasuredFrame, white: &MeasuredRollWhite) -> Option<f32> {
 
 /// The recipe's `roll.frames`: each measured frame's tones; each clamped frame at its own
 /// white ([`own_white`]); each lifted frame with the lifts written
-/// ([`MeasuredFrame::written`]). Keyed by file name,
-/// which [`refuse_shared_file_names`] made unique.
+/// ([`MeasuredFrame::written`]). Keyed by resolved path ([`frame_key`]); a writer makes
+/// the keys relative to its file ([`frames_written_to`]). A used recipe's paths are UTF-8
+/// ([`refuse_unkeyable_inputs`]); an unused one's may be keyed lossily.
 fn frame_table(
     frames: &[MeasuredFrame],
     white: &MeasuredRollWhite,
@@ -8626,35 +8729,24 @@ fn frame_table(
                 thin_exposure: written.thin.map(|t| t.1),
                 tones: written.tones,
             };
-            let name = f.input.file_name()?.to_str()?.to_owned();
-            (entry != recipe::FrameRoll::default()).then_some((name, entry))
+            let key = frame_key(&f.input)
+                .unwrap_or_else(|| collision_key(&f.input).to_string_lossy().into_owned());
+            (entry != recipe::FrameRoll::default()).then_some((key, entry))
         })
         .collect()
 }
 
-/// `roll.frames` keys a frame by its file name, so two inputs sharing one — or one that
-/// has none a recipe can state — would make the table ambiguous.
-fn refuse_shared_file_names(inputs: &[PathBuf]) -> Result<()> {
-    let mut seen: Vec<(&str, &Path)> = Vec::new();
-    for input in inputs {
-        let Some(name) = input.file_name().and_then(|n| n.to_str()) else {
-            return Err(NcError::Usage(format!(
-                "{}: --out keys a frame by its file name in `roll.frames`, and this path has \
-                 no UTF-8 file name",
-                input.display()
-            )));
-        };
-        if let Some((_, first)) = seen.iter().find(|(n, _)| *n == name) {
-            return Err(NcError::Usage(format!(
-                "{} and {} share the file name {name:?}; --out keys a frame by its file name \
-                 in `roll.frames`, so rename one",
-                first.display(),
-                input.display()
-            )));
-        }
-        seen.push((name, input));
+/// A measured recipe kept or applied keys each frame by its resolved path ([`frame_key`]),
+/// which must be UTF-8.
+fn refuse_unkeyable_inputs(inputs: &[PathBuf]) -> Result<()> {
+    match inputs.iter().find(|i| frame_key(i).is_none()) {
+        Some(input) => Err(NcError::Usage(format!(
+            "{}: the measured recipe keys each frame in `roll.frames` by its path, and this \
+             one's resolved path is not UTF-8; rename the file or the folder holding it",
+            input.display()
+        ))),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// What `--unexposed auto` and `--leader auto` found among the inputs
@@ -9007,7 +9099,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         ));
     }
 
-    let loaded = load_recipes(&args.recipe_in)?;
+    // Its frames table is dropped unread: `check` discards the roll section.
+    let loaded = load_recipes(&args.recipe_in, FrameKeys::Drop)?;
     let mut recipe = loaded.recipe;
     // A measured base is not overridden: it is refused beside any other statement of the
     // base, before a rule about that base could refuse first.
@@ -9044,6 +9137,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         },
         strict: args.strict,
         keyed: args.out.out.is_some(),
+        pictures_found: None,
         budget: args.memory.budget(),
         on_roll: false,
     };
@@ -9064,7 +9158,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     check_recipe_out(&args.out)?;
 
     let mut warnings = Vec::new();
-    for msg in loaded.provenance_warnings {
+    for msg in loaded.layer_warnings {
         push_warning_buf(&mut warnings, &log, msg);
     }
     let measured = measure_roll(&req, stated_base, started, warnings, &log)?;
@@ -9156,6 +9250,9 @@ fn refuse_a_measured_base_beside_a_stated_one(
     )))
 }
 
+/// [`RollMeasureRequest::pictures_found`].
+type PicturesCheck<'a> = dyn Fn(&[PathBuf]) -> Result<()> + 'a;
+
 /// One roll measurement's inputs ([`measure_roll`]): `measure-roll`'s, and `roll`'s
 /// measure mode's.
 struct RollMeasureRequest<'a> {
@@ -9171,9 +9268,12 @@ struct RollMeasureRequest<'a> {
     form: WhiteBalanceForm,
     lifts: Lifts,
     strict: bool,
-    /// Whether the measured recipe is kept, so the frames key `roll.frames` and may not
-    /// share a file name.
+    /// Whether the measured recipe is kept or applied, so each frame's resolved path keys
+    /// `roll.frames` and must be UTF-8.
     keyed: bool,
+    /// Under `auto`, a check of the pictures once found, before they are measured: `roll`
+    /// guards their outputs.
+    pictures_found: Option<&'a PicturesCheck<'a>>,
     budget: memory::Budget,
     /// `roll`'s measure mode, whose remedies name `--measure-roll`.
     on_roll: bool,
@@ -9197,10 +9297,6 @@ impl RollMeasureRequest<'_> {
 
     fn named_unexposed(&self) -> Option<&Path> {
         self.unexposed().and_then(Reference::path)
-    }
-
-    fn auto(&self) -> bool {
-        self.leader == Some(&Reference::Auto) || self.unexposed() == Some(&Reference::Auto)
     }
 
     /// The scans the measurement reads, named for a write-target clash.
@@ -9287,10 +9383,8 @@ impl RollMeasureRequest<'_> {
             }
             seen.push((key, input));
         }
-        // After the exact repeat above: a file named twice is that fault, not a clash. With
-        // `auto`, only the picture frames key `roll.frames`, so they are checked once found.
-        if self.keyed && !self.auto() {
-            refuse_shared_file_names(self.inputs)?;
+        if self.keyed {
+            refuse_unkeyable_inputs(self.inputs)?;
         }
         if self.base.is_some() {
             return Ok(None);
@@ -9493,8 +9587,10 @@ fn measure_roll(
                 .into(),
         ));
     }
-    if auto && req.keyed {
-        refuse_shared_file_names(&pictures)?;
+    if references.is_some()
+        && let Some(check) = req.pictures_found
+    {
+        check(&pictures)?;
     }
     // Before the pictures are measured (pass 2); pass 1 has decoded every input.
     if req.strict && auto_leader && leader_path.is_none() {
@@ -11475,6 +11571,23 @@ mod tests {
         );
     }
 
+    /// A frame no `roll.frames` key can name is refused, not dropped from the table. The
+    /// path need not exist: its folder resolves and the name is kept as given.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_measured_recipe_refuses_an_input_whose_path_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir();
+        let named = dir.join("a.tif");
+        refuse_unkeyable_inputs(std::slice::from_ref(&named)).unwrap();
+        let unnamed = dir.join(std::ffi::OsStr::from_bytes(b"\xff.tif"));
+        let err = refuse_unkeyable_inputs(&[named, unnamed]).unwrap_err();
+        assert!(
+            err.to_string().contains("resolved path is not UTF-8"),
+            "{err}"
+        );
+    }
+
     /// **Only what was measured is written**, so the file pins nothing a later layer
     /// states — and what is written loads as a recipe with no hand editing.
     #[test]
@@ -11593,12 +11706,15 @@ mod tests {
     #[test]
     fn load_recipe_maps_failures_to_usage() {
         // No path → defaults, infallibly.
-        let loaded = load_recipes(&[]).unwrap();
+        let loaded = load_recipes(&[], FrameKeys::Resolve).unwrap();
         assert_eq!(loaded.recipe, Recipe::default());
 
         // Missing file → Usage (exit 2), not Other.
         let missing = std::env::temp_dir().join("nc-no-such-recipe-xyz.json");
-        assert!(matches!(load_recipes(&[missing]), Err(NcError::Usage(_))));
+        assert!(matches!(
+            load_recipes(&[missing], FrameKeys::Resolve),
+            Err(NcError::Usage(_))
+        ));
 
         // Malformed JSON and unknown keys both map to Usage.
         for (tag, body) in [

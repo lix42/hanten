@@ -214,8 +214,8 @@ flowchart LR
 ### 3.4 Project file
 
 - JSON with its own schema version, migrated on open.
-- Frames keyed by path relative to the project file (absolute when it can't be), not by
-  bare name — today `roll.frames` is keyed by file name (spike unknown 9). A missing file
+- Frames keyed by path relative to the project file (absolute when it can't be), as
+  `roll.frames` is keyed relative to its recipe (`core/frame-keys-by-path`; spike unknown 9). A missing file
   prompts the user to locate it.
 - Holds the measurements, every resolved value, overrides as offsets, frame operations, and
   the paid record (the token, per-frame content hashes, replacements and the device's seal;

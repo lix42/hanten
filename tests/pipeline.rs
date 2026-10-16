@@ -25,6 +25,50 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// A fixture's `roll.frames` key once loaded: its resolved path, which a recipe outside
+/// `tests/fixtures` can state and every message names.
+fn fixture_key(name: &str) -> String {
+    fixture(name)
+        .canonicalize()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// `recipe` with each `roll.frames` key naming a fixture made its [`fixture_key`], as a
+/// recipe written outside `tests/fixtures` keys it.
+fn keyed_by_fixture(recipe: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(recipe).unwrap();
+    if let Some(serde_json::Value::Object(frames)) = v.pointer_mut("/roll/frames") {
+        *frames = std::mem::take(frames)
+            .into_iter()
+            .map(|(k, e)| match fixture(&k).is_file() {
+                true => (fixture_key(&k), e),
+                false => (k, e),
+            })
+            .collect();
+    }
+    v.to_string()
+}
+
+/// The `roll.frames` entry the recipe written at `recipe` keys to `frame`: a key is the
+/// frame's path relative to the recipe's folder.
+fn entry_for<'a>(
+    written: &'a serde_json::Value,
+    recipe: &Path,
+    frame: &Path,
+) -> &'a serde_json::Value {
+    let frames = written["roll"]["frames"].as_object().unwrap();
+    let folder = recipe.parent().unwrap();
+    let target = frame.canonicalize().unwrap();
+    frames
+        .iter()
+        .find(|(k, _)| folder.join(k).canonicalize().ok().as_ref() == Some(&target))
+        .unwrap_or_else(|| panic!("no entry keys {}: {written}", frame.display()))
+        .1
+}
+
 /// Synthesize a uniform 16-bit RGB TIFF (the `RGB(16)` chunky layout the decoder
 /// accepts) with every pixel set to `rgb`, at `path`. Encodes into memory then writes the whole buffer,
 /// so the file can't be left truncated by a dropped writer.
@@ -2519,10 +2563,12 @@ fn an_overflowing_entry_refuses_its_own_frame_only() {
     let tmp = TempDir::new("overflow-entry");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 3, "look": {"contrast": 1.9},
+        &keyed_by_fixture(
+            r#"{"recipe_version": 3, "look": {"contrast": 1.9},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"white_stops": 2.5, "dark_stops": -1,
                 "frames": {"hdri-64bit.tif": {"white_stops": 0.001}}}}"#,
+        ),
     );
     let params = recipe.to_str().unwrap();
     let out = tmp.path("hdr.tiff");
@@ -2552,7 +2598,10 @@ fn an_overflowing_entry_refuses_its_own_frame_only() {
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains("hdri-64bit.tif: the densest sample")
-            && err.contains(r#"recipe `roll.frames."hdri-64bit.tif".white_stops`"#),
+            && err.contains(&format!(
+                "recipe `roll.frames.{:?}.white_stops`",
+                fixture_key("hdri-64bit.tif")
+            )),
         "{err}"
     );
     assert!(!out_dir.exists(), "refused before any frame is rendered");
@@ -10410,7 +10459,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(written["roll"]["dark_stops"], report["white"]["dark_stops"]);
     assert_eq!(written["roll"]["exposure"], report["exposure"]["ev"]);
     assert_eq!(
-        written["roll"]["frames"]["hdr-48bit.tif"]["frame_exposure"],
+        entry_for(&written, &recipe, &fixture("hdr-48bit.tif"))["frame_exposure"],
         report["frames"][0]["lift_ev"],
         "{written}"
     );
@@ -10987,8 +11036,10 @@ fn a_roll_white_without_its_dark_end_is_refused_naming_the_measurement() {
     // by `roll`, which validates the shared recipe alone, never rendered at the fallback.
     let entry = write_file(
         &tmp.path("entry.json"),
-        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        &keyed_by_fixture(
+            r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"exposure": 0, "frames": {"hdr-48bit.tif": {"white_stops": 1.8}}}}"#,
+        ),
     );
     let frame = fixture("hdr-48bit.tif");
     for command in ["convert", "roll"] {
@@ -11002,8 +11053,10 @@ fn a_roll_white_without_its_dark_end_is_refused_naming_the_measurement() {
         ]);
         assert_eq!(code, 2, "{command}: {err}");
         assert!(
-            err.contains("recipe `roll.frames.\"hdr-48bit.tif\".white_stops` 1.8")
-                && err.contains("`roll.white_stops` and `roll.dark_stops`")
+            err.contains(&format!(
+                "recipe `roll.frames.{:?}.white_stops` 1.8",
+                fixture_key("hdr-48bit.tif")
+            )) && err.contains("`roll.white_stops` and `roll.dark_stops`")
                 && !err.contains("--roll-white (recipe `roll.white_stops`)"),
             "{command}: {err}"
         );
@@ -11027,9 +11080,11 @@ fn a_roll_white_without_its_dark_end_is_refused_naming_the_measurement() {
     // flag's dark end, on both commands.
     let clamped = write_file(
         &tmp.path("clamped.json"),
-        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        &keyed_by_fixture(
+            r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"white_stops": 1.6, "exposure": 0,
                 "frames": {"hdr-48bit.tif": {"white_stops": 2.0}}}}"#,
+        ),
     );
     for command in ["convert", "roll"] {
         let (code, stdout, err) = run(&[
@@ -12738,7 +12793,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     let frames = &written["roll"]["frames"];
     assert_eq!(
         frames["bright.tif"]["white_stops"], white["rule"]["cap_stops"],
-        "keyed by file name: {written}"
+        "keyed beside the recipe: {written}"
     );
     assert!(frames["dim.tif"]["white_stops"].is_null(), "{written}");
     for name in ["dim.tif", "bright.tif"] {
@@ -12826,7 +12881,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         );
     }
 
-    // A single `convert` of the clamped frame takes its entry too, by file name.
+    // A single `convert` of the clamped frame takes its entry too, by its path.
     let single = tmp.path("single.tiff");
     let (code, _, err) = run(&[
         "convert",
@@ -14401,6 +14456,44 @@ fn measure_roll_auto_corroborates_agreeing_frames_and_keeps_a_near_blank_picture
 }
 
 #[test]
+fn roll_auto_refuses_pictures_sharing_an_output_before_measuring_them() {
+    // Two pictures named `a.tif` in two folders: `measure-roll` keys each by its path, but
+    // `roll` would write both to `a_positive.tiff`.
+    let tmp = TempDir::new("roll-auto-twin-outputs");
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let input = s(&write_file(&tmp.path("input.json"), AUTO_INPUT));
+    let sub = tmp.path("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let [blank, a, b, twin] = [
+        tmp.path("blank.tif"),
+        tmp.path("a.tif"),
+        tmp.path("b.tif"),
+        sub.join("a.tif"),
+    ];
+    write_uniform_density(&blank, AUTO_BASE, 0.0);
+    write_picture_density(&a, AUTO_BASE, 0.9);
+    write_picture_density(&b, AUTO_BASE, 1.1);
+    write_picture_density(&twin, AUTO_BASE, 1.0);
+    let [blank, a, b, twin] = [&blank, &a, &b, &twin].map(|p| s(p));
+    let frames = [blank.as_str(), &a, &b, &twin, "--unexposed", "auto"];
+    let (code, _, err) = run(&[&["measure-roll"][..], &frames, &["--params", &input]].concat());
+    assert_eq!(code, 0, "measure-roll keeps both: {err}");
+    let out_dir = s(&tmp.path("out"));
+    let (code, stdout, err) = run(&[
+        &["roll"][..],
+        &frames,
+        &["--params", &input, "--out-dir", &out_dir],
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        err.contains(&format!("output for {twin}")) && err.contains("collides with"),
+        "{err}"
+    );
+}
+
+#[test]
 fn measure_roll_auto_refuses_when_nothing_is_trustworthy() {
     let tmp = TempDir::new("measure-roll-auto-refusals");
     let s = |p: &Path| p.to_str().unwrap().to_owned();
@@ -14471,7 +14564,7 @@ fn measure_roll_auto_refuses_when_nothing_is_trustworthy() {
         assert!(err.contains(expect), "{args:?}: {err}");
         assert!(!err.contains(absent), "{args:?}: {err}");
     }
-    // A found leader keys no `roll.frames` entry, so its file name may repeat a picture's.
+    // Inputs in two folders may share a file name: each frame is keyed by its path.
     let sub = tmp.path("sub");
     std::fs::create_dir_all(&sub).unwrap();
     let twin = sub.join("a.tif");
@@ -14517,11 +14610,6 @@ fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
         &tmp.path("stated.json"),
         r#"{"recipe_version": 3, "calibration": {"film_base": {"region": [0, 0, 8, 8]}}}"#,
     );
-    let copy = tmp.path("sub");
-    std::fs::create_dir_all(&copy).unwrap();
-    let twin = copy.join("hdr-48bit.tif");
-    std::fs::copy(&frame, &twin).unwrap();
-    let out = tmp.path("roll.json").display().to_string();
     for (args, expect, absent) in [
         (
             vec![
@@ -14555,18 +14643,6 @@ fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
             "is both the --leader and the --unexposed frame",
             "input frame",
         ),
-        (
-            vec![
-                frame.as_str(),
-                twin.to_str().unwrap(),
-                "--unexposed",
-                &blank,
-                "--out",
-                &out,
-            ],
-            "share the file name",
-            "named twice",
-        ),
     ] {
         let (code, stdout, err) = run(&[&["measure-roll"][..], &args].concat());
         assert_eq!(code, 2, "{args:?}: {err}");
@@ -14582,7 +14658,6 @@ fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
             "{args:?}: refused before decoding: {err}"
         );
     }
-    assert!(!Path::new(&out).exists());
 }
 
 #[test]
@@ -14692,11 +14767,15 @@ fn a_flag_over_a_frames_own_white_replays_from_save_recipe() {
     // replay what rendered, not re-apply the entry the flag overrode.
     let tmp = TempDir::new("roll-frames-replay");
     let frame = fixture("hdr-48bit.tif");
+    let other = tmp.path("other.tif");
+    std::fs::copy(&frame, &other).unwrap();
     let recipe = write_file(
         &tmp.path("r.json"),
-        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        &keyed_by_fixture(
+            r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"white_stops": 1.6, "dark_stops": -3.75,
                      "frames": {"hdr-48bit.tif": {"white_stops": 2.0}, "other.tif": {"white_stops": 2.0}}}}"#,
+        ),
     );
     let (dump, first, replay) = (tmp.path("d.json"), tmp.path("a.tiff"), tmp.path("b.tiff"));
     let (code, stdout, err) = run(&[
@@ -14716,10 +14795,11 @@ fn a_flag_over_a_frames_own_white_replays_from_save_recipe() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(json(&stdout)["chain"]["roll"]["white_stops"], 1.7);
     let dumped = written_recipe(&dump);
-    assert!(
-        dumped["roll"]["frames"].get("hdr-48bit.tif").is_none()
-            && dumped["roll"]["frames"].get("other.tif").is_some(),
-        "the frame's own entry is resolved away, the others kept: {dumped}"
+    assert_eq!(
+        dumped["roll"]["frames"],
+        serde_json::json!({"other.tif": {"white_stops": 2.0, "frame_exposure": null,
+            "thin_slope": null, "thin_exposure": null, "tones": null}}),
+        "the frame's own entry is resolved away, the others kept, keyed beside the dump"
     );
     let (code, _, err) = run(&[
         "convert",
@@ -14755,14 +14835,355 @@ fn the_removed_estimate_command_names_measure_base() {
 }
 
 #[test]
+fn frames_sharing_a_file_name_keep_their_own_entries_after_the_roll_moves() {
+    // `roll.frames` keys a frame by its path relative to the recipe, so two `01.tif` in two
+    // folders each get their own entry, and a roll folder holding its scans and recipe
+    // converts unchanged after it moves.
+    let tmp = TempDir::new("frame-keys-by-path");
+    let base = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let roll = tmp.path("roll");
+    let (a, b) = (roll.join("a/01.tif"), roll.join("b/01.tif"));
+    for frame in [&a, &b] {
+        std::fs::create_dir_all(frame.parent().unwrap()).unwrap();
+    }
+    write_picture_density(&a, AUTO_BASE, 0.9);
+    write_picture_density(&b, AUTO_BASE, 1.3);
+    let measured = roll.join("measured.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+        "--params",
+        base.to_str().unwrap(),
+        "--out",
+        measured.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let written = written_recipe(&measured);
+    let frames = written["roll"]["frames"].as_object().unwrap();
+    assert_eq!(
+        frames.keys().collect::<Vec<_>>(),
+        ["a/01.tif", "b/01.tif"],
+        "{written}"
+    );
+    assert_ne!(frames["a/01.tif"], frames["b/01.tif"], "{written}");
+
+    // Each frame alone (a subset of the roll), whose output is `01_positive.tiff` in its
+    // own folder.
+    let render = |roll: &Path, sub: &str| {
+        let out_dir = roll.join(format!("out-{sub}"));
+        let (code, _, err) = run(&[
+            "roll",
+            roll.join(sub).join("01.tif").to_str().unwrap(),
+            "--params",
+            roll.join("measured.json").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{err}");
+        assert!(!err.contains("names no file"), "{err}");
+        std::fs::read(out_dir.join("01_positive.tiff")).unwrap()
+    };
+    let own = [render(&roll, "a"), render(&roll, "b")];
+
+    // Not vacuous: `b` under `a`'s entry renders differently.
+    let swapped = write_file(
+        &roll.join("swapped.json"),
+        &serde_json::json!({"recipe_version": 3, "roll": {"frames": {"b/01.tif": frames["a/01.tif"]}}})
+            .to_string(),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        b.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+        "--params",
+        swapped.to_str().unwrap(),
+        "--out-dir",
+        roll.join("out-swapped").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_ne!(
+        std::fs::read(roll.join("out-swapped/01_positive.tiff")).unwrap(),
+        own[1]
+    );
+
+    let moved = tmp.path("moved");
+    std::fs::rename(&roll, &moved).unwrap();
+    assert!(own == [render(&moved, "a"), render(&moved, "b")]);
+}
+
+#[test]
+fn a_frames_key_naming_no_file_warns_and_one_not_rendered_does_not() {
+    let tmp = TempDir::new("frame-key-dangling");
+    let rendered = tmp.path("rendered.tif");
+    let neighbour = tmp.path("neighbour.tif");
+    for frame in [&rendered, &neighbour] {
+        std::fs::copy(fixture("hdr-48bit.tif"), frame).unwrap();
+    }
+    // A key naming a folder names no file either.
+    std::fs::create_dir(tmp.path("sub")).unwrap();
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.0, "dark_stops": -3.75,
+                "frames": {"neighbour.tif": {"white_stops": 1.8},
+                           "scans/gone.tif": {"white_stops": 1.8},
+                           "sub": {"white_stops": 1.8}}}}"#,
+    );
+    let out = tmp.path("out.tiff");
+    let convert = |strict: bool| {
+        let mut args = vec![
+            "convert",
+            rendered.to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ];
+        args.extend(MEASURED);
+        if strict {
+            args.push("--strict");
+        }
+        run(&args)
+    };
+    let (code, stdout, err) = convert(false);
+    assert_eq!(code, 0, "{err}");
+    let warnings = json(&stdout)["warnings"].as_array().unwrap().clone();
+    let named: Vec<&str> = warnings.iter().map(|w| w.as_str().unwrap()).collect();
+    assert_eq!(named.len(), 2, "only the two keys warn: {named:?}");
+    assert!(
+        named[0].contains(r#"`roll.frames` key "scans/gone.tif" names no file"#),
+        "{named:?}"
+    );
+    assert!(
+        named[1].contains(r#"`roll.frames` key "sub" names no file"#),
+        "{named:?}"
+    );
+    let (code, _, err) = convert(true);
+    assert_ne!(code, 0, "--strict refuses it: {err}");
+}
+
+#[test]
+fn two_frames_keys_naming_one_file_are_refused() {
+    let tmp = TempDir::new("frame-key-twice");
+    let frame = tmp.path("a.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.0, "dark_stops": -3.75,
+                "frames": {"a.tif": {"white_stops": 1.8}, "./a.tif": {"white_stops": 1.9}}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        frame.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains(r#""./a.tif" and "a.tif" both name"#), "{err}");
+}
+
+#[test]
+fn roll_measure_mode_refuses_a_stated_frames_table_before_its_keys() {
+    // Merging two keys naming one file would only lead into the measured-value refusal,
+    // so that one is diagnosed first.
+    let tmp = TempDir::new("roll-measure-frames-raw");
+    let frame = tmp.path("a.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"frames": {"a.tif": {"white_stops": 1.8}, "./a.tif": {"white_stops": 1.9}}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        frame.to_str().unwrap(),
+        "--measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("states `roll.frames`, a roll value"), "{err}");
+    assert!(!err.contains("both name"), "{err}");
+}
+
+#[test]
+fn measure_roll_drops_the_frames_table_unread() {
+    // `measure-roll` discards the recipe's roll section, so a prior roll recipe's frames
+    // table neither warns (which `--strict` would refuse) nor refuses the run.
+    let tmp = TempDir::new("measure-roll-frames-unread");
+    let frame = tmp.path("frame.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    let leader = tmp.path("leader.tif");
+    write_hdri_with_uniform_ir(&leader, 64, 64, [900, 700, 400], 40_000);
+    let recipe = |name: &str, frames: &str| {
+        write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{"recipe_version": 3,
+                    "input": {{"transfer": "linear", "meaning": "scanner-device"}},
+                    "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}}
+                    {frames}}}"#
+            ),
+        )
+    };
+    let measure = |recipe: &Path| {
+        let (code, stdout, err) = run(&[
+            "measure-roll",
+            "--params",
+            recipe.to_str().unwrap(),
+            frame.to_str().unwrap(),
+            "--leader",
+            leader.to_str().unwrap(),
+            "--strict",
+        ]);
+        assert_eq!(code, 0, "{}: {err}", recipe.display());
+        assert!(!err.contains("names no file"), "{err}");
+        assert!(!stdout.contains("names no file"), "{stdout}");
+        json(&stdout)["white_balance"]["gains"].clone()
+    };
+    // The control: the same run with no frames table.
+    let control = measure(&recipe("plain.json", ""));
+    let missing = recipe(
+        "missing.json",
+        r#", "roll": {"frames": {"gone.tif": {"white_stops": 1.8}}}"#,
+    );
+    let twice = recipe(
+        "twice.json",
+        r#", "roll": {"frames": {"frame.tif": {"white_stops": 1.8}, "./frame.tif": {"white_stops": 1.9}}}"#,
+    );
+    assert_eq!(measure(&missing), control);
+    assert_eq!(measure(&twice), control);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recipe_saved_through_a_dangling_symlink_keys_frames_from_its_referent() {
+    // The staged writer writes a symlink's referent, so the keys are relative to the
+    // referent's folder, not the link's.
+    let tmp = TempDir::new("frame-key-symlink-save");
+    let (roll, recipes) = (tmp.path("roll"), tmp.path("recipes"));
+    std::fs::create_dir_all(&roll).unwrap();
+    std::fs::create_dir_all(&recipes).unwrap();
+    let (frame, other) = (roll.join("frame.tif"), roll.join("other.tif"));
+    for f in [&frame, &other] {
+        std::fs::copy(fixture("hdr-48bit.tif"), f).unwrap();
+    }
+    let recipe = write_file(
+        &roll.join("roll.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.0, "dark_stops": -3.75,
+                "frames": {"other.tif": {"white_stops": 1.8}}}}"#,
+    );
+    let (link, referent) = (roll.join("latest.json"), recipes.join("new.json"));
+    std::os::unix::fs::symlink(&referent, &link).unwrap();
+    let (code, _, err) = run(&[
+        "convert",
+        frame.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--save-recipe",
+        link.to_str().unwrap(),
+        "-o",
+        roll.join("out.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let saved = written_recipe(&referent);
+    let keys: Vec<&String> = saved["roll"]["frames"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect();
+    assert_eq!(keys, ["../roll/other.tif"], "{saved}");
+}
+
+#[test]
+fn a_recipe_on_stdin_keys_frames_from_the_working_directory() {
+    // Cargo runs this test from the package root, as it does the binary. The entry
+    // overflows the frame's densest sample, so a refusal naming it shows it matched.
+    let tmp = TempDir::new("frame-key-stdin");
+    let recipe = r#"{"recipe_version": 3, "look": {"contrast": 1.9},
+        "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        "roll": {"white_stops": 2.5, "dark_stops": -1,
+            "frames": {"tests/fixtures/hdr-48bit.tif": {"white_stops": 0.001}}}}"#;
+    let (code, _, err) = run_stdin(
+        &[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "--params",
+            "-",
+            "-o",
+            tmp.path("out.tiff").to_str().unwrap(),
+        ],
+        recipe,
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(&format!(
+            "`roll.frames.{:?}.white_stops`",
+            fixture_key("hdr-48bit.tif")
+        )),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recipe_from_a_pipe_keys_frames_from_the_working_directory() {
+    // As `--params <(jq …)` passes: a path that is no regular file has no folder, so its
+    // keys resolve as on stdin. The entry overflows, so a refusal naming it shows it matched.
+    let tmp = TempDir::new("frame-key-fifo");
+    let fifo = tmp.path("recipe.fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let writer = fifo.clone();
+    // Never joined: it blocks until the binary opens the pipe.
+    std::thread::spawn(move || {
+        std::fs::write(
+            writer,
+            r#"{"recipe_version": 3, "look": {"contrast": 1.9},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 2.5, "dark_stops": -1,
+                "frames": {"tests/fixtures/hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
+        )
+    });
+    let (code, _, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--params",
+        fifo.to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(!err.contains("names no file"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "`roll.frames.{:?}.white_stops`",
+            fixture_key("hdr-48bit.tif")
+        )),
+        "{err}"
+    );
+}
+
+#[test]
 fn a_roll_frames_table_is_validated_by_key_and_value() {
     let tmp = TempDir::new("roll-frames-table");
     let frame = fixture("hdr-48bit.tif").display().to_string();
     for (table, contrast, expect) in [
         (
-            r#"{"sub/f.tif": {"white_stops": 2.0}}"#,
+            r#"{"": {"white_stops": 2.0}}"#,
             "1",
-            "file names, not paths",
+            "a `roll.frames` key is empty",
         ),
         (
             r#"{"hdr-48bit.tif": {"white_stops": -1.0}}"#,
@@ -14780,17 +15201,18 @@ fn a_roll_frames_table_is_validated_by_key_and_value() {
         (
             r#"{"hdr-48bit.tif": {"white_stops": 0.001}}"#,
             "0.9e38",
-            "`roll.frames.\"hdr-48bit.tif\".white_stops`",
+            &format!(
+                "`roll.frames.{:?}.white_stops`",
+                fixture_key("hdr-48bit.tif")
+            ),
         ),
     ] {
-        let recipe = write_file(
-            &tmp.path("r.json"),
-            &format!(
-                r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
-                    "look": {{"contrast": {contrast}}},
-                    "roll": {{"white_stops": 2.5, "dark_stops": -3.75, "frames": {table}}}}}"#
-            ),
+        let body = format!(
+            r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                "look": {{"contrast": {contrast}}},
+                "roll": {{"white_stops": 2.5, "dark_stops": -3.75, "frames": {table}}}}}"#
         );
+        let recipe = write_file(&tmp.path("r.json"), &keyed_by_fixture(&body));
         for command in ["convert", "roll"] {
             let out = tmp.path(&format!("o-{command}.tiff"));
             let (code, _, err) = run(&[
@@ -16639,10 +17061,12 @@ fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
     let tmp = TempDir::new("layers-dump-as-look");
     let roll1 = write_file(
         &tmp.path("roll1.json"),
-        r#"{"recipe_version": 2,
+        &keyed_by_fixture(
+            r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
             "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0, "dark_stops": -3.75,
                      "frames": {"hdr-48bit.tif": {"white_stops": 1.7}}}}"#,
+        ),
     );
     let roll2 = write_file(
         &tmp.path("roll2.json"),
@@ -16950,10 +17374,10 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     // `params`. The frame renders its small lift, as if its entry held that alone.
     let tmp = TempDir::new("white-beats-thin-lift");
     let roll = |frames: &str| {
-        format!(
+        keyed_by_fixture(&format!(
             r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
                 "roll": {{"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0, "frames": {frames}}}}}"#
-        )
+        ))
     };
     let lifted = write_file(
         &tmp.path("lifted.json"),
@@ -17614,9 +18038,11 @@ fn a_roll_flag_beats_a_frames_table_entry_as_on_convert() {
     let tmp = TempDir::new("roll-table-flag");
     let measured = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2,
+        &keyed_by_fixture(
+            r#"{"recipe_version": 2,
             "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
             "roll": {"white_stops": 2.5, "dark_stops": -3.75, "frames": {"hdr-48bit.tif": {"white_stops": 1.5}}}}"#,
+        ),
     );
     let scan = fixture("hdr-48bit.tif");
     let roll = |extra: &[&str], dir: &str| {
@@ -17897,11 +18323,13 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version": 3,
+        keyed_by_fixture(
+            r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "look": {"contrast": 1.9},
             "roll": {"white_stops": 2.5, "dark_stops": -1, "exposure": 0,
                 "frames": {"hdr-48bit.tif": {"white_stops": 0.001}}}}"#,
+        ),
     )
     .unwrap();
     let out_dir = tmp.path("roll");
@@ -17915,7 +18343,10 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains(r#"recipe `roll.frames."hdr-48bit.tif".white_stops` at its default"#),
+        err.contains(&format!(
+            "recipe `roll.frames.{:?}.white_stops` at its default",
+            fixture_key("hdr-48bit.tif")
+        )),
         "{err}"
     );
     assert!(!out_dir.exists() || std::fs::read_dir(&out_dir).unwrap().next().is_none());

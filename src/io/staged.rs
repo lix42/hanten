@@ -427,7 +427,7 @@ fn check_promotable(target: &Path) -> Result<()> {
 /// referent to exist), which covers `latest.tiff -> not-yet-written.tiff`. A dangling
 /// *chain* resolves only its first hop — an edge case of an edge case, noted rather
 /// than handled.
-fn resolve_target(target: &Path) -> Result<PathBuf> {
+pub fn resolve_target(target: &Path) -> Result<PathBuf> {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_symlink() => {
             if let Ok(real) = fs::canonicalize(target) {
