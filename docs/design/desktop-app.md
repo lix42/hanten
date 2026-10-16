@@ -95,8 +95,10 @@ are Hanten features not yet implemented in the CLI (§4).
   that changes the image.
 - A colour-management (lcms2) fault is an error, not a quietly wrong preview (spike
   unknown 5), scoped to the render that raised it and sent to the report channel. Today's
-  handler is one process-global flag that writes to stderr; lcms2's per-context handlers
-  are a lead (unverified).
+  handler is one process-global flag that writes to stderr, and a preview and an export
+  racing on it take or lose each other's faults. One lcms2 context per render job, with
+  its own handler, keeps each fault with its render; a context without a handler drops
+  its faults (`docs/spike/export-beside-preview.md`, Q4).
 
 ### 2.8 Files and persistence
 
@@ -232,12 +234,23 @@ flowchart LR
 - Measuring runs in the core, so a frame is decoded once for measuring and preview, not
   twice (spike unknown 6).
 
-### 3.6 Export (proposal: in-process)
+### 3.6 Export (in-process)
 
 - Export runs **in the core process** as a queue, not by spawning a bundled `hanten`
   binary. A shipped binary would be an unpaid public CLI (though not the only free route,
   §5), and a second process would need its own route for messages.
-- Preview takes priority over the queue for CPU and memory.
+- Preview takes priority over the queue for CPU and memory
+  (`docs/spike/export-beside-preview.md`):
+  - **Two thread pools.** The preview and the export each run in their own rayon pool,
+    never the shared global one.
+  - **A cooperative pause.** Export threads pause between stages and between pixel
+    bands while the preview is active, so a drag stays near its idle latency (p99 42
+    against 40 ms, worse under heavy machine load) and the export runs at full speed in
+    the rests.
+  - **No lowered QoS.** On Apple silicon it slowed the export 7× or more with no preview
+    running.
+- **One export at a time** (~300 MB each; a second adds 16% throughput). Export decodes
+  its frame again rather than keeping the preview's full decode.
 
 ### 3.7 Payment
 

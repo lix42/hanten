@@ -17,6 +17,14 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
   preview should apply the curve directly (37–54 ms render, 56–70 ms from slider to the next
   frame).
   Coalescing (one request in flight, newest value next) is enough for newest-wins.
+- **Export beside preview** (`export-beside-preview-spike`,
+  `docs/spike/export-beside-preview.md`):
+  - In-process export works with a preview pool, an export pool, and export threads
+    that pause between stages and pixel bands while the preview is active.
+  - Never the shared global pool (p99 275 ms), and never a lowered QoS (7× slower on
+    Apple silicon, with no preview running).
+  - One export at a time; export decodes again.
+  - lcms2 faults: one context per render job, each with its own handler.
 - **Payment** (`offline-token-spike`): a proposal, not the final scheme — tokens bound
   to a device's P-256 key at download, the device sealing the paid record; see
   `docs/spike/offline-token.md`.
@@ -41,10 +49,13 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## export-beside-preview-spike
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory
+- 2026-10-16: Started. Plan: throwaway core on branch spike/export-beside-preview-core (lib target + preview + in-process export, never merged) in ../temp/export-beside-preview-spike/core; synthetic 36-frame roll at 4927x3335 tiled from tests/fixtures/hdri-64bit.tif (the SSD with real scans is not mounted); headless harness for preview latency under export with scheduling variants (shared global rayon pool, separate pools, lower QoS for export, stage-boundary yield), concurrency 1/2/3, decode reuse; lcms2 per-context fault experiment; one Tauri shell sweep under export. Report docs/spike/export-beside-preview.md.
+- 2026-10-16: Done: report docs/spike/export-beside-preview.md. Synthetic 36-frame roll (SSD not mounted); in-process export equals hanten convert in all u16 samples. Verdict: in-process export works with two rayon pools (preview, export) and a cooperative pause of export threads between stages and pixel bands while the preview is active (150 ms hold): drag p99 42 ms vs 40 idle, first render of a drag <=29 ms, export at full speed in rests; the shared global pool gives p90 161/p99 275. Lower QoS confines export to E-cores: utility 7x slower with nothing else running, background ~150x. One export at a time (~300 MB each, a second +16% throughput). Export decodes again (decode 11% of an export; a kept full decode is 263 MB). lcms2: global flag race 935/937 of 2000 renders wrong; one ThreadContext per render with its own handler 0/0; a context without a handler drops faults silently. WKWebView shell: WebKit frames unaffected by a full export (p99 20-24 ms). Gotchas: machine load 10-58 from other work, so passes were interleaved and medians reported; rayon install runs the job on pool threads, so per-thread marks go in the pool's start_handler. Handoff: design §2.7/§3.6 updated; preview-cache-spike gains the export memory and QoS facts.
+- 2026-10-16: Review fixes: the lcms2 race's stolen faults are 935 of the clean thread's 4,000 renders (swallowed stays 937 of 2,000), not 935 of 2,000. The QoS slowdown was measured with no preview running, not on an idle machine (load 10-58), and the efficiency-core cause is inferred. The band gate's tail figures are the load 10-21 head-to-head; in the pass before (load 23-31) it reached p99 117 ms, no better than the stage gate. The shell's 36 ms frame-interval maximum holds for the export phases; one idle phase had a 113 ms warm-up frame.
 
 ## frame-offset-spike
 

@@ -1,9 +1,10 @@
 ---
 title: Export beside preview spike
-status: todo
+status: done
 deps: []
 related: [app/preview-cache-spike]
 summary: "an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory"
+done: 2026-10-16
 ---
 # Export beside preview spike
 

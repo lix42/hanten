@@ -496,9 +496,9 @@ graph TD
 > over `nc` as a library, preview, export and payment. Spikes come first; the CLI work the
 > app needs lives in `io`, `core` and `film-base` (the design's §4).
 
-- [ ] [Export beside preview spike](tasks/app/export-beside-preview-spike.md) — an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory
 - [ ] [Frame offsets on multiplicative knobs](tasks/app/frame-offset-spike.md) — is a frame's contrast or saturation offset a ratio or a step? settled by a review round
 - [ ] [Packaging and file access spike](tasks/app/packaging-spike.md) — sign and notarize a Tauri app with the Rust core; write the project file into any user-picked folder
 - [ ] [Preview cache and memory spike](tasks/app/preview-cache-spike.md) — a whole roll: cold load, one decode shared by measuring and preview, a memory budget, a disk cache
+- [x] [Export beside preview spike](tasks/app/export-beside-preview-spike.md) — an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory
 - [x] [Offline token spike](tasks/app/offline-token-spike.md) — how tokens are signed, verified, stored and recovered on macOS
 - [x] [WebKit display spike](tasks/app/webkit-display-spike.md) — Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron
