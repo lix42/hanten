@@ -165,7 +165,7 @@ graph TD
 - [ ] [Scanner Density Calibration](tasks/io/scanner-density-calibration.md) — turn the density-scale question into a shipped, reusable scanner profile · **waits on** `analysis/calibration-frame-capture`
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — convert positive (E-6) film: no film base or decode, enters at the working space; no slide scans to verify against yet · **low priority**
 - [ ] [Streaming / Tiled I/O](tasks/io/streaming-tiled-io.md) — strip/tile decode for very large inputs; STEP 0 evaluated no-go (2026-10-13), revisit only if the input envelope grows · **low priority**
-- [ ] [Name a truncated input file](tasks/io/truncated-file-fault.md) — a file shorter than its own header declares (a cloud file still downloading) gets its own fault, not a decode error
+- [ ] [Name a truncated input file](tasks/io/truncated-file-fault.md) — a file shorter than its own header declares, or a cloud file whose read times out, gets a named fault, not a decode error
 - [x] [Input Data Semantics and Validation](tasks/io/input-data-semantics.md) — resolve transfer encoding independently from scanner-device versus colorimetric meaning
 - [x] [Memory Preflight & In-Place Transform](tasks/io/memory-preflight.md) — from the memory-safety review (Phase A, cheap): predict peak allocation and fail loudly over a budget before allocating (reconciling the dishonest 4 GiB input limit), and drop the whole-image clone…
 - [x] [Multi-frame runs outgrow the per-frame memory model](tasks/io/multi-frame-memory-growth.md) — macOS malloc kept freed full-frame blocks resident, so a roll's peak climbed with every slightly larger frame
