@@ -849,7 +849,7 @@ top level, one section per stage in chain order, the destination last:
     "scale": [1.0, 0.84, 0.73],
     "offset": [0.0, 0.0, 0.0],
     "linearization": 1.8,
-    "anchor": {"mid-at-base-offset": 0.62}
+    "anchor_rule": {"mid-at-base-offset": 0.62}
   },
   "rendering": "default",
   "scene_correction": { "white_balance": {"explicit": [1.0, 1.0, 1.0]}, "exposure": 0.0 },
@@ -958,7 +958,7 @@ re-derives it from the recipe:
                 "linearization": 1.8, "scale": [1.0, 0.84, 0.73], "offset": [0.0, 0.0, 0.0] },
     "stages": [
       { "stage": "scene_correction", "applied": "identity" },
-      { "stage": "look", "applied": "contrast+saturation+highlight-desaturation" },
+      { "stage": "look", "applied": "tone-slope+saturation-slope+highlight-desaturation" },
       { "stage": "fit_range", "applied": "reinhard-peak-lifted-v1" },
       { "stage": "fit_gamut", "applied": "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2" }
     ],
@@ -1666,12 +1666,12 @@ missing-exposure warning.
   tests of the `D = −log10(scan / base)` definition.
 - `--density-offset R,G,B` ⇒ `reconstruction.offset` — per-channel density offset,
   default `[0, 0, 0]` (§7.2).
-- `--density-gamma <f>` ⇒ `reconstruction.linearization` (default `1.8`) — the film's
+- `--linearization <f>` ⇒ `reconstruction.linearization` (default `1.8`) — the film's
   linearization, finite and positive. It is the calibrated half of the single `gamma`
   the removed chain shipped; print contrast is `look.contrast`. The pre-split
   `reconstruction.contrast` is refused by name, with the `look.contrast` multiplier
   that would keep it.
-- `--anchor-mid-offset <d>` ⇒ `reconstruction.anchor = {"mid-at-base-offset": d}`
+- `--anchor-mid-offset <d>` ⇒ `reconstruction.anchor_rule = {"mid-at-base-offset": d}`
   (default `0.62`), strictly positive. The placement divides by the linearization, so
   validation **resolves the rule** and rejects a non-finite anchor, and separately one
   whose exponent overflows f32 (a silently black frame; `2e38` reaches it). A retired
@@ -2004,6 +2004,9 @@ alias, on flags and recipe keys alike. The reference build
   `film-base/tiling-uniformity-validator`). `--export-ir` and `input.export_ir`
   retired with no replacement (`nf-verification/roll-side-exports`); a `null` key, as
   older dumps wrote it, is dropped.
+- **Renamed** (`core/rename-decode-look-misnomers`): `--density-gamma` (→
+  `--linearization`) and `reconstruction.anchor` (→ `reconstruction.anchor_rule`,
+  refused at every value, its old default included).
 
 ### Global
 - `--params <json>` (repeatable), `--save-recipe <path>`

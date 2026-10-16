@@ -256,7 +256,7 @@ fn correctly_rounded_densities() -> Vec<Option<f32>> {
 /// The decode after its `log10`, correctly rounded: the calibration and exponent in
 /// f32 as the decode writes them, the `10^` in f64.
 fn decode_from_density(d: f32, channel: usize, params: &DecodeParams) -> f32 {
-    let anchor = params.anchor.anchor(params.linearization);
+    let anchor = params.anchor_rule.anchor(params.linearization);
     let corrected = params.scale[channel] * d + params.offset[channel];
     10f64.powf(f64::from(params.linearization * (corrected - anchor))) as f32
 }
@@ -331,8 +331,8 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
             );
             // The second libm call, `powf`, at the exponent the decode forms from `d`.
             let corrected = params.scale[i % 3] * d + params.offset[i % 3];
-            let exponent =
-                params.linearization * (corrected - params.anchor.anchor(params.linearization));
+            let exponent = params.linearization
+                * (corrected - params.anchor_rule.anchor(params.linearization));
             let off = ulps_between(10f32.powf(exponent), decode_from_density(d, i % 3, &params));
             assert!(
                 off <= LIBM_MAX_ERROR_ULPS,
@@ -1270,7 +1270,7 @@ fn golden_look_tone_slope_is_correct_within_its_libm_window() {
     let (corrected, _) =
         scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
     let params = look_tone_slope_params();
-    assert_eq!(params.applied(), "contrast");
+    assert_eq!(params.applied(), "tone-slope");
     let out = look::apply(corrected, &params)
         .unwrap()
         .into_buffer()
@@ -1340,7 +1340,7 @@ fn golden_look_saturation_is_correct_within_its_libm_window() {
         scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
     let mut params = LookParams::off();
     params.section.saturation_slope = LOOK_SATURATION_SLOPE;
-    assert_eq!(params.applied(), "saturation");
+    assert_eq!(params.applied(), "saturation-slope");
     let out = look::apply(corrected, &params)
         .unwrap()
         .into_buffer()

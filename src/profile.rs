@@ -89,11 +89,11 @@ pub const NOTES: &[Note] = &[
     ),
     value(
         "reconstruction.linearization",
-        "--density-gamma",
+        "--linearization",
         "the decode's slope, > 0",
     ),
     value(
-        "reconstruction.anchor",
+        "reconstruction.anchor_rule",
         "--anchor-mid-offset",
         "mid-grey's density above the film base",
     ),
@@ -590,7 +590,7 @@ mod tests {
         let json = r#"{"meta":{"pipeline_version":10},"params":{"recipe_version":3,
             "look":{"contrast":1.2,"channel_grade":[1.0,1.0],
             "highlight_desaturation":{"strength":null}},
-            "reconstruction":{"anchor":{"mid-at-base-offset":0.62}},
+            "reconstruction":{"anchor_rule":{"mid-at-base-offset":0.62}},
             "fit_gamut":{},"output":{"display":{"range":"hdr"}},
             "odd":"a \"quoted\", {tricky} // string"}}"#;
         let text = render(json, &none);

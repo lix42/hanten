@@ -120,7 +120,7 @@ pub const DIFFUSE_WHITE: f32 = 1.0;
 /// calibration unless `scale` moves with it — `nf-calibration/neutrality-gate` measures
 /// the two together from bracketed neutrals, never one alone.
 ///
-/// Reachable as `--density-gamma`, a misnomer (recipe `reconstruction.linearization`). A current
+/// Reachable as `--linearization` (recipe `reconstruction.linearization`). A current
 /// pick, expected to move with `scale`.
 pub const LINEARIZATION: f32 = 1.8;
 
@@ -235,7 +235,7 @@ pub struct DecodeParams {
     /// tone slope, never this.
     pub linearization: f32,
     /// Which tone is pinned, and where.
-    pub anchor: AnchorRule,
+    pub anchor_rule: AnchorRule,
 }
 
 impl Default for DecodeParams {
@@ -244,7 +244,7 @@ impl Default for DecodeParams {
             scale: DENSITY_SCALE,
             offset: DENSITY_OFFSET,
             linearization: LINEARIZATION,
-            anchor: AnchorRule::MidAboveBase(MID_ABOVE_BASE),
+            anchor_rule: AnchorRule::MidAboveBase(MID_ABOVE_BASE),
         }
     }
 }
@@ -328,8 +328,8 @@ pub fn decode(
         FilmRgbImage::from_linear(image),
         DecodeReport {
             anchor,
-            anchor_rule: params.anchor.name(),
-            reads_reference: params.anchor.reads_reference(),
+            anchor_rule: params.anchor_rule.name(),
+            reads_reference: params.anchor_rule.reads_reference(),
             linearization,
             scale,
             offset,
@@ -409,11 +409,11 @@ impl DecodeParams {
         if !self.linearization.is_finite() || self.linearization <= 0.0 {
             return Err(DecodeFault::Linearization(self.linearization));
         }
-        let AnchorRule::MidAboveBase(d) = self.anchor;
+        let AnchorRule::MidAboveBase(d) = self.anchor_rule;
         if !d.is_finite() || d <= 0.0 {
             return Err(DecodeFault::MidAboveBase(d));
         }
-        let anchor = self.anchor.anchor(self.linearization);
+        let anchor = self.anchor_rule.anchor(self.linearization);
         if !anchor.is_finite() || !(self.linearization * anchor).is_finite() {
             return Err(DecodeFault::Anchor {
                 anchor,
@@ -598,7 +598,7 @@ mod tests {
         let (img, b) = (scan(), base());
         let a = decode(img.clone(), &b, &DecodeParams::default()).unwrap().0;
         let shifted = DecodeParams {
-            anchor: AnchorRule::MidAboveBase(MID_ABOVE_BASE + 0.1),
+            anchor_rule: AnchorRule::MidAboveBase(MID_ABOVE_BASE + 0.1),
             ..DecodeParams::default()
         };
         let c = decode(img, &b, &shifted).unwrap().0;
@@ -652,7 +652,7 @@ mod tests {
             ),
             (
                 DecodeParams {
-                    anchor: AnchorRule::MidAboveBase(2e38),
+                    anchor_rule: AnchorRule::MidAboveBase(2e38),
                     ..DecodeParams::default()
                 },
                 "the product",
@@ -721,7 +721,7 @@ mod tests {
                 scan(),
                 &base(),
                 &DecodeParams {
-                    anchor: AnchorRule::MidAboveBase(d),
+                    anchor_rule: AnchorRule::MidAboveBase(d),
                     ..DecodeParams::default()
                 },
             )

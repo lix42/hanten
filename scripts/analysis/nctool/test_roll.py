@@ -171,7 +171,7 @@ class TestConvert(unittest.TestCase):
         "recipe_version": 3,
         "calibration": {"film_base": None},
         "reconstruction": {"scale": [1.0, 0.84, 0.73], "linearization": 1.8,
-                           "anchor": {"mid-at-base-offset": .62}},
+                           "anchor_rule": {"mid-at-base-offset": .62}},
         "scene_correction": {"exposure": 0.0},
         "look": {"contrast": 1.0, "channel_grade": [1.0, 1.0]},
         "output": {"display": {}},

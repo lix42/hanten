@@ -44,7 +44,7 @@ are Hanten features not yet implemented in the CLI (§4).
 | 1. Placement | placement | `--placement` | always visible | three named choices |
 | 2. Taste | exposure, contrast, saturation, overall cast, tone cast | `--exposure`, `--contrast`, `--saturation`, `--white-balance`, `--channel-grade` | collapsed, easy to find | sliders and a colour control |
 | 3. Behaviour switches | highlight desaturation, lifts, midtone neutral, neutral balance, dark end, … | `--highlight-desaturation`, `--small-lift`, `--thin-lift`, `--midtone-neutral`, `--neutral-balance`, `--dark-target`, … | hidden deeper; meaning may change | on/off or a few named steps |
-| Not in the app | debug rendering, decode and calibration, film master | `--rendering` (always `default`), `--density-*`, `--anchor-mid-offset`, `--input-*` (as controls; the core may set them per camera file, `io/camera-scan-input`), `--film-master` (leaning) | — | — |
+| Not in the app | debug rendering, decode and calibration, film master | `--rendering` (always `default`), `--density-*`, `--linearization`, `--anchor-mid-offset`, `--input-*` (as controls; the core may set them per camera file, `io/camera-scan-input`), `--film-master` (leaning) | — | — |
 
 - Every app control maps to a flag and recipe key; not every flag gets a control. Output
   axes belong to the export dialog; operational flags (`--report`, `--telemetry`,

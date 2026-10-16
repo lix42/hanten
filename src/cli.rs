@@ -620,7 +620,7 @@ pub struct RollArgs {
     /// Measure mode: measure the roll first, as `hanten measure-roll` does over the same
     /// frames — its white balance, midtone line, white, dark end, exposure and clamps —
     /// then convert with the measurement layered after every `--params` recipe. The
-    /// decode, input and measure flags (`--density-gamma`, `--input-transfer`,
+    /// decode, input and measure flags (`--linearization`, `--input-transfer`,
     /// `--measure-inset`, …) apply to the measurement too.
     /// Needs a film base: `--unexposed <PATH|auto>` (which implies this flag), or a stated
     /// one (`--film-base`, a recipe's). The
@@ -851,8 +851,13 @@ pub struct DensityOverrides {
     /// The decode's slope: the film's linearization (recipe key
     /// `reconstruction.linearization`, default 1.8) — a calibration; how contrasty the
     /// picture is is `--contrast`.
-    #[arg(long)]
-    pub density_gamma: Option<f32>,
+    #[arg(long, value_name = "SLOPE")]
+    pub linearization: Option<f32>,
+    /// Renamed `--linearization` (it never set a gamma); hidden, kept only for the
+    /// migration error. Takes any value or none, though a bare one followed by a valued
+    /// flag still swallows that flag and hits clap's error.
+    #[arg(long = "density-gamma", hide = true, value_name = "SLOPE", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub removed_density_gamma: Option<String>,
 }
 
 /// The curve selector, the `characteristic` curve's stock and the named bundles that
@@ -928,7 +933,7 @@ pub struct RemovedSigmoidFlags {
     pub sigmoid_white_at_d_max: bool,
 }
 
-/// The fixed decode's anchor override (recipe key `reconstruction.anchor`,
+/// The fixed decode's anchor override (recipe key `reconstruction.anchor_rule`,
 /// `algo::fixed::AnchorRule`).
 #[derive(Args, Debug, Default)]
 pub struct AnchorOverrides {
@@ -1231,7 +1236,7 @@ pub struct LookOverrides {
     pub highlight_desaturation_start: Option<f32>,
     /// Highlight desaturation's chroma band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
-    /// `--density-gamma` times the look's saturation slope (recipe key
+    /// `--linearization` times the look's saturation slope (recipe key
     /// `look.highlight_desaturation.band`, default `0.015,0.025`).
     #[arg(
         long = "highlight-desaturation-band",
@@ -3208,6 +3213,20 @@ fn reject_deprecated_input_flags(o: &InputOverrides) -> Result<()> {
 /// recipe-side mirror is [`recipe::check_body`].
 fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool, on_roll: bool) -> Result<()> {
     reject_new_flow(args.new_flow)?;
+    if let Some(value) = &args.density.removed_density_gamma {
+        // Echo only a slope `--linearization` accepts: a bare flag may have swallowed
+        // the next flag.
+        let value = if value.parse::<f32>().is_ok_and(|v| v.is_finite() && v > 0.0) {
+            value
+        } else {
+            "SLOPE"
+        };
+        return Err(NcError::Usage(format!(
+            "--density-gamma was renamed to --linearization (recipe \
+             `reconstruction.linearization`): it sets the decode's linearization, not a \
+             gamma. There is no alias; pass --linearization {value}."
+        )));
+    }
     if let Some(name) = &args.algorithm {
         return Err(NcError::Usage(format!(
             "--algorithm {name} was removed: there is one fixed decode, so no algorithm to \
@@ -3533,7 +3552,7 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
         (
             "--sigmoid-contrast",
             flags.sigmoid_contrast.is_some(),
-            "the decode's slope is `--density-gamma`, the film's linearization, and \
+            "the decode's slope is `--linearization`, the film's linearization, and \
              the picture's contrast is `--contrast`",
         ),
         ("--sigmoid-toe", flags.sigmoid_toe.is_some(), KNEE),
@@ -3592,7 +3611,7 @@ fn removed_dmax_message(flag: &str, what: &str) -> String {
         "{flag} was removed: it {what}. The roll reference density and the placements \
          that read it are gone. Drop the flag: the anchor is placed from the film base, \
          mid-grey `--anchor-mid-offset D` density above it (default 0.62, slope \
-         `--density-gamma`)."
+         `--linearization`)."
     )
 }
 
@@ -5910,9 +5929,9 @@ const ROLL_WIDE: &[RollWide] = &[
         },
     },
     RollWide {
-        key: "reconstruction.anchor",
+        key: "reconstruction.anchor_rule",
         breaks: DECODED_APART,
-        compare: |f, r| changed(&f.reconstruction.anchor, &r.reconstruction.anchor),
+        compare: |f, r| changed(&f.reconstruction.anchor_rule, &r.reconstruction.anchor_rule),
     },
     RollWide {
         key: "rendering",
@@ -10562,7 +10581,7 @@ mod tests {
         removed(&remedy).unwrap();
         let r = merged(base_recipe(), &remedy);
         assert_eq!(
-            r.reconstruction.anchor,
+            r.reconstruction.anchor_rule,
             crate::algo::fixed::AnchorRule::MidAboveBase(0.5)
         );
     }
@@ -12178,8 +12197,8 @@ mod tests {
             ("reconstruction.linearization", |r| {
                 r.reconstruction.linearization = 1.7
             }),
-            ("reconstruction.anchor", |r| {
-                r.reconstruction.anchor = fixed::AnchorRule::MidAboveBase(0.5)
+            ("reconstruction.anchor_rule", |r| {
+                r.reconstruction.anchor_rule = fixed::AnchorRule::MidAboveBase(0.5)
             }),
             ("rendering", |r| {
                 r.rendering = crate::rendering::Rendering::Direct

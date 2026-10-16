@@ -84,9 +84,15 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `--dark-floor 4.5`); the target's figures are from its review of the 2026-10-12
 > Gold200 roll. At `nf-look/midtone-contrast-colour` (`pipeline_version` 17 unchanged)
 > §7's `--contrast 1.3 --saturation 1.15` pairing was re-run against the binary (the
-> saturation slope is the roll's × 1.15 × 1.15, the tone slope the placement's × 1.3). The staleness
-> signal is `pipeline_version`: if `hanten --version` reports a different one, treat
-> this document as suspect and re-verify.
+> saturation slope is the roll's × 1.15 × 1.15, the tone slope the placement's × 1.3).
+> At `core/rename-decode-look-misnomers` (`pipeline_version` 17 unchanged;
+> `--linearization`, `reconstruction.anchor_rule`, the look's `tone-slope` /
+> `saturation-slope`) §5's default recipe and a `measure-roll --out` file's
+> `reconstruction`, §6's decode table and the `--anchor-mid-fraction`,
+> `reconstruction.contrast` and old-key refusals, and §7's stage list and look report
+> were re-run against the binary. The staleness signal is `pipeline_version`: if
+> `hanten --version` reports a different one, treat this document as suspect and
+> re-verify.
 >
 > **Before `pipeline_version` 8** there was a second rendering chain, chosen by
 > **output presets** (`--output-preset`: `gain-map-hdr`, `display-p3`, `hdr-pq`, …)
@@ -303,7 +309,7 @@ abridged):
     },
     "reconstruction": {
       "scale": [1.0, 0.84, 0.73], "offset": [0.0, 0.0, 0.0],
-      "linearization": 1.8, "anchor": { "mid-at-base-offset": 0.62 }
+      "linearization": 1.8, "anchor_rule": { "mid-at-base-offset": 0.62 }
     }
   }
 }
@@ -605,10 +611,10 @@ hanten roll frames/*.tif --params base.json --measure-roll --leader leader.tif -
 The images are byte-identical to `measure-roll … --out roll.json` then `roll …
 --params roll.json` over the same frames and layers, with the same style flags
 (checked on the real 2026-09-18 Gold 200 roll, both forms). The decode and input flags
-(`--density-gamma`, `--input-transfer`, …) and `--measure-inset` apply to the
+(`--linearization`, `--input-transfer`, …) and `--measure-inset` apply to the
 measurement too, so by hand `measure-roll` must measure under them: pass it
 `--measure-inset` directly, and state the rest in a `--params` layer it reads
-(`reconstruction.linearization` for `--density-gamma`). The measurement is layered after every
+(`reconstruction.linearization` for `--linearization`). The measurement is layered after every
 `--params` recipe, as `roll.json` would be, and the flags apply over it. The report is
 `roll`'s, with a `measurement` object holding what `measure-roll`'s report would (the
 `unexposed`, `content_base` and `references` evidence, each frame's white, the warnings).
@@ -691,7 +697,7 @@ and the measuring commands write parts of it):
       "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
       "linearization": 1.8,
-      "anchor": { "mid-at-base-offset": 0.62 }
+      "anchor_rule": { "mid-at-base-offset": 0.62 }
     },
     "rendering": "default",
     "scene_correction": {
@@ -1010,22 +1016,25 @@ where a picture is made contrasty or warm.
 |---|---|---|
 | `--density-scale R,G,B` | `scale` | per-channel density scale — **default `1,0.84,0.73`**, see below |
 | `--density-offset R,G,B` | `offset` | per-channel density offset (orange-mask compensation), default `0,0,0` |
-| `--density-gamma G` | `linearization` | the film's linearization, default `1.8` |
-| `--anchor-mid-offset D` | `anchor` = `{"mid-at-base-offset": D}` | where mid-grey sits above the base, default `0.62` |
+| `--linearization SLOPE` | `linearization` | the film's linearization, default `1.8` |
+| `--anchor-mid-offset D` | `anchor_rule` = `{"mid-at-base-offset": D}` | where mid-grey sits above the base, default `0.62` |
 
 The report states what the decode ran, in `chain.decode` (`anchor`,
 `anchor_rule`, `reads_reference` — always `false`, see Anchoring below — `linearization`, `scale`,
-`offset`).
+`offset`). There `anchor` is the density the rule derives, not the rule. The recipe's
+earlier `reconstruction.anchor` is refused at every value, naming `anchor_rule`: rename
+the key and keep its value.
 
 ### The decode's slope and the picture's contrast are two knobs
 
-`--density-gamma` is the film's **linearization** — undoing the negative's ≈0.55
-density per decade — and the look's slope (§7) is how contrasty the picture is. With no
-roll white, the whole slope is `1.8 × 1.414 ≈ 2.54`, steeper than the single slope of
-2.0 that earlier builds bundled the two into. To change how contrasty a picture is, change
-`--contrast`; `--density-gamma` is a calibration and moves with `--density-scale`,
-never alone. A recipe stating the pre-split `reconstruction.contrast` is refused with
-the value that keeps it:
+`--linearization` is the film's **linearization** — undoing the negative's ≈0.55
+density per decade — and the look's slope (§7) is how contrasty the picture is. (Its
+earlier name, `--density-gamma`, is refused, naming `--linearization`: it was never a
+gamma.) With no roll white, the whole slope is `1.8 × 1.414 ≈ 2.54`, steeper than the
+single slope of 2.0 that earlier builds bundled the two into. To change how contrasty a
+picture is, change `--contrast`; `--linearization` is a calibration and moves with
+`--density-scale`, never alone. A recipe stating the pre-split `reconstruction.contrast`
+is refused with the value that keeps it:
 
 ```
 usage: recipe old.json: `reconstruction.contrast` split in two: the decode's slope is
@@ -1054,7 +1063,7 @@ usage: --anchor-mid-fraction was removed: it pinned mid-grey at a fraction of th
        reference density. The roll reference density and the placements that read it
        are gone. Drop the flag: the anchor is placed from the film base, mid-grey
        `--anchor-mid-offset D` density above it (default 0.62, slope
-       `--density-gamma`).
+       `--linearization`).
 ```
 
 (`--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max`, `--anchor-white-at-reference`,
@@ -1128,13 +1137,16 @@ identity), and the report lists what each applied in `chain.stages`:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stages[].applied]'
-["identity","contrast+saturation+highlight-desaturation","reinhard-peak-lifted-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
+["identity","tone-slope+saturation-slope+highlight-desaturation","reinhard-peak-lifted-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
 ```
 
 Scene correction reports what ran joined by `+`, in order — `midtone-neutral`,
 `tilt`, `white-balance`, `exposure` (e.g. `"midtone-neutral+white-balance+exposure"`) — or
-`"identity"`; the look the controls that ran joined by `+`, or
-`"identity"`; fit range its operator and the dark end's curve; fit gamut the change of
+`"identity"`; the look what ran joined by `+` — `tone-slope`, `saturation-slope`,
+`channel-grade`, `highlight-desaturation` — or `"identity"`, where a slope stage runs
+when its value (`chain.look.slope`, `chain.look.saturation_slope`) is not 1, so the
+default reports both at `--contrast 1` (earlier builds wrote `contrast` and
+`saturation`); fit range its operator and the dark end's curve; fit gamut the change of
 primaries and the gamut map, named for the destination's gamut. `--film-master` runs
 none of them (§8).
 
@@ -1304,7 +1316,7 @@ grade is off.
 
 - **It only touches near-neutral highlights.** Its strength rises from `start_stops`
   up to diffuse white, and falls to nothing across the band: a pixel whose channels
-  differ by more than `S1` (measured as `log10(max/min)` over `--density-gamma` × the
+  differ by more than `S1` (measured as `log10(max/min)` over `--linearization` × the
   saturation slope, so the band means the same on a flat roll and a saturated one) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
 - **It assumes the roll's white balance.** "Near-neutral" means near R = G = B, which
   is near white only after `measure-roll`'s gains have removed the roll's cast.
@@ -1356,7 +1368,7 @@ grade is off.
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
       | jq -c '{look: .chain.look, stage: .chain.stages[1]}'
-  {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","saturation":1.0,"saturation_base_slope":1.6257261,"saturation_base_from":"fallback","slope":1.413675,"saturation_slope":1.6257261,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+saturation+highlight-desaturation"}}
+  {"look":{"contrast":1.0,"base_slope":1.413675,"base_from":"fallback","saturation":1.0,"saturation_base_slope":1.6257261,"saturation_base_from":"fallback","slope":1.413675,"saturation_slope":1.6257261,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"tone-slope+saturation-slope+highlight-desaturation"}}
   ```
 
   `base_from` is `roll`, `placement` (the hybrid's or `frame`'s slope), `thin`, `fallback`
