@@ -28,7 +28,7 @@ defaults should move — and move them only with that evidence, recorded either 
 - Does the midtone line help on any roll, or only on the pictures it was fitted on
   (`nf-scene-correction/midtone-neutral-fit`)?
 - With `stock-neutral-offset` in place, should a calibrated stock render with the roll
-  colour correction off (`--neutral-balance off`) by default, keeping the illuminant cast?
+  colour correction off (`--colour-correction off`) by default, keeping the illuminant cast?
 - The chart frames judge greys, not pictures: any change also needs a review of the
   rolls' pictures by eye.
 

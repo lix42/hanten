@@ -12,7 +12,7 @@ summary: remove the part of the residual cast fixed per stock, measured from cha
 Remove the part of the residual cast that is the stock's own, the same on every roll of
 it, so that what the roll's (or a frame's) white balance still removes is the light. A
 declared stock would then render neutral greys with the roll colour correction off
-(`--neutral-balance off`), and keeping the illuminant cast becomes a real choice.
+(`--colour-correction off`), and keeping the illuminant cast becomes a real choice.
 
 ## Known
 

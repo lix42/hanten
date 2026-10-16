@@ -70,7 +70,7 @@ def expand_grid(grid: dict) -> dict[str, dict]:
             common = ["--placement", p, "--highlight-desaturation", hd]
             if grid.get("balance_off") and forms:
                 configs[f"{p}.hd{hd}.wb-off"] = {
-                    "recipe": forms[0], "args": ["--neutral-balance", "off", *common]}
+                    "recipe": forms[0], "args": ["--colour-correction", "off", *common]}
             for form in forms:
                 for mn in grid.get("midtone_neutral", []):
                     configs[f"{p}.hd{hd}.{form}.mn-{mn}"] = {

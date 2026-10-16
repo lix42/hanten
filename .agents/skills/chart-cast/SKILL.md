@@ -43,7 +43,7 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts cast rend
 ```
 
 The default grid (`nctool.cast.DEFAULT_GRID`) is every placement × highlight
-desaturation 0.8 / 0 × roll colour correction off (`--neutral-balance off`), or gain /
+desaturation 0.8 / 0 × roll colour correction off (`--colour-correction off`), or gain /
 tilt with the midtone line on, off, red only, blue only — plus `--rendering direct`: 55
 configurations, about 50 s for seven frames (`--jobs 6`, an 11-core machine). Once the roll is
 measured it clears `<work>`'s earlier renders (it refuses a folder with renders it did
@@ -52,7 +52,7 @@ runs, e.g. a decode offset:
 
 ```json
 {"extra": {"hybrid.offset.wb-off": {"recipe": "gain",
-  "args": ["--density-offset", "0,0,0.0447", "--neutral-balance", "off"]}}}
+  "args": ["--density-offset", "0,0,0.0447", "--colour-correction", "off"]}}}
 ```
 
 Ask the user before adding axes; the grid already answers the standing questions.

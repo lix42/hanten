@@ -43,7 +43,7 @@ Creative's 8 neutrals). Overcast, incident meter at the card; self-developed (Ci
 Cs41, an early roll of the kit); Plustek 8300i, SilverFast with automatic adjustments
 locked. Conditions in full: the manifest's roll `conditions`.
 **Build**: measured at `c40951c` (pipeline 17), reproduced exactly at `ce5a9e5` (render
-fingerprint `f51d3397c7364160`) and at `202988f`. Roll measured on its 29 pictures; the
+fingerprint `f51d3397c7364160`) and on `248190f`. Roll measured on its 29 pictures; the
 chart frames' per-frame placement entries (tones, white stops, small lift) taken from a
 measurement that included them, whose white-balance gains differ by up to 3.5 %. Outside
 exports: NLP, SilverFast and SilverFast CCR, Adobe RGB, at the scan's size.
@@ -52,7 +52,7 @@ exports: NLP, SilverFast and SilverFast CCR, Adobe RGB, at the scan's size.
 ### Grey patches (L\* 15–95, all seven frames)
 
 Hybrid placement, highlight desaturation 0.8 unless named. "Roll colour correction off" is
-`--neutral-balance off` (no roll white balance, no midtone line).
+`--colour-correction off` (no roll white balance, no midtone line).
 
 | Configuration | C\* | a\* | b\* | dark b\* | mid b\* | light b\* | dark a\* | mid a\* | light a\* |
 |---|---|---|---|---|---|---|---|---|---|

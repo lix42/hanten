@@ -65,7 +65,7 @@ class TestGrid(unittest.TestCase):
         self.assertEqual(c["recipe"], "tilt")
         self.assertEqual(c["args"], ["--midtone-neutral", "red", "--placement", "hybrid",
                                      "--highlight-desaturation", "0.8"])
-        self.assertIn("--neutral-balance", configs["frame.hd0.wb-off"]["args"])
+        self.assertIn("--colour-correction", configs["frame.hd0.wb-off"]["args"])
 
     def test_extra_configurations_join_and_may_not_repeat_a_name(self):
         grid = {**cast.DEFAULT_GRID, "placement": ["hybrid"], "highlight_desaturation": ["0.8"],
@@ -76,7 +76,7 @@ class TestGrid(unittest.TestCase):
             cast.expand_grid(grid)
 
     def test_graft_takes_the_chart_frames_whole_entries_and_leaves_the_input_alone(self):
-        chart_entry = {"tones": "chart", "white_stops": 1.2, "exposure": 0.3}
+        chart_entry = {"tones": "chart", "white_stops": 1.2, "frame_exposure": 0.3}
         mine = {"params": {"roll": {"white_balance": [1, 1, 1.25],
                                     "frames": {"1.tif": {"tones": "pic"}}}}}
         both = {"params": {"roll": {"white_balance": [0.97, 1, 1.21],
