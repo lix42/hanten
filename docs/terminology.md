@@ -194,7 +194,7 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 | **roll white balance** | green-anchored gains `[g/r, 1, g/b]` equalising the pooled per-channel p99, as a flat *gain* or a *tilt* ramping from the film base to the tilt white. The gains move ACEScg luminance too | public | `--roll-white-balance`, `--white-balance-form` |
 | **stated white balance** | the user's gains, multiplied with the roll's | public | `--white-balance` |
 | **midtone line** | the development cast as a function of scene stop, `log2(c/g) = slope·s + intercept`, corrected on R and B with ACEScg luminance restored, limited to near-neutrals by the tint gate. "Midtone neutral" names the switch | public | `--roll-midtone-line`, `--midtone-neutral` |
-| **roll colour correction** | the roll white balance and the midtone line together | internal | — |
+| **roll colour correction** | the roll white balance and the midtone line together | public | `--colour-correction`, `roll.colour_correction` (its switch) |
 | **cast** | an unwanted colour shift, always qualified: *roll cast*, *development cast*, *residual cast*. An *illuminant cast* is a scene fact and is kept | internal | — |
 
 ### Preferences — the look's colour
@@ -218,8 +218,7 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 
 ### Overloaded colour words
 
-- **neutral** — R=G=B in a named space. Not identity values, not "neutral gain"; the
-  `--neutral-balance` switch is a misnomer for the roll colour correction.
+- **neutral** — R=G=B in a named space. Not identity values, not "neutral gain".
 - **saturation** — colourfulness. Density near the film's maximum is **film
   saturation**, always with "film".
 - **balance** — "white balance" means the roll and stated gains only. The film base
@@ -234,7 +233,7 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 
 | Word | Meanings | Reading |
 |---|---|---|
-| **tilt** | the white-balance form `tilt` (a tone-dependent gain); `area_uniformity.tilt` (a spatial density gradient) | "WB tilt" vs "area tilt" |
+| **tilt** | the white-balance form `tilt` (a tone-dependent gain). A spatial density change across an area is a **gradient** (`area_uniformity.gradient`) | "tilt" is the WB form only |
 | **spread** | region spread `(p97−p10)/p97`; area spread `(p90−p10)/p50` (a coarse "is this a picture?" guard, not a uniformity verdict); `spread_stops` (p95−p5 luminance); `spread_density` | always qualified |
 | **grade** | `channel_grade`; the graded image | a confidence level is a **tier** |
 | **range** | the `--range` axis; the fit range stage; CICP full range | "dynamic range" or "fit range" in prose |
@@ -244,16 +243,7 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 
 ## Known public misnomers
 
-Each changes the scripting contract, so it waits for a migration
-(`core/rename-roll-report-misnomers`). Prose names the right concept and quotes
-the public name once. Internal identifiers that contradict this doc are
-`core/internal-term-renames`.
-
-| | Public name | What it really is |
-|---|---|---|
-| P6 | `roll.frames.*.exposure` | the small lift, `roll.frame_exposure` |
-| P7 | `slope_bound` | an enum in `frames[].hybrid`, a number in `thin_lift` |
-| P10 | `area_uniformity.tilt` | collides with the WB form `tilt` |
-| P11 | `--neutral-balance`, `roll.neutral_balance` | switches the roll colour correction |
-| P12 | `saturation_margin_stops` | film saturation, beside `look.saturation` (colourfulness) |
-| P13 | `input_color`, "color-consistent", `gray-world` | American spellings |
+None is open. A public name that breaks these rules is listed here with the task that
+will migrate it, since each changes the scripting contract; until then prose names the
+right concept and quotes the public name once. Internal identifiers that contradict this
+doc are `core/internal-term-renames`.

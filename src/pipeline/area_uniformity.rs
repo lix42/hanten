@@ -4,7 +4,7 @@
 //! spatial structure. Splitting the area into [`TILES`]×[`TILES`] tiles separates them:
 //! each tile's p05–p95 is grain (*within*), and the tile medians carry the structure,
 //! split again into **outlier tiles** (a local defect: dust, a leak, a holder sliver)
-//! and the **tilt** of a least-squares plane through the rest (a smooth gradient).
+//! and the **gradient**, a least-squares plane through the rest.
 //!
 //! Everything is in **density** (`-log10` of the transmission), so a figure reads the
 //! same on a thin scan and a dense one. Diagnostic only: nothing here moves the base.
@@ -42,11 +42,12 @@ static BIN_OF: LazyLock<Vec<u16>> = LazyLock::new(|| {
 /// The tile percentiles bounding *within*.
 const WITHIN_PERCENTILES: [f32; 2] = [0.05, 0.95];
 
-/// Largest tilt, `|left → right| + |top → bottom|` on any channel, of a uniform area.
+/// Largest gradient, `|left → right| + |top → bottom|` on any channel, of a uniform area.
 ///
 /// Measured 2026-10-13 over `../nc-assets` (the `probe` below): the 12 unexposed frames
-/// tilt at most 0.030 (0.10 stops); leaders 0.015-0.152 — Portra 160's 0.114, blue left
-/// to right as `docs/reports/sigmoid-reference-baseline.md` found, Gold 200's 0.027.
+/// have a gradient of at most 0.030 (0.10 stops); leaders 0.015-0.152 — Portra 160's
+/// 0.114, blue left to right as `docs/reports/sigmoid-reference-baseline.md` found, Gold
+/// 200's 0.027.
 /// Set above the unexposed worst with headroom, and below Portra 160's leader.
 pub const MAX_TILT: f32 = 0.05;
 
@@ -58,7 +59,7 @@ pub const MAX_TILT: f32 = 0.05;
 pub const MAX_TILE_OFFSET: f32 = 0.03;
 
 /// Most tiles set aside as outliers. More than this is not a local defect, and is
-/// left in the plane to show as tilt.
+/// left in the plane to show as gradient.
 pub const MAX_OUTLIER_TILES: usize = 4;
 
 /// The tiled decomposition of one area, per channel `[r, g, b]`, in density.
@@ -73,7 +74,7 @@ pub struct AreaUniformity {
     /// The plane through the tile medians, outlier tiles left out: its change
     /// `[left → right, top → bottom]` from edge to edge of the area. Positive is
     /// denser toward the right or bottom.
-    pub tilt: [[f32; 2]; 3],
+    pub gradient: [[f32; 2]; 3],
     /// Tiles set aside, in that order, each more than [`MAX_TILE_OFFSET`] off the plane
     /// through the tiles still kept when it was.
     pub outlier_tiles: Vec<OutlierTile>,
@@ -105,19 +106,19 @@ impl OutlierTile {
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Uniform,
-    /// The tilt exceeds [`MAX_TILT`] on some channel.
+    /// The gradient exceeds [`MAX_TILT`] on some channel.
     Sloped,
     /// Some tile is more than [`MAX_TILE_OFFSET`] off the plane.
     OutlierTiles,
     SlopedWithOutlierTiles,
 }
 
-/// The warnings an area's verdict raises: one for a tilt, one for the outlier tiles.
+/// The warnings an area's verdict raises: one for a gradient, one for the outlier tiles.
 pub fn warnings(u: &AreaUniformity) -> Vec<String> {
     let mut out = Vec::new();
     if matches!(u.verdict, Verdict::Sloped | Verdict::SlopedWithOutlierTiles) {
-        let c = worst_channel(u.tilt.map(|[x, y]| x.abs() + y.abs()));
-        let [x, y] = u.tilt[c];
+        let c = worst_channel(u.gradient.map(|[x, y]| x.abs() + y.abs()));
+        let [x, y] = u.gradient[c];
         out.push(format!(
             "the effective area is sloped: its {} density changes by {x:+.3} from the left \
              edge to the right and {y:+.3} from the top to the bottom (more than {MAX_TILT} \
@@ -242,12 +243,12 @@ fn at(t: usize) -> (f64, f64) {
     )
 }
 
-/// Split the tile medians (row-major) into outlier tiles and a tilt.
+/// Split the tile medians (row-major) into outlier tiles and a gradient.
 ///
 /// Each round sets aside the tile furthest, on any channel, from the plane through the
 /// other kept tiles, while that distance exceeds [`MAX_TILE_OFFSET`] — judged against a
 /// plane it is not in, so it cannot drag the plane toward itself, and up to
-/// [`MAX_OUTLIER_TILES`]. The tilt is then the plane through the tiles kept.
+/// [`MAX_OUTLIER_TILES`]. The gradient is then the plane through the tiles kept.
 fn decompose(medians: &[[f32; 3]; TILE_COUNT], within: [f32; 3]) -> AreaUniformity {
     let value = |c: usize| move |t: usize| medians[t][c] as f64;
     let mut kept: Vec<usize> = (0..TILE_COUNT).collect();
@@ -281,11 +282,11 @@ fn decompose(medians: &[[f32; 3]; TILE_COUNT], within: [f32; 3]) -> AreaUniformi
     }
 
     let span = TILES as f64;
-    let mut tilt = [[0.0f32; 2]; 3];
+    let mut gradient = [[0.0f32; 2]; 3];
     let mut between = [0.0f32; 3];
     for c in 0..3 {
         let [_, bx, by] = coefficients(&kept, value(c));
-        tilt[c] = [(bx * span) as f32, (by * span) as f32];
+        gradient[c] = [(bx * span) as f32, (by * span) as f32];
         let (lo, hi) = medians
             .iter()
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), m| {
@@ -293,7 +294,7 @@ fn decompose(medians: &[[f32; 3]; TILE_COUNT], within: [f32; 3]) -> AreaUniformi
             });
         between[c] = hi - lo;
     }
-    let sloped = tilt.iter().any(|[x, y]| x.abs() + y.abs() > MAX_TILT);
+    let sloped = gradient.iter().any(|[x, y]| x.abs() + y.abs() > MAX_TILT);
     let verdict = match (sloped, !outlier_tiles.is_empty()) {
         (false, false) => Verdict::Uniform,
         (true, false) => Verdict::Sloped,
@@ -304,7 +305,7 @@ fn decompose(medians: &[[f32; 3]; TILE_COUNT], within: [f32; 3]) -> AreaUniformi
         tiles: [TILES, TILES],
         within,
         between,
-        tilt,
+        gradient,
         outlier_tiles,
         verdict,
     }
@@ -428,7 +429,7 @@ mod tests {
     fn a_smooth_ramp_is_tilt_not_grain() {
         let u = measure_all(&frame(200, 200, |x, _| 0.2 * x as f32 / 200.0));
         for c in 0..3 {
-            let [lr, tb] = u.tilt[c];
+            let [lr, tb] = u.gradient[c];
             assert!((lr - 0.2).abs() < 0.003, "edge to edge: {u:?}");
             assert!(tb.abs() < 0.002, "{u:?}");
             assert!(u.within[c] < 0.05, "{u:?}");
@@ -451,7 +452,7 @@ mod tests {
         assert_eq!(located(&u), [(2, 1)], "{u:?}");
         for c in 0..3 {
             assert!((u.outlier_tiles[0].offset[c] - 0.1).abs() < 0.005, "{u:?}");
-            assert!(u.tilt[c].iter().all(|t| t.abs() < 0.005), "{u:?}");
+            assert!(u.gradient[c].iter().all(|t| t.abs() < 0.005), "{u:?}");
         }
         assert_eq!(u.verdict, Verdict::OutlierTiles);
         let w = warnings(&u);
@@ -469,7 +470,7 @@ mod tests {
         let mut tiles = located(&u);
         tiles.sort();
         assert_eq!(tiles, [(0, 0), (1, 0)], "{u:?}");
-        assert!(u.tilt.iter().flatten().all(|t| t.abs() < 1e-3), "{u:?}");
+        assert!(u.gradient.iter().flatten().all(|t| t.abs() < 1e-3), "{u:?}");
         assert_eq!(u.verdict, Verdict::OutlierTiles);
         assert!(warnings(&u)[0].contains("--measure-inset"), "an edge tile");
     }
@@ -488,7 +489,7 @@ mod tests {
         let u = measure_all(&img);
         assert_eq!(located(&u), [(0, 0), (3, 2)], "{u:?}");
         assert!((u.outlier_tiles[1].offset[2] - 0.05).abs() < 0.003, "{u:?}");
-        assert!(u.tilt.iter().flatten().all(|t| t.abs() < 1e-3), "{u:?}");
+        assert!(u.gradient.iter().flatten().all(|t| t.abs() < 1e-3), "{u:?}");
     }
 
     #[test]
@@ -497,7 +498,7 @@ mod tests {
             0.2 * y as f32 / 200.0 + in_tile(x, y, (0, 0), -0.1)
         }));
         assert_eq!(located(&u), [(0, 0)], "{u:?}");
-        assert!((u.tilt[0][1] - 0.2).abs() < 0.003, "{u:?}");
+        assert!((u.gradient[0][1] - 0.2).abs() < 0.003, "{u:?}");
         assert_eq!(u.verdict, Verdict::SlopedWithOutlierTiles);
         assert_eq!(warnings(&u).len(), 2);
     }
@@ -576,14 +577,14 @@ mod probe {
                 let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
                 let area = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET).unwrap();
                 let u = measure(&scan.image, area.region).unwrap().unwrap();
-                let t = u.tilt;
+                let t = u.gradient;
                 let outliers: Vec<String> = u
                     .outlier_tiles
                     .iter()
                     .map(|o| format!("({},{}) {}", o.column, o.row, f3(o.offset)))
                     .collect();
                 println!(
-                    "{roll} {role:9} within {}  between {}  tilt {} (lr {:+.4}/{:+.4}/{:+.4} \
+                    "{roll} {role:9} within {}  between {}  gradient {} (lr {:+.4}/{:+.4}/{:+.4} \
                      tb {:+.4}/{:+.4}/{:+.4})  outliers [{}]",
                     f3(u.within),
                     f3(u.between),

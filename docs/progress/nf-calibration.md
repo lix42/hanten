@@ -63,7 +63,7 @@ fewer frames qualify (small 101 → 45, thin 14 → 4 of 178). Exposure groups w
 **`frame-level-trim` is done (2026-10-01): a low-key frame gets a small lift** on top of
 the roll's exposure, 0 to +0.3 EV, keyed on where its white renders after that exposure;
 bright frames are never darkened. `measure-roll` writes it as a **delta** in
-`roll.frames."<file>".exposure`, which `convert`/`roll` move into `roll.frame_exposure`.
+`roll.frames."<file>".frame_exposure`, which `convert`/`roll` move into `roll.frame_exposure`.
 On by default; off at measurement (`--no-small-lift`) or at render (`--small-lift off`,
 `roll.small_lift`, `null` = on) without re-measuring (`taste-vs-quality` renamed the
 switches). Review: the lift was better on 72 of

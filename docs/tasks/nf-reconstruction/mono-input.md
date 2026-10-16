@@ -34,7 +34,7 @@ What is decided (`mono.md`):
   f32 ULP of each other.
 - **Refused on mono input:** a white balance or midtone neutral that would apply, and a
   non-identity `channel_grade`. The rule reads the resolved correction, so gains a
-  recipe keeps behind `roll.neutral_balance off` are not refused. A roll measurement
+  recipe keeps behind `roll.colour_correction off` are not refused. A roll measurement
   over mono input writes no white-balance gains and no midtone line.
 - **Output** stays three channels. A grayscale encode is a follow-up.
 

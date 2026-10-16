@@ -1275,6 +1275,9 @@ fn measure_base_reports_the_area_tiling_only_for_the_effective_area() {
     // The fixture is a picture: a gradient and local structure, both said.
     assert_eq!(u["verdict"], "sloped_with_outlier_tiles", "{u}");
     assert!(!u["outlier_tiles"].as_array().unwrap().is_empty(), "{u}");
+    // The plane is the `gradient`; `tilt` is the white-balance form's word.
+    assert_eq!(u["gradient"].as_array().map(Vec::len), Some(3), "{u}");
+    assert!(u.get("tilt").is_none(), "{u}");
     let warned = |what: &str| {
         report["warnings"]
             .as_array()
@@ -10404,7 +10407,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(written["roll"]["dark_stops"], report["white"]["dark_stops"]);
     assert_eq!(written["roll"]["exposure"], report["exposure"]["ev"]);
     assert_eq!(
-        written["roll"]["frames"]["hdr-48bit.tif"]["exposure"], report["frames"][0]["lift_ev"],
+        written["roll"]["frames"]["hdr-48bit.tif"]["frame_exposure"],
+        report["frames"][0]["lift_ev"],
         "{written}"
     );
     assert!(
@@ -11311,6 +11315,20 @@ fn measure_roll_keeps_a_fully_exposed_frame_out_of_the_white() {
     let clean = gains(&[frame, other, "--leader", leader]);
     let guarded = gains(&[frame, other, blown, "--leader", leader]);
     let unguarded = gains(&[frame, other, blown]);
+    // The leader's margin is film saturation's, not `look.saturation`'s; without a leader
+    // there is no check, and no margin.
+    let rule = |r: &serde_json::Value| r["white"]["rule"].clone();
+    assert_eq!(rule(&clean)["film_saturation_margin_stops"], 0.5, "{clean}");
+    assert!(
+        rule(&clean).get("saturation_margin_stops").is_none(),
+        "{clean}"
+    );
+    assert!(
+        rule(&unguarded)
+            .get("film_saturation_margin_stops")
+            .is_none(),
+        "{unguarded}"
+    );
     assert_eq!(
         guarded["white_balance"]["gains"], clean["white_balance"]["gains"],
         "{guarded}"
@@ -11658,7 +11676,7 @@ fn midtone_neutral_red_or_blue_keeps_one_term_of_the_line() {
         recipe,
         "-o",
         tmp.path("refused.tiff").to_str().unwrap(),
-        "--neutral-balance",
+        "--colour-correction",
         "off",
         "--midtone-neutral",
         "blue",
@@ -11666,7 +11684,7 @@ fn midtone_neutral_red_or_blue_keeps_one_term_of_the_line() {
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains("--midtone-neutral blue asks for the roll's midtone line")
-            && err.contains("drop --midtone-neutral blue, or drop --neutral-balance off")
+            && err.contains("drop --midtone-neutral blue, or drop --colour-correction off")
             && !err.contains("--midtone-neutral on"),
         "{err}"
     );
@@ -11768,7 +11786,10 @@ fn measure_roll_writes_a_tilt_that_convert_applies_and_switches() {
 
     // Off at render takes the tilt with the gains: either form then renders the same.
     let tilt = recipe.to_str().unwrap();
-    let (off_report, off_px) = convert("off.tiff", &["--params", tilt, "--neutral-balance", "off"]);
+    let (off_report, off_px) = convert(
+        "off.tiff",
+        &["--params", tilt, "--colour-correction", "off"],
+    );
     assert!(
         off_report["chain"]["scene_correction"]
             .get("roll_tilt")
@@ -11782,7 +11803,7 @@ fn measure_roll_writes_a_tilt_that_convert_applies_and_switches() {
             tilt,
             "--white-balance-form",
             "gain",
-            "--neutral-balance",
+            "--colour-correction",
             "off",
         ],
     );
@@ -11952,15 +11973,15 @@ fn a_tilt_with_no_gains_applied_is_refused_only_when_typed() {
     let (code, _, err) = convert(&[
         "--roll-white-balance",
         "1.1,1,0.9",
-        "--neutral-balance",
+        "--colour-correction",
         "off",
         "--white-balance-form",
         "tilt",
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("which are off under --neutral-balance off")
-            && err.contains("drop --neutral-balance off and state --roll-white-balance-stops"),
+        err.contains("which are off under --colour-correction off")
+            && err.contains("drop --colour-correction off and state --roll-white-balance-stops"),
         "{err}"
     );
     assert!(
@@ -11979,7 +12000,7 @@ fn a_tilt_with_no_gains_applied_is_refused_only_when_typed() {
     let off = write_file(
         &tmp.path("off.json"),
         r#"{ "recipe_version": 3, "roll": { "white_balance": [1.1, 1.0, 0.9],
-             "neutral_balance": "off", "white_balance_form": "tilt" } }"#,
+             "colour_correction": "off", "white_balance_form": "tilt" } }"#,
     );
     let (code, _, err) = convert(&["--params", off.to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
@@ -12057,9 +12078,209 @@ fn measure_roll_runs_the_polarity_check_on_picture_frames_only() {
     assert!(polarity(&report, &leader), "{report}");
 }
 
+/// A manifest frame's `params` holding `roll.frames` is refused for that first: renaming a
+/// retired key inside the entry, as the rename message would say, only meets it next. A
+/// retired switch there is refused too: its `null` is omitted, any other value renamed.
 #[test]
-fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_advised() {
-    let tmp = TempDir::new("neutral-balance");
+fn a_manifest_frame_entry_with_a_retired_key_is_sent_to_the_shared_recipe() {
+    let tmp = TempDir::new("manifest-entry-retired");
+    let input = fixture("hdr-48bit.tif");
+    let input = input.to_str().unwrap();
+    let roll = |name: &str, params: &str| {
+        let manifest = write_file(
+            &tmp.path(&format!("{name}.json")),
+            &format!(r#"{{"frames": [{{"input": "{input}", "params": {params}}}]}}"#),
+        );
+        let (code, _, err) = run(&[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--out-dir",
+            tmp.path(name).to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "{name}: {err}");
+        err
+    };
+    for (name, entry) in [
+        ("exposure", r#"{"exposure": 0.2}"#),
+        ("slope", r#"{"slope": 2}"#),
+    ] {
+        let err = roll(
+            name,
+            &format!(r#"{{"roll": {{"frames": {{"a.tif": {entry}}}}}}}"#),
+        );
+        assert!(err.contains("`roll.frames` names frames"), "{name}: {err}");
+        assert!(!err.contains("not a recipe key any more"), "{name}: {err}");
+    }
+    let err = roll("switch-null", r#"{"roll": {"neutral_balance": null}}"#);
+    assert!(
+        err.contains("`roll.neutral_balance` is null")
+            && err.contains("Omit `roll.neutral_balance`"),
+        "{err}"
+    );
+    let err = roll("switch-off", r#"{"roll": {"neutral_balance": "off"}}"#);
+    assert!(
+        err.contains(
+            "`roll.neutral_balance` is not a recipe key any more: it is `roll.colour_correction`"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_renamed_roll_switch_and_frame_lift_are_refused_naming_the_new_ones() {
+    let tmp = TempDir::new("roll-renames");
+    let input = fixture("hdr-48bit.tif");
+    let input = input.to_str().unwrap();
+    let out = tmp.path("out.tif");
+    let out = out.to_str().unwrap();
+    let dir = tmp.0.to_str().unwrap();
+    let base = ["--film-base", "0.9,0.55,0.42"];
+    let recipe = |name: &str, body: &str| {
+        write_file(&tmp.path(name), body)
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    let switch_off = recipe(
+        "switch.json",
+        r#"{"recipe_version": 3, "roll": {"neutral_balance": "off"}}"#,
+    );
+    let entry = recipe(
+        "entry.json",
+        r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 0.2}}}}"#,
+    );
+    let flag = "--neutral-balance was renamed to --colour-correction (recipe \
+                `roll.colour_correction`)";
+    // A typed value gets a ready-to-paste remedy; the bare flag the generic message.
+    let flag_off = "midtone line with it: pass --colour-correction off. There is no alias.";
+    let switch_key = "`roll.neutral_balance` is not a recipe key any more: it is \
+                      `roll.colour_correction`";
+    let entry_key = r#"`roll.frames."a.tif".exposure` is not a recipe key any more: rename every `roll.frames` entry's `exposure` to `frame_exposure` (here `roll.frames."a.tif".frame_exposure`)"#;
+    for (args, needle) in [
+        (
+            vec!["convert", input, "-o", out, "--neutral-balance", "off"],
+            flag_off,
+        ),
+        (
+            vec!["roll", input, "--out-dir", dir, "--neutral-balance", "OFF"],
+            flag_off,
+        ),
+        (vec!["profile", "--neutral-balance", "off"], flag_off),
+        // The bare flag reaches the same message.
+        (vec!["convert", input, "-o", out, "--neutral-balance"], flag),
+        (
+            vec!["convert", input, "-o", out, "--params", &switch_off],
+            switch_key,
+        ),
+        (
+            vec!["roll", input, "--out-dir", dir, "--params", &switch_off],
+            switch_key,
+        ),
+        (
+            vec!["convert", input, "-o", out, "--params", &entry],
+            entry_key,
+        ),
+        (
+            vec!["roll", input, "--out-dir", dir, "--params", &entry],
+            entry_key,
+        ),
+    ] {
+        let args = if args[0] == "profile" {
+            args
+        } else {
+            [&args[..], &base].concat()
+        };
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
+    let (_, _, err) = run(&[
+        &["convert", input, "-o", out, "--neutral-balance"][..],
+        &base,
+    ]
+    .concat());
+    assert!(!err.contains("pass --colour-correction"), "{err}");
+    let (_, _, err) = run(&[
+        &["convert", input, "-o", out, "--params", &entry][..],
+        &base,
+    ]
+    .concat());
+    assert!(
+        err.contains("Or re-run `hanten measure-roll --out` for the roll"),
+        "{err}"
+    );
+
+    // Beside the retired `slope`, the entry's `exposure` was the thin lift's: that rename
+    // is diagnosed first, and this one is not.
+    let thin = recipe(
+        "thin.json",
+        r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 0.6, "slope": 2}}}}"#,
+    );
+    let (code, _, err) =
+        run(&[&["convert", input, "-o", out, "--params", &thin][..], &base].concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("to `thin_exposure`"), "{err}");
+    assert!(
+        !err.contains("rename every `roll.frames` entry's `exposure`"),
+        "{err}"
+    );
+
+    // The old default every earlier recipe carries, `null`, replays as if absent.
+    let roll = r#""white_stops": 1.5, "dark_stops": -3.75, "white_balance": [1.1, 1.0, 0.9]"#;
+    let old = recipe(
+        "old.json",
+        &format!(
+            r#"{{"recipe_version": 3, "roll": {{{roll}, "neutral_balance": null,
+                "frames": {{"hdr-48bit.tif": {{"white_stops": 1.0, "exposure": null}}}}}}}}"#
+        ),
+    );
+    let new = recipe(
+        "new.json",
+        &format!(
+            r#"{{"recipe_version": 3, "roll": {{{roll}, "colour_correction": null,
+                "frames": {{"hdr-48bit.tif": {{"white_stops": 1.0, "frame_exposure": null}}}}}}}}"#
+        ),
+    );
+    let render = |params: &str, name: &str| {
+        let out = tmp.path(name);
+        let saved = tmp.path(&format!("{name}.json"));
+        let (code, _, err) = run(&[
+            &[
+                "convert",
+                input,
+                "-o",
+                out.to_str().unwrap(),
+                "--params",
+                params,
+            ][..],
+            &["--save-recipe", saved.to_str().unwrap()],
+            &base,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        (std::fs::read(out).unwrap(), written_recipe(&saved))
+    };
+    let (old_bytes, old_saved) = render(&old, "old.tif");
+    let (new_bytes, new_saved) = render(&new, "new.tif");
+    assert!(
+        old_bytes == new_bytes,
+        "the stripped nulls changed the render"
+    );
+    // `--save-recipe` writes only the new names.
+    assert_eq!(old_saved["roll"], new_saved["roll"]);
+    let roll = &old_saved["roll"];
+    assert!(
+        roll.get("colour_correction").is_some() && roll.get("neutral_balance").is_none(),
+        "{roll}"
+    );
+}
+
+#[test]
+fn colour_correction_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_advised() {
+    let tmp = TempDir::new("colour-correction");
     let base = [0.9f32, 0.55, 0.42];
     let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
     let frames: Vec<PathBuf> = (0..10)
@@ -12092,7 +12313,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
     let advice = report["confidence"]["advice"].as_str().unwrap();
     assert!(
         advice.starts_with("the roll's white balance and midtone line were measured from 10")
-            && advice.contains("`--neutral-balance off`")
+            && advice.contains("`--colour-correction off`")
             && advice.ends_with("if it has more"),
         "{advice}"
     );
@@ -12134,7 +12355,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
 
     // Off keeps the gains in the recipe, applies neither them nor the line, and renders as
     // a recipe without both.
-    let (code, off, err, off_path) = convert("off.tiff", &["--neutral-balance", "off"]);
+    let (code, off, err, off_path) = convert("off.tiff", &["--colour-correction", "off"]);
     assert_eq!(code, 0, "{err}");
     let off = json(&off);
     let roll = &off["chain"]["roll"];
@@ -12186,7 +12407,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
         stated_on.to_str().unwrap(),
         "-o",
         tmp.path("stated-on.tiff").to_str().unwrap(),
-        "--neutral-balance",
+        "--colour-correction",
         "off",
     ]);
     assert_eq!(code, 0, "{err}");
@@ -12196,17 +12417,17 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
     // off came from.
     let (code, _, err, _) = convert(
         "both.tiff",
-        &["--neutral-balance", "off", "--midtone-neutral", "on"],
+        &["--colour-correction", "off", "--midtone-neutral", "on"],
     );
     assert_eq!(code, 2, "{err}");
     assert!(
         err.contains("--midtone-neutral on asks for the roll's midtone line")
-            && err.contains("drop --midtone-neutral on, or drop --neutral-balance off"),
+            && err.contains("drop --midtone-neutral on, or drop --colour-correction off"),
         "{err}"
     );
     let stated_off = tmp.path("stated-off.json");
     let mut off_recipe = written.clone();
-    off_recipe["roll"]["neutral_balance"] = "off".into();
+    off_recipe["roll"]["colour_correction"] = "off".into();
     std::fs::write(&stated_off, off_recipe.to_string()).unwrap();
     let (code, _, err) = run(&[
         "convert",
@@ -12224,8 +12445,8 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("under the recipe's `roll.neutral_balance` \"off\"")
-            && err.contains("or pass --neutral-balance on"),
+        err.contains("under the recipe's `roll.colour_correction` \"off\"")
+            && err.contains("or pass --colour-correction on"),
         "{err}"
     );
     // Under `direct` it is diagnosed first, since the direct rule's `--rendering default`
@@ -12235,7 +12456,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
         &[
             "--rendering",
             "direct",
-            "--neutral-balance",
+            "--colour-correction",
             "off",
             "--midtone-neutral",
             "on",
@@ -12278,7 +12499,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
         .concat());
         (code, err, out_dir.join("f0_positive.tiff"))
     };
-    let off = ["--neutral-balance", "off"];
+    let off = ["--colour-correction", "off"];
     let (code, err, frame_on) = roll(
         "roll-on",
         r#", "params": { "roll": { "midtone_neutral": "on" } }"#,
@@ -12303,7 +12524,7 @@ fn neutral_balance_off_drops_the_rolls_gains_and_its_line_and_a_short_roll_is_ad
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("`roll.white_balance`"), "not vacuous: {err}");
     let restated_off = r#", "params": { "roll": { "white_balance": [1.1, 1, 0.9],
-        "neutral_balance": "off" } }"#;
+        "colour_correction": "off" } }"#;
     let (code, err, _) = roll("roll-restated-off", restated_off, &[]);
     assert_eq!(code, 0, "{err}");
     assert!(!err.contains("`roll.white_balance`"), "{err}");
@@ -12518,7 +12739,10 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     );
     assert!(frames["dim.tif"]["white_stops"].is_null(), "{written}");
     for name in ["dim.tif", "bright.tif"] {
-        assert!(frames[name]["exposure"].is_null(), "no lifts: {written}");
+        assert!(
+            frames[name]["frame_exposure"].is_null(),
+            "no lifts: {written}"
+        );
         assert!(frames[name]["tones"].is_object(), "{written}");
     }
     // The input it was decoded under travels too: these scans state no transfer.
@@ -12764,15 +12988,15 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
     assert_eq!(report["small_lift"]["lifted"], 2, "{report}");
     let frames = &written["roll"]["frames"];
     assert_eq!(
-        frames["night.tif"]["exposure"],
+        frames["night.tif"]["frame_exposure"],
         report["frames"][0]["lift_ev"]
     );
     assert_eq!(
-        frames["mid.tif"]["exposure"],
+        frames["mid.tif"]["frame_exposure"],
         report["frames"][1]["lift_ev"]
     );
     assert!(
-        frames["bright.tif"]["exposure"].is_null(),
+        frames["bright.tif"]["frame_exposure"].is_null(),
         "only its clamp: {written}"
     );
     assert!(
@@ -12825,7 +13049,7 @@ fn measure_roll_lifts_a_low_key_frame_and_either_opt_out_drops_it() {
         "still reported: {report_off}"
     );
     assert!(
-        written_off["roll"]["frames"]["night.tif"]["exposure"].is_null(),
+        written_off["roll"]["frames"]["night.tif"]["frame_exposure"].is_null(),
         "its tones alone: {written_off}"
     );
     let off_layer = write_file(
@@ -13044,11 +13268,12 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     );
     let frames = &written["roll"]["frames"];
     assert!(
-        frames["flat.tif"]["exposure"].is_null() && frames["flat.tif"]["thin_slope"].is_null(),
+        frames["flat.tif"]["frame_exposure"].is_null()
+            && frames["flat.tif"]["thin_slope"].is_null(),
         "its tones alone: {written}"
     );
     assert!(frames["thin.tif"]["thin_slope"].is_null(), "{written}");
-    let small_ev = frames["thin.tif"]["exposure"].clone();
+    let small_ev = frames["thin.tif"]["frame_exposure"].clone();
     assert!(small_ev.as_f64().unwrap() > 0.0, "{written}");
 
     // Written by default beside the small lift, which stays for `--thin-lift off`; every
@@ -13061,10 +13286,14 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     let entry = &written_l["roll"]["frames"]["thin.tif"];
     assert_eq!(entry["thin_slope"], thin["slope"], "{written_l}");
     assert_eq!(entry["thin_exposure"], thin["exposure"], "{written_l}");
-    assert_eq!(entry["exposure"], small_ev, "{written_l}");
+    assert_eq!(entry["frame_exposure"], small_ev, "{written_l}");
     assert_eq!(
         written_l["roll"]["frames"]["thinnest.tif"]["thin_slope"].as_f64(),
-        report_l["thin_lift"]["slope_bound"].as_f64(),
+        report_l["thin_lift"]["max_thin_slope"].as_f64(),
+    );
+    assert!(
+        report_l["thin_lift"].get("slope_bound").is_none(),
+        "{report_l}"
     );
     for n in ["mid.tif", "bright.tif"] {
         assert_eq!(written_l["roll"]["frames"][n], frames[n], "{n}");
@@ -13167,7 +13396,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     assert_eq!(report_u["small_lift"]["written"], false, "{report_u}");
     assert_eq!(report_u["thin_lift"]["written"], false, "{report_u}");
     assert!(
-        written_u["roll"]["frames"]["thin.tif"]["exposure"].is_null()
+        written_u["roll"]["frames"]["thin.tif"]["frame_exposure"].is_null()
             && written_u["roll"]["frames"]["thin.tif"]["thin_slope"].is_null(),
         "its tones alone: {written_u}"
     );
@@ -13325,7 +13554,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     };
     let keys = format!(
         r#""frame_exposure":{},"thin_slope":{},"thin_exposure":{}"#,
-        entry["exposure"], entry["thin_slope"], entry["thin_exposure"]
+        entry["frame_exposure"], entry["thin_slope"], entry["thin_exposure"]
     );
     assert_eq!(
         rolled(&format!(r#"{{"roll":{{{keys}}}}}"#), "rolled-dumped"),
@@ -13472,7 +13701,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     assert!(
         err.contains(&format!(
             "pass --roll-thin-slope {slope} with, as --roll-thin-exposure, the frame's \
-             `roll.frames` entry `exposure` if it has one"
+             `roll.frames` entry `frame_exposure` if it has one"
         )) && !err.contains("--roll-frame-exposure"),
         "{err}"
     );
@@ -16725,15 +16954,17 @@ fn a_stated_white_drops_a_frames_thin_lift() {
     };
     let lifted = write_file(
         &tmp.path("lifted.json"),
-        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.2, "thin_slope": 2.0, "thin_exposure": 0.7}}"#),
+        &roll(
+            r#"{"hdri-64bit.tif": {"frame_exposure": 0.2, "thin_slope": 2.0, "thin_exposure": 0.7}}"#,
+        ),
     );
     let plain = write_file(
         &tmp.path("plain.json"),
-        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.2}}"#),
+        &roll(r#"{"hdri-64bit.tif": {"frame_exposure": 0.2}}"#),
     );
     let small = write_file(
         &tmp.path("small.json"),
-        &roll(r#"{"hdri-64bit.tif": {"exposure": 0.7}}"#),
+        &roll(r#"{"hdri-64bit.tif": {"frame_exposure": 0.7}}"#),
     );
     let input = fixture("hdri-64bit.tif");
     let s = |p: &Path| p.to_str().unwrap().to_owned();
@@ -18567,7 +18798,7 @@ fn roll_measure_mode_refuses_before_measuring() {
     check(
         &[
             &mm[..],
-            &["--midtone-neutral", "on", "--neutral-balance", "off"],
+            &["--midtone-neutral", "on", "--colour-correction", "off"],
         ]
         .concat(),
         "--midtone-neutral on asks for the roll's midtone line",

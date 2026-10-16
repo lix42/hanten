@@ -158,6 +158,13 @@ What other epics need to know about `core`:
   refused at **every** value, the old default included, so every recipe written earlier
   (`measure-roll --out` files too) needs that one key renamed. The look's
   `chain.stages` strings are `tone-slope` and `saturation-slope`.
+- **Roll and report renames** (`core/rename-roll-report-misnomers`): `--neutral-balance` /
+  `roll.neutral_balance` is `--colour-correction` / `roll.colour_correction` (a switch,
+  so no `--roll-` prefix: every `--roll-*` flag is a measured value), and a `roll.frames`
+  entry's `exposure` is `frame_exposure`. A recipe's old `null` is dropped; any other
+  value is refused. Reports: `area_uniformity.gradient`, `thin_lift.max_thin_slope`,
+  `white.rule.film_saturation_margin_stops`. `docs/terminology.md` lists no open public
+  misnomer.
 
 
 ## product-naming
@@ -1653,10 +1660,13 @@ new path. No pixel moved.
 
 ## rename-roll-report-misnomers
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: report fields and roll keys whose names collide or flip sign; includes the American spellings input_color, gray-world
+- 2026-10-15: Scope settled with the user: P6, P11 migrate (recipe + flag); P7, P10, P12 are report-only renames; P8 moved to core/rename-fit-range-misnomers (it renames the same dark_end report block; rename, don't flip, since the fields share --dark-floor's below-mid-grey convention); P13 dropped (identifiers keep their spelling; gray-world is already a retired value). No version reset is planned anywhere, so migrations happen now. New public names spell 'colour'. Coordinated with the three sibling rename sessions: an old key's null default is stripped and any other value refused naming the new key; no pipeline_version/recipe_version bump; whoever merges second recomputes the v17 row's recipe fingerprint and appends its note; each PR deletes only its own misnomer rows. (rename-decode-look-misnomers refuses reconstruction.anchor at every value, its default included, by its user's choice.) Chunk 1 done: --neutral-balance/roll.neutral_balance -> --colour-correction/roll.colour_correction; roll.frames.*.exposure -> frame_exposure. A frame entry's exposure is refused after the retired slope check, whose message renames an exposure beside a slope to thin_exposure. A roll --frames manifest's roll.frames is now refused before the retired-key checks, so a rename remedy never leads into that refusal. v17 recipe fingerprint refreshed in place (00c0144665fa1587 -> b5eec6c8437ff02c).
+- 2026-10-16: Chunk 2 done: report-only renames, no migration: area_uniformity.tilt -> gradient (tilt is the WB form's word only), thin_lift.slope_bound (a number) -> max_thin_slope, white.rule.saturation_margin_stops -> film_saturation_margin_stops. frames[].hybrid/frame slope_bound stays: an enum beside exposure_bound and white.bound, and with the number renamed nothing collides. The Rust field that is each name moved with it; the constants (THIN_SLOPE_BOUND, SATURATION_MARGIN_STOPS, MAX_TILT) are left to core/internal-term-renames. P13 dropped from terminology.md, whose misnomer table is now empty. using-nc re-verified against the binary for every section these names reach; header pin refreshed. Codex was unavailable all task (workspace spend cap); the second review engine was ship:diff-reviewer.
+- 2026-10-16: Closed. Landed: P6 and P11 migrated as recipe keys and a flag (an old null is stripped from a recipe; refused in a --frames override, where any null is; other values refused naming the new key; no alias); P7, P10 and P12 renamed as report fields. P8 went to core/rename-fit-range-misnomers (#308), and P13 was dropped. Verified: every CI gate, two review-fix rounds per chunk (nc-reviewer plus ship:diff-reviewer; Codex blocked by the workspace spend cap throughout), and using-nc re-run against the binary. For dependents: core/internal-term-renames takes THIN_SLOPE_BOUND, SATURATION_MARGIN_STOPS, MAX_TILT and the three 'tilt'-named area_uniformity tests (agreed with that session); the v17 recipe fingerprint chain is bb01d83b -> 587435112 -> 00c01446 -> b5eec6c8.
 
 ## internal-term-renames
 
