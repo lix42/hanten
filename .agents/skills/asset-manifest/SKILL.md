@@ -192,7 +192,8 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts table
 ```
 
 It also says whether every neutral's density rises with exposure across its bracket.
-`generate` and `validate` ignore it (they track images only).
+`generate` and `validate` ignore it (they track images only). `manifest charts cast`
+(the `chart-cast` skill) reads the `charts` entries and this table.
 
 ## Where the assets live
 

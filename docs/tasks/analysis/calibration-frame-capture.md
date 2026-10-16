@@ -3,7 +3,7 @@ title: Capture the calibration frames
 status: doing
 deps: [analysis/asset-manifest, analysis/chart-extraction]
 tags: [post-mvp]
-summary: "**Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first neutrality…"
+summary: "**Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket to the protocol agreed 2026-09-08, register the frames in `manifest.json`, and take a first neutrality measurement (the first: `docs/reports/chart-cast.md`)"
 ---
 # Capture the calibration frames
 
@@ -116,7 +116,8 @@ short note on why each requirement exists for the fit it performs.
 ## Scope
 
 In: the shoot, development, scanning, registering the frames in `manifest.json` with
-their roles and conditions, and a first neutrality measurement against them.
+their roles and conditions, and a first neutrality measurement against them (done
+2026-10-15 for 2026-10-12-Gold200: `docs/reports/chart-cast.md`, the `chart-cast` skill).
 
 Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode's
 `scale` and linearization (`nf-calibration/neutrality-gate`), the parametric per-channel gain

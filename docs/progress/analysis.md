@@ -189,6 +189,10 @@ What other epics need to know about `analysis`:
   whose bytes no longer match the manifest and a chart whose check is stale. On
   `2026-10-12-Gold200` the +2 EV frame took about half a step's less light than
   nominal, so a fit against nominal offsets should not trust that frame's offset.
+- **The residual cast on chart frames (2026-10-15)**: `nctool manifest charts cast
+  render` / `measure` renders a roll's chart frames through a grid of settings and reads
+  every patch beside outside tools' exports; the `chart-cast` skill is the procedure,
+  `docs/reports/chart-cast.md` the record.
 
 
 ## real-scan-verification
@@ -963,7 +967,7 @@ What other epics need to know about `analysis`:
 - 2026-10-14: `2026-10-12-Gold200` is the 10-07 Gold200 roll (+3/+4 added after that note);
   SilverFast's automatic adjustments were locked for its scan. The Ektar100 roll and an
   UltraMax400 roll are expected around 2026-10-21; the Ektar roll is the protocol's second.
-- 2026-10-15: First neutrality number (`docs/reports/chart-cast.md`, `chart-cast` skill): on 2026-10-12-Gold200 the default leaves the chart's greys at b* −15 and C* 15; the best setting measured without a chart, C* 3.4–4.0. Next chart roll wanted: Gold200 again, in different light (sun behind the camera) and ideally another developer, so `nf-calibration/stock-neutral-offset` can separate the stock's fixed cast from this roll's light. Shoot the 180°-rotated frame this time.
+- 2026-10-15: First neutrality number (`docs/reports/chart-cast.md`, `chart-cast` skill): on 2026-10-12-Gold200 the default leaves the chart's greys at b* −15 and C* 15; the best setting measured without a chart, C* 3.4–4.0. Next chart roll wanted: Gold200 again, in different light (sun behind the camera) and ideally another developer, so `nf-calibration/stock-neutral-offset` can separate the part of the residual cast fixed per stock from this roll's light. Shoot the 180°-rotated frame this time.
 
 ## review-reference-cells
 
@@ -1507,7 +1511,8 @@ What other epics need to know about `analysis`:
 ## chart-cast
 
 **Status:** done
-**Updated:** 2026-10-15
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: `nctool manifest charts cast`, the `chart-cast` skill and `docs/reports/chart-cast.md`: every chart patch through a grid of settings and beside outside tools
-- 2026-10-15: Done. `nctool manifest charts cast render` / `measure` (`nctool/cast.py`, tests in `test_cast.py`), the `chart-cast` skill, and `docs/reports/chart-cast.md` opened with 2026-10-12-Gold200 (55 grid configurations, plus NLP, SilverFast and SilverFast CCR). Gotchas: a cast that rises with lightness in Lab can be one constant ratio, so slope vs offset is read in density; colour accuracy only means something on the frame whose mid-grey renders near the card's; the roll's chart frames need their own tones grafted in from a measurement that includes them, since the pictures-only measurement has none and placement reads them. Follow-ups filed: `nf-calibration/stock-neutral-offset`, `nf-calibration/chart-default-review`.
+- 2026-10-15: Done. `nctool manifest charts cast render` / `measure` (`nctool/cast.py`, tests in `test_cast.py`), the `chart-cast` skill, and `docs/reports/chart-cast.md` opened with 2026-10-12-Gold200 (55 grid configurations, plus NLP, SilverFast and SilverFast CCR). Gotchas: a residual cast that rises with lightness in CIELAB can be one constant ratio, so density scale vs offset is read in density; colour accuracy only means something on the frame whose D4 grey patch renders near the card's L*; the roll's chart frames need their own per-frame placement entries grafted in from a measurement that includes them, since the pictures-only measurement has none and placement reads them. Follow-ups filed: `nf-calibration/stock-neutral-offset`, `nf-calibration/chart-default-review`.
+- 2026-10-16: Review fixes to `manifest charts cast`: `measure` reads only the configurations `render` recorded (`<work>/configs.json`, with the density scale), refuses an export not at the scan's size, a stale chart entry, a repeated source name and repeated chart stems; the offset and the fitted density scale against green (`scale_fit`) are fitted over the straight part, 0.2–0.9, and the shoulder from 0.9 apart; `measure` refuses a chart table that no longer matches the manifest; `render` refuses a build before destinations, records the build in `configs.json` (carried into `cast.json`), clears a work folder's earlier renders only once the roll is measured and only in a folder it recorded, replaces its recipes, relays hanten's warnings and prints how far the chart-inclusive measurement's white-balance gains land from the pictures-only one (3.5 % on 2026-10-12-Gold200). Re-run on 2026-10-12-Gold200: every CIELAB row unchanged.

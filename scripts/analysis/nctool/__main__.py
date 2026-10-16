@@ -9,7 +9,8 @@ of conversions into a review set for `tools/review-app`), `acceptance`
 (decode every encoding without nc and check it against nc's pre-encode buffers), and
 `viewer` (the file set and decoder pre-checks for the manual viewer rubric).
 
-`metrics` and `acceptance` need third-party packages; see
+The commands that read pixels (`metrics`, `acceptance`, the `manifest charts` readers,
+parts of `review`) need third-party packages; see
 `scripts/analysis/requirements.txt`. Importing the module is still free — it
 pulls `numpy`/`tifffile` inside the functions that touch pixels — so a checkout
 without the venv builds the same parser and gets a real error only if it runs the
@@ -134,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     ctab.add_argument("--dry-run", action="store_true",
                       help="build and summarise the table; do not write it")
     ctab.set_defaults(func=_chart_table.cmd_table)
-    ccast = csub_.add_parser("cast", help="the colour cast renders and outside exports leave "
+    ccast = csub_.add_parser("cast", help="the residual cast renders and outside exports leave "
                                           "on a roll's chart frames")
     castsub = ccast.add_subparsers(dest="cast_cmd", required=True)
     crend = castsub.add_parser("render", help="measure the roll on its pictures, then render "

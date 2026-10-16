@@ -1,10 +1,10 @@
 ---
-title: Measure the cast settings and tools leave on the chart frames
+title: Measure the residual cast settings and tools leave on the chart frames
 status: done
 deps: [analysis/chart-labeling-tool, analysis/chart-extraction]
 summary: "`nctool manifest charts cast`, the `chart-cast` skill and `docs/reports/chart-cast.md`: every chart patch through a grid of settings and beside outside tools"
 ---
-# Measure the cast settings and tools leave on the chart frames
+# Measure the residual cast settings and tools leave on the chart frames
 
 ## Goal
 
