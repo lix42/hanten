@@ -165,7 +165,7 @@ graph TD
 - [ ] [Scanner Density Calibration](tasks/io/scanner-density-calibration.md) — turn the density-scale question into a shipped, reusable scanner profile · **waits on** `analysis/calibration-frame-capture`
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — convert positive (E-6) film: no film base or decode, enters at the working space; no slide scans to verify against yet · **low priority**
 - [ ] [Streaming / Tiled I/O](tasks/io/streaming-tiled-io.md) — strip/tile decode for very large inputs; STEP 0 evaluated no-go (2026-10-13), revisit only if the input envelope grows · **low priority**
-- [ ] [Name a truncated input file](tasks/io/truncated-file-fault.md) — a file shorter than its own header declares (a cloud file still downloading) gets its own fault, not a decode error
+- [ ] [Name a truncated input file](tasks/io/truncated-file-fault.md) — a file shorter than its own header declares, or a cloud file whose read times out, gets a named fault, not a decode error
 - [x] [Input Data Semantics and Validation](tasks/io/input-data-semantics.md) — resolve transfer encoding independently from scanner-device versus colorimetric meaning
 - [x] [Memory Preflight & In-Place Transform](tasks/io/memory-preflight.md) — from the memory-safety review (Phase A, cheap): predict peak allocation and fail loudly over a budget before allocating (reconciling the dishonest 4 GiB input limit), and drop the whole-image clone…
 - [x] [Multi-frame runs outgrow the per-frame memory model](tasks/io/multi-frame-memory-growth.md) — macOS malloc kept freed full-frame blocks resident, so a roll's peak climbed with every slightly larger frame
@@ -496,11 +496,11 @@ graph TD
 > over `nc` as a library, preview, export and payment. Spikes come first; the CLI work the
 > app needs lives in `io`, `core` and `film-base` (the design's §4).
 
-- [ ] [File access spike](tasks/app/file-access-spike.md) — the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update
 - [ ] [Frame offsets on multiplicative knobs](tasks/app/frame-offset-spike.md) — is a frame's contrast or saturation offset a ratio or a step? settled by a review round
 - [ ] [Preview cache and memory spike](tasks/app/preview-cache-spike.md) — a whole roll: cold load, one decode shared by measuring and preview, a memory budget, a disk cache
 - [ ] [Signed build spike](tasks/app/signed-build-spike.md) — notarize the Tauri app and run a synced P-256 key in the data protection keychain across two Macs; waits on Apple Developer Program enrollment · **blocked**
 - [x] [Export beside preview spike](tasks/app/export-beside-preview-spike.md) — an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory
+- [x] [File access spike](tasks/app/file-access-spike.md) — the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update
 - [x] [Offline token spike](tasks/app/offline-token-spike.md) — how tokens are signed, verified, stored and recovered on macOS
 - [x] [Packaging spike](tasks/app/packaging-spike.md) — unsigned Tauri app with the Rust core: hardened runtime, updater, dev keychain fallback, telemetry consent
 - [x] [WebKit display spike](tasks/app/webkit-display-spike.md) — Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron

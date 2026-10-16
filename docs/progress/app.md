@@ -35,9 +35,19 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
   - `SecKey`'s RFC 4754 output is padded, so sign X9.62 DER.
   - The telemetry helper re-launches the app binary.
   - A file-keychain key prompts after every ad-hoc update.
+  - lcms2 must be forced static (`LCMS2_STATIC=1`): library validation refuses a
+    Homebrew copy, and the app dies in dyld.
 
-  File access is `file-access-spike`; signing and the synced key are
-  `signed-build-spike` (needs enrollment).
+  Signing and the synced key are `signed-build-spike` (needs enrollment).
+- **File access** (`file-access-spike`, `docs/spike/file-access.md`):
+  - A folder picked in the open panel opens with no prompt, protected or not, and stays
+    open across relaunches and ad-hoc updates. The grant isn't shown in Settings.
+  - A protected folder opened by path, never picked, prompts. An ad-hoc update loses
+    that grant, so open only folders the user picked.
+  - Privacy refusal is `EPERM`, an unwritable folder `EACCES`, an offline iCloud file
+    `ETIMEDOUT`. Branch on the errno: Rust gives the first two the same `ErrorKind`.
+  - An iCloud file is downloaded whole by its first read (~1.3 s per frame).
+  - A 34-frame roll on the external SSD exports in 41 s.
 
 ## webkit-display-spike
 
@@ -105,7 +115,10 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## file-access-spike
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-16
 
 - 2026-10-16: filed. Goal: the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update
+- 2026-10-16: Started on the M3 Pro (macOS 26.6.2, SSD mounted). Plan: rebuild the packaging spike from the Drive copy into ../temp/file-access-spike (core patch on throwaway spike/file-access-core from 966c853, new updater key pair, v0.1.0 + v0.2.0); shell gains step timing, errno capture and a full-read step; run the checklist live: real roll on /Volumes/square, relaunch, ad-hoc update, synced Documents/Desktop (iCloud Desktop & Documents is on here) plus ~/Downloads as a local protected folder, an evicted iCloud scan (Wi-Fi off for the failure), a read-only folder. Report docs/spike/file-access.md.
+- 2026-10-16: Checklist run on the M3 Pro, report docs/spike/file-access.md. First build died in dyld: lcms2-sys linked Homebrew's lcms2 via pkg-config and library validation refused it; LCMS2_STATIC=1 fixes it (packaging.md's static claim held only on a Mac without Homebrew lcms2; the CLI here links Homebrew's 2.19.1 too). Results: a picked folder (SSD, ~/Documents, ~/Downloads after a refusal) opens with no prompt and holds across relaunch and two ad-hoc updates, with no Files & Folders entry; ~/Desktop opened by path prompted, and prompted again after the ad-hoc update. Faults: privacy refusal EPERM (1), chmod a-w EACCES (13), both PermissionDenied in Rust; offline evicted iCloud file ETIMEDOUT (60) in 0.4-0.6 s, which the core reports as exit 3 'not a readable TIFF'. Online, a header probe of an evicted 144 MB scan downloads it whole in 1.29 s. Export of 34 real frames (2026-09-20-Portra400) on the SSD: 41.0 s (measure 10.6 s, 0.87 s median per frame). Handoff: design §2.8/§3.8/§5, signed-build-spike Q3 narrowed to prompt-based grants, io/truncated-file-fault gains the iCloud ETIMEDOUT case. Test folders, app, app data and TCC grants removed; code and results in ../temp/file-access-spike.
+- 2026-10-16: Done. Review (Codex: clean; diff reviewer: §3.8 said 'updates' where only ad-hoc ones ran, and two open-question lines still listed folder access in general) fixed: design §3.8 now says ad-hoc updates, the signed-build open questions name only a prompt-based grant, design §5 adds Google Drive streamed folders. For signed-build-spike: compare a Files & Folders toggle across a Developer ID update; picked folders need no check. For io/truncated-file-fault: errno 60 marks an offline iCloud read. Not filed (raised with the user): a local CLI build links Homebrew's lcms2 when present.

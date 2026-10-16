@@ -31,8 +31,9 @@ Rust core inside, and the device key the payment proposal needs
    give the data protection keychain?
 2. Does a synchronizable P-256 key item sync through iCloud Keychain, and survive an
    update?
-3. Do folder access grants and keychain access survive a signed update, unlike an
-   ad-hoc one?
+3. Do keychain access and a prompt-based folder grant (a Files & Folders toggle) survive
+   a signed update, unlike an ad-hoc one? A folder picked in the open panel already
+   survives an ad-hoc update (`docs/spike/file-access.md`).
 
 ## How to Verify
 
