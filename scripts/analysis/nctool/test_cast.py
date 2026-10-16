@@ -75,6 +75,16 @@ class TestGrid(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "repeats"):
             cast.expand_grid(grid)
 
+    def test_an_extra_configuration_may_not_crop_or_turn(self):
+        # Patch rects are fractions of the source scan; an identity turn asks for nothing.
+        grid = {**cast.DEFAULT_GRID, "placement": [], "extra": {}}
+        for args in (["--crop", "0,0,10,10"], ["--rotate=90"], ["--flip", "vertical"]):
+            grid["extra"] = {"x": {"args": args}}
+            with self.assertRaisesRegex(ValueError, "fractions of the source scan"):
+                cast.expand_grid(grid)
+        grid["extra"] = {"x": {"args": ["--rotate", "0", "--flip=none"]}}
+        self.assertEqual(cast.expand_grid(grid)["x"]["args"], ["--rotate", "0", "--flip=none"])
+
     def test_graft_takes_the_chart_frames_whole_entries_and_leaves_the_input_alone(self):
         chart_entry = {"tones": "chart", "white_stops": 1.2, "frame_exposure": 0.3}
         mine = {"params": {"roll": {"white_balance": [1, 1, 1.25],

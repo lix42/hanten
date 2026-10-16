@@ -16,6 +16,7 @@
 //!
 //! ```text
 //! input · calibration · measure      the decode's input and the film base
+//! geometry                           the crop and orientation (pipeline::geometry)
 //! roll                               what `hanten measure-roll` measured for the roll
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
 //! rendering                          which base the stages start from (crate::rendering)
@@ -54,6 +55,7 @@ use crate::pipeline::chain;
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::fit_range::{DarkEnd, DarkEndFault, MAX_DARK_END_STOPS};
+use crate::pipeline::geometry::{self, GeometrySection};
 use crate::pipeline::look::{
     ChannelGradeFault, DesaturationFault, HighlightDesaturation, IDENTITY_CHANNEL_GRADE,
     LookSection, MAX_START_STOPS,
@@ -100,6 +102,9 @@ pub struct Recipe {
     pub roll: RollSection,
     #[serde(default)]
     pub measure: MeasureParams,
+    /// The crop and orientation, shared and per frame (`pipeline::geometry`).
+    #[serde(default)]
+    pub geometry: GeometrySection,
     #[serde(default)]
     pub reconstruction: DecodeParams,
     /// `direct` or `default` (`--rendering`): the base every stage knob starts from.
@@ -1329,6 +1334,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(f) = args.measure.measure_inset {
         r.measure.inset = f;
     }
+    // The crop and orientation, over every frame's own.
+    let o = &args.orientation;
+    r.geometry.apply_flags(args.crop.crop, o.rotate, o.flip);
     // The decode's own knobs. `--linearization` is a calibration; how contrasty the
     // picture is is `--contrast`, the look's.
     if let Some(v) = args.density.density_scale {
@@ -1487,6 +1495,7 @@ fn knob_name(names: KnobNames, section: &str, flag: &str, key: &str) -> String {
 /// [`DecodeParams::check`] and are rendered here as a usage error. The input, film-base
 /// and measurement sections are checked by `cli::validate_shared`.
 pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
+    geometry::validate(&r.geometry, &knob_name(names, "geometry", "--crop", "crop"))?;
     let name = |flag: &str, key: &str| knob_name(names, "reconstruction", flag, key);
     let d = &r.reconstruction;
     let message = match d.check() {
@@ -2862,7 +2871,7 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 
 impl Recipe {
     /// The recipe's `params_hash` (`version::stable_hash`) over its pretty JSON — the
-    /// `params` `--save-recipe` writes, dedented, with `roll.frames` keys absolute as
+    /// `params` `--save-recipe` writes, dedented, with per-frame keys absolute as
     /// loaded — so a dumped recipe, once loaded, hashes to the run it came from. The report's `identity` and the telemetry record carry the same value.
     pub fn params_hash(&self) -> String {
         // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
@@ -3372,6 +3381,7 @@ mod tests {
                 "calibration",
                 "roll",
                 "measure",
+                "geometry",
                 "reconstruction",
                 "rendering",
                 "scene_correction",
@@ -5370,6 +5380,15 @@ mod tests {
             ("--base-region", &["--base-region", "0,0,10,10"], |r| {
                 matches!(r.calibration.film_base, Some(FilmBaseSource::Region(_)))
             }),
+            ("--crop", &["--crop", "1,2,3,4"], |r| {
+                r.geometry.crop == Some([1, 2, 3, 4])
+            }),
+            ("--rotate", &["--rotate", "270"], |r| {
+                r.geometry.rotate == Some(geometry::Rotation::R270)
+            }),
+            ("--flip", &["--flip", "vertical"], |r| {
+                r.geometry.flip == Some(geometry::Flip::Vertical)
+            }),
             ("--measure-inset", &["--measure-inset", "0.1"], |r| {
                 r.measure.inset == 0.1
             }),
@@ -5548,6 +5567,55 @@ mod tests {
         let mut axes = DisplayAxes::default();
         set(&mut axes);
         OutputSection::Display(axes)
+    }
+
+    /// A typed geometry flag beats every frame's entry, so the value it beat leaves the
+    /// table, and a frame is measured over what renders it.
+    #[test]
+    fn a_geometry_flag_drops_the_entry_values_it_beat() {
+        use crate::cli::{ConversionFlags, CropOverride, OrientationOverrides};
+        let mut stated = Recipe::default();
+        let entry = geometry::Geometry {
+            crop: Some([0, 0, 10, 10]),
+            rotate: Some(geometry::Rotation::R90),
+            flip: None,
+        };
+        const KEY: &str = "/roll/a.tif";
+        stated.geometry.frames.insert(KEY.into(), entry);
+        let frames = |knobs: ConversionFlags| merge(stated.clone(), &knobs).geometry.frames;
+        let crop = frames(ConversionFlags {
+            crop: CropOverride {
+                crop: Some([1, 1, 5, 5]),
+            },
+            ..Default::default()
+        });
+        assert_eq!(crop[KEY].crop, None);
+        assert_eq!(crop[KEY].rotate, Some(geometry::Rotation::R90));
+        let both = frames(ConversionFlags {
+            crop: CropOverride {
+                crop: Some([1, 1, 5, 5]),
+            },
+            orientation: OrientationOverrides {
+                rotate: Some(geometry::Rotation::R0),
+                flip: None,
+            },
+            ..Default::default()
+        });
+        assert!(both.is_empty(), "an entry left with nothing is dropped");
+        assert_eq!(frames(ConversionFlags::default())[KEY], entry);
+        // The measurement's lookup now agrees with the render's.
+        let knobs = ConversionFlags {
+            crop: CropOverride {
+                crop: Some([1, 1, 5, 5]),
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            merge(stated.clone(), &knobs).geometry.of(KEY),
+            merge(for_frame(stated.clone(), Path::new(KEY)), &knobs)
+                .geometry
+                .shared()
+        );
     }
 
     /// Every conversion flag reaches its own recipe field — a flag with no arm in

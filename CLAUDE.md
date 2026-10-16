@@ -161,12 +161,13 @@ Read the module docs before changing these; they hold the traps.
 |---|---|
 | output paths, suffixes, destination → container | `cli::resolve_output_path`, `OutputTarget`, `Unappendable` |
 | knob merge, `--params` layering, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::compose`, `recipe::validate`, `recipe::validate_render`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
-| `roll.frames` keys (paths relative to the recipe) | `recipe::frame_keys` |
+| `roll.frames` and `geometry.frames` keys (paths relative to the recipe) | `recipe::frame_keys` |
 | roll and style combined into stage params, the report's `chain.roll` / `chain.look` provenance | `recipe::resolve` |
 | renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | destination set (axes, table, derivation) | `src/destination.rs` |
 | decode, density scale, anchor | `algo/fixed.rs` |
 | film base, holder march, measurement region | `pipeline/film_base.rs` |
+| crop and orientation (geometry) | `pipeline/geometry.rs`; the crop's cut in `film_base::effective_area`; `GeometrySection::apply_flags`, `recipe::for_frame` |
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
 | rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `midtone_neutral.rs`, `roll_balance.rs`, `correction_confidence.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |

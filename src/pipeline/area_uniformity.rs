@@ -577,7 +577,8 @@ mod probe {
                 }
                 let p = root.join(f["file"].as_str().unwrap());
                 let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
-                let area = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET).unwrap();
+                let area =
+                    effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None).unwrap();
                 let u = measure(&scan.image, area.region).unwrap().unwrap();
                 let t = u.gradient;
                 let outliers: Vec<String> = u

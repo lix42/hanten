@@ -9366,7 +9366,7 @@ fn a_profile_is_written_without_a_scan_and_renders_as_its_flags() {
         "{text}"
     );
     let doc = recipe_in(&profile_json(&text));
-    for section in ["calibration", "roll", "scene_correction"] {
+    for section in ["calibration", "roll", "geometry", "scene_correction"] {
         assert!(doc.get(section).is_none(), "{section}: {doc}");
     }
 
@@ -9420,7 +9420,7 @@ fn a_profile_holds_what_save_recipe_holds_but_the_rolls_own() {
     assert_eq!(code, 0, "{err}");
     let mut expected = written_recipe(&saved);
     let sections = expected.as_object_mut().unwrap();
-    for section in ["calibration", "roll", "scene_correction"] {
+    for section in ["calibration", "roll", "geometry", "scene_correction"] {
         sections.remove(section).unwrap();
     }
 
@@ -20209,4 +20209,565 @@ fn roll_base_content_is_byte_identical_to_measure_roll_then_roll() {
         assert_eq!(code, 2, "{args:?}: {err}");
         assert!(err.contains(expect), "{args:?}: {err}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Crop and orientation (`core/crop-rotate`)
+// ---------------------------------------------------------------------------
+
+/// A TIFF's size and its samples, as `f32` (a `u16` sample widened).
+fn read_tiff(path: &Path) -> ((u32, u32), Vec<f32>) {
+    use tiff::decoder::{Decoder, DecodingResult};
+    let mut dec = Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()))
+        .unwrap()
+        .with_limits(tiff::decoder::Limits::unlimited());
+    let size = dec.dimensions().unwrap();
+    let samples = match dec.read_image().unwrap() {
+        DecodingResult::F32(d) => d,
+        DecodingResult::U16(d) => d.into_iter().map(f32::from).collect(),
+        other => panic!("unexpected samples {:?}", std::mem::discriminant(&other)),
+    };
+    (size, samples)
+}
+
+/// `convert` the HDR fixture with `extra`, returning the report and the written image.
+fn convert_geometry(
+    tmp: &TempDir,
+    name: &str,
+    extra: &[&str],
+) -> (serde_json::Value, (u32, u32), Vec<f32>) {
+    let out = tmp.path(name);
+    let (code, stdout, err) = run(&[
+        &[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+        ][..],
+        // The film master takes no roll value.
+        if extra.contains(&"--film-master") {
+            &[]
+        } else {
+            &MEASURED[..]
+        },
+        extra,
+    ]
+    .concat());
+    assert_eq!(code, 0, "{extra:?}: {err}");
+    let (size, samples) = read_tiff(&out);
+    (json(&stdout), size, samples)
+}
+
+/// The RGB pixel at `(x, y)` of a `width`-wide image, as bits.
+fn pixel(samples: &[f32], width: u32, x: u32, y: u32) -> [u32; 3] {
+    let i = ((y * width + x) * 3) as usize;
+    [0, 1, 2].map(|c| samples[i + c].to_bits())
+}
+
+#[test]
+fn a_crop_cuts_the_film_master_and_the_turn_moves_its_pixels_exactly() {
+    // The film master runs no rendering stage, so the cropped, mirrored and turned
+    // output must be the whole scan's pixels, rearranged, bit for bit.
+    let tmp = TempDir::new("crop-film-master");
+    let (_, (w, _), whole) = convert_geometry(&tmp, "whole.tif", &["--film-master"]);
+    let (report, size, cut) = convert_geometry(
+        &tmp,
+        "cut.tif",
+        &[
+            "--film-master",
+            "--crop",
+            "10,20,30,40",
+            "--flip",
+            "horizontal",
+            "--rotate",
+            "90",
+        ],
+    );
+    assert_eq!(size, (40, 30), "a quarter turn swaps the crop's 30x40");
+    let g = &report["geometry"];
+    assert_eq!(g["crop"], serde_json::json!([10, 20, 30, 40]), "{report}");
+    assert_eq!(
+        (g["width"].as_u64(), g["height"].as_u64()),
+        (Some(40), Some(30))
+    );
+    assert_eq!(
+        (g["flip"].as_str(), g["rotate"].as_u64()),
+        (Some("horizontal"), Some(90))
+    );
+    for oy in 0..30 {
+        for ox in 0..40 {
+            // Undo the clockwise turn into the mirrored crop, then the mirror.
+            let (fx, fy) = (oy, 40 - 1 - ox);
+            let (cx, cy) = (30 - 1 - fx, fy);
+            assert_eq!(
+                pixel(&cut, 40, ox, oy),
+                pixel(&whole, w, 10 + cx, 20 + cy),
+                "({ox}, {oy})"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_turn_changes_no_rendered_sample() {
+    // Through the whole chain: the turn comes after it, so the half-turned output is the
+    // upright one read backwards.
+    let tmp = TempDir::new("rotate-sdr");
+    let (_, _, upright) = convert_geometry(&tmp, "upright.tif", &[]);
+    let (report, _, turned) = convert_geometry(&tmp, "turned.tif", &["--rotate", "180"]);
+    assert_eq!(report["geometry"]["rotate"], 180);
+    let px: Vec<&[f32]> = upright.chunks(3).rev().collect();
+    assert_eq!(px.concat(), turned);
+}
+
+#[test]
+fn the_report_states_the_crop_and_the_measurement_region_it_narrowed() {
+    let tmp = TempDir::new("crop-report");
+    let (whole, _, _) = convert_geometry(&tmp, "whole.tif", &[]);
+    assert!(whole.get("geometry").is_none(), "{whole}");
+    assert!(whole["effective_area"].get("crop").is_none(), "{whole}");
+    let f: Vec<u64> = whole["effective_area"]["region"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    let (cut, _, _) = convert_geometry(&tmp, "cut.tif", &["--crop", "0,100,200,150"]);
+    let area = &cut["effective_area"];
+    assert_eq!(area["crop"], serde_json::json!([0, 100, 200, 150]), "{cut}");
+    // The holder and inset cut, intersected with the crop.
+    assert_eq!(
+        area["region"],
+        serde_json::json!([f[0], 100, 200 - f[0], 150]),
+        "{cut}"
+    );
+    assert_eq!(
+        cut["recipe"]["geometry"]["crop"],
+        serde_json::json!([0, 100, 200, 150])
+    );
+}
+
+#[test]
+fn a_crop_past_the_scan_refuses_before_anything_is_written() {
+    let tmp = TempDir::new("crop-past");
+    let out = tmp.path("out.tif");
+    let convert = |crop: &str| {
+        run(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--crop",
+            crop,
+        ])
+    };
+    let (code, _, err) = convert("400,0,200,10");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("reaches past the 502x462 scan"), "{err}");
+    assert!(!out.exists());
+    let (code, _, err) = convert("0,0,0,10");
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--crop (recipe `geometry.crop`) width and height"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
+    let tmp = TempDir::new("crop-table");
+    // Keyed by path, as `roll.frames` is: the fixture lives outside the recipe's folder.
+    let key = serde_json::to_string(fixture("hdr-48bit.tif").to_str().unwrap()).unwrap();
+    let recipe = write_file(
+        &tmp.path("geometry.json"),
+        &format!(
+            r#"{{"recipe_version": 3, "geometry": {{"rotate": 90, "frames": {{
+            {key}: {{"crop": [0, 0, 100, 50]}}}}}}}}"#
+        ),
+    );
+    let params = ["--params", recipe.to_str().unwrap()];
+    let (report, size, _) = convert_geometry(&tmp, "own.tif", &params);
+    assert_eq!(size, (50, 100), "its crop, then the shared turn: {report}");
+    let with = |extra: &[&'static str]| [&params[..], extra].concat();
+    let (_, size, _) = convert_geometry(&tmp, "flag.tif", &with(&["--crop", "0,0,20,30"]));
+    assert_eq!(size, (30, 20), "--crop beats the frame's entry");
+    let (_, size, _) = convert_geometry(&tmp, "upright.tif", &with(&["--rotate", "0"]));
+    assert_eq!(size, (100, 50), "--rotate beats the shared turn");
+
+    // A bad entry is named as the entry, not as `--crop`.
+    let bad = write_file(
+        &tmp.path("bad.json"),
+        &format!(
+            r#"{{"recipe_version": 3, "geometry": {{"frames": {{{key}: {{"crop": [0, 0, 0, 5]}}}}}}}}"#
+        ),
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("bad.tif").to_str().unwrap(),
+        "--params",
+        bad.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("hdr-48bit.tif\".crop`") && !err.contains("--crop"),
+        "{err}"
+    );
+    // On `roll`, a typed `--crop` does not erase the bad entry before it is checked.
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("bad-roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        bad.to_str().unwrap(),
+        "--crop",
+        "0,0,20,20",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("hdr-48bit.tif\".crop`"), "{err}");
+    // So too on `measure-roll` and on `roll`'s measure mode, with a recipe that
+    // would otherwise measure.
+    let bad_measured = write_file(
+        &tmp.path("bad-measured.json"),
+        &format!(
+            r#"{{"recipe_version": 3,
+            "input": {{"transfer": "linear", "meaning": "scanner-device"}},
+            "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+            "geometry": {{"frames": {{{key}: {{"crop": [0, 0, 0, 5]}}}}}}}}"#
+        ),
+    );
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    let out = tmp.path("measured-roll").display().to_string();
+    let typed = [
+        "--params",
+        bad_measured.to_str().unwrap(),
+        "--crop",
+        "0,0,20,20",
+    ];
+    for command in [
+        &["measure-roll", frame.as_str()][..],
+        &["roll", frame.as_str(), "-o", out.as_str(), "--measure-roll"][..],
+    ] {
+        let (code, _, err) = run(&[command, &typed[..]].concat());
+        assert_eq!(code, 2, "{command:?}: {err}");
+        assert!(err.contains("hdr-48bit.tif\".crop`"), "{command:?}: {err}");
+    }
+}
+
+#[test]
+fn geometry_frames_keys_two_same_named_scans_apart_and_writes_them_relative() {
+    // Keyed by path relative to the recipe (`recipe::frame_keys`), as `roll.frames` is.
+    let tmp = TempDir::new("crop-same-name");
+    for dir in ["a", "b"] {
+        std::fs::create_dir_all(tmp.path(dir)).unwrap();
+        std::fs::copy(fixture("hdr-48bit.tif"), tmp.path(&format!("{dir}/x.tif"))).unwrap();
+    }
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "geometry": {"frames": {"a/x.tif": {"crop": [0, 0, 40, 30]}}}}"#,
+    );
+    let saved = tmp.path("saved/recipe.json");
+    std::fs::create_dir_all(tmp.path("saved")).unwrap();
+    let convert = |dir: &str, extra: &[&str]| {
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                tmp.path(&format!("{dir}/x.tif")).to_str().unwrap(),
+                "-o",
+                tmp.path(&format!("{dir}.tif")).to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--params",
+                recipe.to_str().unwrap(),
+            ][..],
+            &MEASURED[..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let a = convert("a", &[]);
+    assert_eq!(a["geometry"]["width"], 40, "{a}");
+    let b = convert("b", &["--save-recipe", saved.to_str().unwrap()]);
+    assert!(b.get("geometry").is_none(), "the same name elsewhere: {b}");
+    // A key naming no file warns, as a `roll.frames` one does.
+    let stale = write_file(
+        &tmp.path("stale.json"),
+        r#"{"recipe_version": 3, "geometry": {"frames": {"gone.tif": {"rotate": 90}}}}"#,
+    );
+    let (code, stdout, err) = run(&[
+        &[
+            "convert",
+            tmp.path("a/x.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("stale.tif").to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--params",
+            stale.to_str().unwrap(),
+        ][..],
+        &MEASURED[..],
+    ]
+    .concat());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        stdout.contains("`geometry.frames` key \\\"gone.tif\\\" names no file"),
+        "{stdout}"
+    );
+    // Written relative to the saved recipe's own folder.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+    assert_eq!(
+        written["params"]["geometry"]["frames"]["../a/x.tif"]["crop"],
+        serde_json::json!([0, 0, 40, 30]),
+        "{written}"
+    );
+}
+
+#[test]
+fn measure_base_reads_only_the_crop() {
+    let measure = |extra: &[&str]| {
+        let (code, stdout, err) = run(&[
+            &["measure-base", fixture("hdr-48bit.tif").to_str().unwrap()][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let whole = measure(&[]);
+    let cut = measure(&["--crop", "100,100,120,80"]);
+    assert_eq!(
+        cut["effective_area"]["region"],
+        serde_json::json!([100, 100, 120, 80])
+    );
+    assert_ne!(
+        cut["film_base"], whole["film_base"],
+        "the base is read over the crop"
+    );
+    // A zero-size crop is a shape fault, not one that reaches past the scan.
+    let (code, _, err) = run(&[
+        "measure-base",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--crop",
+        "0,0,0,5",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--crop width and height must be > 0 (got 0x5)"),
+        "{err}"
+    );
+    assert!(!err.contains("reaches past"), "{err}");
+}
+
+#[test]
+fn measure_roll_measures_each_frame_over_its_crop_and_roll_renders_it() {
+    let tmp = TempDir::new("crop-measure-roll");
+    let base = [0.9, 0.55, 0.42];
+    // A frame whose bottom 24 rows are thinner: cropping them away moves its tones.
+    let split = tmp.path("split.tif");
+    write_split_density(&split, base, 1.2, 0.3, 24);
+    let other = tmp.path("other.tif");
+    write_uniform_density(&other, base, 1.0);
+    let input = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let table = write_file(
+        &tmp.path("crops.json"),
+        r#"{"recipe_version": 3, "geometry": {"frames": {"split.tif": {"crop": [0, 0, 64, 36]}}}}"#,
+    );
+    let measure = |out: &Path, extra: &[&str]| {
+        let (code, stdout, err) = run(&[
+            &[
+                "measure-roll",
+                split.to_str().unwrap(),
+                other.to_str().unwrap(),
+                "--params",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let whole = measure(&tmp.path("whole.json"), &[]);
+    let roll = tmp.path("measured.json");
+    let cut = measure(&roll, &["--params", table.to_str().unwrap()]);
+    let frame = &cut["frames"][0];
+    assert_eq!(frame["crop"], serde_json::json!([0, 0, 64, 36]), "{cut}");
+    let region = frame["region"].as_array().unwrap();
+    assert!(
+        region[1].as_u64().unwrap() + region[3].as_u64().unwrap() <= 36,
+        "{cut}"
+    );
+    assert!(whole["frames"][0].get("crop").is_none());
+    assert_ne!(
+        cut["frames"][0]["dark_stops"], whole["frames"][0]["dark_stops"],
+        "the crop moved the measurement: {cut}"
+    );
+    // The written recipe carries the crop, so `roll` renders the measured picture.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&roll).unwrap()).unwrap();
+    assert_eq!(
+        written["params"]["geometry"]["frames"]["split.tif"]["crop"],
+        serde_json::json!([0, 0, 64, 36])
+    );
+    let out_dir = tmp.path("out");
+    let (code, stdout, err) = run(&[
+        "roll",
+        split.to_str().unwrap(),
+        other.to_str().unwrap(),
+        "--params",
+        roll.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let frames = report["frames"].as_array().unwrap();
+    let of = |name: &str| {
+        frames
+            .iter()
+            .find(|f| f["input"].as_str().unwrap().ends_with(name))
+            .unwrap()
+    };
+    assert_eq!(of("split.tif")["geometry"]["height"], 36, "{report}");
+    assert!(of("other.tif").get("geometry").is_none(), "{report}");
+    let (size, _) = read_tiff(Path::new(of("split.tif")["output"].as_str().unwrap()));
+    assert_eq!(size, (64, 36));
+}
+
+#[test]
+fn measure_roll_takes_the_typed_crop_over_an_entry_and_reads_the_references_whole() {
+    let tmp = TempDir::new("crop-measure-roll-flag");
+    let base = [0.9, 0.55, 0.42];
+    let (split, other, blank, leader) = (
+        tmp.path("split.tif"),
+        tmp.path("other.tif"),
+        tmp.path("blank.tif"),
+        tmp.path("leader.tif"),
+    );
+    write_split_density(&split, base, 1.2, 0.3, 24);
+    write_uniform_density(&other, base, 1.0);
+    write_uniform_density(&blank, base, 0.0);
+    write_uniform_density(&leader, base, 1.5);
+    let input = write_file(
+        &tmp.path("input.json"),
+        r#"{ "recipe_version": 3,
+             "input": { "transfer": "linear", "meaning": "scanner-device" },
+             "geometry": {"frames": {"split.tif": {"crop": [0, 0, 64, 36]}}} }"#,
+    );
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &s(&split),
+        &s(&other),
+        "--unexposed",
+        &s(&blank),
+        "--leader",
+        &s(&leader),
+        "--params",
+        &s(&input),
+        "--crop",
+        "0,0,64,40",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    for frame in report["frames"].as_array().unwrap() {
+        assert_eq!(frame["crop"], serde_json::json!([0, 0, 64, 40]), "{report}");
+    }
+    let area = &report["unexposed"]["effective_area"];
+    assert!(area.get("crop").is_none(), "{report}");
+    let (code, stdout, err) = run(&["measure-base", &s(&blank)]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        *area,
+        json(&stdout)["effective_area"],
+        "read as measure-base reads it"
+    );
+
+    // `--base-content --leader auto` classifies the leader uncropped too: a picture
+    // cropped to a flat, dense field is still a picture.
+    let [a, c, leader] = ["a.tif", "c.tif", "lead.tif"].map(|n| tmp.path(n));
+    write_split_density(&a, CONTENT_BASE, 0.9, 0.0, 16);
+    write_split_density(&c, CONTENT_BASE, 1.5, 0.3, 16);
+    write_uniform_density(&leader, CONTENT_BASE, 1.5);
+    let flat = write_file(
+        &tmp.path("flat.json"),
+        r#"{ "recipe_version": 3,
+             "input": { "transfer": "linear", "meaning": "scanner-device" },
+             "geometry": {"frames": {"c.tif": {"crop": [0, 0, 64, 40]}}} }"#,
+    );
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &s(&a),
+        &s(&c),
+        &s(&leader),
+        "--base-content",
+        "--leader",
+        "auto",
+        "--params",
+        &s(&flat),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["references"]["leader"]["frames"],
+        serde_json::json!([s(&leader)]),
+        "{report}"
+    );
+
+    // A bad `--crop` is named as the flag.
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &s(&split),
+        "--unexposed",
+        &s(&blank),
+        "--params",
+        &s(&input),
+        "--crop",
+        "0,0,0,10",
+    ]);
+    assert_eq!(code, 2);
+    assert!(err.contains("--crop (recipe `geometry.crop`)"), "{err}");
+}
+
+#[test]
+fn a_profile_and_a_frames_manifest_refuse_what_names_frames() {
+    let tmp = TempDir::new("crop-refusals");
+    let (code, _, err) = run(&["profile", "--crop", "0,0,10,10"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`geometry`"), "{err}");
+    let recipe = write_file(
+        &tmp.path("base.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+    );
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{"frames": [{{"input": "{}", "params": {{"geometry": {{"frames": {{}}}}}}}}]}}"#,
+            fixture("hdr-48bit.tif").display()
+        ),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "-o",
+        tmp.path("out").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`geometry.frames` names frames"), "{err}");
 }

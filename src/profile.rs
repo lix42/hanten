@@ -9,10 +9,10 @@ use crate::cli::ConversionFlags;
 use crate::recipe::Recipe;
 
 /// The recipe sections a profile leaves out, since each belongs to one roll: its
-/// measurements (`calibration`, `roll`), and the adjustment made on top of them
+/// measurements (`calibration`, `roll`), the adjustment made on top of them
 /// (`scene_correction`), which a recipe file would otherwise state as a value the roll's
-/// warnings read as stale.
-pub const OMITTED_SECTIONS: [&str; 3] = ["calibration", "roll", "scene_correction"];
+/// warnings read as stale, and its frames' crop and orientation (`geometry`).
+pub const OMITTED_SECTIONS: [&str; 4] = ["calibration", "roll", "geometry", "scene_correction"];
 
 /// How a key is written: a section opens an object whose keys are annotated in turn;
 /// a value is written on one line, a tagged value (`{"explicit": […]}`) included.
@@ -201,6 +201,9 @@ pub const REFUSED_FLAGS: &[(&str, &str)] = &[
     ("roll", "--colour-correction"),
     ("roll", "--white-balance-form"),
     ("roll", "--roll-white-balance-stops"),
+    ("geometry", "--crop"),
+    ("geometry", "--rotate"),
+    ("geometry", "--flip"),
     ("scene_correction", "--white-balance"),
     ("scene_correction", "--exposure"),
 ];
@@ -215,6 +218,7 @@ pub fn refusal(knobs: &ConversionFlags, merged: &Recipe) -> Option<String> {
         Some(&(section, flag)) => (section, flag),
         None if merged.calibration != defaults.calibration => ("calibration", "a flag here"),
         None if merged.roll != defaults.roll => ("roll", "a flag here"),
+        None if merged.geometry != defaults.geometry => ("geometry", "a flag here"),
         None if merged.scene_correction != defaults.scene_correction => {
             ("scene_correction", "a flag here")
         }
@@ -237,6 +241,10 @@ pub fn refusal(knobs: &ConversionFlags, merged: &Recipe) -> Option<String> {
             "or write the roll's file with `hanten measure-roll <frames> --out roll.json` and \
              layer it after the look (--params look.jsonc --params roll.json)"
                 .to_string(),
+        ),
+        ("geometry", _) => (
+            "the crop or orientation (`geometry`), which belongs to the roll's frames".to_string(),
+            "or state `geometry` in the roll's recipe file".to_string(),
         ),
         _ => (
             "an adjustment to one roll's measured white balance and exposure \
@@ -277,6 +285,7 @@ const ROLL_SWITCHES: &[(&str, &str)] = &[
 /// Whether `flag`, one of [`REFUSED_FLAGS`], is on the command line.
 fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
     let (base, roll, scene) = (&knobs.film_base, &knobs.roll, &knobs.scene);
+    let orientation = &knobs.orientation;
     match flag {
         "--film-base" => base.film_base.is_some(),
         "--base-region" => base.base_region.is_some(),
@@ -299,6 +308,9 @@ fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
         "--colour-correction" => roll.colour_correction.is_some(),
         "--white-balance-form" => roll.white_balance_form.is_some(),
         "--roll-white-balance-stops" => roll.roll_white_balance_stops.is_some(),
+        "--crop" => knobs.crop.crop.is_some(),
+        "--rotate" => orientation.rotate.is_some(),
+        "--flip" => orientation.flip.is_some(),
         "--white-balance" => scene.white_balance.is_some(),
         "--exposure" => scene.exposure.is_some(),
         _ => false,
@@ -324,8 +336,9 @@ pub fn removed_flag_message(message: String) -> String {
 /// The comment heading a profile, one line per element.
 const HEADER: &[&str] = &[
     "A Hanten look profile, written by `hanten profile`. It writes every setting but what",
-    "belongs to one roll (`calibration`, `roll`, `scene_correction`); a null takes the",
-    "rendering's value, which a later build may move. `meta` names the build that wrote it.",
+    "belongs to one roll (`calibration`, `roll`, `geometry`, `scene_correction`); a null",
+    "takes the rendering's value, which a later build may move. `meta` names the build that",
+    "wrote it.",
     "Checked without a scan: what depends on your base or pixels (clipping, a render your",
     "base cannot hold) is checked when it converts. It states the decode, so layer it",
     "before a roll's measured recipe: --params look.jsonc --params roll.json",
@@ -703,6 +716,8 @@ mod tests {
         for group in [
             "FilmBaseOverrides",
             "RollOverrides",
+            "CropOverride",
+            "OrientationOverrides",
             "SceneCorrectionOverrides",
         ] {
             let group = convert
@@ -761,7 +776,7 @@ mod tests {
     fn the_omitted_sections_are_left_out() {
         let json = json!({"params": {"recipe_version": 3,
             "calibration": {"film_base": null}, "roll": {"exposure": null},
-            "scene_correction": {"exposure": 0.0}}})
+            "geometry": {"crop": null}, "scene_correction": {"exposure": 0.0}}})
         .to_string();
         let back = reparsed(&render(&json, &none));
         assert_eq!(back, json!({"params": {"recipe_version": 3}}));
@@ -779,7 +794,9 @@ mod tests {
     /// The value each refused flag is given here, a legal one.
     fn sample(flag: &str) -> &'static str {
         match flag {
-            "--base-region" => "0,0,10,10",
+            "--base-region" | "--crop" => "0,0,10,10",
+            "--rotate" => "90",
+            "--flip" => "vertical",
             "--roll-midtone-line" => "1,0,1,0,-1,1,2",
             "--small-lift" | "--thin-lift" | "--midtone-neutral" | "--colour-correction" => "off",
             "--placement" => "roll",

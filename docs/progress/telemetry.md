@@ -742,3 +742,10 @@ What shipped, and the parts the open tasks build on:
 **Updated:** 2026-10-14
 
 - 2026-10-14: section added at the frontmatter migration. Filed 2026-10-01 out of `upload` (see its section): only a compile check covers the uploader on Windows; low priority.
+
+## cropped-megapixels
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: Telemetry's megapixels is the decoded scan's size; after a --crop every stage past the decode runs on fewer pixels, so per-MP stage timings understate cropped runs.

@@ -34,6 +34,7 @@ use crate::jsonc;
 use crate::pipeline::black_endpoint;
 use crate::pipeline::chain;
 use crate::pipeline::fit_range;
+use crate::pipeline::geometry::{self, GeometrySection};
 use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
@@ -107,8 +108,8 @@ pub enum Command {
     /// --out.
     MeasureRoll(MeasureRollArgs),
     /// Write a look as an annotated recipe (JSONC) from conversion flags, with no scan:
-    /// every setting but what belongs to one roll (its film base, roll values, white
-    /// balance and exposure).
+    /// every setting but what belongs to one roll (its film base, roll values, its frames'
+    /// crop and orientation, white balance and exposure).
     Profile(ProfileArgs),
     /// Removed: renamed `profile`. Hidden, and kept only to emit a migration error.
     #[command(hide = true, disable_help_flag = true)]
@@ -187,6 +188,9 @@ pub enum TelemetryCommand {
 #[command(mut_arg("roll_white_balance_stops", |a| a.hide(true)))]
 #[command(mut_arg("white_balance", |a| a.hide(true)))]
 #[command(mut_arg("exposure", |a| a.hide(true)))]
+#[command(mut_arg("crop", |a| a.hide(true)))]
+#[command(mut_arg("rotate", |a| a.hide(true)))]
+#[command(mut_arg("flip", |a| a.hide(true)))]
 pub struct ProfileArgs {
     #[command(flatten)]
     pub knobs: ConversionFlags,
@@ -333,6 +337,8 @@ pub struct MeasureBaseArgs {
     pub film_base: FilmBaseOverrides,
     #[command(flatten)]
     pub measure: MeasureOverrides,
+    #[command(flatten)]
+    pub crop: CropOverride,
     /// Treat estimation warnings (a non-uniform area or `--base-region`, decode
     /// notes, …) as a hard error. `measure-base` produces the
     /// film base a roll is calibrated on, so a script baking the result into a
@@ -410,6 +416,8 @@ pub struct MeasureRollArgs {
     pub film_base: Option<[f32; 3]>,
     #[command(flatten)]
     pub measure: MeasureOverrides,
+    #[command(flatten)]
+    pub crop: CropOverride,
     /// Write no small lift, a taste adjustment: a low-key frame renders at the roll's
     /// exposure. Still reported (`frames[].lift_ev`); `convert --small-lift off` turns a
     /// written one off without re-measuring.
@@ -540,6 +548,10 @@ pub struct ConversionFlags {
     pub film_base: FilmBaseOverrides,
     #[command(flatten)]
     pub measure: MeasureOverrides,
+    #[command(flatten)]
+    pub crop: CropOverride,
+    #[command(flatten)]
+    pub orientation: OrientationOverrides,
     #[command(flatten)]
     pub density: DensityOverrides,
     #[command(flatten)]
@@ -826,18 +838,47 @@ pub struct FilmBaseOverrides {
 #[derive(Args, Debug, Default)]
 pub struct MeasureOverrides {
     /// Static border inset for measurements, as a fraction of the shorter edge
-    /// (default 0.05). The effective area is two cuts in order: the film holder,
-    /// measured from the IR plane where it separates, then this inset. The inset
+    /// (default 0.05). The effective area is cut in order: the film holder,
+    /// measured from the IR plane where it separates, this inset, then any --crop. The inset
     /// runs either way — where the holder could not be measured (no IR plane, or
     /// film too IR-opaque, which is routine for B&W) it is the only cut, and the
     /// default is sized for a rebate rather than a holder. Raise it for such a
     /// scan; the report says which case the run was in. Where the holder *was*
     /// measured the applied inset is floored at one holder-probe step (0.5% of the
     /// shorter edge), the cut's own resolution, so a stated value near 0 can report
-    /// more than it asked for — `effective_area.inset` is the applied value. Never
-    /// crops the image.
+    /// more than it asked for — `effective_area.inset` is the applied value. Cuts only
+    /// the measurement, never the image.
     #[arg(long = "measure-inset", value_name = "FRAC")]
     pub measure_inset: Option<f32>,
+}
+
+/// `--crop`, on every command that measures or converts (recipe `geometry.crop`).
+#[derive(Args, Debug, Default)]
+pub struct CropOverride {
+    /// Crop to `X,Y,W,H`, in the scan's own pixels before any rotation (the
+    /// `--base-region` convention). It also narrows every measurement: the effective
+    /// area is cut to it, so the film base, the roll's white and white balance read only
+    /// the picture. A frame's own crop is its `geometry.frames` entry, keyed by its path.
+    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_region)]
+    pub crop: Option<[u32; 4]>,
+}
+
+/// The orientation (recipe `geometry.rotate` and `geometry.flip`, `pipeline::geometry`).
+#[derive(Args, Debug, Default)]
+pub struct OrientationOverrides {
+    /// Turn the written image clockwise by 0, 90, 180 or 270 degrees, after the crop and
+    /// any `--flip`. Moves pixels only; no value changes.
+    #[arg(long, value_name = "DEGREES", value_parser = geometry::parse_rotation)]
+    pub rotate: Option<geometry::Rotation>,
+    /// Mirror the written image before any `--rotate`: `horizontal` swaps left and right,
+    /// `vertical` top and bottom, `none` states no flip (over a recipe's).
+    #[arg(
+        long,
+        value_enum,
+        ignore_case = true,
+        value_name = "NONE|HORIZONTAL|VERTICAL"
+    )]
+    pub flip: Option<geometry::Flip>,
 }
 
 /// The fixed decode's calibration overrides (recipe section `reconstruction`,
@@ -1619,7 +1660,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<ChainResult>,
     /// The resolved recipe (`convert`): the `params` of a `--save-recipe` file, with
-    /// `roll.frames` keys absolute, so it reloads through `--params` to this run. `identity.params_hash` hashes it.
+    /// per-frame keys absolute, so it reloads through `--params` to this run. `identity.params_hash` hashes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<Recipe>,
     /// What the linear HDR TIFF encoder wrote (`--transfer linear`), and the
@@ -1692,15 +1733,19 @@ pub struct Report {
     /// The resolved **effective measurement area** (every command that decodes —
     /// `inspect`, `measure-base`, `convert`, and each `roll` frame via
     /// `FrameStatus::Ok`): the rectangle a measurement may be read over, after the
-    /// IR-measured holder cut and the static inset. Reported so both cuts are
-    /// falsifiable from a run —
+    /// IR-measured holder cut, the static inset and any crop. Reported so the cuts
+    /// are falsifiable from a run —
     /// `holder: null` means the holder was *not measured* (no IR, shape-only, or
     /// not separable here), while all-zero depths mean it was measured and there is
     /// none. `inset` is the **applied** inset, which the holder cut's resolution
-    /// floors at one probe step wherever the march ran. The image is never cropped;
-    /// this is where statistics are read.
+    /// floors at one probe step wherever the march ran. This is where statistics are
+    /// read; `geometry` is what was written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_area: Option<film_base::EffectiveArea>,
+    /// The crop and orientation a conversion applied, and the written size; absent when
+    /// it wrote the scan as decoded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<geometry::GeometryReport>,
     /// Reuse-ready forms of the measured base (`measure-base`), only when it is usable
     /// as an explicit base (each channel in `(0, 1]`). Flattened, so the flag is the
     /// top-level key `film_base_flag`; the recipe half is what `--out` writes.
@@ -1927,7 +1972,8 @@ fn compose_layers(bodies: &[serde_json::Value]) -> Result<Recipe> {
     })
 }
 
-/// What a load does with each layer's `roll.frames`.
+/// What a load does with each layer's `roll.frames`. `geometry.frames` is resolved on
+/// every load: each command that reads it measures or renders by it.
 #[derive(Clone, Copy)]
 enum FrameKeys {
     /// Resolve the keys ([`resolve_frame_keys`]).
@@ -1962,6 +2008,13 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
         };
         let mut layer = read_layer(&txt, &name)?;
         layer_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
+        // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on stdin.
+        let folder = if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
+            collision_key(Path::new("."))
+        } else {
+            let key = collision_key(p);
+            key.parent().map_or(key.clone(), Path::to_path_buf)
+        };
         match frames {
             FrameKeys::Keep => {}
             FrameKeys::Drop => {
@@ -1969,19 +2022,19 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
                     roll.remove("frames");
                 }
             }
-            FrameKeys::Resolve => {
-                // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on
-                // stdin.
-                let folder =
-                    if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
-                        collision_key(Path::new("."))
-                    } else {
-                        let key = collision_key(p);
-                        key.parent().map_or(key.clone(), Path::to_path_buf)
-                    };
-                layer_warnings.extend(resolve_frame_keys(&mut layer.body, &folder, &name)?);
-            }
+            FrameKeys::Resolve => layer_warnings.extend(resolve_frame_keys(
+                &mut layer.body,
+                "roll.frames",
+                &folder,
+                &name,
+            )?),
         }
+        layer_warnings.extend(resolve_frame_keys(
+            &mut layer.body,
+            "geometry.frames",
+            &folder,
+            &name,
+        )?);
         layers.push(layer.body);
         names.push(name);
     }
@@ -1992,47 +2045,47 @@ fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
     })
 }
 
-/// Rewrite a layer's `roll.frames` keys, each relative to `folder` (the recipe's), to the
-/// frames' resolved paths ([`recipe::frame_keys`]); one warning per key naming no file.
+/// Rewrite a layer's `table` keys (`roll.frames` or `geometry.frames`), each relative to
+/// `folder` (the recipe's), to the frames' resolved paths ([`recipe::frame_keys`]); one
+/// warning per key naming no file.
 fn resolve_frame_keys(
     body: &mut serde_json::Value,
+    table: &str,
     folder: &Path,
     name: &str,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
-    recipe::frame_keys::rebase(body, |key| {
+    recipe::frame_keys::rebase(body, table, |key| {
         if key.is_empty() {
-            return Err("a `roll.frames` key is empty: key each frame by its path".into());
+            return Err(format!(
+                "a `{table}` key is empty: key each frame by its path"
+            ));
         }
         let path = folder.join(key);
         if !path.is_file() {
             warnings.push(format!(
-                "recipe {name}: `roll.frames` key {key:?} names no file (looked for {}), so \
+                "recipe {name}: `{table}` key {key:?} names no file (looked for {}), so \
                  its values reach no frame. A key is the frame's path relative to the \
                  recipe's folder: move the recipe with its scans, or correct the key",
                 path.display()
             ));
         }
-        frame_key(&path).ok_or_else(|| {
-            format!("`roll.frames` key {key:?} resolves to a path that is not UTF-8")
-        })
+        frame_key(&path)
+            .ok_or_else(|| format!("`{table}` key {key:?} resolves to a path that is not UTF-8"))
     })
     .map_err(|e| NcError::Usage(format!("recipe {name}: {e}")))?;
     Ok(warnings)
 }
 
-/// The key a frame's `roll.frames` entry has once loaded: its resolved path
-/// ([`collision_key`]); `None` when that is not UTF-8, which no key can name.
+/// The key a frame's `roll.frames` and `geometry.frames` entries have once loaded: its
+/// resolved path ([`collision_key`]); `None` when that is not UTF-8, which no key can name.
 fn frame_key(input: &Path) -> Option<String> {
     collision_key(input).to_str().map(str::to_owned)
 }
 
 /// `frames` as a recipe written to `path` states them: relative to the folder of the file
 /// the staged writer writes — a symlink's referent ([`staged::resolve_target`]).
-fn frames_written_to(
-    frames: &BTreeMap<String, recipe::FrameRoll>,
-    path: &Path,
-) -> BTreeMap<String, recipe::FrameRoll> {
+fn frames_written_to<T: Clone>(frames: &BTreeMap<String, T>, path: &Path) -> BTreeMap<String, T> {
     // A target that does not resolve fails the write itself.
     let written = staged::resolve_target(path).unwrap_or_else(|_| path.to_path_buf());
     let key = collision_key(&written);
@@ -4017,11 +4070,21 @@ fn convert_frame(
         ..Report::default()
     };
 
-    if let recipe::Destination::Display(d) = destination
-        && d.container == Container::Jpeg
-    {
+    // The frame's crop and orientation (its `geometry.frames` entry has moved into the
+    // shared values, `Recipe::for_frame`). A crop past the scan refuses before the decode.
+    let frame_geometry = recipe.geometry.shared();
+    let jpeg = match destination {
+        recipe::Destination::Display(d) if d.container == Container::Jpeg => Some(d),
+        _ => None,
+    };
+    if jpeg.is_some() || !frame_geometry.is_identity() {
         let shape = probe(input)?;
-        jpeg::check_fits(shape.width, shape.height, d.range, d.gamut)?;
+        geometry::check_crop_fits(frame_geometry.crop, shape.width, shape.height)?;
+        report.geometry = geometry::GeometryReport::of(&frame_geometry, shape.width, shape.height);
+        if let Some(d) = jpeg {
+            let (w, h) = frame_geometry.output_size(shape.width, shape.height);
+            jpeg::check_fits(w, h, d.range, d.gamut)?;
+        }
     }
 
     // Stage 0 — memory preflight, on a metadata-only header probe. This must run
@@ -4126,7 +4189,11 @@ fn convert_frame(
     // Timed as a success whatever it returns: an empty region is a warning, not the
     // run's failure.
     let area = clock.time(StageKind::FilmBase, || {
-        Ok(film_base::effective_area(&scan, recipe.measure.inset))
+        Ok(film_base::effective_area(
+            &scan,
+            recipe.measure.inset,
+            recipe.geometry.crop,
+        ))
     })?;
     match area {
         Ok(area) => {
@@ -4537,25 +4604,27 @@ fn render_destination(
     export: Option<&Path>,
     clock: &mut impl StageClock,
 ) -> Result<(DestinationRender, Option<staged::Staged>)> {
+    // Applied to what the chain rendered, before the encode and `--export-pre-encode`: it only
+    // moves pixels, so the chain's statistics never see another order.
+    let orientation = recipe.geometry.shared().orientation();
     let d = match destination {
         recipe::Destination::FilmMaster => {
             // Profile only — no transform: the tag names the space the pixels are in.
-            let (icc, staged) = clock.time(StageKind::Destination, || {
+            let (image, icc, staged) = clock.time(StageKind::Destination, || {
+                let mut image = aces.into_linear();
+                geometry::orient(&mut image, orientation);
                 let page = PreEncodePage::rgb_f32(
                     "film-master",
                     "acescg",
-                    aces.width(),
-                    aces.height(),
-                    aces.rgb(),
+                    image.width,
+                    image.height,
+                    &image.rgb,
                 );
                 let staged = export_pages(export, &[page])?;
-                Ok::<_, NcError>((color::icc_profile(&color::OutputSpace::AcesCg)?, staged))
+                let icc = color::icc_profile(&color::OutputSpace::AcesCg)?;
+                Ok::<_, NcError>((image, icc, staged))
             })?;
-            let render = DestinationRender::FilmMaster {
-                image: aces.into_linear(),
-                icc,
-            };
-            return Ok((render, staged));
+            return Ok((DestinationRender::FilmMaster { image, icc }, staged));
         }
         recipe::Destination::Display(d) => d,
     };
@@ -4636,8 +4705,9 @@ fn render_one(
         look,
         fit_range,
     } = chain::render(aces, film_base, &params, clock)?;
-    let (linear, gamut) = image.into_parts();
+    let (mut linear, gamut) = image.into_parts();
     let (bright_end, pixels) = clock.time(StageKind::Destination, || {
+        geometry::orient(&mut linear, recipe.geometry.shared().orientation());
         let bright_end = near_black::measure(&linear.rgb);
         let pixels = encode(OneRendition {
             linear,
@@ -4687,10 +4757,13 @@ fn render_gain_map(
         clock,
     )?;
     let base_fit_range = sdr.fit_range;
-    let (sdr_linear, gamut) = sdr.image.into_parts();
+    let (mut sdr_linear, gamut) = sdr.image.into_parts();
     let (mut hdr_linear, _) = hdr.image.into_parts();
     let (base, icc, map, clamp, report, staged, bright_end) =
         clock.time(StageKind::Destination, || {
+            let orientation = recipe.geometry.shared().orientation();
+            geometry::orient(&mut sdr_linear, orientation);
+            geometry::orient(&mut hdr_linear, orientation);
             let bright_end = near_black::measure(&sdr_linear.rgb);
             let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
             let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
@@ -4877,7 +4950,10 @@ fn render_frame(
     // film RGB v1 3×3. The film RGB export, if asked for, is staged between them: it
     // writes the decode's buffer before the in-place 3×3, so it adds no image buffer,
     // and it is timed as `encode`.
+    // The crop, before the decode: every stage after it sees only the picture. The film
+    // base and the effective area were read from the whole scan, in its own pixels.
     let (film, decoded) = clock.time(StageKind::Reconstruction, || {
+        let scan = geometry::crop_scan(scan, recipe.geometry.crop)?;
         fixed::decode(scan, &base, &decode_params)
     })?;
     let mut pending: Vec<staged::Staged> = Vec::new();
@@ -5223,8 +5299,10 @@ fn convert_attempt(
     reject_removed_flags(&args.knobs, !args.recipe_in.is_empty(), false)?;
     // A recipe written for the removed chain is refused inside the load, by name.
     let loaded = load_recipes(&args.recipe_in, FrameKeys::Resolve)?;
-    // The frame's own roll values first, then the flags win over every recipe.
+    // The frame's own roll values first, then the flags win over every recipe. The
+    // geometry table is checked as stated, so a bad entry is named as the entry.
     let stated_roll = loaded.recipe.roll.clone();
+    geometry::validate_frames(&loaded.recipe.geometry)?;
     let key = frame_key(&args.input);
     let recipe = recipe::merge(
         recipe::for_frame(loaded.recipe, Path::new(key.as_deref().unwrap_or_default())),
@@ -5371,6 +5449,7 @@ fn convert_attempt(
         .map(|path| {
             let mut written = recipe.clone();
             written.roll.frames = frames_written_to(&recipe.roll.frames, path);
+            written.geometry.frames = frames_written_to(&recipe.geometry.frames, path);
             stage_json(path, &RecipeEnvelope::new(&written))
         })
         .transpose()?;
@@ -5654,6 +5733,9 @@ enum FrameStatus {
         /// (`clippy::large_enum_variant`); `Box` serializes transparently.
         #[serde(skip_serializing_if = "Option::is_none")]
         effective_area: Option<Box<film_base::EffectiveArea>>,
+        /// The frame's crop and orientation, as `convert` reports them.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        geometry: Option<geometry::GeometryReport>,
         /// Resolved input color semantics (transfer + meaning + evidence + ICC
         /// summary) the frame ran on — mirrors the single-frame `Report` field so a
         /// roll frame reports the same input semantics `convert` does. Boxed like
@@ -6195,6 +6277,14 @@ fn resolve_frames(
                             return Err(null_refused(&key));
                         }
                         recipe::check_body(&ov, false, &context)?;
+                        if ov.pointer("/geometry/frames").is_some() {
+                            return Err(NcError::Usage(format!(
+                                "{context}: `geometry.frames` names frames, so it belongs in \
+                                 the shared recipe; state this frame's own crop and \
+                                 orientation as `geometry.crop`, `geometry.rotate` and \
+                                 `geometry.flip` here"
+                            )));
+                        }
                         // Its white or dark end beats the thin lift beneath it, as a typed
                         // one does.
                         if ["/roll/white_stops", "/roll/dark_stops"]
@@ -6468,6 +6558,7 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
         status: FrameStatus::Ok {
             film_base: report.film_base,
             effective_area: report.effective_area.map(Box::new),
+            geometry: report.geometry,
             input_color: report.input_color.map(Box::new),
             loss: report.loss,
             output_stats: report.output_stats,
@@ -6967,6 +7058,8 @@ fn measure_for_roll(
     log: &Log,
 ) -> Result<RollMeasurement> {
     let stated = compose_layers(&layers.bodies)?;
+    // As stated: a flag would otherwise erase a bad entry before it is checked.
+    geometry::validate_frames(&stated.geometry)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     // A frame's lift is refused on any `roll`, so before the measured values are, whose
     // remedy (render without measuring) it would refuse next.
@@ -7165,7 +7258,7 @@ fn guard_roll_targets(
 /// The recipe `roll --save-recipe` writes: the roll's, flags applied, with each
 /// `roll.frames` entry's values that a typed flag beat taken out, so every frame replays
 /// as it ran (a frame's entry applies before the flags, [`resolve_frames`]). An entry left
-/// with nothing is dropped.
+/// with nothing is dropped. `merge` already did this for `geometry.frames`.
 fn saved_roll_recipe(shared: &Recipe, roll: &RollOverrides) -> Recipe {
     let mut saved = shared.clone();
     saved.roll.frames.retain(|_, entry| {
@@ -7253,6 +7346,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // from the recipes alone (`resolve_frames`), since its `roll.frames` entry comes
     // before the flags.
     let stated = compose_layers(&layers.bodies)?;
+    geometry::validate_frames(&stated.geometry)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_a_tilt_without_its_gains(&args.knobs, &shared, false)?;
@@ -7366,6 +7460,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
                 &RecipeEnvelope::new(&{
                     let mut saved = saved_roll_recipe(&shared, &args.knobs.roll);
                     saved.roll.frames = frames_written_to(&saved.roll.frames, path);
+                    saved.geometry.frames = frames_written_to(&saved.geometry.frames, path);
                     saved
                 }),
             )
@@ -7565,6 +7660,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
     match film_base::effective_area(
         &scan,
         args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
+        None,
     ) {
         Ok(area) => {
             report.effective_area = Some(area);
@@ -7679,6 +7775,8 @@ struct BaseRequest<'a> {
     source: Option<&'a FilmBaseSource>,
     /// The static inset of the effective area.
     inset: f32,
+    /// The crop, the effective area's third cut.
+    crop: Option<[u32; 4]>,
     /// The declared chemistry, echoed (it gates nothing).
     film_type: Option<FilmType>,
 }
@@ -7718,6 +7816,7 @@ fn measure_base_into(
         input,
         source,
         inset,
+        crop,
         film_type,
     } = *req;
     // Decode-only: a stated region is gathered whole; the effective area is counted
@@ -7748,7 +7847,9 @@ fn measure_base_into(
     // The calibration command reports the IR verdict itself, not just a warning
     // about it: it decides whether the holder was measured.
     let ir_separability = film_base::ir_separability(&scan);
-    let area = film_base::effective_area(&scan, inset);
+    // A crop past the scan is the user's to fix, even where the area is only evidence.
+    geometry::check_crop_fits(crop, scan.image.width, scan.image.height)?;
+    let area = film_base::effective_area(&scan, inset, crop);
     let (effective_area, film_base_source, est) = match source {
         // A stated source does not read the area, so a failure to resolve it is a
         // diagnostic, not a refusal.
@@ -7895,6 +7996,8 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
     if let Some(f) = args.measure.measure_inset {
         check_measure_inset(f)?;
     }
+    // Shape first, so a zero-size crop is not reported as reaching past the scan.
+    geometry::check_crop_shape(args.crop.crop, "--crop")?;
 
     let mut targets = Vec::new();
     if let Some(out) = args.out.out.as_deref() {
@@ -7918,6 +8021,7 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
         input: &args.input,
         source: source.as_ref(),
         inset: args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
+        crop: args.crop.crop,
         film_type: args.film_type,
     };
     let m = measure_base(&req, args.memory.budget(), false, &log, &mut warnings)?;
@@ -7929,6 +8033,7 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
         },
         roll: None,
         measure: None,
+        geometry: None,
         reconstruction: None,
     });
     let report = Report {
@@ -7999,6 +8104,10 @@ struct MeasuredRecipe {
     roll: Option<recipe::RollSection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     measure: Option<MeasureParams>,
+    /// The crops the frames were measured over, and their orientation, so `roll` renders
+    /// the pictures that were measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<GeometrySection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reconstruction: Option<fixed::DecodeParams>,
 }
@@ -8025,6 +8134,9 @@ fn write_recipe_out(path: &Path, recipe: &MeasuredRecipe, log: &Log) -> Result<(
     let mut written = recipe.clone();
     if let Some(roll) = &mut written.roll {
         roll.frames = frames_written_to(&roll.frames, path);
+    }
+    if let Some(geometry) = &mut written.geometry {
+        geometry.frames = frames_written_to(&geometry.frames, path);
     }
     let mut json = serde_json::to_string_pretty(&RecipeEnvelope::new(&written))
         .map_err(|e| NcError::Other(format!("serializing recipe: {e}")))?;
@@ -8180,6 +8292,9 @@ struct MeasuredFrame {
     /// Whether a measured holder moved `region` (`convert`'s `effective_area.holder_applied`);
     /// otherwise the inset alone cut it.
     holder_applied: bool,
+    /// The crop `region` was cut to, when the frame has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crop: Option<[u32; 4]>,
     #[serde(flatten)]
     counts: roll_white::FrameCounts,
     /// The frame's white — the percentile of its pixels' brightest channel, before the
@@ -8585,7 +8700,17 @@ fn decode_for_roll_white<T>(
         );
     }
     input_semantics::require_convertible(&input_meta)?;
-    let area = film_base::effective_area(&scanned, recipe.measure.inset);
+    // A crop is the picture's: the leader is read whole, like the unexposed frame.
+    let crop = match scan {
+        RollScan::Leader => None,
+        RollScan::Frame | RollScan::ContentFrame => {
+            recipe
+                .geometry
+                .of(&frame_key(input).unwrap_or_default())
+                .crop
+        }
+    };
+    let area = film_base::effective_area(&scanned, recipe.measure.inset, crop);
     if scan == RollScan::Frame
         && let Ok(a) = &area
         && let Some(w) = film_base::polarity_warning(&scanned.image, a.region, base)?
@@ -8814,10 +8939,11 @@ type AreaMeasurement = Option<(BaseMeasurement, Vec<String>)>;
 
 /// Every input's effective-area measurement for the `auto` references, its warnings
 /// kept per input: only a frame taken as the base reports them. `None` for an input
-/// whose area gives no base.
+/// whose area gives no base. Uncropped: a crop is the picture's, and a reference is read
+/// whole.
 fn measure_areas(
     inputs: &[PathBuf],
-    inset: f32,
+    measure: &MeasureParams,
     budget: memory::Budget,
     log: &Log,
 ) -> Result<Vec<AreaMeasurement>> {
@@ -8827,7 +8953,8 @@ fn measure_areas(
             let req = BaseRequest {
                 input,
                 source: None,
-                inset,
+                inset: measure.inset,
+                crop: None,
                 film_type: None,
             };
             let mut own = Vec::new();
@@ -8856,7 +8983,8 @@ fn measure_areas(
 /// pool. An input whose area cannot be resolved refuses here, as it would as a picture.
 fn pool_content(
     inputs: &[PathBuf],
-    inset: f32,
+    measure: &MeasureParams,
+    geometry: &GeometrySection,
     hold_flat: bool,
     budget: memory::Budget,
     log: &Log,
@@ -8886,15 +9014,25 @@ fn pool_content(
         log_memory_preflight(&memory, log);
         let (scan, _) =
             decode_within(input, budget.bytes()).map_err(|e| e.prefixed(input.display()))?;
-        let area = film_base::effective_area(&scan, inset).map_err(|e| {
-            NcError::Usage(format!(
-                "{}: {} (every frame is measured over its effective area)",
-                input.display(),
-                e.message()
-            ))
-        })?;
-        let counts = film_base::AreaCounts::of(&scan.image, area.region)?;
-        let (median, spread) = pool.add(i, counts);
+        let area_of = |crop| {
+            film_base::effective_area(&scan, measure.inset, crop).map_err(|e| {
+                NcError::Usage(format!(
+                    "{}: {} (every frame is measured over its effective area)",
+                    input.display(),
+                    e.message()
+                ))
+            })
+        };
+        let crop = geometry.of(&frame_key(input).unwrap_or_default()).crop;
+        let counts = film_base::AreaCounts::of(&scan.image, area_of(crop)?.region)?;
+        // The pool reads the crop; a leader is classified over the whole frame, as
+        // `measure_areas` reads it.
+        let (median, spread) = if hold_flat && crop.is_some() {
+            film_base::AreaCounts::of(&scan.image, area_of(None)?.region)?.median_and_spread()
+        } else {
+            counts.median_and_spread()
+        };
+        pool.add_classified(i, counts, (median, spread));
         stats.push(
             median
                 .iter()
@@ -9102,6 +9240,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // Its frames table is dropped unread: `check` discards the roll section.
     let loaded = load_recipes(&args.recipe_in, FrameKeys::Drop)?;
     let mut recipe = loaded.recipe;
+    geometry::validate_frames(&recipe.geometry)?;
     // A measured base is not overridden: it is refused beside any other statement of the
     // base, before a rule about that base could refuse first.
     if let Some(measured) = measured_base(args.unexposed.as_ref(), args.base_content) {
@@ -9120,6 +9259,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if let Some(f) = args.measure.measure_inset {
         recipe.measure.inset = f;
     }
+    recipe.geometry.apply_flags(args.crop.crop, None, None);
     // Read before `check` clears the recipe's roll section.
     let form = args
         .white_balance_form
@@ -9318,12 +9458,13 @@ impl RollMeasureRequest<'_> {
         // What this measures — the roll section, and the style knobs a roll recipe may
         // carry beside it — is never read, and none of it may refuse the run. Nor may the
         // rendering, since a measurement renders nothing: a roll recipe stating `direct`
-        // beside a film master would otherwise be refused as that pair. Keys only: the
-        // measurement takes none of the conversion flags.
+        // beside a film master would otherwise be refused as that pair. Of the conversion
+        // flags the measurement takes only `--crop`, so the rest are named by key.
         recipe.roll = recipe::RollSection::default();
         recipe.rendering = crate::rendering::Rendering::default();
         recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
         recipe.look = recipe::LookKeys::default();
+        geometry::validate(&recipe.geometry, "--crop (recipe `geometry.crop`)")?;
         recipe::validate(recipe, KnobNames::KeyOnly)?;
         if self.strict && self.leader.is_none() {
             return Err(NcError::Usage(
@@ -9457,6 +9598,8 @@ fn measure_roll(
                 input: path,
                 source: None,
                 inset: recipe.measure.inset,
+                // A crop is the picture's; the reference is film base edge to edge.
+                crop: None,
                 film_type: None,
             };
             let m = measure_base(&base_req, budget, true, log, &mut warnings)?;
@@ -9481,14 +9624,20 @@ fn measure_roll(
     // `--base-content` (`film-base/content-fallback`) reads every input in its own pass,
     // which also gives `--leader auto` its statistics.
     let (pool, content_stats) = if req.content() {
-        let (pool, stats) =
-            pool_content(req.inputs, recipe.measure.inset, auto_leader, budget, log)?;
+        let (pool, stats) = pool_content(
+            req.inputs,
+            &recipe.measure,
+            &recipe.geometry,
+            auto_leader,
+            budget,
+            log,
+        )?;
         (Some(pool), Some(stats))
     } else {
         (None, None)
     };
     let mut areas = if auto && pool.is_none() {
-        measure_areas(req.inputs, recipe.measure.inset, budget, log)?
+        measure_areas(req.inputs, &recipe.measure, budget, log)?
     } else {
         Vec::new()
     };
@@ -9756,6 +9905,7 @@ fn measure_roll(
             input: input.clone(),
             region: area.region,
             holder_applied: area.holder_applied,
+            crop: area.crop,
             counts,
             // Replaced by the corrected white once the roll's colour is measured.
             white_stops: None,
@@ -9994,8 +10144,8 @@ fn measure_roll(
         white.stops, white.bound, white.slope
     ));
     // Everything a roll shares, as one recipe `roll --params` renders alone: the base,
-    // the roll section with its clamps, the decode the gains hold under, and the input
-    // and measure sections when stated.
+    // the roll section with its clamps, the decode the gains hold under, and the input,
+    // measure and geometry sections when stated.
     let measured = MeasuredRecipe {
         recipe_version: recipe::RecipeVersion,
         input: Some(recipe.input.clone()).filter(|i| *i != InputParams::default()),
@@ -10017,6 +10167,7 @@ fn measure_roll(
             ..recipe::RollSection::default()
         }),
         measure: (recipe.measure != MeasureParams::default()).then(|| recipe.measure.clone()),
+        geometry: (recipe.geometry != GeometrySection::default()).then(|| recipe.geometry.clone()),
         reconstruction: Some(recipe.reconstruction),
     };
 
@@ -11600,6 +11751,7 @@ mod tests {
             },
             roll: None,
             measure: None,
+            geometry: None,
             reconstruction: None,
         };
         let json = serde_json::to_string(&base).unwrap();
@@ -12319,6 +12471,8 @@ mod tests {
         "roll.colour_correction",
         // Resolved per frame; a manifest stating it is refused, not warned about.
         "roll.frames",
+        // A frame's crop and orientation are its own.
+        "geometry",
         "measure",
         "scene_correction",
         "look",
@@ -12853,6 +13007,7 @@ mod tests {
                 status: FrameStatus::Ok {
                     film_base: Some(FilmBase::from([0.9, 0.55, 0.42])),
                     effective_area: None,
+                    geometry: None,
                     input_color: None,
                     loss: None,
                     output_stats: Some(OutputStats {

@@ -1,8 +1,9 @@
 ---
 title: Crop and rotate
-status: todo
+status: done
 deps: []
 summary: crop and rotate as flags and recipe keys; a crop also narrows the measurement region
+done: 2026-10-16
 ---
 # Crop and rotate
 
@@ -15,22 +16,27 @@ re-measures that frame and can shift the roll's measurements.
 
 ## What is known
 
-- Every knob is a flag and a recipe key (the project's knob rule). `roll.frames` holds
-  only measured values; a user's per-frame setting goes in a `roll --frames` manifest's
-  `params`, which is where a crop belongs.
-- The effective area (`pipeline/film_base.rs`) is the IR holder cut then a static inset;
-  a crop would be a third cut.
-- Not in scope: straighten (arbitrary angles), auto-crop.
+- Every knob is a flag and a recipe key (the project's knob rule). A frame's own crop goes
+  in the shared recipe's `geometry.frames` table, keyed like `roll.frames`,
+  so `measure-roll` (which never reads a `roll --frames` manifest) measures it too.
+- The effective area (`pipeline/film_base.rs`) is the IR holder cut, then a static inset,
+  then the crop as a third cut.
+- Not in scope: straighten (arbitrary angles), auto-crop. Seeding a crop from the
+  measured holder belongs to the desktop app.
 - "The image is never cropped" (design-spec §9) and "It never crops the image"
   (`docs/using-nc.md`) change with this task.
 
-## Open questions
+## Decided
 
-1. Rotation in quarter turns only, plus flips?
-2. Crop coordinates: before or after rotation, and in pixels or fractions.
-3. How a crop's re-measure of the roll's pooled measurements (white, envelope, content
-   base) is batched and reported.
-4. Whether a crop affects the memory model (`pipeline/memory.rs`).
+The answers, and why, are in `docs/progress/core.md` `## crop-rotate`.
+
+1. Quarter turns plus flips; the flip comes before the turn.
+2. Pixels in the scan's own orientation, before any turn (the `--base-region`
+   convention).
+3. No batching: a crop is part of the recipe, so measuring with it measures each frame
+   over its crop, and `measure-roll --out` carries it to `roll`.
+4. No new term in the memory model: the crop compacts in place, the turn permutes in
+   place.
 
 ## How to Verify
 

@@ -141,7 +141,7 @@ What other epics need to know about `core`:
   A reader of a written recipe must unwrap `params` — and accept a bare one from the
   reference build (`nctool roll`'s `_unwrap_envelope`).
 - **`hanten profile` writes a look** (`core/profile-authoring`): every key but
-  `calibration`, `roll` and `scene_correction`, whose flags it refuses, as annotated JSONC
+  `calibration`, `roll`, `scene_correction` and `geometry`, whose flags it refuses, as annotated JSONC
   (`crate::profile`). `--params` reads JSONC everywhere (`crate::jsonc`), so a recipe
   reader outside the binary strips comments first (`nctool roll`'s `_strip_jsonc`). A new
   knob gets a `profile::NOTES` entry (a test refuses a key without one), and a new flag
@@ -165,6 +165,13 @@ What other epics need to know about `core`:
   value is refused. Reports: `area_uniformity.gradient`, `thin_lift.max_thin_slope`,
   `white.rule.film_saturation_margin_stops`. `docs/terminology.md` lists no open public
   misnomer.
+- **Crop and orientation are the recipe's `geometry`** (`core/crop-rotate`,
+  `pipeline::geometry`). The crop is the effective area's third cut after the holder
+  and inset, so every measurement reads only the picture; a frame's own crop goes in
+  `geometry.frames` (never `roll.frames`), and reference frames are read uncropped.
+  `effective_area.holder` is in scan pixels, the `--crop` convention, so a crop can be
+  seeded from it (check `capped` and `converged`). The turn runs last, in place;
+  `--export-film-rgb` is cropped but not turned.
 
 
 ## product-naming
@@ -1704,10 +1711,16 @@ new path. No pixel moved.
 
 ## crop-rotate
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: crop and rotate as flags and recipe keys; a crop also narrows the measurement region
+- 2026-10-15: Decided with the user (2026-10-15): quarter turns plus flips (--rotate 0|90|180|270, --flip horizontal|vertical); a crop is [x, y, w, h] pixels in the scan's own orientation, before rotation, like --base-region; one frame's crop/rotate/flip live in a new per-frame table keyed by file name (beside roll.frames, which stays measured-only), read by convert, roll, measure-base and measure-roll so a crop reaches the roll's measurement. Order: holder march on the full scan, area intersected with the crop, scan cropped in place; rotation and flip last, in place, before encode. Open question 3 (batching a re-measure) is the app's: each measuring run measures with the crops it is given.
+- 2026-10-15: Implemented. A new recipe section geometry {crop, rotate, flip, frames} (pipeline::geometry), flags --crop X,Y,W,H (convert, roll, measure-base, measure-roll), --rotate 0|90|180|270 and --flip none|horizontal|vertical (convert, roll). The crop is the effective area's third cut (film_base::effective_area takes it; the holder still marches on the whole scan) and cuts the scan in place before the fixed decode; the orientation (flip, then a clockwise turn) runs in place on the rendered image before the encode and its exports, so it moves pixels only. geometry.frames is keyed by file name and merged as a table (compose::MAPS); Recipe::for_frame moves a frame's entry in before the flags, so a flag beats it, and roll --save-recipe strips entries a typed flag beat. measure-roll --out carries geometry when stated; a manifest's params refuse a geometry.frames table; hanten profile refuses the section. Reports: geometry (crop, flip, rotate, written size) only when the image changed, effective_area.crop, measure-roll frames[].crop. holder_applied now compares against the same inset and crop without the holder, since a crop inside the holder's cut leaves the holder nothing to move. A crop past the scan is exit 2 (convert/roll before the decode from the probe; measure-base even beside a stated --base-region). Drift gate: v17 recipe hash refreshed in place (bb01d83b037d9f91 -> 277c297f9bfce8f4), render and base held. Memory model: no term added (in place; the visited bitset is under 0.13 B/px). Verified: uncropped outputs byte-identical to af4a4b9 on both fixtures across six destinations and on real 2026-07-15 Ektar 971; on 971 a crop with --rotate 270/90 writes 2000x3000 TIFF and gain-map JPEG (map 1000x1500). Gates: fmt, machete, clippy, build, doc, nctool 677, cargo test 857 unit + 299 + 32 + 1 integration, tasks check.
+- 2026-10-15: Code-review round. Fixed: a typed --crop/--rotate/--flip now drops the value it beat from every geometry.frames entry in recipe::merge (GeometrySection::apply_flags, also used by measure-roll), so the measuring paths and the render pick the same crop; the --unexposed and --leader frames and the auto reference search are read uncropped (a crop is the picture's); the empty crop/area error offers lowering the inset only when the floor inset would reach the crop; the holder-cap warning is skipped when the holder moved nothing (the not-settled warning stays: an unsettled march can under-report the holder, so a crop inside the reported cut can still hold holder); measure-roll names a bad crop as --crop; the crop releases the buffer tail (shrink_to_fit, a mapped block shrinks in place); half turns and flips swap in one pass; one rect_within predicate. Decided: --export-film-rgb stays un-turned and the guide and spec say so. Filed telemetry/cropped-megapixels. Uncropped output still byte-identical to af4a4b9 on both fixtures and 971.tif across 6 destinations; all gates green.
+- 2026-10-16: Done. Ship review round (Codex + local diff review): --base-content --leader auto now classifies the leader over the whole frame while the content pool reads the crop (ContentPool::add_classified), so a picture cropped to a flat dense field is not taken as a leader; convert checks the geometry.frames table as stated before for_frame folds it in, so a bad entry is named as the entry, not --crop; using-nc.md and design-spec.md now say holder_applied and the cap warning depend on the crop. Verified: all CI gates on rustc 1.99.1; uncropped output byte-identical to af4a4b9 (both fixtures and 2026-07-15-Ektar100/971.tif, 6 destinations). For dependents: the crop lives in geometry.frames, never in roll.frames; reference frames are read uncropped; effective_area.holder is in scan pixels, the --crop convention, so the desktop app can seed a crop from it (check capped and converged first). Follow-up filed: telemetry/cropped-megapixels.
+- 2026-10-16: PR-review round: the holder cap warning now names only capped edges the holder moved (EffectiveArea::holder_moved, not reported). geometry::validate_frames runs on the stated recipe before flags on roll, measure-roll and roll's measure mode (each tested), so a typed --crop cannot erase a bad geometry.frames entry before it is checked. measure-base shape-checks --crop before the decode, so a zero-size crop says 'width and height must be > 0', not 'reaches past'. nctool refuses only a geometry that changes the frame, in a --recipe and a review matrix (an identity section, --rotate 0 and --flip none pass). The 'march did not settle' warning stays ungated on purpose: an unsettled march can under-report the holder. Correction: after the rebase onto 248190f the v17 recipe hash refresh is b5eec6c8437ff02c -> f2ee438037fe8b41; the earlier entry's bb01d83b -> 277c297f predates the rebase.
+- 2026-10-16: Rebased onto b92f362 (core/frame-keys-by-path, #311): geometry.frames now keys frames like roll.frames, by path relative to the recipe's folder (a bare name is the frame beside the recipe), not by file name. recipe::frame_keys::rebase takes the table; cli load_layers resolves geometry.frames on every load, whatever FrameKeys does to roll.frames (roll's measure mode keeps roll.frames raw and measure-roll drops it, but both measure by the crops); GeometrySection::of / take_frame match the resolved key exactly; validate_frames no longer refuses path keys; convert/roll --save-recipe and measure-roll --out write the keys relative to the file written. A key naming no file warns (--strict refuses), two keys naming one frame exit 2. Also guarded nctool cast (#309) grids against a crop or turn. Same-named scans in two folders get their own crops (tested). Gates green: 865 unit, 316 + 32 + 1 integration, nctool 723.
 
 ## half-frame-split
 

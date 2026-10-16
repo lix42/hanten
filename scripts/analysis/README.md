@@ -84,7 +84,9 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts cast meas
 - `charts cast render` measures a roll on its pictures (`measure-roll`, the chart
   frames left out) and renders its chart frames through a grid of settings (default
   `nctool.cast.DEFAULT_GRID`; `--grid` overrides keys) into `<work>/renders/`, SDR Display
-  P3 16-bit TIFF. It needs a current build (destination flags). `charts cast measure`
+  P3 16-bit TIFF. It needs a current build (destination flags); a grid's `extra` args
+  may not crop or turn (`--crop`, or `--rotate`/`--flip` other than `0`/`none`), since
+  the patches are fractions of the scan. `charts cast measure`
   samples every labelled patch of those renders and of each `--source` (another
   producer's exports at the scan's size) as CIELAB D50 and writes `<work>/cast.json`:
   the grey patches' residual cast by tone and by bracket frame, colour-patch CIELAB hue
@@ -135,7 +137,8 @@ It performs these operations:
    present and match its checksum; a roll with none is measured unguarded, which
    `hanten` warns about — and `--strict-roll` refuses, since `roll --strict` refuses
    an unguarded measurement. A `--recipe` stating measured `roll` values is refused
-   too: measure mode measures them.
+   too: measure mode measures them. So is one whose `geometry` crops, turns or flips
+   (an identity section passes): patch rects are fractions of the source scan.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
    beside the converted images, and in measure mode `resolved-recipe.json`, the whole
    run with its measured `roll` section (`roll --save-recipe`).
@@ -504,8 +507,9 @@ Four rules it holds to, each of which has a reason rather than a preference:
   interface the matrix does not state is refused before anything renders. A config
   may not restate these or any other flag the generator supplies (`-o`,
   `--report`), because `nc` takes the last occurrence of such a flag and the
-  override would be silent. Every destination axis is stated rather than left to
-  `nc`'s derivation, so the suffix and the metrics' colour space are read off the
+  override would be silent. `--crop`, and a `--rotate` or `--flip` that changes the
+  frame, are refused too: patch rects are fractions of the source scan. Every
+  destination axis is stated rather than left to `nc`'s derivation, so the suffix and the metrics' colour space are read off the
   matrix, keyed on the container and on (gamut, transfer).
 - **Each cell is measured in the space its own render reports**, not in whatever
   the output's name usually implies — a destination cell by the

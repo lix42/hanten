@@ -30,6 +30,7 @@ pub mod fit_gamut;
 pub mod fit_range;
 pub mod gain_encode;
 pub mod gain_ratio;
+pub mod geometry;
 pub mod hdr;
 pub mod input_semantics;
 pub mod look;

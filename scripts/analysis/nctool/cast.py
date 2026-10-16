@@ -33,6 +33,7 @@ import sys
 from . import chart_table as _chart_table
 from . import charts as _charts
 from . import manifest as _manifest
+from . import review as _review
 
 D50 = (0.96422, 1.0, 0.82521)
 NEUTRAL_L = (15.0, 95.0)
@@ -78,7 +79,16 @@ def expand_grid(grid: dict) -> dict[str, dict]:
     for name, spec in grid.get("extra", {}).items():
         if name in configs:
             raise ValueError(f"extra configuration {name!r} repeats a grid name")
-        configs[name] = {"recipe": spec.get("recipe"), "args": list(spec.get("args", []))}
+        args = list(spec.get("args", []))
+        # Patch rects are fractions of the source scan; a crop or turn moves the render's.
+        for i, arg in enumerate(args):
+            flag = arg.split("=", 1)[0]
+            if (flag in _review.GEOMETRY_FLAGS
+                    and not _review.geometry_identity(flag, arg, args[i + 1:])):
+                raise ValueError(f"extra configuration {name!r}: {flag} is refused: patch "
+                                 "rects are fractions of the source scan, which a cropped "
+                                 "or turned render no longer shows")
+        configs[name] = {"recipe": spec.get("recipe"), "args": args}
     return configs
 
 

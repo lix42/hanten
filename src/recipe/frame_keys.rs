@@ -1,4 +1,4 @@
-//! How `roll.frames` keys name their frames.
+//! How the per-frame tables' keys (`roll.frames`, `geometry.frames`) name their frames.
 //!
 //! A recipe file keys each frame by its path **relative to the recipe's own folder**
 //! (absolute only where no relative path exists, as across Windows drives), so a roll
@@ -22,13 +22,17 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 
-/// Rewrite each `roll.frames` key in a recipe body to `resolve(key)`. Two keys resolving
-/// to one frame are an error naming both; so is any error `resolve` returns.
+/// Rewrite each key of `table` (`roll.frames` or `geometry.frames`, keyed alike) in a
+/// recipe body to `resolve(key)`.
+/// Two keys resolving to one frame are an error naming both; so is any error `resolve`
+/// returns.
 pub fn rebase(
     body: &mut Value,
+    table: &str,
     mut resolve: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<(), String> {
-    let Some(Value::Object(frames)) = body.pointer_mut("/roll/frames") else {
+    let pointer = format!("/{}", table.replace('.', "/"));
+    let Some(Value::Object(frames)) = body.pointer_mut(&pointer) else {
         return Ok(());
     };
     let mut rebased = serde_json::Map::new();
@@ -37,8 +41,8 @@ pub fn rebase(
         let path = resolve(&key)?;
         if let Some(first) = stated.get(&path) {
             return Err(format!(
-                "`roll.frames` keys {first:?} and {key:?} both name {path}: merge them into \
-                 one entry"
+                "`{table}` keys {first:?} and {key:?} both name {path}: merge them into one \
+                 entry"
             ));
         }
         stated.insert(path.clone(), key);
@@ -148,14 +152,14 @@ mod tests {
     #[test]
     fn rebase_rewrites_every_key_and_refuses_two_naming_one_frame() {
         let mut body = json!({"roll": {"frames": {"a.tif": {"frame_exposure": 1.0}}}});
-        rebase(&mut body, |k| Ok(format!("/r/{k}"))).unwrap();
+        rebase(&mut body, "roll.frames", |k| Ok(format!("/r/{k}"))).unwrap();
         assert_eq!(
             body,
             json!({"roll": {"frames": {"/r/a.tif": {"frame_exposure": 1.0}}}})
         );
 
         let mut body = json!({"roll": {"frames": {"a.tif": {}, "./a.tif": {}}}});
-        let err = rebase(&mut body, |k| {
+        let err = rebase(&mut body, "roll.frames", |k| {
             Ok(format!("/r/{}", k.trim_start_matches("./")))
         })
         .unwrap_err();
@@ -165,6 +169,14 @@ mod tests {
         );
 
         let mut none = json!({"look": {}});
-        rebase(&mut none, |_| Err("unreached".into())).unwrap();
+        rebase(&mut none, "roll.frames", |_| Err("unreached".into())).unwrap();
+
+        // The geometry table is keyed the same way.
+        let mut body = json!({"geometry": {"frames": {"a.tif": {"rotate": 90}}}});
+        rebase(&mut body, "geometry.frames", |k| Ok(format!("/r/{k}"))).unwrap();
+        assert_eq!(
+            body,
+            json!({"geometry": {"frames": {"/r/a.tif": {"rotate": 90}}}})
+        );
     }
 }

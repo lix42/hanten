@@ -128,14 +128,14 @@ graph TD
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
-- [ ] [Crop and rotate](tasks/core/crop-rotate.md) — crop and rotate as flags and recipe keys; a crop also narrows the measurement region
-- [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame · **waits on** `core/crop-rotate`
+- [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame
 - [ ] [Stable codes for warnings and errors](tasks/core/message-codes.md) — every warning and error carries a code and facts; the CLI formats its prose from them, the app maps codes to its own handling
 - [ ] [Release Readiness](tasks/core/release-readiness.md) — from the release-readiness review: (1) correct public docs that misstate the product (README "pre-implementation" + "planned", TASKS.md "two algorithms" omitting sigmoid, obsolete `--out-depth` in…
 - [x] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll, cross-frame agreement, provenance + confidence, a loud refusal
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section
 - [x] [CLI Framework](tasks/core/cli-framework.md)
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report identity and pipeline_version, the golden drift gate, the {meta,params} sidecar envelope, and nctool compare
+- [x] [Crop and rotate](tasks/core/crop-rotate.md) — crop and rotate as flags and recipe keys; a crop also narrows the measurement region
 - [x] [Dependency & Module Hygiene](tasks/core/dependency-hygiene.md) — from the hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image` (test-only, JPEG decode) to a JPEG-only dev-dependency
 - [x] [Key roll frames by relative path](tasks/core/frame-keys-by-path.md) — roll.frames is keyed by file name; a recipe applied to a same-named file elsewhere shares its entry
 - [x] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
@@ -292,6 +292,7 @@ graph TD
 > may perturb deterministic image output.
 
 - [~] [Performance Instrumentation](tasks/telemetry/perf-instrumentation.md) — **parked**: the LAB criterion-benchmark approach was prototyped and parked on branch `prototype/perf-bench-instrumentation` (not merged
+- [ ] [Count a cropped frame's megapixels in telemetry](tasks/telemetry/cropped-megapixels.md) — Telemetry's megapixels is the decoded scan's size; after a --crop every stage past the decode runs on fewer pixels, so per-MP stage timings understate cropped runs. · **low priority**
 - [ ] [Run the uploader's tests on Windows](tasks/telemetry/upload-windows.md) — run the uploader's tests on Windows; only a compile check covers it today · **low priority**
 - [x] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — the validating Cloudflare Worker + D1 ingestion endpoint, with dedup, retention, cost ceilings and a kill switch · **low priority**
 - [x] [Sanitized panic telemetry](tasks/telemetry/panic-hook.md) — publish persistent-managed-consent panic events as isolated atomic ready files with only capped, normalized `nc` function/module frames

@@ -446,7 +446,7 @@ pub enum FilmType {
 #[serde(default, deny_unknown_fields)]
 pub struct MeasureParams {
     /// The static border inset, as a fraction of the **original** frame's shorter
-    /// dimension — the second of the effective area's two cuts.
+    /// dimension — the second of the effective area's cuts.
     ///
     /// The holder is cut first, from IR, so this only has to clear a rebate; the
     /// default is [`DEFAULT_MEASURE_INSET`] and the bound is [`MAX_MEASURE_INSET`],
@@ -468,7 +468,7 @@ impl Default for MeasureParams {
 }
 
 /// Default static border inset, as a fraction of the **original** frame's shorter
-/// dimension — the second of the effective area's two cuts.
+/// dimension — the second of the effective area's cuts.
 ///
 /// It is sized for a rebate, because the holder is cut first from IR. Where the
 /// holder could *not* be measured this same 5% is the only cut, and it may then

@@ -50,6 +50,11 @@
 //!   `--export-film-rgb` writes the decode's buffer verbatim before the 3×3, and
 //!   `--export-pre-encode` the buffers the render already holds, so neither adds a
 //!   term.
+//! - **A crop and an orientation add no term** (`pipeline::geometry`). The crop
+//!   compacts the scan in place before the decode and releases the tail, so every later
+//!   phase holds less than the full frame the model counts — an over-count, the safe
+//!   side. The orientation permutes the rendered buffer in place; a quarter turn marks
+//!   moved pixels in one bit each (under 0.13 B/px), which the allowance covers.
 //! - **Retention: a freed buffer is still counted at every later peak.** The film-base
 //!   sample is **added into** the render and encode phases rather than competing with
 //!   them. This was macOS malloc's behaviour: it kept freed large blocks resident, and
