@@ -3,7 +3,7 @@ title: Rename the fit-range and HDR misnomers (--display-tone-headroom, --displa
 status: done
 deps: [core/value-domain-terminology]
 summary: the highlight range gets its own public name; display black and the duplicated display peak
-done: 2026-10-16
+done: "2026-10-16 #308"
 ---
 # Rename the fit-range and HDR misnomers
 
