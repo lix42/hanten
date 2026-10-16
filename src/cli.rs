@@ -7049,6 +7049,8 @@ fn measure_for_roll(
     log: &Log,
 ) -> Result<RollMeasurement> {
     let stated = compose_layers(&layers.bodies)?;
+    // As stated: a flag would otherwise erase a bad entry before it is checked.
+    geometry::validate_frames(&stated.geometry)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     // A frame's lift is refused on any `roll`, so before the measured values are, whose
     // remedy (render without measuring) it would refuse next.
@@ -7335,6 +7337,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // from the recipes alone (`resolve_frames`), since its `roll.frames` entry comes
     // before the flags.
     let stated = compose_layers(&layers.bodies)?;
+    geometry::validate_frames(&stated.geometry)?;
     let shared = recipe::merge(stated.clone(), &args.knobs);
     reject_a_line_without_its_gains(&args.knobs, &shared)?;
     reject_a_tilt_without_its_gains(&args.knobs, &shared, false)?;
@@ -7983,6 +7986,8 @@ fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
     if let Some(f) = args.measure.measure_inset {
         check_measure_inset(f)?;
     }
+    // Shape first, so a zero-size crop is not reported as reaching past the scan.
+    geometry::check_crop_shape(args.crop.crop, "--crop")?;
 
     let mut targets = Vec::new();
     if let Some(out) = args.out.out.as_deref() {
@@ -9217,6 +9222,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // Its frames table is dropped unread: `check` discards the roll section.
     let loaded = load_recipes(&args.recipe_in, FrameKeys::Drop)?;
     let mut recipe = loaded.recipe;
+    geometry::validate_frames(&recipe.geometry)?;
     // A measured base is not overridden: it is refused beside any other statement of the
     // base, before a rule about that base could refuse first.
     if let Some(measured) = measured_base(args.unexposed.as_ref(), args.base_content) {

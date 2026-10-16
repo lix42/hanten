@@ -9,7 +9,7 @@
 //! (`film-base/holder-masked-measurement`):
 //!
 //! - **The effective area** of a reference frame ([`effective_area`]: the IR-measured
-//!   holder cut, then a static inset), read by [`measure_area`] at the per-channel
+//!   holder cut, then a static inset, then any stated crop), read by [`measure_area`] at the per-channel
 //!   **median**. With the holder cut away the area is one population — unexposed film
 //!   plus grain and scanner noise — and an extreme percentile would land in its noise
 //!   tail: p97 sat 0.046 density above the median on a Gold 200 leader, ~0.15 stops
@@ -852,6 +852,10 @@ pub struct EffectiveArea {
     /// all-zero depths reads `false`: the plane was read and the answer was "no
     /// holder", which moved nothing.
     pub holder_applied: bool,
+    /// Which edges the holder moved, top, bottom, left, right: those the cap warning
+    /// may name. Not reported; `holder_applied` is whether any did.
+    #[serde(skip)]
+    pub holder_moved: [bool; 4],
     /// The static inset **applied** inside the holder, in pixels — the same value
     /// on every edge, taken from the **original** frame's shorter dimension so it
     /// does not move with the holder measurement.
@@ -889,6 +893,16 @@ impl CappedEdges {
             left,
             right,
         }
+    }
+
+    /// These flags kept only where `keep` (top, bottom, left, right) is set.
+    fn only(self, [top, bottom, left, right]: [bool; 4]) -> Self {
+        Self::from_array([
+            self.top && top,
+            self.bottom && bottom,
+            self.left && left,
+            self.right && right,
+        ])
     }
 
     /// Whether any edge capped — the question the old frame-wide boolean answered.
@@ -1113,15 +1127,28 @@ pub fn effective_area(
         image.width.saturating_sub(2 * inset),
         image.height.saturating_sub(2 * inset),
     ];
-    let holder_applied = holder.is_some()
-        && Some(region)
-            != crop.map_or(Some(without_holder), |c| {
-                geometry::intersect(without_holder, c)
-            });
+    // `region` lies inside it, so the intersection is never empty.
+    let u = crop
+        .map_or(Some(without_holder), |c| {
+            geometry::intersect(without_holder, c)
+        })
+        .unwrap_or(region);
+    let far = |r: [u32; 4], i: usize| r[i] + r[i + 2];
+    let holder_moved = if holder.is_some() {
+        [
+            region[1] != u[1],
+            far(region, 1) != far(u, 1),
+            region[0] != u[0],
+            far(region, 0) != far(u, 0),
+        ]
+    } else {
+        [false; 4]
+    };
     Ok(EffectiveArea {
         region,
         holder,
-        holder_applied,
+        holder_applied: holder_moved.contains(&true),
+        holder_moved,
         inset,
         crop,
     })
@@ -1142,9 +1169,10 @@ pub fn effective_area_warnings(area: &EffectiveArea) -> Vec<String> {
     let Some(h) = area.holder else {
         return out;
     };
-    // A capped edge only over-cuts, so it matters only where the holder moved the region.
-    if h.capped.any() && area.holder_applied {
-        let edges = h.capped.names().join(", ");
+    // A capped edge only over-cuts, so it matters only where it moved the region.
+    let capped = h.capped.only(area.holder_moved);
+    if capped.any() {
+        let edges = capped.names().join(", ");
         let depth_pct = (HOLDER_MARCH_MAX_FRAC * 100.0).round();
         // The premise and its remedy are `HOLDER_MARCH_MAX_FRAC`'s.
         out.push(format!(
@@ -2258,6 +2286,19 @@ mod tests {
         let inside = effective_area(&img, 0.05, Some([80, 80, 40, 40])).unwrap();
         assert!(!inside.holder_applied);
         assert!(effective_area_warnings(&inside).is_empty());
+        // Only the measured right edge cuts it: the capped ones moved nothing.
+        let right = effective_area(&img, 0.05, Some([80, 80, 115, 20])).unwrap();
+        assert!(right.holder_applied);
+        assert!(effective_area_warnings(&right).is_empty(), "{right:?}");
+        // The capped left edge cuts it: the warning names that edge alone.
+        let left = effective_area(&img, 0.05, Some([0, 80, 100, 20])).unwrap();
+        let warnings = effective_area_warnings(&left);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("on the left edge(s)"),
+            "{}",
+            warnings[0]
+        );
 
         let shallow = ir_holder_edges(200, 200, [4, 4, 4, 4]);
         assert!(
@@ -2345,6 +2386,7 @@ mod tests {
                 converged: false,
             }),
             holder_applied: true,
+            holder_moved: [true; 4],
             inset: 10,
             crop: None,
         };
@@ -2371,6 +2413,7 @@ mod tests {
         let not_measured = EffectiveArea {
             holder: None,
             holder_applied: false,
+            holder_moved: [false; 4],
             ..unsettled
         };
         assert!(effective_area_warnings(&not_measured).is_empty());

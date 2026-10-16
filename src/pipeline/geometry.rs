@@ -266,7 +266,8 @@ pub fn validate_frames(section: &GeometrySection) -> Result<()> {
     Ok(())
 }
 
-fn check_crop_shape(crop: Option<[u32; 4]>, name: &str) -> Result<()> {
+/// Refuse a crop of zero size or one whose far edge a `u32` cannot hold.
+pub fn check_crop_shape(crop: Option<[u32; 4]>, name: &str) -> Result<()> {
     let Some([x, y, w, h]) = crop else {
         return Ok(());
     };

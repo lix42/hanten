@@ -167,6 +167,7 @@ Read the module docs before changing these; they hold the traps.
 | destination set (axes, table, derivation) | `src/destination.rs` |
 | decode, density scale, anchor | `algo/fixed.rs` |
 | film base, holder march, measurement region | `pipeline/film_base.rs` |
+| crop and orientation (geometry) | `pipeline/geometry.rs`; the crop's cut in `film_base::effective_area`; `GeometrySection::apply_flags`, `recipe::for_frame` |
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
 | rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `midtone_neutral.rs`, `roll_balance.rs`, `correction_confidence.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |

@@ -212,7 +212,26 @@ def _recipe_input(path: str | None) -> tuple[dict | None, dict | None, str | Non
     value, error = _unwrap_envelope(value, str(path))
     if error:
         return None, None, error
+    # A crop or turn moves the render's frame off the scan's, and patch rects are
+    # fractions of the scan (`patches`). Every hanten-written recipe states an
+    # identity section, which asks for nothing.
+    if _moves_the_frame(value.get("geometry")):
+        return None, None, (f"{path}: `geometry` (a crop or turn) is refused: patch "
+                            "rects are fractions of the source scan, which a cropped "
+                            "or turned render no longer shows")
     return json.loads(json.dumps(value)), meta, None
+
+
+def _moves_the_frame(geometry: object) -> bool:
+    """Whether a recipe's `geometry` section crops, turns or flips any frame."""
+    if geometry is None:
+        return False
+    if not isinstance(geometry, dict):
+        return True  # malformed: refuse rather than guess
+    return (geometry.get("crop") is not None
+            or geometry.get("rotate") not in (None, 0)
+            or geometry.get("flip") not in (None, "none")
+            or bool(geometry.get("frames")))
 
 
 def _unwrap_envelope(value: dict, label: str) -> tuple[dict | None, str | None]:

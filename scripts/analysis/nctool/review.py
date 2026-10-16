@@ -131,6 +131,9 @@ OWNED_FLAGS = ("--output-preset", "-o", "--output", "--report", "--report-file",
                # The matrix's `destination` supplies these.
                "--range", "--transfer", "--gamut", "--container", "--film-master")
 
+#: A crop or turn moves a cell's frame off the scan's (`patches`).
+GEOMETRY_FLAGS = ("--crop", "--rotate", "--flip")
+
 #: The matrix key that states the output for each interface a build may speak
 #: (`manifest.output_interface`).
 OUTPUT_KEYS = {"preset": "output_preset", "destination": "destination"}
@@ -410,11 +413,15 @@ def placeholders_in(args: list[str], at: str) -> set[str]:
 
 def reject_owned_flags(args: list[str], at: str) -> None:
     """Refuse a matrix that states a flag the generator supplies itself."""
-    for arg in args:
+    for i, arg in enumerate(args):
         # `-o/tmp/x.jpg` is one token to clap, so splitting on `=` alone misses it —
         # and it would then beat the generator's own `-o`, writing the image
         # somewhere `review.json` does not name.
         name = arg[:2] if arg.startswith("-o") and not arg.startswith("--") else arg.split("=", 1)[0]
+        if name in GEOMETRY_FLAGS and not _geometry_identity(name, arg, args[i + 1:]):
+            raise ReviewError(
+                f"{at}: {name} is refused: patch rects are fractions of the source "
+                "scan, which a cropped or turned render no longer shows")
         if name in OWNED_FLAGS:
             raise ReviewError(
                 f"{at}: {name} is set by the generator, not by the matrix"
@@ -422,6 +429,12 @@ def reject_owned_flags(args: list[str], at: str) -> None:
                 + (" — state it once as destination"
                    if name in ("--range", "--transfer", "--gamut",
                                "--container", "--film-master") else ""))
+
+
+def _geometry_identity(name: str, arg: str, rest: list[str]) -> bool:
+    """Whether a geometry flag asks for nothing (`--rotate 0`, `--flip none`)."""
+    value = arg.split("=", 1)[1] if "=" in arg else (rest[0] if rest else None)
+    return (name, value) in (("--rotate", "0"), ("--flip", "none"))
 
 
 def destination_render(destination: object) -> tuple[str, list[str]]:

@@ -135,7 +135,8 @@ It performs these operations:
    present and match its checksum; a roll with none is measured unguarded, which
    `hanten` warns about — and `--strict-roll` refuses, since `roll --strict` refuses
    an unguarded measurement. A `--recipe` stating measured `roll` values is refused
-   too: measure mode measures them.
+   too: measure mode measures them. So is one whose `geometry` crops, turns or flips
+   (an identity section passes): patch rects are fractions of the source scan.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
    beside the converted images, and in measure mode `resolved-recipe.json`, the whole
    run with its measured `roll` section (`roll --save-recipe`).
@@ -504,8 +505,9 @@ Four rules it holds to, each of which has a reason rather than a preference:
   interface the matrix does not state is refused before anything renders. A config
   may not restate these or any other flag the generator supplies (`-o`,
   `--report`), because `nc` takes the last occurrence of such a flag and the
-  override would be silent. Every destination axis is stated rather than left to
-  `nc`'s derivation, so the suffix and the metrics' colour space are read off the
+  override would be silent. `--crop`, and a `--rotate` or `--flip` that changes the
+  frame, are refused too: patch rects are fractions of the source scan. Every
+  destination axis is stated rather than left to `nc`'s derivation, so the suffix and the metrics' colour space are read off the
   matrix, keyed on the container and on (gamut, transfer).
 - **Each cell is measured in the space its own render reports**, not in whatever
   the output's name usually implies — a destination cell by the

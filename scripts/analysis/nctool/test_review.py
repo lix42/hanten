@@ -248,6 +248,18 @@ class TestOwnedFlags(unittest.TestCase):
             with self.assertRaisesRegex(review.ReviewError, "set by the generator"):
                 load(common_args=[flag, "x"])
 
+    def test_refuses_a_crop_or_turn(self):
+        # Patch rects are fractions of the source scan; a cropped or turned cell is not.
+        for args in (["--crop=0,0,10,10"], ["--crop", "0,0,10,10"], ["--rotate=90"],
+                     ["--rotate", "90"], ["--flip=vertical"], ["--flip", "horizontal"],
+                     ["--rotate"]):
+            with self.assertRaisesRegex(review.ReviewError, "fractions of the source scan"):
+                load(configs=[{"id": "a", "args": args}])
+
+    def test_accepts_a_turn_that_asks_for_nothing(self):
+        for args in (["--rotate=0"], ["--rotate", "0"], ["--flip=none"], ["--flip", "none"]):
+            load(configs=[{"id": "a", "args": args}])
+
     def test_sees_the_equals_form_too(self):
         with self.assertRaisesRegex(review.ReviewError, "set by the generator"):
             load(configs=[{"id": "a", "args": ["--output-preset=legacy"]}])

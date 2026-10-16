@@ -417,6 +417,35 @@ class TestConvert(unittest.TestCase):
             self.assertIn("envelope `meta` must be an object", err.getvalue())
             self.assertEqual(run.call_count, 2, meta)  # the default-recipe probe and query only
 
+    def test_a_recipe_stating_geometry_is_refused_before_measuring(self):
+        # Patch rects are fractions of the source scan, which a crop or turn moves.
+        recipe_path = self.root / "geometry.json"
+        recipe_path.write_text(json.dumps({"recipe_version": 3, "geometry": {"rotate": 90}}))
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run) as run, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(recipe=str(recipe_path)))
+        self.assertEqual(code, 2)
+        self.assertIn("`geometry` (a crop or turn) is refused", err.getvalue())
+        self.assertEqual(run.call_count, 2)  # the default-recipe probe and query only
+
+    def test_a_geometry_that_asks_for_nothing_is_accepted(self):
+        # Every hanten-written recipe states this section.
+        for geometry in ({"crop": None, "rotate": None, "flip": None, "frames": {}},
+                         {"rotate": 0, "flip": "none"}):
+            self.assertIsNone(roll._recipe_input(self._write_geometry(geometry))[2], geometry)
+
+    def test_a_geometry_that_moves_the_frame_is_refused(self):
+        for geometry in ({"crop": [0, 0, 10, 10]}, {"rotate": 180}, {"flip": "vertical"},
+                         {"frames": {"a.tif": {"rotate": 90}}}):
+            error = roll._recipe_input(self._write_geometry(geometry))[2]
+            self.assertIn("`geometry` (a crop or turn) is refused", error or "", geometry)
+
+    def _write_geometry(self, geometry: dict) -> str:
+        path = self.root / "geometry.json"
+        path.write_text(json.dumps({"recipe_version": 3, "geometry": geometry}))
+        return str(path)
+
     # Refused before the Dmin estimate: everything it depends on is known by then.
     def test_the_destination_flags_on_a_preset_build_are_refused_before_measuring(self):
         self.defaults = self.PRESET_DEFAULTS

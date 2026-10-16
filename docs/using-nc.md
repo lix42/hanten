@@ -2450,7 +2450,7 @@ leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2
 from every command, before the file is read.
 
 Two fields on `holder` say the measurement is not what it looks like. **Both emit a
-warning, which `--strict` promotes to a failure** — `capped` only where the holder
+warning, which `--strict` promotes to a failure** — `capped` only for an edge that
 moved the region, since a capped edge only over-cuts.
 
 - `capped` — one flag per edge. A capped edge marched as deep as `hanten` looks (25% of
@@ -2529,7 +2529,9 @@ hanten convert scan.tif -o out --params roll.json --crop 40,30,400,300 --rotate 
   and the `--out` file carries the section, so `roll --params roll.json` renders the
   pictures that were measured. A `--crop`, `--rotate` or `--flip` flag beats every
   frame's entry, as `--roll-white` beats a clamp. `--flip none` states no flip, over a
-  recipe's.
+  recipe's. A crop in a `roll --frames` manifest's `params` renders, but is not what
+  that frame was measured over (`measure-roll` reads no manifest), so a crop that
+  should re-measure belongs here.
 - **A crop past the scan refuses** (exit 2), before the decode on `convert`:
 
   ```

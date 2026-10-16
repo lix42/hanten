@@ -20413,6 +20413,52 @@ fn a_frames_own_geometry_applies_to_it_alone_and_a_flag_beats_it() {
         err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`") && !err.contains("--crop"),
         "{err}"
     );
+    // On `roll`, a typed `--crop` does not erase the bad entry before it is checked.
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("bad-roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        bad.to_str().unwrap(),
+        "--crop",
+        "0,0,20,20",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`"),
+        "{err}"
+    );
+    // So too on `measure-roll` and on `roll`'s measure mode, with a recipe that
+    // would otherwise measure.
+    let bad_measured = write_file(
+        &tmp.path("bad-measured.json"),
+        r#"{"recipe_version": 3,
+            "input": {"transfer": "linear", "meaning": "scanner-device"},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "geometry": {"frames": {"hdr-48bit.tif": {"crop": [0, 0, 0, 5]}}}}"#,
+    );
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    let out = tmp.path("measured-roll").display().to_string();
+    let typed = [
+        "--params",
+        bad_measured.to_str().unwrap(),
+        "--crop",
+        "0,0,20,20",
+    ];
+    for command in [
+        &["measure-roll", frame.as_str()][..],
+        &["roll", frame.as_str(), "-o", out.as_str(), "--measure-roll"][..],
+    ] {
+        let (code, _, err) = run(&[command, &typed[..]].concat());
+        assert_eq!(code, 2, "{command:?}: {err}");
+        assert!(
+            err.contains("`geometry.frames.\"hdr-48bit.tif\".crop`"),
+            "{command:?}: {err}"
+        );
+    }
 }
 
 #[test]
@@ -20436,6 +20482,19 @@ fn measure_base_reads_only_the_crop() {
         cut["film_base"], whole["film_base"],
         "the base is read over the crop"
     );
+    // A zero-size crop is a shape fault, not one that reaches past the scan.
+    let (code, _, err) = run(&[
+        "measure-base",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--crop",
+        "0,0,0,5",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--crop width and height must be > 0 (got 0x5)"),
+        "{err}"
+    );
+    assert!(!err.contains("reaches past"), "{err}");
 }
 
 #[test]

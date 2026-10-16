@@ -254,14 +254,14 @@ The conversion is a linear sequence of pure-function stages, each with its own
 parameters, orchestrated by `cli::convert_frame`:
 
 ```text
-decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 → linear ACEScg
-  │  (stage 1)  (stage 1b)   (stage 2)     (§7)            (§7.5)
+decode ─ input semantics ─ film base ─ crop ─ fixed decode ─ NC film RGB v1 → linear ACEScg
+  │  (stage 1)  (stage 1b)   (stage 2)          (§7)            (§7.5)
   │
-  ├─ film master ─────────────────────────────────────── encode (f32 ACEScg TIFF)
+  ├─ film master ─────────────────────────────────────── orient → encode (f32 ACEScg TIFF)
   │
   └─ scene correction → look ─┬─ fit range(peak 1) → fit gamut ─┐
-                              └─ fit range(peak P) → fit gamut ─┴─ encode → package
-     └──────── rendering, scene-referred ──┘ └── display-referred ──┘   └── output ──┘
+                              └─ fit range(peak P) → fit gamut ─┴─ orient → encode → package
+     └──────── rendering, scene-referred ──┘ └── display-referred ──┘   └────── output ──────┘
 ```
 
 | Stage | Job | Module |
@@ -269,12 +269,14 @@ decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 →
 | **decode** | SilverFast HDR/HDRi → linear `f32` scanner RGB (+ IR) | `io::decode` |
 | **input semantics** | prove the samples are linear scanner measurements, or refuse (§9) | `pipeline::input_semantics` |
 | **film base** | the per-roll `Dmin`, stated or read from a stated region (§9) | `pipeline::film_base` |
+| **crop** | cut the scan to the stated picture (§9 "Crop and orientation") | `pipeline::geometry` |
 | **fixed decode** | density → the negative as a print sees it; `FilmRgbImage` (§7) | `algo::fixed` |
 | **NC film RGB v1** | the pinned 3×3 into linear ACEScg; `AcesCgImage` (§7.5) | `pipeline::working_space` |
 | **scene correction** | photographic corrections toward what the scene was: the roll's midtone neutral, white balance (a gain, or a tilt), exposure. Scene-referred, linear | `pipeline::scene_correction` |
 | **look** | creative and optional: contrast, saturation, the per-channel grade, highlight desaturation; later print emulation and per-stock normalization. Scene-referred | `pipeline::look` |
 | **fit range** | fit the scene's range into the display's, with the display's peak as the one per-destination argument; place the dark end (*tone mapping*: "tone" means brightness, not colour) | `pipeline::fit_range` |
 | **fit gamut** | change primaries into the destination's gamut and move out-of-gamut colour to its boundary, keeping hue | `pipeline::fit_gamut` |
+| **orient** | the stated flip and quarter turn, moving pixels only (§9 "Crop and orientation") | `pipeline::geometry` |
 | **encode** | transfer function, quantization, counting clamped and non-finite samples, warning on a channel written as 0 everywhere or rendered near-black | `pipeline::color`, `io::encode`, `io::jpeg`, `pipeline::near_black` |
 | **package** | container, ICC profile or CICP, metadata; for the gain map, the map itself | `io::*`, `pipeline::gain_ratio`, `pipeline::gain_encode`, `io::iso_gain_map` |
 
@@ -1383,7 +1385,7 @@ per-edge `capped` and the frame-wide `converged`), `holder_applied`, and the app
 inset — for a `roll`, inside each frame's entry.
 `convert` and every roll frame resolve it unconditionally so `--measure-inset` and
 the `measure.inset` recipe key (including a per-frame override) are observable rather
-than accepted-and-ignored. A `capped` edge (where `holder_applied`) or
+than accepted-and-ignored. A `capped` edge that moved the region or
 `converged: false` also emits a `--strict`-promotable warning: both mean the reported
 rectangle is not a measurement. The march stops at 25% of the shorter edge on the premise that no film
 holder is that deep, so a cap is an IR misread and errs only toward an over-cut (the
@@ -2285,6 +2287,7 @@ src/
 └── pipeline/
     ├── input_semantics.rs  # transfer + measurement-meaning resolver (stage 1b)
     ├── film_base.rs        # Dmin measurement, IR holder cut, effective area
+    ├── geometry.rs         # crop and orientation
     ├── working_space.rs    # NC film RGB v1 → linear ACEScg
     ├── chain.rs            # the rendering chain composed; the SDR/HDR branch contract
     ├── working_image.rs    # the buffer every chain boundary carries
