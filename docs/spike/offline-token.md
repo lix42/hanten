@@ -11,6 +11,7 @@ A stays offline. A roll paid on A re-exports anywhere but grows only on A. The l
 direction is to **spend online** (the server signs the spend) or to **download one token
 to a Mac just before spending it there**. Either fixes stranded tokens; adding frames to
 a paid roll on another Mac still needs its own rule (online, or a server hand-over).
+Round 2 ran three machine bindings for real; none crosses Macs.
 
 **Investigated:** a throwaway Rust round trip in `../temp/offline-token-spike/` (not
 kept) · rustc 1.99.0, release build · Apple M4 Pro · `p256` 0.14.0, `sha2` 0.11.1,
@@ -200,6 +201,36 @@ still design §5's question.
     ledger syncs;
   - a bearer token lets any self-made key seal any roll. This is why the server must
     bind the key.
+
+## Round 2: three machine bindings, run unsigned
+
+What each way of tying a token to one Mac gives, run on macOS 26.7.1 from ad-hoc signed
+binaries (no Developer ID, no provisioning profile; probes in
+`../temp/offline-token-spike/round2/`, not kept). "Updated app" is a rebuilt binary with
+a new code hash.
+
+| | Keychain key (file-based) | Secure Enclave key (CryptoKit blob in a file) | Hardware UUID |
+|---|---|---|---|
+| seals a record | yes | yes: the Rust `p256` crate verifies CryptoKit's `r‖s` signature and rejects an edited message | **no**: nothing secret |
+| updated app reads it | **no**: `-25293`; the item's access list names the old binary. A signed app's list names its team and bundle id (not run) | yes | yes |
+| another program on the Mac | only if the user approves it in a password dialog, which also lets the user read the key out | **yes, silently**: any program of that user can sign with the blob, but it can never be copied off the Mac | yes |
+| another Mac | no (a migrated keychain: not run) | never: only this Secure Enclave can use the blob (Apple) | never: a different id |
+| app deleted, reinstalled | the item stays; an unsigned reinstall can't read it | yes, if the blob file stays | yes |
+| macOS erased | lost | lost | **kept** |
+| data protection keychain | `-34018`, missing entitlement | — | — |
+| cost | — | 21 ms per signature, including process start; 284-byte blob | — |
+
+- **A damaged blob crashes the process.** CryptoKit traps internally
+  (`CryptoKitError.invalidParameter` under a `try!` in `SEP_P256.swift`) instead of
+  throwing. The app would have to check the blob, or load it out of process.
+- **The Secure Enclave key is the best device key without signing.** It seals records,
+  survives updates and can't leave the Mac. But "another program can sign" means a short
+  user-written program can seal records with it. That's a weaker lock than the accepted
+  "extracted device key" limit: nothing has to be extracted.
+- **The hardware UUID cannot replace a key.** It can only tell the server which Mac this
+  is, for example so a re-bind after erasing macOS doesn't count against the limit.
+- **None of the three works across a user's Macs.** That confirms the main finding.
+  Only the synced data protection keychain would, and it needs a signed app.
 
 ## Not settled
 
