@@ -6441,11 +6441,11 @@ fn the_highlight_range_reaches_the_pixels() {
         std::fs::read(&out).unwrap()
     };
 
-    // The headroom reaches the operator, and naming the default is naming nothing.
+    // The highlight range reaches the operator, and naming the default is naming nothing.
     let default = render("default", &[]);
     assert_eq!(default, render("w64", &["--highlight-range", "6"]));
     let w16 = render("w16", &["--highlight-range", "4"]);
-    assert_ne!(default, w16, "the headroom did not reach the render");
+    assert_ne!(default, w16, "the highlight range did not reach the render");
 }
 
 #[test]
@@ -6481,9 +6481,9 @@ fn the_retired_display_tone_flags_are_refused_with_a_migration_error() {
 
 #[test]
 fn the_highlight_range_is_gated_before_anything_is_opened() {
-    // The headroom bound is a **value** rule, so it runs with the recipe's validation —
-    // not in the stage, which runs after the decode. Proof: a nonexistent input still
-    // exits 2 (usage), never 3 (decode).
+    // The highlight range bound is a **value** rule, so it runs with the recipe's
+    // validation — not in the stage, which runs after the decode. Proof: a nonexistent
+    // input still exits 2 (usage), never 3 (decode).
     let tmp = TempDir::new("reinhard-gate");
     let missing = tmp.path("does-not-exist.tif");
     //
@@ -6521,7 +6521,7 @@ fn the_highlight_range_is_gated_before_anything_is_opened() {
             "{extra:?}: clap answered for the validation rule: {err}"
         );
     }
-    // Falsifiable control: the same invocation with a usable headroom gets past
+    // Falsifiable control: the same invocation with a usable highlight range gets past
     // validation and fails at the *decode* instead.
     let out = tmp.path("out.tiff");
     let (code, _stdout, err) = run(&[
@@ -6534,11 +6534,14 @@ fn the_highlight_range_is_gated_before_anything_is_opened() {
         "--highlight-range",
         "6",
     ]);
-    assert_eq!(code, 3, "a valid headroom must reach the decoder: {err}");
+    assert_eq!(
+        code, 3,
+        "a valid highlight range must reach the decoder: {err}"
+    );
 }
 
 #[test]
-fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
+fn roll_refuses_an_out_of_range_highlight_range_in_the_shared_recipe() {
     // `roll` never calls `validate_convert`, so a rule that lives only there — or only
     // in the stage — is no gate at all for it: every frame decoded and reconstructed
     // before failing, once per frame. The shared recipe is validated up front, so this
@@ -7341,9 +7344,9 @@ fn telemetry_reports_the_primary_containers_depth_not_the_ir_planes() {
 }
 
 #[test]
-fn the_headroom_changes_the_sdr_render_and_the_report_records_it() {
+fn the_highlight_range_changes_the_sdr_render_and_the_report_records_it() {
     // The knob's product claim: on a display destination it is a real pixel change,
-    // and the report says which headroom produced them.
+    // and the report says which highlight range produced them.
     let tmp = TempDir::new("display-tone");
     let scan = fixture("hdr-48bit.tif");
     let mut bytes = Vec::new();
@@ -7371,7 +7374,7 @@ fn the_headroom_changes_the_sdr_render_and_the_report_records_it() {
     }
     assert_ne!(
         bytes[0], bytes[1],
-        "the headroom must change the rendered pixels"
+        "the highlight range must change the rendered pixels"
     );
 }
 
@@ -7402,10 +7405,10 @@ fn the_coded_hdr_report_block_names_the_fit_range_operator() {
 }
 
 #[test]
-fn film_master_refuses_a_stated_headroom_and_accepts_the_reset() {
-    // The film master runs no fit range, so a non-default headroom would be silently
-    // ignored — refused by value. The default is the flags-win reset that lets one recipe
-    // serve every destination, so it is accepted.
+fn film_master_refuses_a_stated_highlight_range_and_accepts_the_reset() {
+    // The film master runs no fit range, so a non-default highlight range would be
+    // silently ignored — refused by value. The default is the flags-win reset that lets
+    // one recipe serve every destination, so it is accepted.
     let tmp = TempDir::new("master-headroom");
     let scan = fixture("hdr-48bit.tif");
     let run_master = |stops: &str| {
@@ -7429,7 +7432,7 @@ fn film_master_refuses_a_stated_headroom_and_accepts_the_reset() {
     let (code, _o, err) = run_master("6");
     assert_eq!(
         code, 0,
-        "the default headroom must reset, not refuse:\n{err}"
+        "the default highlight range must reset, not refuse:\n{err}"
     );
 }
 
@@ -8228,11 +8231,11 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
 }
 
 #[test]
-fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
-    // `nf-display-stages/fit-range` through the binary: the headroom flag reaches the
-    // stage, the report names the operator and its arguments rather than describing
-    // them, and zero headroom leaves reinhard out — which clips far more of an unbounded
-    // decode at the encode than the default does.
+fn fit_range_fits_the_scene_range_with_the_stated_highlight_range() {
+    // `nf-display-stages/fit-range` through the binary: the highlight range flag
+    // reaches the stage, the report names the operator and its arguments rather than
+    // describing them, and zero highlight range leaves reinhard out — which clips far
+    // more of an unbounded decode at the encode than the default does.
     let tmp = TempDir::new("fit-range");
     let input = fixture("hdr-48bit.tif").display().to_string();
     let convert = |name: &str, extra: &[&str]| {
@@ -8274,7 +8277,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     assert_eq!(fr["white_point"], 16.0);
     assert_ne!(read_u16_tiff(&four), read_u16_tiff(&default));
 
-    // Zero headroom leaves reinhard out; display black still runs when it is on.
+    // Zero highlight range leaves reinhard out; the dark base still runs when it is on.
     let (_, report) = convert(
         "zero-black.tiff",
         &["--highlight-range", "0", "--dark-base", "6"],
@@ -8297,7 +8300,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     );
 
     // The dark end: the target by default, which a frame with no measured dark end
-    // leaves alone; display black on, and deeper, each render differently.
+    // leaves alone; the dark base on, and deeper, each render differently.
     let dark_end = &report_default_dark_end;
     assert_eq!(
         dark_end["setting"],
@@ -8326,7 +8329,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     );
     assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&on));
 
-    // A bad headroom is refused by its recipe key as well as its flag.
+    // A bad highlight range is refused by its recipe key as well as its flag.
     let (code, _out, err) = run(&[
         "convert",
         input.as_str(),
@@ -8375,10 +8378,10 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
 }
 
 #[test]
-fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
+fn the_dark_floor_raises_a_measured_frame_s_dark_end_to_it() {
     // `nf-display-stages/midtone-contrast-toe` through the binary: 09-18 Gold200 1774's
     // tones under the hybrid, at a contrast steep enough to sink its darkest 1 % under
-    // a 4.5-stop floor, which lifts it there. A floor stated where no frame was measured
+    // a 4.5-stop floor, which raises it there. A floor stated where no frame was measured
     // does nothing, and says so; the default target's is silent.
     let tmp = TempDir::new("dark-floor");
     let input = fixture("hdr-48bit.tif").display().to_string();
@@ -8410,8 +8413,8 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
         "--contrast",
         "1.6",
     ];
-    let (lifted, report) = convert(
-        "lifted.tiff",
+    let (raised, report) = convert(
+        "raised.tiff",
         &[&hybrid[..], &["--dark-floor", "4.5"]].concat(),
     );
     let d = &report["chain"]["fit_range"]["dark_end"];
@@ -8435,7 +8438,7 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
         report["chain"]["fit_range"]["dark_end"]["curve"],
         "identity"
     );
-    assert_ne!(read_u16_tiff(&lifted), read_u16_tiff(&off));
+    assert_ne!(read_u16_tiff(&raised), read_u16_tiff(&off));
 
     let unread = |w: &serde_json::Value| {
         w.as_array()
@@ -8462,7 +8465,7 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
     );
 
     // `direct` leaves the measured tones out: a typed floor is refused before decoding,
-    // its `off` (which turns `direct`'s display black off) is not, and a recipe's floor
+    // its `off` (which turns `direct`'s dark base off) is not, and a recipe's floor
     // renders and warns, naming the rendering.
     let direct = |extra: &[&str]| {
         let mut argv = vec![
@@ -8586,7 +8589,7 @@ fn the_dark_target_pushes_a_measured_frame_s_dark_end_down_to_it() {
 
 #[test]
 fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
-    // `nf-reconstruction/curve-endpoint-warning` through the binary, display black off
+    // `nf-reconstruction/curve-endpoint-warning` through the binary, the dark base off
     // (the default): squeezed flat, pushed up (with the frame's tones) and the base near
     // mid-grey (without them), each with the remedy it names.
     let tmp = TempDir::new("black-endpoint");
@@ -8646,7 +8649,7 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
     assert_eq!(code, 1, "{err}");
     let (code, _, err) = convert(&["--roll-exposure", "0", "--contrast", "0.9", "--strict"]);
     assert_eq!(code, 0, "raising --contrast clears it: {err}");
-    // Display black on places the base itself; this check stands aside.
+    // The dark base on places the base itself; this check stands aside.
     let w = warnings(&[
         "--roll-exposure",
         "0",
@@ -8658,8 +8661,8 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
     assert!(!w.iter().any(squeezed), "{w:?}");
 
     // Without tones or a roll exposure the base decides: a stated exposure pushed it.
-    let lifted = ["--contrast", "1.1111112", "--exposure", "2.8"];
-    let w = warnings(&lifted);
+    let raised = ["--contrast", "1.1111112", "--exposure", "2.8"];
+    let w = warnings(&raised);
     assert!(
         w.iter()
             .any(|m| base(m) && m.contains("lower `--exposure`")),
@@ -8720,7 +8723,7 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
         "the base is not read beside tones: {w:?}"
     );
     let w = warnings(&[&hybrid[..], &["--exposure", "1"]].concat());
-    assert!(!w.iter().any(pushed), "a one-stop lift is fine: {w:?}");
+    assert!(!w.iter().any(pushed), "a one-stop raise is fine: {w:?}");
 }
 
 #[test]
@@ -10723,7 +10726,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     assert_eq!(code, 0, "{err}");
     let replayed = json(&stdout);
     assert!((slope(&replayed) - 1.111_111_2).abs() < 1e-6, "{stdout}");
-    // That old slope is flatter than any placement sets, and with display black off now
+    // That old slope is flatter than any placement sets, and with the dark base off now
     // it warns (`pipeline::black_endpoint`) — the only warning.
     let warnings = replayed["warnings"].as_array().unwrap();
     assert!(
@@ -12593,9 +12596,9 @@ fn a_roll_of_sixteen_frames_is_confident_and_a_short_one_is_advised_but_passes_s
 fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     // A dim frame and a bright one, whose whites after the roll's white balance sit at
     // ~+1.7 and ~+2.3 stops: the roll's white is the dim frame's, and the bright one is
-    // clamped to the cap — disclosed with both contrasts, and handed to `roll` as a
-    // per-frame contrast. It warns only when its leader is near: a frame merely above the
-    // cap is an ordinary bright scene.
+    // clamped to the cap — disclosed with both roll slopes, and handed to `roll` as a
+    // per-frame white (`roll.frames`). It warns only when its leader is near: a frame
+    // merely above the cap is an ordinary bright scene.
     let tmp = TempDir::new("measure-roll-white");
     let base = [0.9f32, 0.55, 0.42];
     let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
@@ -15790,7 +15793,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
 #[test]
 fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
     // `hdr-48bit.tif` is 502×462 and IR-free, and every run states a roll measurement
-    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit is this run's
+    // (identity gains, exposure 0, the default contrast), so a `--strict` exit is this run's
     // own — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("gain-map");
     let measured = MEASURED;
@@ -15902,7 +15905,7 @@ fn the_film_master_runs_no_rendering_and_refuses_a_look() {
 #[test]
 fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     // `hdr-48bit.tif` is the IR-free fixture, and every run states a roll measurement
-    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit 1 is this
+    // (identity gains, exposure 0, the default contrast), so a `--strict` exit 1 is this
     // warning's — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("peak-clamp");
     let measured = MEASURED;
@@ -16000,8 +16003,8 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
             assert_eq!(code, 0, "{off}: {err}");
         }
     }
-    // A typed dark end at `off` asks for nothing: the remedy names only the headroom, and
-    // following it beside that flag converts.
+    // A typed dark end at `off` asks for nothing: the remedy names only the highlight
+    // range, and following it beside that flag converts.
     for flag in ["--dark-target", "--dark-base", "--dark-floor"] {
         let (code, _, err) = convert_48bit(
             &tmp.path("off-headroom"),
@@ -16329,7 +16332,7 @@ fn a_roll_names_each_frame_from_its_destination() {
     // The shared recipe's `output` picks the container, so derived names follow it; a
     // per-frame override that changes the destination changes that frame's name.
     let tmp = TempDir::new("roll-destination");
-    // A roll measurement is stated (neutral gains and a white), so the `--strict` runs
+    // A roll measurement is stated (identity gains and a white), so the `--strict` runs
     // below see only the destination warning, not the `default` rendering's fallback.
     let recipe = write_file(
         &tmp.path("roll.json"),
@@ -16571,7 +16574,7 @@ fn a_later_layer_wins_and_a_flag_beats_every_layer_by_source() {
     );
     let ba = scene(&["--params", m, "--params", b, "--params", a], "ba");
     assert_eq!(ba["exposure"], 0.3, "{ba}");
-    // An explicit neutral gain is a value, not "fall back to the layers".
+    // An explicit identity white balance is a value, not "fall back to the layers".
     let flagged = scene(
         &[
             "--params",
@@ -17874,7 +17877,7 @@ fn a_value_that_cannot_render_is_a_usage_error_naming_the_knob() {
             out.to_str().unwrap(),
             "--film-base",
             "0.9,0.55,0.42",
-            // `direct`, whose pinned display black reads the film base the offset grades
+            // `direct`, whose pinned dark base reads the film base the offset grades
             // to nothing.
             "--rendering",
             "direct",

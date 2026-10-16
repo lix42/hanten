@@ -584,7 +584,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   then the NC film RGB v1 → ACEScg mapping: every film-RGB and ACEScg `f32` bit
 ///   pattern, and the anchor. It **stops at scene correction's input, on purpose.**
 ///   Every rendering stage after it makes libm calls at its defaults (the look's
-///   `powf`, highlight desaturation, display black), each able to round either way on
+///   `powf`, highlight desaturation, the dark end), each able to round either way on
 ///   another target, and a hash has no window; it would also trip on every tuning
 ///   round. The rendering stages' default *values* are `recipe`'s, their arithmetic
 ///   the stage goldens' (`pipeline::chain_golden`) — which can be recaptured without a
@@ -971,7 +971,8 @@ pub(crate) mod drift_gate {
             DarkEnd::Off => "off".to_string(),
             DarkEnd::Floor(s) => format!("floor {}", hex(s)),
             DarkEnd::Target(s) => format!("target {}", hex(s)),
-            DarkEnd::Black(s) => format!("black {}", hex(s)),
+            // Hashed text: frozen.
+            DarkEnd::Base(s) => format!("black {}", hex(s)),
         };
         let a = &base.axes;
         let linear = a.linear_gamut.map_or("none", Axis::name);
@@ -985,7 +986,7 @@ pub(crate) mod drift_gate {
             hex(d.start_stops),
             hex(d.band[0]),
             hex(d.band[1]),
-            hex(base.headroom_stops),
+            hex(base.highlight_range_stops),
             a.range.name(),
             a.transfer.name(),
             a.gamut.name(),
@@ -1187,7 +1188,7 @@ pub(crate) mod drift_gate {
         for dark_end in [
             DarkEnd::Target(5.0),
             DarkEnd::Floor(5.0),
-            DarkEnd::Black(4.5),
+            DarkEnd::Base(4.5),
             DarkEnd::Off,
         ] {
             let perturbed_dark_end = Base {

@@ -20,21 +20,21 @@ The epic was created on 2026-09-19 as part of the new-flow migration plan
 peak as its argument, `Y′ = r(Y)·(1 + (P − 1)·s(Y))` on ACEScg luminance. Every peak
 agrees bit for bit below diffuse white (`algo::fixed::DIFFUSE_WHITE = 1.0`); above `W`
 the output exceeds the peak on every branch and the encoder counts it; an HDR
-destination gets no hard ceiling there (decided 2026-09-24, `branch-contract`). Knob `fit_range.headroom_stops` (`--display-tone-headroom`);
-the peak is the destination's. Non-finite samples are refused.
+destination gets no hard ceiling there (decided 2026-09-24, `branch-contract`). Knob
+`fit_range.highlight_range_stops` (`--highlight-range`); the peak is the destination's. Non-finite samples are refused.
 
 **Fit gamut has landed** (`fit-gamut`, 2026-09-24): `fit_gamut::radial_to_boundary` is
 the one gamut map. The legacy renderers call it with their own ceilings, byte-identically;
 the new flow maps against `max(peak, Y)`, with the peak on `RangeFittedImage`. Above the
 peak, content renders neutral at its luminance and clips at the encode. At the default
-headroom the new flow clips nothing on 92 real frames.
+highlight range the new flow clips nothing on 92 real frames.
 
 **The branch contract has landed** (`branch-contract`, 2026-09-24): SDR and HDR split
 after the look (`chain::render_pair` grades once and copies the `GradedImage`), and the
-headroom is shared above the split, so the renditions differ only in the peak. Below
+highlight range is shared above the split, so the renditions differ only in the peak. Below
 white they are bit-identical except where the SDR cube binds, which
 `chain::contract::check` re-derives exactly: 0 violations on 92 real frames at every
-headroom measured. `pipeline::gain_ratio` is the pair's per-channel gain, ratioed
+highlight range measured. `pipeline::gain_ratio` is the pair's per-channel gain, ratioed
 against the base as stored. No hard HDR ceiling above `W`: the encoder clamps and
 counts what passes the peak — a gain-map destination must do that itself
 (`nf-destinations/gain-map-destination`), since `gain_ratio` does not.
@@ -42,22 +42,22 @@ counts what passes the peak — a gain-map destination must do that itself
 **The dark end is fit range's** (`fit_range.dark_end`): a shift in stops on luminance,
 whole at a reference and below, fading to nothing at mid-grey, graded with the frame so
 nothing is measured from the image; mid-grey, white and the branch contract are
-untouched. Two settings of one key. **Display black** (`parametric-operator`, 2026-09-26;
-`--display-black`, `{"black": stops}`) pushes the decoded film base down to its target,
-never lifts it; it was the default (6, ≈ L\* 2.5) until the hybrid placement
+untouched. Two settings of one key. **The dark base** (`parametric-operator`, 2026-09-26;
+`--dark-base`, `{"base": stops}`) pushes the decoded film base down to its target,
+never raises it; it was the default (6, ≈ L\* 2.5) until the hybrid placement
 (`nf-calibration/envelope-hybrid-placement`, 2026-10-10), and stays `direct`'s.
 **The target** (`frame-dark-target`, 2026-10-14; `--dark-target`, `{"target": stops}`)
-is `default`'s: it places a frame's measured darkest 1 % at 5.5 stops (≈ L\* 3.6), lifted
+is `default`'s: it places a frame's measured darkest 1 % at 5.5 stops (≈ L\* 3.6), raised
 or pushed down (the push capped at two thirds of the way to mid-grey), and needs the
 frame's tones. **The floor** (`midtone-contrast-toe`, 2026-10-12; `--dark-floor`) was
-`default`'s before it: the same reference, only lifted, to 4.5 stops (≈ L\* 7).
+`default`'s before it: the same reference, only raised, to 4.5 stops (≈ L\* 7).
 
 **Reinhard stands** (`parametric-shoulder`, 2026-09-27). With mid-grey, the rendered
 white and the peak pinned, any smooth shoulder stays within about 0.15 stop of reinhard.
 A brighter white with mid-grey pinned (+0.15, +0.30 stop, shadows untouched) lost to
 reinhard in review. Where white renders is the look's slope: the frame's placement,
 else the roll's span, times `look.contrast`. The
-headroom barely moves white (0.09 stop from 6 stops to 2); it sets how hard the stops
+highlight range barely moves white (0.09 stop from 6 stops to 2); it sets how hard the stops
 above white are compressed. HDR under the white rule was reviewed and stands
 (`nf-calibration/white-rule-hdr`, 2026-10-12).
 

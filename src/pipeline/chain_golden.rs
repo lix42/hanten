@@ -19,11 +19,11 @@
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one (`exp2`),
-//! fit range one (`log2`) for an HDR peak above diffuse white and, with display black
+//! fit range one (`log2`) for an HDR peak above diffuse white and, with the dark base
 //! on, five per frame (the target's `exp2`, exact at a whole-stop setting, three `log2`
 //! and the whole shift's `exp2`) and two per pixel below mid-grey (`log2`, `exp2`); its
-//! golden runs a whole-stop setting (6) — so its reinhard vectors run with display
-//! black off — the look's tone slope one `powf` per pixel (on its luminance), its
+//! golden runs a whole-stop setting (6) — so its reinhard vectors run with the dark
+//! base off — the look's tone slope one `powf` per pixel (on its luminance), its
 //! per-channel grade one on red and one on blue (both entering its luminance restore),
 //! and highlight desaturation one per pixel at most: `log10` inside its band's ramp,
 //! `log2` inside its brightness ramp (its constants' `powf` / `exp2` only classify,
@@ -39,7 +39,7 @@
 //! covering the stages above it.** A stage's input can only be minted by the stage
 //! before it, so the downstream vectors enter through the mapping, and fit gamut's
 //! through scene correction and the look at their identities and fit range at zero
-//! headroom. A fault in
+//! highlight range. A fault in
 //! one of those paths can therefore red goldens below it, and the first red one in
 //! chain order names the stage that moved. But every downstream vector bypasses the
 //! decode (`FilmRgbImage::fixture`), so a decode fault reds only the decode's goldens;
@@ -73,7 +73,7 @@ use crate::pipeline::scene_correction::{
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
 use crate::stage::{StageKind, Untimed};
-use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, IrPlane, LinearImage, Scan};
+use crate::types::{DEFAULT_HIGHLIGHT_RANGE_STOPS, FilmBase, IrPlane, LinearImage, Scan};
 use crate::version::drift_gate;
 
 // --- shared harness ----------------------------------------------------------
@@ -656,13 +656,13 @@ fn golden_midtone_neutral_is_correct_within_its_libm_window() {
 
 // --- fit range -----------------------------------------------------------------
 
-/// Fit range at `headroom_stops` against `peak`.
+/// Fit range at `highlight_range_stops` against `peak`.
 ///
 /// The dark end off: reinhard alone is IEEE arithmetic and pinned bit for bit here;
 /// the dark end calls `log2` and `exp2`, and each setting has its own windowed golden.
-fn fit_range_params(headroom_stops: f32, peak: DisplayPeak) -> FitRangeParams {
+fn fit_range_params(highlight_range_stops: f32, peak: DisplayPeak) -> FitRangeParams {
     FitRangeParams {
-        headroom_stops,
+        highlight_range_stops,
         peak,
         dark_end: DarkEnd::Off,
         film_base: FILM_BASE,
@@ -690,10 +690,10 @@ fn through_fit_range(params: &FitRangeParams) -> fit_range::RangeFittedImage {
 }
 
 #[test]
-fn golden_look_and_zero_headroom_fit_range_are_bit_exact_identities() {
-    // An empty look is an identity, and so is fit range at zero headroom — which is
-    // also how fit gamut's golden below enters its stage. Highlight desaturation has its
-    // own golden below.
+fn golden_look_and_zero_highlight_range_fit_range_are_bit_exact_identities() {
+    // An empty look is an identity, and so is fit range at zero highlight range — which
+    // is also how fit gamut's golden below enters its stage. Highlight desaturation has
+    // its own golden below.
     let input = bits(finite_aces().rgb());
     let out = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR))
         .into_buffer()
@@ -715,9 +715,12 @@ const FIT_RANGE_SDR: [u32; 21] = [
 
 #[test]
 fn golden_fit_range_sdr_is_bit_identical() {
-    let out = through_fit_range(&fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR))
-        .into_buffer()
-        .into_linear();
+    let out = through_fit_range(&fit_range_params(
+        DEFAULT_HIGHLIGHT_RANGE_STOPS,
+        DisplayPeak::SDR,
+    ))
+    .into_buffer()
+    .into_linear();
     assert_stage_bits("fit-range (sdr)", &out.rgb, &FIT_RANGE_SDR);
 }
 
@@ -729,32 +732,32 @@ const HDR_PEAK: f32 = 1000.0 / 203.0;
 /// with `log2(Y)` supplied — the one libm call, which the window enumerates.
 fn hdr_fit_range_pixel(px: [f32; 3], log2_luminance: f32) -> [f32; 3] {
     let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
-    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+    let w = f64::from(DEFAULT_HIGHLIGHT_RANGE_STOPS.exp2());
     let k = 1.0 - 0.18;
     let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
     let u = f64::from(y) * gain;
     let base = (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32;
-    // The lift starts at diffuse white, `1.0`, whose `log2` is exactly `0`.
-    let t = (log2_luminance / DEFAULT_HEADROOM_STOPS).clamp(0.0, 1.0);
-    let lift = t * t * (3.0 - 2.0 * t);
-    let scale = base * (1.0 + (HDR_PEAK - 1.0) * lift) / y;
+    // The peak ramp starts at diffuse white, `1.0`, whose `log2` is exactly `0`.
+    let t = (log2_luminance / DEFAULT_HIGHLIGHT_RANGE_STOPS).clamp(0.0, 1.0);
+    let ramp = t * t * (3.0 - 2.0 * t);
+    let scale = base * (1.0 + (HDR_PEAK - 1.0) * ramp) / y;
     px.map(|c| c * scale)
 }
 
 #[test]
 fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window() {
     let peak = DisplayPeak::new(HDR_PEAK).unwrap();
-    let hdr = through_fit_range(&fit_range_params(DEFAULT_HEADROOM_STOPS, peak))
+    let hdr = through_fit_range(&fit_range_params(DEFAULT_HIGHLIGHT_RANGE_STOPS, peak))
         .into_buffer()
         .into_linear()
         .rgb;
     let input = finite_aces().rgb().to_vec();
-    let (mut lifted, mut widest) = (0, 0);
+    let (mut ramped, mut widest) = (0, 0);
     for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
         let y =
             px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
         if y <= DIFFUSE_WHITE {
-            // Below diffuse white the lift is zero: the HDR peak renders the SDR
+            // Below diffuse white the peak ramp is zero: the HDR peak renders the SDR
             // pixel bit for bit — the gain-map contract, at the stage.
             assert_stage_bits(
                 "fit-range (hdr, below white)",
@@ -763,13 +766,13 @@ fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window
             );
             continue;
         }
-        lifted += 1;
+        ramped += 1;
         let rounded = f64::from(y).log2() as f32;
         assert!(
             ulps_between(y.log2(), rounded) <= LIBM_MAX_ERROR_ULPS,
             "this host's `log2` is not conforming at {y:e}"
         );
-        for (c, &want) in FIT_RANGE_HDR_LIFTED.iter().enumerate() {
+        for (c, &want) in FIT_RANGE_HDR_RAMPED.iter().enumerate() {
             let i = p * 3 + c;
             let render = |l: f32| hdr_fit_range_pixel(*px, l)[c];
             let captured = f32::from_bits(want);
@@ -788,16 +791,16 @@ fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window
             );
         }
     }
-    assert_eq!(lifted, 1, "exactly one pixel sits above diffuse white");
+    assert_eq!(ramped, 1, "exactly one pixel sits above diffuse white");
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }
 
-/// The one lifted pixel's three samples, correctly rounded.
-const FIT_RANGE_HDR_LIFTED: [u32; 3] = [0x3fc84f43, 0x3faaf58a, 0x3f904c23];
+/// The one ramped pixel's three samples, correctly rounded.
+const FIT_RANGE_HDR_RAMPED: [u32; 3] = [0x3fc84f43, 0x3faaf58a, 0x3f904c23];
 
-/// Display black's golden film base: a capped roll's, graded — it renders ≈ 4.4 stops
-/// under mid-grey without black, so the default 6 stops shifts it by ≈ −1.6.
-const BLACK_FILM_BASE: f32 = 0.0075;
+/// The dark base's golden film base: a capped roll's, graded — it renders ≈ 4.4 stops
+/// under mid-grey without the dark base, so the default 6 stops shifts it by ≈ −1.6.
+const DARK_BASE_FILM_BASE: f32 = 0.0075;
 
 /// One libm result a conforming target may return, `k` f64 ULPs from this host's.
 fn perturbed(host: f64, k: i32) -> f64 {
@@ -808,22 +811,22 @@ fn perturbed(host: f64, k: i32) -> f64 {
     v
 }
 
-/// Fit range at the default SDR headroom with display black at 6 stops, one pixel
-/// written out independently of the stage. Each libm result is supplied through
-/// `libm(call_index, host_value)`, so the window can move each of them: the frame's
-/// `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), then the pixel's `log2(y)` (3) and
-/// `exp2` (4) — at `y ≤ 0` the frame's `2^shift` in its place. `2^−6` is a whole-stop
-/// `exp2`, taken as exact (module docs).
-fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32; 3] {
-    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+/// Fit range at the default highlight range and SDR peak with the dark base at 6 stops,
+/// one pixel written out independently of the stage. Each libm result is supplied
+/// through `libm(call_index, host_value)`, so the window can move each of them: the
+/// frame's `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), then the pixel's `log2(y)`
+/// (3) and `exp2` (4) — at `y ≤ 0` the frame's `2^shift` in its place. `2^−6` is a
+/// whole-stop `exp2`, taken as exact (module docs).
+fn dark_base_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32; 3] {
+    let w = f64::from(DEFAULT_HIGHLIGHT_RANGE_STOPS.exp2());
     let k = 1.0 - 0.18;
     let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
     let reinhard = |v: f32| {
         let u = f64::from(v) * gain;
         (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32
     };
-    let b = f64::from(reinhard(BLACK_FILM_BASE));
-    let target = 0.18 * 2f64.powi(-(fit_range::REVIEWED_DISPLAY_BLACK_STOPS as i32));
+    let b = f64::from(reinhard(DARK_BASE_FILM_BASE));
+    let target = 0.18 * 2f64.powi(-(fit_range::REVIEWED_DARK_BASE_STOPS as i32));
     let stops = libm(0, (target / b).log2());
     let base = libm(1, b.log2());
     let knee = libm(2, 0.18f64.log2());
@@ -844,28 +847,28 @@ fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
     px.map(|c| c * scale)
 }
 
-/// [`finite_aces`] through fit range at the default SDR headroom with display black at
-/// 6 stops and [`BLACK_FILM_BASE`], as this host rounds it. Pixel 0 sits at
-/// mid-grey and 2–4 above it (untouched), 1 in the shift's band, 6 below the base (the
-/// whole shift), 5 at luminance 0. Captured 2026-09-26 when display black
-/// landed (`nf-display-stages/parametric-operator`).
-const FIT_RANGE_BLACK: [u32; 21] = [
+/// [`finite_aces`] through fit range at the default highlight range and SDR peak with
+/// the dark base at 6 stops and [`DARK_BASE_FILM_BASE`], as this host rounds it.
+/// Pixel 0 sits at mid-grey and 2–4 above it (untouched), 1 in the shift's band, 6
+/// below the base (the whole shift), 5 at luminance 0. Captured 2026-09-26 when the
+/// dark base landed (`nf-display-stages/parametric-operator`).
+const FIT_RANGE_DARK_BASE: [u32; 21] = [
     0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d22aaea, 0x3c64f0e8, 0x3f30167f, 0x3f0b3c44, 0x3d864902,
     0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
     0x00000000, 0x00000000, 0x3aa29276, 0x3ac0bb85, 0x3a5d34dc,
 ];
 
 #[test]
-fn golden_display_black_is_correct_within_its_libm_window() {
-    let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
-    params.dark_end = DarkEnd::Black(fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
-    params.film_base = BLACK_FILM_BASE;
+fn golden_dark_base_is_correct_within_its_libm_window() {
+    let mut params = fit_range_params(DEFAULT_HIGHLIGHT_RANGE_STOPS, DisplayPeak::SDR);
+    params.dark_end = DarkEnd::Base(fit_range::REVIEWED_DARK_BASE_STOPS);
+    params.film_base = DARK_BASE_FILM_BASE;
     let out = through_fit_range(&params).into_buffer().into_linear().rgb;
     let input = finite_aces().rgb().to_vec();
     let host = |_: usize, v: f64| v;
     let mut widest = 0;
     for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
-        let centre = black_fit_range_pixel(*px, &host);
+        let centre = dark_base_fit_range_pixel(*px, &host);
         // Every combination of the five libm results at this host's value and two f64
         // ULPs either side — the host may itself be a ULP off the correctly rounded
         // result, and a conforming target a ULP the other way.
@@ -877,11 +880,11 @@ fn golden_display_black_is_correct_within_its_libm_window() {
             ks
         });
         let reachable: Vec<[f32; 3]> = offsets
-            .map(|ks| black_fit_range_pixel(*px, &move |n: usize, v: f64| perturbed(v, ks[n])))
+            .map(|ks| dark_base_fit_range_pixel(*px, &move |n: usize, v: f64| perturbed(v, ks[n])))
             .collect();
         for (c, &centre_c) in centre.iter().enumerate() {
             let i = p * 3 + c;
-            let want = FIT_RANGE_BLACK[i];
+            let want = FIT_RANGE_DARK_BASE[i];
             assert_eq!(centre_c.to_bits(), want, "sample {i}: capture integrity");
             let window = reachable
                 .iter()
@@ -892,7 +895,7 @@ fn golden_display_black_is_correct_within_its_libm_window() {
             let drift = ulps_between(out[i], f32::from_bits(want));
             assert!(
                 drift <= window,
-                "stage `fit-range (display black)` sample {i}: {drift} ULP from the \
+                "stage `fit-range (dark base)` sample {i}: {drift} ULP from the \
                  capture, outside the {window} ULP a conforming libm can reach"
             );
         }
@@ -901,7 +904,7 @@ fn golden_display_black_is_correct_within_its_libm_window() {
     // Mid-grey and everything above it are bit-identical to reinhard alone.
     for p in [0, 2, 3, 4] {
         assert_stage_bits(
-            "fit-range (display black, at or above mid-grey)",
+            "fit-range (dark base, at or above mid-grey)",
             &out[p * 3..p * 3 + 3],
             &FIT_RANGE_SDR[p * 3..p * 3 + 3],
         );
@@ -909,22 +912,22 @@ fn golden_display_black_is_correct_within_its_libm_window() {
 }
 
 /// The floor's and the target's golden frame dark end, graded: it renders ≈ 5.1 stops
-/// under mid-grey, so the 4.5-stop floor lifts it by ≈ 0.6 and the default 5.5-stop
+/// under mid-grey, so the 4.5-stop floor raises it by ≈ 0.6 and the default 5.5-stop
 /// target pushes it by ≈ 0.4, each under its cap.
 const FLOOR_FRAME_DARK: f32 = 0.0042;
 
-/// Fit range at the default SDR headroom with the dark end at `stops` reading
-/// [`FLOOR_FRAME_DARK`], one pixel written out independently of the stage, as
-/// [`black_fit_range_pixel`]. The libm results: the frame's `log2(T / b)`, `log2(b)` and
-/// `log2(0.18)` (0–2), the pixel's `log2(y)` (3) and `exp2` (4), then the frame's
-/// `2^−stops` (5), not a whole stop. The cap does not bind (the test asserts it), so its
-/// `log2` is left out.
+/// Fit range at the default highlight range and SDR peak with the dark end at `stops`
+/// reading [`FLOOR_FRAME_DARK`], one pixel written out independently of the stage, as
+/// [`dark_base_fit_range_pixel`]. The libm results: the frame's `log2(T / b)`,
+/// `log2(b)` and `log2(0.18)` (0–2), the pixel's `log2(y)` (3) and `exp2` (4), then the
+/// frame's `2^−stops` (5), not a whole stop. The cap does not bind (the test asserts
+/// it), so its `log2` is left out.
 fn dark_end_fit_range_pixel(
     px: [f32; 3],
     stops: f32,
     libm: &dyn Fn(usize, f64) -> f64,
 ) -> [f32; 3] {
-    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+    let w = f64::from(DEFAULT_HIGHLIGHT_RANGE_STOPS.exp2());
     let k = 1.0 - 0.18;
     let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
     let reinhard = |v: f32| {
@@ -953,10 +956,10 @@ fn dark_end_fit_range_pixel(
     px.map(|c| c * scale)
 }
 
-/// [`finite_aces`] through fit range at the default SDR headroom with the 4.5-stop floor
-/// and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of [`FIT_RANGE_BLACK`],
-/// lifted where display black darkened. Captured 2026-10-12 when the floor landed
-/// (`nf-display-stages/midtone-contrast-toe`).
+/// [`finite_aces`] through fit range at the default highlight range and SDR peak with
+/// the 4.5-stop floor and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of
+/// [`FIT_RANGE_DARK_BASE`], raised where the dark base darkened. Captured 2026-10-12
+/// when the floor landed (`nf-display-stages/midtone-contrast-toe`).
 const FIT_RANGE_FLOOR: [u32; 21] = [
     0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d607ed9, 0x3c9dfab3, 0x3f730441, 0x3f0b3c44, 0x3d864902,
     0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
@@ -972,10 +975,10 @@ fn golden_dark_floor_is_correct_within_its_libm_window() {
     );
 }
 
-/// [`finite_aces`] through fit range at the default SDR headroom with the default target
-/// and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of [`FIT_RANGE_SDR`],
-/// pushed down below mid-grey. Captured 2026-10-14 when the target became the default
-/// (`nf-display-stages/frame-dark-target`).
+/// [`finite_aces`] through fit range at the default highlight range and SDR peak with
+/// the default target and [`FLOOR_FRAME_DARK`], as this host rounds it: the pixels of
+/// [`FIT_RANGE_SDR`], pushed down below mid-grey. Captured 2026-10-14 when the target
+/// became the default (`nf-display-stages/frame-dark-target`).
 const FIT_RANGE_TARGET: [u32; 21] = [
     0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d494710, 0x3c8da402, 0x3f59e219, 0x3f0b3c44, 0x3d864902,
     0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
@@ -998,17 +1001,17 @@ fn check_dark_end_golden(setting: DarkEnd, golden: &[u32; 21], stage: &str) {
     let (DarkEnd::Floor(stops) | DarkEnd::Target(stops)) = setting else {
         unreachable!("{setting:?}")
     };
-    let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
+    let mut params = fit_range_params(DEFAULT_HIGHLIGHT_RANGE_STOPS, DisplayPeak::SDR);
     params.dark_end = setting;
     params.frame_dark = Some(FLOOR_FRAME_DARK);
     // The cap stays out of the oracle: it must not bind here.
     let resolved = params.resolved().dark_end;
-    let dark = resolved.frame_dark_stops.unwrap();
+    let dark = resolved.frame_dark_below_mid_stops.unwrap();
     assert!(
-        resolved.shift_stops.abs() < dark * fit_range::MAX_LIFT_SHARE as f32 / 2.0,
+        resolved.shift_stops.abs() < dark * fit_range::MAX_RAISE_SHARE as f32 / 2.0,
         "{resolved:?}"
     );
-    let lifts = resolved.shift_stops > 0.0;
+    let raises = resolved.shift_stops > 0.0;
     let out = through_fit_range(&params).into_buffer().into_linear().rgb;
     let input = finite_aces().rgb().to_vec();
     let host = |_: usize, v: f64| v;
@@ -1016,7 +1019,7 @@ fn check_dark_end_golden(setting: DarkEnd, golden: &[u32; 21], stage: &str) {
     for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
         let centre = dark_end_fit_range_pixel(*px, stops, &host);
         // Every combination of the six libm results at this host's value and two f64
-        // ULPs either side, as display black's.
+        // ULPs either side, as the dark base's.
         let offsets = (0..5_u32.pow(6)).map(|n| {
             let mut ks = [0_i32; 6];
             for (call, k) in ks.iter_mut().enumerate() {
@@ -1065,7 +1068,7 @@ fn check_dark_end_golden(setting: DarkEnd, golden: &[u32; 21], stage: &str) {
     for i in [3, 4, 5, 18, 19, 20] {
         let reinhard = f32::from_bits(FIT_RANGE_SDR[i]);
         assert!(
-            if lifts {
+            if raises {
                 out[i] > reinhard
             } else {
                 out[i] < reinhard
@@ -1532,7 +1535,7 @@ fn golden_fit_gamut_adobe_rgb_is_bit_identical() {
 
 /// [`FIT_GAMUT_P3`]'s input into BT.2020, the HDR destinations' gamut: the same map
 /// through BT.2020's pinned matrix and luminance row. Run against the SDR peak, as its
-/// siblings are, so the vector stays bit-exact — fit range's HDR lift calls `log2`
+/// siblings are, so the vector stays bit-exact — fit range's peak ramp calls `log2`
 /// above diffuse white; what this pins is the gamut's arithmetic, not the peak's. The
 /// widest gamut takes pixel 2's negative P3 channel inside the cube, so it passes
 /// through the matrix alone. Captured 2026-09-25 with the destination set
@@ -1565,7 +1568,7 @@ const SDR_P3: DisplayTarget = DisplayTarget {
 /// Every stage at its shipped setting except scene correction, which is not an
 /// identity on purpose — see the threaded goldens — the look, which is off: no pixel
 /// here is near-neutral after these gains, so it would change nothing (it has its own
-/// threaded vector below) — and display black, off so the vector stays bit-exact (its
+/// threaded vector below) — and the dark base, off so the vector stays bit-exact (its
 /// golden is windowed; `chain`'s tests cover its wiring).
 fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
     ChainParams {
@@ -1576,9 +1579,9 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
             },
             roll_colour: None,
             look: LookParams::off(),
-            headroom_stops: DEFAULT_HEADROOM_STOPS,
+            highlight_range_stops: DEFAULT_HIGHLIGHT_RANGE_STOPS,
             dark_end: DarkEnd::Off,
-            frame_dark_stops: None,
+            frame_dark_scene_stops: None,
         },
         target: SDR_P3,
     }
@@ -1627,7 +1630,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
         rendered.fit_range,
         FitRange {
             operator: fit_range::OPERATOR,
-            headroom_stops: DEFAULT_HEADROOM_STOPS,
+            highlight_range_stops: DEFAULT_HIGHLIGHT_RANGE_STOPS,
             white_point: 64.0,
             display_peak: DisplayPeak::SDR,
             dark_end: rendered.fit_range.dark_end,
@@ -1673,9 +1676,9 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
             scene_correction: scene_correction.clone(),
             roll_colour: None,
             look,
-            headroom_stops: DEFAULT_HEADROOM_STOPS,
+            highlight_range_stops: DEFAULT_HIGHLIGHT_RANGE_STOPS,
             dark_end: DarkEnd::Off,
-            frame_dark_stops: None,
+            frame_dark_scene_stops: None,
         },
         target: SDR_P3,
     };

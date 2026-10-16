@@ -181,7 +181,7 @@ pub fn chain_params(r: &Recipe, peak: DisplayPeak, gamut: Gamut) -> ChainParams 
 /// Everything every rendition of a frame shares (`pipeline::chain`'s branch contract),
 /// each stage resolved against the rendering's base.
 pub fn shared_params(r: &Recipe) -> SharedParams {
-    let (headroom_stops, dark_end) = fit_range(r);
+    let (highlight_range_stops, dark_end) = fit_range(r);
     SharedParams {
         scene_correction: scene_correction(r),
         roll_colour: roll_colour(r),
@@ -189,9 +189,9 @@ pub fn shared_params(r: &Recipe) -> SharedParams {
             section: look(r),
             linearization: r.reconstruction.linearization,
         },
-        headroom_stops,
+        highlight_range_stops,
         dark_end,
-        frame_dark_stops: applied_frame_tones(r).map(|t| t.dark_stops),
+        frame_dark_scene_stops: applied_frame_tones(r).map(|t| t.dark_stops),
     }
 }
 
@@ -326,12 +326,12 @@ pub fn look(r: &Recipe) -> LookSection {
 /// [`LookKeys::resolve`]: super::LookKeys::resolve
 pub fn fit_range(r: &Recipe) -> (f32, DarkEnd) {
     let FitRangeSection {
-        headroom_stops,
+        highlight_range_stops,
         dark_end,
     } = r.fit_range;
     let base = r.base();
     (
-        headroom_stops.unwrap_or(base.headroom_stops),
+        highlight_range_stops.unwrap_or(base.highlight_range_stops),
         dark_end.unwrap_or(base.dark_end),
     )
 }
@@ -612,7 +612,7 @@ mod tests {
     fn the_roll_section_reaches_the_stages_and_the_contrast_multiplies_its_slope() {
         let roll = r#"{"recipe_version": 3,
                        "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6, "dark_stops": -3.75}}"#;
-        // The gains multiply the stated white balance; the white sets the contrast.
+        // The gains multiply the stated white balance; the white and dark end set the roll slope.
         let r = merged(roll, &["--white-balance", "1.25,1,1"]);
         let shared = shared_params(&r);
         assert_eq!(
@@ -687,9 +687,9 @@ mod tests {
         assert_eq!(p.look.section.slope, DIRECT.slope, "nor its white");
         assert_eq!(slope(&direct).base_from, SlopeBase::Direct);
         assert!(p.look.section.highlight_desaturation.is_off());
-        assert_eq!(p.headroom_stops, DIRECT.headroom_stops);
+        assert_eq!(p.highlight_range_stops, DIRECT.highlight_range_stops);
         assert_eq!(p.dark_end, DIRECT.dark_end);
-        assert_eq!(p.frame_dark_stops, None, "nor its tones");
+        assert_eq!(p.frame_dark_scene_stops, None, "nor its tones");
         let report = roll_report(&direct, true).unwrap();
         assert!(!report.white_balance_applied && !report.slope_applied);
         // `default` on the same recipe applies the roll, with every other default.
@@ -734,7 +734,7 @@ mod tests {
         );
         assert_eq!(adjusted.look.section.highlight_desaturation.strength, 0.5);
         assert_eq!(adjusted.dark_end, DarkEnd::Off);
-        assert_eq!(adjusted.headroom_stops, DIRECT.headroom_stops);
+        assert_eq!(adjusted.highlight_range_stops, DIRECT.highlight_range_stops);
     }
 
     #[test]
@@ -742,12 +742,12 @@ mod tests {
         let tones =
             r#""frame_tones": {"white_stops": 1.5, "level_stops": -0.5, "dark_stops": -4.2}"#;
         let r = parse(&format!(r#"{{"recipe_version": 3, "roll": {{{tones}}}}}"#)).unwrap();
-        assert_eq!(shared_params(&r).frame_dark_stops, Some(-4.2));
+        assert_eq!(shared_params(&r).frame_dark_scene_stops, Some(-4.2));
         let r = parse(&format!(
             r#"{{"recipe_version": 3, "rendering": "direct", "roll": {{{tones}}}}}"#
         ))
         .unwrap();
-        assert_eq!(shared_params(&r).frame_dark_stops, None);
+        assert_eq!(shared_params(&r).frame_dark_scene_stops, None);
     }
 
     #[test]
@@ -755,9 +755,9 @@ mod tests {
         // The recipe carries the highlight range; the peak comes from the destination, so a
         // recipe cannot name a peak its destination does not have.
         let mut r = Recipe::default();
-        r.fit_range.headroom_stops = Some(4.0);
+        r.fit_range.highlight_range_stops = Some(4.0);
         let p = chain_params(&r, DisplayPeak::SDR, Gamut::DisplayP3);
-        assert_eq!(p.shared.headroom_stops, 4.0);
+        assert_eq!(p.shared.highlight_range_stops, 4.0);
         assert_eq!(p.target.peak, DisplayPeak::SDR);
         let err = parse(r#"{"recipe_version": 3, "fit_range": {"peak": 4.9}}"#)
             .unwrap_err()

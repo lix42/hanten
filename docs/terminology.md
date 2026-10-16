@@ -83,7 +83,7 @@ A stops figure states its reference and its sign.
 | Kind | Meaning | Sign | Kind | Public spellings |
 |---|---|---|---|---|
 | **scene stops** | `log2(value / 0.18)` on the decode's output; the linearization is already in. The statistic varies: the roll white is in film RGB (see the whites below), a dark end or level is ACEScg luminance | dark is negative | public | `roll.white_stops`, `roll.dark_stops`, `envelope_stops` (`[dark end, white]`), `level_stops` |
-| **look stops** | scene stops × the tone slope | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
+| **look stops** | scene stops × the tone slope; the roll's figures are at contrast 1 (× the base slope) | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
 | **display stops below mid-grey** | distance below mid-grey after fit range | **positive is darker** — the opposite of `roll.dark_stops` | public | `fit_range.dark_end`, `film_base_below_mid_stops`, `frame_dark_below_mid_stops` |
 | **stops from diffuse white** | relative to graded 1.0 | signed | public | `fit_range.highlight_range_stops` (+6), `highlight_desaturation.start_stops` (−1) |
 
@@ -119,7 +119,8 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | **roll slope** | the roll's span (dark end to white, scene stops) mapped onto 9.049 look stops, clamped to ≈1.237–3.5 | measure-roll | public | `chain.roll.slope` |
 | **fallback slope** | the base slope when no roll is measured (≈1.414); `direct` pins it | look | public | `base_from: fallback` |
 | **thin slope, placement slope** | per-frame replacements of the base slope | roll | public | `roll.thin_slope`, `frames[].hybrid.slope` |
-| **saturation slope** | the power on colour ratios: the roll's or fallback slope (never a frame's own) × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope`; look stage `saturation-slope` |
+| **colour base slope** | the base the saturation slope is built on: the roll slope, else the rendering's base slope (the fallback, or `direct`'s pinned one); never a frame's own thin or placement slope | look | internal | — |
+| **saturation slope** | the power on colour ratios: the colour base slope × rendering saturation × the saturation knob | look | public | `chain.look.saturation_slope`; look stage `saturation-slope` |
 | **whole slope** | linearization × tone slope (≈2.54) — what the retired single "gamma" meant | validation | public (usage messages) | — |
 | **colour slope** | linearization × saturation slope, used by highlight desaturation | look | internal | — |
 | **midtone-line slope** | the cast's change per scene stop, as a log2 ratio | scene correction | public (positional) | — |
@@ -148,6 +149,7 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | **white point** | reinhard's `W = 2^highlight range` (64): the graded value that lands about at the display peak (reference white for SDR) | graded | public | `chain.fit_range.white_point` |
 | **HDR headroom** | the destination's peak over reference white, **in stops** (ISO 21496-1's term): 0 for SDR, `log2(1000/203)` ≈ 2.30 at 1000 nits. A bare "headroom" means this | display | public | — |
 | **display peak** | the same, as a ratio: 1.0 for SDR, ≈4.93 for HDR. *Peak nits* is the absolute form | display | public | `chain.fit_range.display_peak`, `target_peak_nits`, `hdr_linear_tiff.peak_sample` |
+| **peak ramp** | fit range's blend from reinhard toward the display peak: 0 at diffuse white, 1 at the white point, so every peak agrees below diffuse white. No effect at an SDR peak (`1 + (P − 1)·s` is 1 at P = 1) | graded | internal | — |
 | **dark end** | where fit range places the frame's darkest 1 % (target or floor) or the film base (the dark base), in display stops below mid-grey | display | public | `--dark-target`, `--dark-floor`, `--dark-base` |
 | **dark base** | the film base's placement on the display: one setting of the dark end. Sets no black level | display stops below mid-grey | public | `--dark-base`, `fit_range.dark_end` `{"base": STOPS}` |
 | **roll white, tilt white, fade end** | three whites measured from a roll: the brightest channel's p97 in film RGB; green's p99 in ACEScg; the luminance of the per-channel p99s after balance. Never a bare "the roll's white" | scene stops | public | `roll.white_stops`, `roll.white_balance_stops`, `midtone_line.fade_end_stops` |
@@ -218,7 +220,8 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 
 ### Overloaded colour words
 
-- **neutral** — R=G=B in a named space. Not identity values, not "neutral gain".
+- **neutral** — R=G=B in a named space. Not identity values: `1,1,1` gains are
+  *identity* gains. A *neutral gain* is one equal on every channel, like exposure's.
 - **saturation** — colourfulness. Density near the film's maximum is **film
   saturation**, always with "film".
 - **balance** — "white balance" means the roll and stated gains only. The film base
@@ -245,5 +248,5 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 
 None is open. A public name that breaks these rules is listed here with the task that
 will migrate it, since each changes the scripting contract; until then prose names the
-right concept and quotes the public name once. Internal identifiers that contradict this
-doc are `core/internal-term-renames`.
+right concept and quotes the public name once. An internal identifier that contradicts
+this doc is renamed in the change that finds it.

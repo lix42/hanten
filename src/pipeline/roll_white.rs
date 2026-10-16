@@ -45,7 +45,7 @@
 //!   cap. A frame above the cap is **clamped**: it renders at the cap's span, not the
 //!   roll's, and the report discloses it — an ordinary bright scene is clamped too, so it
 //!   is not a warning.
-//! - A frame whose white **as decoded** is within [`SATURATION_MARGIN_STOPS`] of the
+//! - A frame whose white **as decoded** is within [`FILM_SATURATION_MARGIN_STOPS`] of the
 //!   leader is near film saturation, and that warns. Without a leader there is no check.
 //!
 //! **A frame's white is measured before the leader guard.** The guard drops pixels
@@ -150,7 +150,7 @@ pub const FALLBACK_WHITE_STOPS: f32 = 1.75;
 /// warns as near film saturation. A placeholder, owned by
 /// `nf-calibration/saturation-margin`: set from one frame judged overexposed. A leader
 /// can sit below the film's shoulder, so a frame near it need not be saturated.
-pub const SATURATION_MARGIN_STOPS: f32 = 0.5;
+pub const FILM_SATURATION_MARGIN_STOPS: f32 = 0.5;
 
 /// Where a roll's exposure puts its median frame level ([`frame_level`]), in scene stops
 /// from mid-grey: mid-grey itself, where a light meter would. Chosen by review over −0.6
@@ -198,7 +198,7 @@ pub const THIN_LIFT_STOPS: f32 = 1.0;
 
 /// The steepest slope a thin-frame lift may reach — grain rises with it. Review passed 2.4
 /// on two thin frames.
-pub const THIN_SLOPE_BOUND: f32 = 2.4;
+pub const MAX_THIN_SLOPE: f32 = 2.4;
 
 /// The percentile of a frame's luminance taken as its dark end ([`FrameTones::dark_stops`]).
 /// From the poor-development spike (`docs/spike/poor-development.md`), whose 5 % is
@@ -837,13 +837,13 @@ pub struct ThinLift {
     /// How far its white rises, in look stops, by [`thin_lift`]'s measure:
     /// [`THIN_LIFT_STOPS`] unless bounded.
     pub lift_stops: f32,
-    /// Whether [`THIN_SLOPE_BOUND`] held the lift under [`THIN_LIFT_STOPS`].
+    /// Whether [`MAX_THIN_SLOPE`] held the lift under [`THIN_LIFT_STOPS`].
     pub bounded: bool,
 }
 
 /// Raise a thin frame's white about [`THIN_LIFT_STOPS`] with the film base held about where
 /// its small lift renders it: from slope `k0` and total exposure `e0` (the roll's plus the frame's
-/// [`small_lift`]) to slope `k0 + Δ/(white − base)`, capped at [`THIN_SLOPE_BOUND`], and
+/// [`small_lift`]) to slope `k0 + Δ/(white − base)`, capped at [`MAX_THIN_SLOPE`], and
 /// the exposure that keeps `k·(base + e)` where it was. `None` when no lift is possible:
 /// the white is not above the base, `k0` is already at the bound, or the exposure would
 /// fall under `e0` (a base above mid-grey), darkening the mid-tones the small lift raised.
@@ -859,11 +859,11 @@ pub fn thin_lift(
     e0: f32,
 ) -> Option<ThinLift> {
     let range = white_stops - base_stops;
-    if range <= 0.0 || k0 >= THIN_SLOPE_BOUND {
+    if range <= 0.0 || k0 >= MAX_THIN_SLOPE {
         return None;
     }
     let wanted = k0 + THIN_LIFT_STOPS / range;
-    let slope = wanted.min(THIN_SLOPE_BOUND);
+    let slope = wanted.min(MAX_THIN_SLOPE);
     let e = k0 * (base_stops + e0) / slope - base_stops;
     if e < e0 {
         return None;
@@ -995,7 +995,7 @@ pub fn leader_distance_stops(white: f32, leader_peak: f32) -> f32 {
 /// Whether a frame whose white sits `distance` stops under its leader is near film
 /// saturation.
 pub fn near_saturation(distance: f32) -> bool {
-    distance < SATURATION_MARGIN_STOPS
+    distance < FILM_SATURATION_MARGIN_STOPS
 }
 
 /// The roll's white-balance gains: green-anchored, equalizing the pooled pixels'
@@ -1136,15 +1136,15 @@ mod tests {
         );
         // A white close to the base asks for a slope past the bound: capped, and said so.
         let t = thin_lift(base + 0.5, base, roll_ev, k0, e0).unwrap();
-        assert_eq!(t.slope, THIN_SLOPE_BOUND);
+        assert_eq!(t.slope, MAX_THIN_SLOPE);
         assert!(t.bounded && t.lift_stops < THIN_LIFT_STOPS, "{t:?}");
         // Nothing to spread, or no room under the bound.
         assert_eq!(thin_lift(base, base, roll_ev, k0, e0), None);
-        assert_eq!(thin_lift(white, base, roll_ev, THIN_SLOPE_BOUND, e0), None);
+        assert_eq!(thin_lift(white, base, roll_ev, MAX_THIN_SLOPE, e0), None);
         // A base above mid-grey would solve an exposure under the small lift's: none.
         let (white, base) = (1.5, 0.5);
         let k0 = slope_for(white);
-        assert!(k0 * (base + e0) > 0.0 && k0 < THIN_SLOPE_BOUND);
+        assert!(k0 * (base + e0) > 0.0 && k0 < MAX_THIN_SLOPE);
         assert_eq!(thin_lift(white, base, roll_ev, k0, e0), None);
     }
 

@@ -819,7 +819,7 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
   `--save-recipe` file is the whole run, its `roll.frames` table included); a tagged
   value that switches variant (`region` → `explicit`) is replaced whole, and
   `roll.frames` merges as a table, entry by entry. Flags win **by
-  source**: an explicit `--white-balance 1,1,1` means neutral gains, not "fall back to
+  source**: an explicit `--white-balance 1,1,1` means identity gains, not "fall back to
   the recipes". A frame's `roll.frames` entry applies before the flags, so
   `--roll-white` or `--roll-dark` beats it, and a thin frame's lift (slope and exposure) with it; on
   `roll`, a frame's manifest `params` land after the flags, so they win over both, a

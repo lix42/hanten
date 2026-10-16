@@ -128,7 +128,6 @@ graph TD
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
-- [~] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
 - [ ] [Crop and rotate](tasks/core/crop-rotate.md) — crop and rotate as flags and recipe keys; a crop also narrows the measurement region
 - [ ] [Key roll frames by relative path](tasks/core/frame-keys-by-path.md) — roll.frames is keyed by file name; a recipe applied to a same-named file elsewhere shares its entry
 - [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame · **waits on** `core/crop-rotate`, `core/frame-keys-by-path`
@@ -139,6 +138,7 @@ graph TD
 - [x] [CLI Framework](tasks/core/cli-framework.md)
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report identity and pipeline_version, the golden drift gate, the {meta,params} sidecar envelope, and nctool compare
 - [x] [Dependency & Module Hygiene](tasks/core/dependency-hygiene.md) — from the hygiene review: dropped the unused `kamadak-exif` and `palette`, and moved `image` (test-only, JPEG decode) to a JPEG-only dev-dependency
+- [x] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
 - [x] [`measure-base`, and `measure-roll` as the one-stop measurement](tasks/core/measure-base.md) — `measure-roll --unexposed` measures the base too and writes one recipe (`calibration` + `roll`)
 - [x] [Pipeline Orchestration](tasks/core/pipeline-orchestration.md)
 - [x] [Name the product Hanten, and fix the boundary](tasks/core/product-naming.md) — Hanten as the product, `nc` as the internal name

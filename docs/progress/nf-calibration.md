@@ -28,7 +28,7 @@ mid-grey, raised to at least **+1.5**; a frame above +2.0 is clamped to it; the 
 `look.contrast` spans whole contrast 2.23–2.97 (2.23 on a clamped frame). A warning fires near the **leader**
 (film saturation), never merely because the cap bound. It was chosen by review **with a
 black point in the chain**, which the new chain lacked: every placement looked pale
-without one. Black landed on 2026-09-26 as `--display-black` (`fit_range.display_black`,
+without one. Black landed on 2026-09-26 as `--display-black` (now `--dark-base`; then
 default 6 stops below mid-grey; `nf-display-stages/parametric-operator`), keyed on where
 the film base renders, so judge any white placement with it at its default. Implementation is
 `roll-white-rule`: `hanten measure-roll` reports the white and the `look.contrast` placing
@@ -52,7 +52,7 @@ roll has no measurement is `no-roll-defaults`'.
 
 **`roll-exposure` is done (2026-09-29): the roll's level is measured, as
 `roll.exposure`** — one neutral gain per roll that brings the median frame's log-average
-ACEScg luma to mid-grey (±3 EV; −0.6 stop until `level-target-zero`, 2026-10-07), added to
+ACEScg luminance to mid-grey (±3 EV; −0.6 stop until `level-target-zero`, 2026-10-07), added to
 `scene_correction.exposure` under `default`. The decode still lets film speed show
 through; the roll's level is set after it. The white stays measured at exposure 0, so a
 lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.62 to
@@ -67,13 +67,13 @@ bright frames are never darkened. `measure-roll` writes it as a **delta** in
 On by default; off at measurement (`--no-small-lift`) or at render (`--small-lift off`,
 `roll.small_lift`, `null` = on) without re-measuring (`taste-vs-quality` renamed the
 switches). Review: the lift was better on 72 of
-103 lifted frames, worse on 7. A **flat** frame (luma p5–p95 under a stop) gets no lift, and
+103 lifted frames, worse on 7. A **flat** frame (luminance p5–p95 under a stop) gets no lift, and
 a thin frame's lift (below) replaces the small one while it applies.
 
 **`thin-frame-lift` is done (2026-10-01): a thin frame gets a steeper slope and the
 exposure that holds the film base**, raising its white about a stop (slope bound 2.4), in
 place of the small lift. A frame qualifies when its white renders at or under +0.9 stop
-after the roll's exposure and 30% of its luma sits within a stop of the base, which a
+after the roll's exposure and 30% of its luminance sits within a stop of the base, which a
 night scene also meets. Written as `roll.frames."<file>".thin_slope` and `thin_exposure`
 beside the small lift, moved into `roll.thin_slope` / `roll.thin_exposure` (the look's
 `base_from` is then `thin`). A typed `--roll-white` or a manifest's `roll.white_stops` drops
@@ -95,7 +95,7 @@ lift that another source's lift would silently replace is refused, naming the va
 
 **`span-roll-slope` is done (2026-10-09, `pipeline_version` 11): the roll's slope spreads
 its span.** `roll.white_stops` and `roll.dark_stops` (the p10 over picture frames of each
-frame's luma p1) are stated together, or refused where the roll applies; the slope is
+frame's luminance p1) are stated together, or refused where the roll applies; the slope is
 `9.049 / (white − dark)` within 1.237–3.5 (`roll_white::span_slope`), mid-grey pinned, the
 roll's exposure unchanged, so the white has no target (round 1 chose this over holding it
 at L\* 91 or 94). The white rule (cap, floor, clamp) is unchanged; a clamped frame spreads
@@ -109,9 +109,9 @@ over at least R = 7 look stops, 8 since `hybrid-span-target`, inside the envelop
 exposure (keeping α = 0.6 of its level's offset, inside the envelope, then −1.5 / +0.5 EV)
 at render time, so `--hybrid-span` and `--hybrid-level-keep` need no re-measure. It
 replaces both lifts; `--placement roll` renders per-roll with them. Colour stays at the
-roll's slope. **Display black is off by default under `default`**: it compensated a roll
+roll's slope. **The dark base is off by default under `default`**: it compensated a roll
 slope taken from the white alone, and with the span slope and the hybrid it worked against
-them, darkening low-key frames throughout; read "with display black at its default" above
+them, darkening low-key frames throughout; read "with the dark base at its default" above
 as 6 stops, before this.
 
 **`per-frame-placement` is done (2026-10-10, `pipeline_version` 13): `--placement frame`
@@ -137,7 +137,7 @@ over the eleven rolls were reviewed as the gain-map JPEG beside the SDR JPEG, un
 `hybrid` and `frame`; none looked wrong. The HDR rendition uses little of its range:
 `hybrid`'s median frame reaches 1.8× reference white at p99.9, against a peak of 4.93.
 Frame whites sit 0.4–2.3 stops above diffuse white, low on the 6-stop ramp that
-`--display-tone-headroom` sets. The placement decides where on that ramp a white sits
+`--highlight-range` sets. The placement decides where on that ramp a white sits
 (`frame`'s median frame reaches 2.5×), but the cap and floor shift it little. The gamut map is nearly inert on
 HDR. On SDR it now strips chroma from the brightest 3 % on 07-15, 07-23, 09-11 and 09-14
 (`docs/reports/gamut-map-share.md`'s dated note).

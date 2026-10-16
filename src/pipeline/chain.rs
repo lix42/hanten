@@ -37,7 +37,7 @@
 //! **The chain splits after the look ([`GradedImage`]) and the branches differ in one
 //! argument: the display's peak.** A gain map needs the two renditions to agree below
 //! diffuse white ([`DIFFUSE_WHITE`]), so every stage that shapes tone or colour
-//! sits above the split, and so do fit range's headroom and dark end
+//! sits above the split, and so do fit range's highlight range and dark end
 //! ([`SharedParams`]), with the film base graded once for both. The types carry it:
 //! nothing above the split can read a [`DisplayTarget`], and [`render_pair`] cannot
 //! set either per branch.
@@ -45,12 +45,12 @@
 //! What each branch may differ in, measured on the graded image's ACEScg luminance:
 //!
 //! - **Below diffuse white, only where the SDR cube binds.** Fit range agrees bit for
-//!   bit there (its lift is zero below white). Fit gamut's ceiling is the peak, so a
+//!   bit there (its peak ramp is zero below white). Fit gamut's ceiling is the peak, so a
 //!   saturated colour with one channel above `1` is mapped onto the SDR cube's top and
 //!   left alone in HDR. Everywhere else the two renditions are bit-identical. The
 //!   difference is real colour the HDR display can show, and a per-channel gain map
 //!   carries it; forcing agreement would mean mapping HDR into the SDR cube.
-//! - **Above diffuse white, freely**: fit range lifts toward the peak there.
+//! - **Above diffuse white, freely**: fit range ramps toward the peak there.
 //!
 //! **A single-rendition destination goes through the same split**: [`render`] is one
 //! branch of [`render_pair`], rendered by the same function, so skipping a branch
@@ -71,12 +71,13 @@ use crate::stage::{StageClock, StageKind, Untimed};
 use crate::types::{LinearImage, NcError, Result};
 
 /// Everything every rendition of a frame shares: the stages above the branch point,
-/// and fit range's headroom and dark end.
+/// and fit range's highlight range and dark end.
 ///
-/// **The headroom is here, not in [`DisplayTarget`], on purpose.** Reinhard's white
-/// point `W = 2^headroom_stops` shapes every luminance, the midtones included, so two
-/// renditions at different headrooms disagree below diffuse white and no gain map can
-/// pair them. Only the peak may differ, and it cannot act below white.
+/// **The highlight range is here, not in [`DisplayTarget`], on purpose.** Reinhard's
+/// white point `W = 2^highlight_range_stops` shapes every luminance, the midtones
+/// included, so two renditions at different highlight ranges disagree below diffuse
+/// white and no gain map can pair them. Only the peak may differ, and it cannot act
+/// below white.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedParams {
     pub scene_correction: SceneCorrectionParams,
@@ -84,14 +85,14 @@ pub struct SharedParams {
     pub roll_colour: Option<RollColour>,
     pub look: LookParams,
     /// Fit range's highlight range in stops (the recipe's `fit_range.highlight_range_stops`).
-    pub headroom_stops: f32,
+    pub highlight_range_stops: f32,
     /// Where the dark end renders on the display (the recipe's `fit_range.dark_end`).
-    /// Shared for the reason the headroom is: it acts below mid-grey, where the branches
-    /// must agree.
+    /// Shared for the reason the highlight range is: it acts below mid-grey, where the
+    /// branches must agree.
     pub dark_end: DarkEnd,
     /// The frame's measured dark end in scene stops (`roll_white::FrameStops::dark_stops`),
     /// where the roll applies: the floor's reference, graded by [`graded_tone`].
-    pub frame_dark_stops: Option<f32>,
+    pub frame_dark_scene_stops: Option<f32>,
 }
 
 /// What a destination states about the display it renders for: the peak fit range
@@ -105,7 +106,7 @@ pub struct DisplayTarget {
 /// One rendition's parameters: the shared half and the destination's half.
 ///
 /// Not a recipe type, though parts of it are: `scene_correction`, `look` and the
-/// headroom come from the recipe (`crate::recipe::Recipe`), while the
+/// highlight range come from the recipe (`crate::recipe::Recipe`), while the
 /// [`DisplayTarget`] is the destination's, so [`crate::recipe::resolve::chain_params`]
 /// adds it. No `Default`, because no destination is implied.
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +166,7 @@ pub struct RenderedPair {
 ///
 /// `film_base` is the **decoded film base**, one pixel (`algo::fixed::decode_film_base`
 /// through the same NC film RGB v1 mapping as the frame): it is graded beside the
-/// frame, so display black's reference follows every parameter that moves where the
+/// frame, so the dark base's reference follows every parameter that moves where the
 /// base renders — the look's tone slope above all — and nothing is estimated from the
 /// image. The floor's reference, the frame's measured dark end, is graded by
 /// [`graded_tone`] from what the grade applied.
@@ -229,7 +230,7 @@ pub fn render_pair(
 }
 
 /// The film base's graded ACEScg luminance: the decoded base run through the frame's
-/// own grade — display black's reference.
+/// own grade — the dark base's reference.
 fn graded_luminance(
     film_base: AcesCgImage,
     shared: &SharedParams,
@@ -286,11 +287,11 @@ fn display(
     clock: &mut impl StageClock,
 ) -> Result<Rendered> {
     let fit_range_params = FitRangeParams {
-        headroom_stops: shared.headroom_stops,
+        highlight_range_stops: shared.highlight_range_stops,
         peak: target.peak,
         dark_end: shared.dark_end,
         film_base,
-        frame_dark: shared.frame_dark_stops.map(|stops| {
+        frame_dark: shared.frame_dark_scene_stops.map(|stops| {
             graded_tone(
                 stops,
                 shared.look.section.slope,
@@ -433,17 +434,17 @@ mod tests {
     use crate::stage::Untimed;
     use crate::types::{FilmBase, IrPlane, LinearImage, Scan};
 
-    /// Every stage at its identity — fit range at zero headroom — so a test sees the
-    /// wiring and the destination matrix rather than the operator.
+    /// Every stage at its identity — fit range at zero highlight range — so a test sees
+    /// the wiring and the destination matrix rather than the operator.
     fn params() -> ChainParams {
         ChainParams {
             shared: SharedParams {
                 scene_correction: SceneCorrectionParams::default(),
                 roll_colour: None,
                 look: LookParams::off(),
-                headroom_stops: 0.0,
+                highlight_range_stops: 0.0,
                 dark_end: DarkEnd::Off,
-                frame_dark_stops: None,
+                frame_dark_scene_stops: None,
             },
             target: DisplayTarget {
                 peak: DisplayPeak::SDR,
@@ -452,10 +453,10 @@ mod tests {
         }
     }
 
-    /// [`params`] with fit range at the recipe's default headroom — what a run gets.
+    /// [`params`] with fit range at the default highlight range — what a run gets.
     fn shipped_params() -> ChainParams {
         let mut p = params();
-        p.shared.headroom_stops = crate::types::DEFAULT_HEADROOM_STOPS;
+        p.shared.highlight_range_stops = crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS;
         p
     }
 
@@ -464,7 +465,7 @@ mod tests {
     fn fit_range_params(p: &ChainParams) -> FitRangeParams {
         assert_eq!(p.shared.dark_end, DarkEnd::Off);
         FitRangeParams {
-            headroom_stops: p.shared.headroom_stops,
+            highlight_range_stops: p.shared.highlight_range_stops,
             peak: p.target.peak,
             dark_end: p.shared.dark_end,
             film_base: FILM_BASE,
@@ -632,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_non_finite_sample_is_refused_naming_the_first_pixel() {
-        // At the identity headroom too: whether a frame renders must not depend on
+        // At the identity highlight range too: whether a frame renders must not depend on
         // the setting.
         for p in [params(), shipped_params()] {
             let aces = aces_from(3, 1, &AWKWARD);
@@ -1010,14 +1011,14 @@ mod tests {
     }
 
     #[test]
-    fn display_black_places_the_film_base_itself_at_its_target() {
-        let black_on = DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+    fn dark_base_places_the_film_base_itself_at_its_target() {
+        let dark_base_on = DarkEnd::Base(crate::pipeline::fit_range::REVIEWED_DARK_BASE_STOPS);
         // A frame holding its own film base renders that pixel at the target, whatever
         // the tone slope: the reference is graded with the frame.
         for slope in [1.2_f32, 1.25, 1.4, 1.65] {
             let mut shared = shared_acting();
             shared.look.section.slope = slope;
-            shared.dark_end = black_on;
+            shared.dark_end = dark_base_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1032,23 +1033,23 @@ mod tests {
                 &mut Untimed,
             )
             .unwrap();
-            let black = rendered.fit_range.dark_end;
+            let dark_end = rendered.fit_range.dark_end;
             let (out, _) = rendered.image.into_parts();
             let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMINANCE);
-            let want = 0.18 * (-crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS).exp2();
+            let want = 0.18 * (-crate::pipeline::fit_range::REVIEWED_DARK_BASE_STOPS).exp2();
             // The white balance tints the base, so its Display P3 luminance differs from
-            // the ACEScg luminance display black places by a fraction of a percent.
+            // the ACEScg luminance the dark base places by a fraction of a percent.
             assert!(
                 (y / want - 1.0).abs() < 3e-3,
                 "slope {slope}: {y} vs {want}"
             );
             // A steeper slope leaves less to do.
-            assert!(black.shift_stops < 0.0, "{slope}: {black:?}");
+            assert!(dark_end.shift_stops < 0.0, "{slope}: {dark_end:?}");
         }
         let shift = |slope: f32| {
             let mut shared = shared_acting();
             shared.look.section.slope = slope;
-            shared.dark_end = black_on;
+            shared.dark_end = dark_base_on;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1074,14 +1075,14 @@ mod tests {
         // A neutral at the frame's measured dark end renders at the floor, whatever the
         // slope and exposure that would have sunk it: the reference is graded with the
         // frame. Each dark end is graded to about 5.2 stops down: under the floor, and
-        // within the lift's cap.
+        // within the raise's cap.
         for (slope, exposure) in [(1.2_f32, 0.0_f32), (1.6, 0.25), (2.0, -0.4)] {
             let dark = -5.2 / slope - exposure;
             let mut p = shipped_params();
             p.shared.look.section.slope = slope;
             p.shared.scene_correction.exposure = exposure;
             p.shared.dark_end = DarkEnd::Floor(REVIEWED_DARK_FLOOR_STOPS);
-            p.shared.frame_dark_stops = Some(dark);
+            p.shared.frame_dark_scene_stops = Some(dark);
             let rendered = render(
                 aces_from(1, 1, &[0.18 * dark.exp2(); 3]),
                 film_base(),
@@ -1104,19 +1105,17 @@ mod tests {
     #[test]
     fn a_film_base_that_grades_to_nothing_is_refused() {
         let mut p = shipped_params();
-        p.shared.dark_end =
-            DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+        p.shared.dark_end = DarkEnd::Base(crate::pipeline::fit_range::REVIEWED_DARK_BASE_STOPS);
         let err = render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed)
             .err()
             .expect("refused");
         assert!(err.message().contains("film base"), "{}", err.message());
-        // Without display black the base is never read, so it cannot fail the render.
+        // Without the dark base the base is never read, so it cannot fail the render.
         for unread in [DarkEnd::Off, DarkEnd::default()] {
             p.shared.dark_end = unread;
             render(grid(), aces_from(1, 1, &[0.0; 3]), &p, &mut Untimed).unwrap();
         }
-        p.shared.dark_end =
-            DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS);
+        p.shared.dark_end = DarkEnd::Base(crate::pipeline::fit_range::REVIEWED_DARK_BASE_STOPS);
         let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6]), &p, &mut Untimed)
             .err()
             .expect("refused");
@@ -1124,7 +1123,7 @@ mod tests {
     }
 
     /// Shipped-like shared parameters with every pre-branch stage acting: a white
-    /// balance, an exposure, the default look and the default headroom.
+    /// balance, an exposure, the default look and the default highlight range.
     fn shared_acting() -> SharedParams {
         SharedParams {
             scene_correction: SceneCorrectionParams {
@@ -1142,9 +1141,9 @@ mod tests {
                 },
                 linearization: crate::algo::fixed::LINEARIZATION,
             },
-            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
+            highlight_range_stops: crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS,
             dark_end: DarkEnd::default(),
-            frame_dark_stops: None,
+            frame_dark_scene_stops: None,
         }
     }
 
@@ -1170,23 +1169,23 @@ mod tests {
 
     #[test]
     fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
-        // At the shipped headroom, and at zero, where reinhard is the identity and
+        // At the shipped highlight range, and at zero, where reinhard is the identity and
         // pixels reach fit gamut at luminance near white. The dark end acts in every
-        // case — display black, and the default target lifting a dark end 7 scene stops
+        // case — the dark base, and the default target raising a dark end 7 scene stops
         // down and pushing one 3 down — so the contract is checked with it in the chain.
-        for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
-            for (dark_end, frame_dark_stops) in [
+        for stops in [crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS, 0.0] {
+            for (dark_end, frame_dark_scene_stops) in [
                 (
-                    DarkEnd::Black(crate::pipeline::fit_range::REVIEWED_DISPLAY_BLACK_STOPS),
+                    DarkEnd::Base(crate::pipeline::fit_range::REVIEWED_DARK_BASE_STOPS),
                     None,
                 ),
                 (DarkEnd::default(), Some(-7.0)),
                 (DarkEnd::default(), Some(-3.0)),
             ] {
                 let mut shared = shared_acting();
-                shared.headroom_stops = stops;
+                shared.highlight_range_stops = stops;
                 shared.dark_end = dark_end;
-                shared.frame_dark_stops = frame_dark_stops;
+                shared.frame_dark_scene_stops = frame_dark_scene_stops;
                 pair_agrees_below_white(&shared);
             }
         }
@@ -1242,10 +1241,10 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_check_fails_when_the_headroom_is_set_per_branch() {
-        // Falsifiability: the headroom shapes the midtones, which is why it is shared.
-        // Two renders at different headrooms (which `render_pair` cannot express) break
-        // the contract far below white, and the check must say so.
+    fn the_contract_check_fails_when_the_highlight_range_is_set_per_branch() {
+        // Falsifiability: the highlight range shapes the midtones, which is why it is
+        // shared. Two renders at different highlight ranges (which `render_pair` cannot
+        // express) break the contract far below white, and the check must say so.
         let shared = shared_acting();
         let graded = contract::graded(grid(), &shared);
         let sdr = pixels_of(
@@ -1264,7 +1263,7 @@ mod tests {
             .unwrap(),
         );
         let mut other = shared.clone();
-        other.headroom_stops = 4.0;
+        other.highlight_range_stops = 4.0;
         let hdr = pixels_of(
             render(
                 grid(),
@@ -1379,7 +1378,7 @@ mod tests {
         let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
         let gains = gain_ratio::between(&sdr, &hdr, 1.0 / 64.0).unwrap();
         assert!(!gains.range().flat, "{:?}", gains.range());
-        // Below 1 too: the SDR cube lifted a channel the HDR rendition keeps lower.
+        // Below 1 too: the SDR cube raised a channel the HDR rendition keeps lower.
         assert!(
             gains.range().min.iter().any(|g| *g < 1.0),
             "{:?}",
@@ -1419,7 +1418,7 @@ mod tests {
     /// `black_endpoint`'s model of where a tone lands (`black_endpoint::Inputs::land`),
     /// built from the render's account as `cli` builds it, is the chain's render of a
     /// neutral at that tone: exposure, white balance, the tone slope and reinhard acting.
-    /// Display black off, as the check runs.
+    /// The dark base off, as the check runs.
     #[test]
     fn the_black_endpoint_model_is_the_chain_s_render_of_a_neutral() {
         let tones = [-5.0_f32, -1.5, 0.0, 1.5];
@@ -1450,8 +1449,8 @@ mod tests {
                 roll_exposure: false,
                 stated_exposure: exposure,
                 stated_white_balance: [gain; 3],
-                film_base_stops: out.fit_range.dark_end.film_base_stops,
-                headroom_stops: out.fit_range.headroom_stops,
+                film_base_below_mid_stops: out.fit_range.dark_end.film_base_below_mid_stops,
+                highlight_range_stops: out.fit_range.highlight_range_stops,
                 contrast: 1.0,
                 base_slope: slope,
                 base_from: "",
@@ -1470,28 +1469,29 @@ mod tests {
     }
 
     /// **The tone slope, not fit range, decides shadow separation** — the measurement
-    /// the look's tone slope exists for (`nf-look/contrast`). A neutral ramp from 5.2 to 1.9
-    /// stops below mid-grey, through the whole chain, at matched lightness: mid-grey
-    /// renders at 0.18 in every cell, since the tone slope pivots there and reinhard keeps it.
-    /// With fit range off the shadow log-log slope is the tone slope exactly. At headrooms of
-    /// 2, 3 and 6 stops the test bounds it at no more than 3% below the tone slope, and its
-    /// spread (max − min) across those headrooms under 0.005 (measured: 0.98–0.99× and
-    /// under 0.003): below mid reinhard is nearly a gain, costing 1–3% of slope over this
-    /// ramp (`fit_range::tests::reinhard_compresses_upward_only`). The bound covers
-    /// headroom ≥ 2 only; from 0 up, reinhard switching on costs up to ~0.023 (≈2%) at
-    /// tone slope 1. It runs with display black **off** ([`params`]): black deliberately
-    /// steepens the stops between the film base and mid-grey (`fit_range`'s module
-    /// docs), which was decided by review. What this pins is that nothing *else* in fit
-    /// range shapes the shadows — a toe in reinhard's place would fail it, and would be a
-    /// decision.
+    /// the look's tone slope exists for (`nf-look/contrast`). A neutral ramp from 5.2
+    /// to 1.9 stops below mid-grey, through the whole chain, at matched lightness:
+    /// mid-grey renders at 0.18 in every cell, since the tone slope pivots there and
+    /// reinhard keeps it. With fit range off the shadow log-log slope is the tone slope
+    /// exactly. At highlight ranges of 2, 3 and 6 stops the test bounds it at no more
+    /// than 3% below the tone slope, and its spread (max − min) across those highlight
+    /// ranges under 0.005 (measured: 0.98–0.99× and under 0.003): below mid reinhard is
+    /// nearly a gain, costing 1–3% of slope over this ramp
+    /// (`fit_range::tests::reinhard_compresses_upward_only`). The bound covers
+    /// highlight range ≥ 2 only; from 0 up, reinhard switching on costs up to ~0.023
+    /// (≈2%) at tone slope 1. It runs with the dark base **off** ([`params`]): the dark
+    /// base deliberately steepens the stops between the film base and mid-grey
+    /// (`fit_range`'s module docs), which was decided by review. What this pins is that
+    /// nothing *else* in fit range shapes the shadows — a toe in reinhard's place would
+    /// fail it, and would be a decision.
     #[test]
     fn the_tone_slope_not_fit_range_decides_shadow_separation() {
         let xs = [0.005_f32, 0.05, 0.18];
-        let render_ramp = |k: f32, headroom_stops: f32| {
+        let render_ramp = |k: f32, highlight_range_stops: f32| {
             let rgb: Vec<f32> = xs.iter().flat_map(|&v| [v, v, v]).collect();
             let mut p = params();
             p.shared.look.section.slope = k;
-            p.shared.headroom_stops = headroom_stops;
+            p.shared.highlight_range_stops = highlight_range_stops;
             let out = render(aces_from(3, 1, &rgb), film_base(), &p, &mut Untimed).unwrap();
             let y: Vec<f32> = out
                 .image
@@ -1521,7 +1521,7 @@ mod tests {
             let spread = max - min;
             assert!(
                 spread < 0.005,
-                "tone slope {k}: headroom moved the slope {spread}"
+                "tone slope {k}: highlight range moved the slope {spread}"
             );
         }
     }

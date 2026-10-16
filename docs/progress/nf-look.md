@@ -79,7 +79,7 @@ measured rolls land 0.55â€“1.73 stops below white (09-11 corrected 2026-09-23) â
 task is developed with a per-roll `--density-gamma` computed from that roll's base and
 red p97 (candidate C/D in `docs/spike/white-placement.md`). Its band values stood
 provisional until `nf-calibration/anchor-comparison` chose the rule (2026-09-25) and
-`desaturation-band-refit` re-checked them under it and display black (2026-09-30):
+`desaturation-band-refit` re-checked them under it and the dark base (2026-09-30):
 **nothing moved**. The band's measure divides out the slope, so contrast never moves a
 pixel against it; it is only as good as a white balance measured over the whole roll.
 Two tasks were split out of `path-to-white` to

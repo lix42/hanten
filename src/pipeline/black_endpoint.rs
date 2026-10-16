@@ -1,4 +1,4 @@
-//! **Whether a frame's black can approach black** with display black off — a report
+//! **Whether a frame's black can approach black** with the dark base off — a report
 //! warning, never an error (`nf-reconstruction/curve-endpoint-warning`).
 //!
 //! The encode's loss counter sees highlights leave the top of the range and is blind to a
@@ -17,14 +17,16 @@
 //! - **Squeezed flat**: the look's tone slope is under [`MIN_SLOPE`], the flattest any
 //!   placement sets — a `look.contrast` under 1, or a stated thin slope, gets there.
 //!
-//! **A tone lands at `display_stops(slope · (tone + exposure + log2 gain))`**, `gain` the
-//! white balance's on luminance: the placement model `roll_white` solves in, with what the
-//! render applied. `chain`'s `the_black_endpoint_model_is_the_chain_s_render_of_a_neutral`
-//! pins it to the stages. The base is the real grade's
-//! (`fit_range::ResolvedDarkEnd::film_base_stops`). Display black places the base itself
-//! and has its own warning (`ResolvedDarkEnd::warning`), so this check is skipped there;
-//! the floor and the dark target move only the darkest stops, and neither fixes a frame
-//! placed too bright, so it runs beside them on the tones as placed.
+//! **A tone lands at `display_stops(slope · (tone + exposure + log2 gain))`**, `gain`
+//! the white balance's on luminance: the placement model `roll_white` solves in, with
+//! what the render applied. `chain`'s
+//! `the_black_endpoint_model_is_the_chain_s_render_of_a_neutral` pins it to the stages.
+//! The base is the real grade's
+//! (`fit_range::ResolvedDarkEnd::film_base_below_mid_stops`). The dark base places the
+//! base itself and has its own warning (`ResolvedDarkEnd::warning`), so this check is
+//! skipped there; the floor and the dark target move only the darkest stops, and
+//! neither fixes a frame placed too bright, so it runs beside them on the tones as
+//! placed.
 
 use crate::pipeline::chain::graded_tone;
 use crate::pipeline::colorimetry::dot;
@@ -59,8 +61,8 @@ pub struct Inputs {
     pub stated_exposure: f32,
     pub stated_white_balance: [f32; 3],
     /// Where the graded film base lands, in stops under mid-grey.
-    pub film_base_stops: f32,
-    pub headroom_stops: f32,
+    pub film_base_below_mid_stops: f32,
+    pub highlight_range_stops: f32,
     /// For the message: the `look.contrast` multiplier, and the slope it multiplies and
     /// where that came from.
     pub contrast: f32,
@@ -78,7 +80,7 @@ impl Inputs {
     /// stops from mid-grey.
     pub fn land(&self, stops: f32) -> f32 {
         display_stops(
-            self.headroom_stops,
+            self.highlight_range_stops,
             graded_tone(stops, self.slope, self.exposure, self.white_balance),
         )
     }
@@ -118,10 +120,10 @@ pub fn check(i: &Inputs) -> Vec<Fault> {
             }
         }
         None if (!i.roll_exposure || i.stated_gain() > 0.0)
-            && i.film_base_stops < MIN_FILM_BASE_STOPS =>
+            && i.film_base_below_mid_stops < MIN_FILM_BASE_STOPS =>
         {
             faults.push(Fault::Base {
-                stops: i.film_base_stops,
+                stops: i.film_base_below_mid_stops,
             })
         }
         _ => {}
@@ -176,7 +178,7 @@ impl Fault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::DEFAULT_HEADROOM_STOPS;
+    use crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS;
 
     fn inputs() -> Inputs {
         Inputs {
@@ -191,8 +193,8 @@ mod tests {
             roll_exposure: true,
             stated_exposure: 0.0,
             stated_white_balance: [1.0; 3],
-            film_base_stops: 3.5,
-            headroom_stops: DEFAULT_HEADROOM_STOPS,
+            film_base_below_mid_stops: 3.5,
+            highlight_range_stops: DEFAULT_HIGHLIGHT_RANGE_STOPS,
             contrast: 1.0,
             base_slope: 1.6,
             base_from: "the roll's slope",
@@ -299,16 +301,16 @@ mod tests {
         let mut i = inputs();
         i.tones = None;
         i.roll_exposure = false;
-        i.film_base_stops = MIN_FILM_BASE_STOPS;
+        i.film_base_below_mid_stops = MIN_FILM_BASE_STOPS;
         assert_eq!(check(&i), vec![]);
-        i.film_base_stops = 1.2;
+        i.film_base_below_mid_stops = 1.2;
         let faults = check(&i);
         assert_eq!(faults, vec![Fault::Base { stops: 1.2 }]);
         let message = faults[0].message();
         assert!(message.contains("1.20 stops under mid-grey"), "{message}");
         assert!(message.contains("lower `--exposure`"), "{message}");
         // A base above mid-grey says so.
-        i.film_base_stops = -0.4;
+        i.film_base_below_mid_stops = -0.4;
         assert!(check(&i)[0].message().contains("0.40 stops above mid-grey"));
     }
 
@@ -318,7 +320,7 @@ mod tests {
         // the base near the threshold.
         let mut i = inputs();
         i.tones = None;
-        i.film_base_stops = 1.8;
+        i.film_base_below_mid_stops = 1.8;
         assert_eq!(check(&i), vec![]);
         // An exposure stated on top is the user's push, and is checked.
         i.stated_exposure = 0.3;
@@ -335,7 +337,7 @@ mod tests {
     fn with_tones_the_base_is_not_read() {
         // A thin roll's default render: the base at 2.02 stops, the frame placed well.
         let mut i = inputs();
-        i.film_base_stops = 1.0;
+        i.film_base_below_mid_stops = 1.0;
         assert_eq!(check(&i), vec![]);
     }
 
@@ -346,7 +348,7 @@ mod tests {
         i.roll_exposure = false;
         i.slope = 0.8;
         i.contrast = 0.5;
-        i.film_base_stops = 1.0;
+        i.film_base_below_mid_stops = 1.0;
         let faults = check(&i);
         assert!(
             matches!(faults[..], [Fault::Squeezed { .. }, Fault::Base { .. }]),

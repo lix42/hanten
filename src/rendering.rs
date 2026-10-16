@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::destination::{Container, Defaults, Gamut, Range, Transfer};
 use crate::pipeline::fit_range::DarkEnd;
 use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE, HighlightDesaturation};
-use crate::types::DEFAULT_HEADROOM_STOPS;
+use crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS;
 
 /// The rendering a run starts from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -47,7 +47,7 @@ pub struct Base {
     /// saturation slope is the base slope (never a frame's own) times this times the knob.
     pub saturation: f32,
     pub highlight_desaturation: HighlightDesaturation,
-    pub headroom_stops: f32,
+    pub highlight_range_stops: f32,
     pub dark_end: DarkEnd,
     /// The destination axes an unset axis takes (`crate::destination::resolve`).
     pub axes: Defaults,
@@ -59,7 +59,7 @@ const DEFAULT: Base = Base {
     slope: DEFAULT_SLOPE,
     saturation: DEFAULT_SATURATION,
     highlight_desaturation: HighlightDesaturation::DEFAULT,
-    headroom_stops: DEFAULT_HEADROOM_STOPS,
+    highlight_range_stops: DEFAULT_HIGHLIGHT_RANGE_STOPS,
     dark_end: DarkEnd::Target(crate::pipeline::fit_range::DEFAULT_DARK_TARGET_STOPS),
     axes: Defaults::STANDARD,
 };
@@ -78,9 +78,9 @@ pub const DIRECT: Base = Base {
         start_stops: -1.0,
         band: [0.015, 0.025],
     },
-    headroom_stops: 6.0,
-    // Display black: a monotone stretch, so it loses almost nothing.
-    dark_end: DarkEnd::Black(6.0),
+    highlight_range_stops: 6.0,
+    // The dark base: a monotone stretch, so it loses almost nothing.
+    dark_end: DarkEnd::Base(6.0),
     // The float HDR TIFF; container first, so no lossy container comes from a default.
     axes: Defaults {
         range: Range::Hdr,
@@ -104,7 +104,7 @@ mod tests {
             slope,
             saturation,
             highlight_desaturation,
-            headroom_stops,
+            highlight_range_stops,
             dark_end,
             axes,
         } = DIRECT;
@@ -120,8 +120,8 @@ mod tests {
             }
         );
         assert!(highlight_desaturation.is_off());
-        assert_eq!(headroom_stops, 6.0);
-        assert_eq!(dark_end, DarkEnd::Black(6.0));
+        assert_eq!(highlight_range_stops, 6.0);
+        assert_eq!(dark_end, DarkEnd::Base(6.0));
         assert_eq!(
             axes,
             Defaults {
@@ -147,7 +147,7 @@ mod tests {
             base.highlight_desaturation,
             HighlightDesaturation::default()
         );
-        assert_eq!(base.headroom_stops, DEFAULT_HEADROOM_STOPS);
+        assert_eq!(base.highlight_range_stops, DEFAULT_HIGHLIGHT_RANGE_STOPS);
         assert_eq!(base.dark_end, DarkEnd::default());
         assert_eq!(base.axes, Defaults::STANDARD);
     }
