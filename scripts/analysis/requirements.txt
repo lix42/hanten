@@ -1,7 +1,8 @@
-# Dependencies for `nctool metrics` and `nctool acceptance`.
+# Dependencies for the `nctool` commands that read pixels: `metrics`, `acceptance`,
+# `manifest charts check` / `import` / `table` / `cast measure`, and parts of `review`.
 #
-# The rest of the toolkit is stdlib-only and stays that way: manifest, roll and
-# compare import nothing from here. Only the pixel readers need these, because
+# The rest of the toolkit is stdlib-only and stays that way. Only the pixel
+# readers need these, because
 # reading TIFF variants and taking percentiles over 18-75 megapixels in pure
 # Python is neither short nor fast.
 #

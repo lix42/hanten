@@ -410,7 +410,7 @@ def require_dependencies(command: str = "metrics") -> None:
     except ImportError as error:
         raise MetricsError(
             f"{error.name} is required by `nctool {command}` and is not importable. "
-            "`metrics` and `acceptance` read pixels; the rest of the toolkit is "
+            "Only the commands that read pixels need it; the rest of the toolkit is "
             "stdlib-only. Set it up with:\n"
             "    uv venv --python 3.12\n"
             "    uv pip install -r scripts/analysis/requirements.txt\n"

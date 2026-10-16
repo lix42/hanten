@@ -105,6 +105,7 @@ A stops figure states its reference and its sign.
 | **reinhard input gain** | the pre-gain that holds mid-grey in place | fit range | internal | — |
 | **density scale** | per-channel multiplier on `D`; the bundled one has red = 1. Not "density gain" | decode · `D` | public | `--density-scale`, `reconstruction.scale`, `chain.decode.scale` |
 | **density offset** | per-channel additive term on `D` | decode · `D` | public | `--density-offset`, `reconstruction.offset` |
+| **fitted density scale** | a channel's scaled density (density scale × `D`, no offset) against green's, over a roll's chart grey patches, least squares; 1 means the density scale fits | analysis · `D` | internal | nctool `charts cast measure` (`scale_fit`) |
 | **midtone-line intercept** | the constant in `log2(c/g) = slope·s + intercept` | scene correction | public (positional in `--roll-midtone-line`) | — |
 
 ### Slope — always qualified

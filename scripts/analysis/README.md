@@ -11,9 +11,10 @@ PYTHONPATH=scripts/analysis python3 -m nctool --help
 
 ### Dependencies
 
-Every command except `metrics` and `acceptance` uses only the Python standard
-library, and stays that way. Those two read output pixels, which needs `numpy`,
-`tifffile` and `Pillow` (the last for JPEG):
+Only the commands that read pixels need third-party packages — `metrics`,
+`acceptance`, `manifest charts check` / `import` / `table` / `cast measure`, and
+`review` where it reads images. They need `numpy`, `tifffile` and `Pillow` (the last
+for JPEG); everything else uses only the Python standard library, and stays that way:
 
 ```sh
 uv venv --python 3.12
@@ -58,6 +59,11 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest patches import notes.md \
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts import \
   ../temp/chart-labels/<roll>.json --source 'chart-labels <date>'
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts table
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts cast render \
+  --roll <roll> --work ../temp/chart-cast-<roll> --nc target/release/hanten
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts cast measure \
+  --roll <roll> --work ../temp/chart-cast-<roll> \
+  --source NLP=../nc-assets/converted/nlp/<roll>
 ```
 
 - `generate` inventories source rolls, samples, and converted outputs; obtains
@@ -75,6 +81,18 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts table
 - `patches import` folds the review app's **Copy all** text into frames' `patches`
   (schema in `nctool/patches.py`), replacing each listed frame's patches from the
   same `--source`.
+- `charts cast render` measures a roll on its pictures (`measure-roll`, the chart
+  frames left out) and renders its chart frames through a grid of settings (default
+  `nctool.cast.DEFAULT_GRID`; `--grid` overrides keys) into `<work>/renders/`, SDR Display
+  P3 16-bit TIFF. It needs a current build (destination flags). `charts cast measure`
+  samples every labelled patch of those renders and of each `--source` (another
+  producer's exports at the scan's size) as CIELAB D50 and writes `<work>/cast.json`:
+  the grey patches' residual cast by tone and by bracket frame, colour-patch CIELAB hue
+  and chroma on the lightness-matched frame, and the chart table's density residuals
+  (offset and fitted density scale against green). It reads only the configurations
+  `render` recorded in `<work>/configs.json` (with the build). `render` clears a folder's
+  earlier renders once the roll is measured, and refuses renders it did not record. The procedure is
+  the `chart-cast` skill; results go in `docs/reports/chart-cast.md`.
 
 `generate_manifest.py` is a compatibility wrapper for older callers. New code
 should use `python -m nctool manifest generate`. `manifest.sample.json` is a
