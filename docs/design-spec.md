@@ -61,7 +61,8 @@ The deterministic core owns the image science. Any future ML assistance (see
   is decided ([`design/mono.md`](design/mono.md)); the implementation is not.
 - Camera RAW (Bayer/X-Trans) input, DNG processing.
 - ML/AI assistance of any kind (auto-crop, neutral-patch detection, inpainting).
-- GUI, scanner ICC profiling workflow.
+- Scanner ICC profiling workflow. (A desktop app is designed separately:
+  [`design/desktop-app.md`](design/desktop-app.md).)
 - Output beyond the destination set (§5): PNG/EXR and HEIC gain maps are roadmap items.
 
 ## 3. Design principles
@@ -85,7 +86,8 @@ The deterministic core owns the image science. Any future ML assistance (see
 5. **Every knob is a flag.** No conversion behavior is reachable only through code.
 6. **Pure functions over classes.** Each pipeline stage is a pure function
    `(input, params) -> output`, deterministic in its image output and free of
-   filesystem access. The CLI layer is the only orchestrator. *One narrow
+   filesystem access. Only the CLI layer orchestrates (and the desktop app's roll
+   session, `docs/design/desktop-app.md` §3.2). *One narrow
    exception:* a stage clock reads a monotonic wall clock to fill the telemetry
    record's per-stage timings — a report-only channel that leaves the pixels
    untouched.
