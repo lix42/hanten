@@ -83,7 +83,7 @@ pub struct SharedParams {
     /// The roll's midtone line and tilt, from the recipe's `roll` section.
     pub roll_colour: Option<RollColour>,
     pub look: LookParams,
-    /// Fit range's headroom in stops (the recipe's `fit_range.headroom_stops`).
+    /// Fit range's highlight range in stops (the recipe's `fit_range.highlight_range_stops`).
     pub headroom_stops: f32,
     /// Where the dark end renders on the display (the recipe's `fit_range.dark_end`).
     /// Shared for the reason the headroom is: it acts below mid-grey, where the branches

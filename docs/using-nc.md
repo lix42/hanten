@@ -90,9 +90,16 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `saturation-slope`) §5's default recipe and a `measure-roll --out` file's
 > `reconstruction`, §6's decode table and the `--anchor-mid-fraction`,
 > `reconstruction.contrast` and old-key refusals, and §7's stage list and look report
-> were re-run against the binary. The staleness signal is `pipeline_version`: if
-> `hanten --version` reports a different one, treat this document as suspect and
-> re-verify.
+> were re-run against the binary.
+> At `core/rename-fit-range-misnomers` (`pipeline_version` 17 unchanged, `ce5a9e5` plus
+> that change: `--highlight-range`, `--dark-base` and the fit-range report fields renamed)
+> §5's default recipe, removed-chain refusal and per-frame override refusals, §7's
+> print-control and rendering tables, fit-range table, report, dark-end section and
+> refusals, §8's HDR and film-master examples, §10's warnings and render-fault example,
+> and every old spelling's refusal were re-run against the binary; the floor and target
+> examples' real-roll values were carried over with their keys renamed. The staleness
+> signal is `pipeline_version`: if `hanten --version` reports a different one, treat
+> this document as suspect and re-verify.
 >
 > **Before `pipeline_version` 8** there was a second rendering chain, chosen by
 > **output presets** (`--output-preset`: `gain-map-hdr`, `display-p3`, `hdr-pq`, …)
@@ -710,7 +717,7 @@ and the measuring commands write parts of it):
       "channel_grade": [1.0, 1.0],
       "highlight_desaturation": { "strength": null, "start_stops": null, "band": null }
     },
-    "fit_range": { "headroom_stops": null, "dark_end": null },
+    "fit_range": { "highlight_range_stops": null, "dark_end": null },
     "fit_gamut": {},
     "output": { "display": {} }
   }
@@ -863,10 +870,10 @@ refused naming it, and where its knobs went, rather than parsed and read by noth
 usage: recipe print.json: `print` is a section of the removed chain's recipe: white
        balance and exposure are `scene_correction.white_balance` and
        `scene_correction.exposure`; the display tone is fit range, whose one operator
-       is reinhard and whose highlight range is `fit_range.headroom_stops`; the black point's
-       surviving half is display black, `fit_range.dark_end` `{"black": <stops>}`
+       is reinhard and whose highlight range is `fit_range.highlight_range_stops`; the black point's
+       surviving half is the dark base, `fit_range.dark_end` `{"base": <stops>}`
        (where the film base renders); and `linear_range`, the levels remap, retired:
-       its gain is `scene_correction.exposure` and its black is display black. Drop it
+       its gain is `scene_correction.exposure` and its black is the dark base. Drop it
 ```
 
 The same holds for `reconstruction.density` (its `scale` and `offset` are
@@ -1155,10 +1162,10 @@ The removed chain's print controls are refused, each saying where the knob went:
 | Refused | Where it went |
 |---|---|
 | `--print-exposure` | `--exposure`, scene correction (below) |
-| `--black-point` | display black, `--display-black` (below); a scene-side flare/fog subtraction was judged not needed (`nf-scene-correction/flare-removal`) |
+| `--black-point` | the dark base, `--dark-base` (below); a scene-side flare/fog subtraction was judged not needed (`nf-scene-correction/flare-removal`) |
 | `--auto-wb` | none per frame: `hanten measure-roll` measures the roll's white balance once (below) |
-| `--linear-range` | retired: its gain is `--exposure` and its black `--display-black` (`nf-scene-correction/levels-knob`); refused even at its old default `0,1` |
-| `--display-tone`, `--highlight-compress` | fit range's one operator; its parameter is `--display-tone-headroom` |
+| `--linear-range` | retired: its gain is `--exposure` and its black `--dark-base` (`nf-scene-correction/levels-knob`); refused even at its old default `0,1` |
+| `--display-tone`, `--highlight-compress` | fit range's one operator; its parameter is `--highlight-range` |
 
 ### The rendering — `default` or `direct`
 
@@ -1170,7 +1177,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | white balance / base slope | the roll's; without them neutral / ≈1.414, and a warning | neutral / ≈1.414, pinned |
 | saturation over the base slope's colour | 1.15 | 1, pinned |
 | highlight desaturation | 0.8 | off |
-| dark end / highlight range | the target at 5.5 / 6 | display black at 6 / 6, pinned |
+| dark end / highlight range | the target at 5.5 / 6 | the dark base at 6 / 6, pinned |
 | destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
 
 `default` is Hanten's picture from what was measured; `direct` loses as little as it
@@ -1223,7 +1230,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   $ cat olddirect.json
   {"recipe_version": 3, "rendering": "direct",
    "look": {"highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}},
-   "fit_range": {"headroom_stops": 6.0, "dark_end": {"black": 6.0}}}
+   "fit_range": {"highlight_range_stops": 6.0, "dark_end": {"base": 6.0}}}
   $ hanten convert scan.tif -o od --film-base 0.9,0.55,0.42 --params olddirect.json --report none
   hanten: warning: the recipe moves the `direct` rendering's pinned base: `look.highlight_desaturation.strength` 0.8 (direct: 0, off; every recipe an earlier build wrote stated 0.8). If the strength came from a recipe an earlier build wrote, set it to `null` so `direct` renders as pinned; a deliberate adjustment is fine — type it as a flag to keep it without this warning
   ```
@@ -1393,15 +1400,20 @@ mid-grey stays where the decode put it. It also places the dark end (below). Its
 
 | Flag | Recipe key | |
 |---|---|---|
-| `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` turns the compression off, the dark end still applies |
+| `--highlight-range STOPS` | `fit_range.highlight_range_stops` | `0`–`24`; unstated, `6` (under either rendering); `0` turns the compression off, the dark end still applies |
 | `--dark-floor STOPS\|off` | `fit_range.dark_end` = `{"floor": STOPS}` | the floor: the frame's measured darkest 1 % no deeper than this, in stops below mid-grey on the display, `(0, 16]` |
 | `--dark-target STOPS\|off` | `fit_range.dark_end` = `{"target": STOPS}` | the target: the frame's measured darkest 1 % at this depth, raised or pushed down, `(0, 16]`; unstated under `default`, `5.5` |
-| `--display-black STOPS\|off` | `fit_range.dark_end` = `{"black": STOPS}` | display black: the film base at this depth, `(0, 16]`; unstated under `direct`, `6` |
+| `--dark-base STOPS\|off` | `fit_range.dark_end` = `{"base": STOPS}` | the dark base: the film base at this depth, `(0, 16]`; unstated under `direct`, `6` |
 
 The three set one key, so they are refused together; any one's `off` (`"off"`) leaves the
 dark end where the grade puts it. `fit_range.display_black` retired into this key: a
-recipe stating it is refused, naming `{"black": …}`, and its old `null` is read as
+recipe stating it is refused, naming `{"base": …}`, and its old `null` is read as
 unstated.
+
+Two knobs were renamed to the quantity they set, and each old spelling is refused
+naming the new one. The highlight range was `--display-tone-headroom` and
+`fit_range.headroom_stops`; that key's old `null` is read as unstated. The dark base
+was `--display-black` and `{"black": STOPS}`.
 
 The display's peak is the operator's other argument and belongs to the destination,
 not the recipe — `1` for SDR, `1000/203 ≈ 4.93` for HDR. The report names what ran:
@@ -1411,7 +1423,7 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     | jq '.chain.fit_range'
 {
   "operator": "reinhard-peak-lifted-v1",
-  "headroom_stops": 6.0,
+  "highlight_range_stops": 6.0,
   "white_point": 64.0,
   "display_peak": 1.0,
   "dark_end": {
@@ -1419,8 +1431,8 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
       "target": 5.5
     },
     "curve": "identity",
-    "film_base_stops": 4.9630156,
-    "frame_dark_stops": null,
+    "film_base_below_mid_stops": 4.9630156,
+    "frame_dark_below_mid_stops": null,
     "shift_stops": 0.0
   }
 }
@@ -1433,7 +1445,7 @@ acts, still runs at `0`, so the stage list names its curve then. A pixel with a
 non-finite channel is refused (exit 1, naming the pixel) rather than passed to the
 encoder.
 
-`--display-tone-headroom 0` is also how to see the decode's highlights unrolled; to
+`--highlight-range 0` is also how to see the decode's highlights unrolled; to
 size the highlight range for a roll, read `.loss.clipped_high` against `.loss.total_samples`
 on a representative frame.
 
@@ -1456,18 +1468,18 @@ frame wider than the placement can fit, and under a steeper `--contrast`:
 
 ```console
 $ hanten convert 1774.tif -o out … --contrast 1.3 --dark-floor 4.5 | jq -c '.chain.fit_range.dark_end'
-{"setting":{"floor":4.5},"curve":"log-shift-to-mid-grey-v1","film_base_stops":5.0270963,"frame_dark_stops":5.1680937,"shift_stops":0.6680935}
+{"setting":{"floor":4.5},"curve":"log-shift-to-mid-grey-v1","film_base_below_mid_stops":5.0270963,"frame_dark_below_mid_stops":5.1680937,"shift_stops":0.6680935}
 ```
 
-`frame_dark_stops` is where the darkest 1 % would have rendered, and `shift_stops` the
+`frame_dark_below_mid_stops` is where the darkest 1 % would have rendered, and `shift_stops` the
 raise (`5.17 − 0.67 = 4.5`). The rendered darkest 1 % lands near the floor, at
 L\* 7–8 on the reviewed rolls.
 
-- **Without a measured dark end it does nothing**: `frame_dark_stops` is `null`. Stated
+- **Without a measured dark end it does nothing**: `frame_dark_below_mid_stops` is `null`. Stated
   then, the report warns and names the remedy: measure the roll, or, on a measured roll,
   give this frame its tones (`roll.frames` is keyed by file name). Under `direct`,
   which leaves the roll out, a typed `--dark-floor STOPS` is refused before anything is
-  decoded (its `off` is accepted: it turns `direct`'s display black off).
+  decoded (its `off` is accepted: it turns `direct`'s dark base off).
 - **The raise is capped** at a third of the stops between the darkest 1 % and mid-grey,
   so the shadows never flatten below half their contrast; a frame sunk that far stays
   under the floor, and the report warns, naming `--contrast` and `--exposure`.
@@ -1483,7 +1495,7 @@ the same black:
 
 ```console
 $ hanten convert 2100.tif -o out --params roll.json --placement frame --dark-target 6 | jq -c '.chain.fit_range.dark_end'
-{"setting":{"target":6.0},"curve":"log-shift-to-mid-grey-v1","film_base_stops":4.7087197,"frame_dark_stops":4.2664075,"shift_stops":-1.7335927}
+{"setting":{"target":6.0},"curve":"log-shift-to-mid-grey-v1","film_base_below_mid_stops":4.7087197,"frame_dark_below_mid_stops":4.2664075,"shift_stops":-1.7335927}
 ```
 
 `4.27 + 1.73 = 6`. 5 stops is about L\* 5, 5.5 about L\* 3.6, 6 about L\* 2.5.
@@ -1497,11 +1509,11 @@ $ hanten convert 2100.tif -o out --params roll.json --placement frame --dark-tar
 - **A raise is capped and warned about** as the floor's is; without a measured dark end
   it does nothing and, stated, warns; under `direct` a typed `--dark-target STOPS` is
   refused, as `--dark-floor` is.
-- **Unlike display black it follows the picture, not the film base**, which renders at
-  a different depth on each frame (4.0–4.7 stops on one Gold200 roll), so display black
+- **Unlike the dark base it follows the picture, not the film base**, which renders at
+  a different depth on each frame (4.0–4.7 stops on one Gold200 roll), so the dark base
   moves frames unevenly.
 
-**Display black** (`--display-black`, `direct`'s pinned 6, about L\* 2.5) instead places
+**The dark base** (`--dark-base`, `direct`'s pinned 6, about L\* 2.5) instead places
 the film base — the darkest thing on the film, since nothing below its threshold is
 recorded — at that depth, moving it **down**, never up: a base already that deep is
 left alone (`"curve": "identity"`, `"shift_stops": 0.0`). Fewer stops give lighter
@@ -1514,20 +1526,20 @@ the roll's span and each frame's placement, it darkened a low-key frame througho
   stops under mid-grey, the whole shift is squeezed into that narrow band and crushes
   the shadows; at or above mid-grey (about `--exposure 3.7`) black cannot place it and
   is skipped. Either way the report warns, naming
-  `--exposure` and `--display-black off` as the remedies.
+  `--exposure` and `--dark-base off` as the remedies.
 - **Not the removed `--black-point`**, a subtraction on every channel that crushed
   and tinted the shadows. There is no scene-side subtraction either: base fog is
   already in the measured film base, and scanner veil is a highlight and
   scanner-calibration question (`nf-scene-correction/flare-removal`).
 
-Without display black, a frame too washed out to approach black is warned about
+Without the dark base, a frame too washed out to approach black is warned about
 instead (§10).
 
 ```console
-$ hanten convert … --display-black 0
-usage: --display-black (recipe `fit_range.dark_end`) must be stops below mid-grey within (0, 16], or `off`, got 0
-$ hanten convert … --dark-floor 4 --display-black 6
-error: the argument '--dark-floor <STOPS|off>' cannot be used with '--display-black <STOPS|off>'
+$ hanten convert … --dark-base 0
+usage: --dark-base (recipe `fit_range.dark_end`) must be stops below mid-grey within (0, 16], or `off`, got 0
+$ hanten convert … --dark-floor 4 --dark-base 6
+error: the argument '--dark-floor <STOPS|off>' cannot be used with '--dark-base <STOPS|off>'
 $ hanten convert … --dark-target 5 --dark-floor 4
 error: the argument '--dark-target <STOPS|off>' cannot be used with '--dark-floor <STOPS|off>'
 ```
@@ -2051,7 +2063,7 @@ usage: --film-master (recipe `output`: `"film-master"`) writes the fixed decode'
 
 Each stage's default and its identity are accepted, since neither asks for anything —
 `--exposure 0 --white-balance 1,1,1`, the look's `--contrast 1 --saturation 1
---channel-grade 1,1 --highlight-desaturation 0`, and `--display-tone-headroom 0` with the
+--channel-grade 1,1 --highlight-desaturation 0`, and `--highlight-range 0` with the
 dark end's `off` (`--dark-target off`, or that of the flag that set it; or their defaults) — which is how a flag clears a recipe's stage for a master. The film
 master and a destination axis are one choice, refused at the parser.
 
@@ -2512,7 +2524,7 @@ When only some channels collapse, the remedy names their `--white-balance` gains
 instead; when all three do, it is the exposure, even if the warning above named some.
 
 A black that cannot approach black is out of the loss counters' sight too, so without
-display black (the default's target included) the report warns when a frame is washed out. Three
+the dark base (the default's target included) the report warns when a frame is washed out. Three
 cases, each with its own remedy; none fires on any frame of the full archive at its
 measured default:
 
@@ -2541,13 +2553,13 @@ measured default:
   or a `--white-balance` that brightens).
 
 All three read where the frame's grade places it, never the image; a stated white
-balance counts as the exposure it is on luminance. With display black
+balance counts as the exposure it is on luminance. With the dark base
 on, black places the base itself and only its own warning applies (§7, "The dark end").
 
 Fit range compresses the scene's highlight range into the display, so on both test fixtures **a
 default render does not clip**. A clip warning therefore means something pushed samples
 past fit range's reach — most often **exposure** (`--exposure 12` clips 100% of a frame)
-or a `--display-tone-headroom` too small for the content. Check those before anything
+or a `--highlight-range` too small for the content. Check those before anything
 else.
 
 `--strict` promotes warnings **that reach the JSON report** to a hard error
@@ -2704,22 +2716,22 @@ Your rectangle mixes unexposed film with image content. Check the coordinates, o
 **"the film base renders to luminance 0 after the decode, scene correction and the look …"**
 **"the densest sample a scan can hold … overflows f32 …"**
 The stated values do not combine into a render, though each is legal alone: with
-display black on (`--display-black`, or `direct`), the film base would grade to nothing
+the dark base on (`--dark-base`, or `direct`), the film base would grade to nothing
 it can place black against, or the densest sample a scan can hold (a zero sample) would
 overflow. Checked before anything is decoded, on `convert` and on each frame of a `roll`,
 with that frame's own `roll.frames` entry: another frame's entry never refuses it. The message ends with each knob whose default alone would
-render — `--display-black` among them when its default, the target, would:
+render — `--dark-base` among them when its default, the target, would:
 
 ```console
-$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --display-black 6 --density-offset=-30,-30,-30
-usage: the film base renders to luminance 0 after the decode, scene correction and the look, and display black needs a positive, finite one to place black against. It renders with any one of --density-offset (recipe `reconstruction.offset`), --display-black (recipe `fit_range.dark_end`) at its default
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --dark-base 6 --density-offset=-30,-30,-30
+usage: the film base renders to luminance 0 after the decode, scene correction and the look, and the dark base needs a positive, finite one to place black against. It renders with any one of --density-offset (recipe `reconstruction.offset`), --dark-base (recipe `fit_range.dark_end`) at its default
 ```
 
 A base read from a region is checked as if it were 1, and the message says so.
 
 **Heavy clipping in the report**
 Fit range does not clip ordinary content at its default highlight range, so something pushed
-content past it: a positive `--exposure`, too little `--display-tone-headroom`, or a
+content past it: a positive `--exposure`, too little `--highlight-range`, or a
 low anchor (`--anchor-mid-offset` smaller than the default). Lower the exposure, widen
 the highlight range, move the anchor up, or write a float output: `--transfer linear` (with a
 `--gamut`) keeps up to the HDR peak, and only `--film-master` is unclamped.

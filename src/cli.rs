@@ -567,6 +567,8 @@ pub struct ConversionFlags {
     #[command(flatten)]
     pub display: DisplayOverrides,
     #[command(flatten)]
+    pub removed_fit_range: RemovedFitRangeFlags,
+    #[command(flatten)]
     pub simple: SimpleOverrides,
     #[command(flatten)]
     pub removed_output: RemovedOutputFlags,
@@ -1252,7 +1254,7 @@ pub struct LookOverrides {
 pub struct DisplayOverrides {
     /// The highlight range: how many stops above diffuse white fit range compresses
     /// into the display, default 6 (a white point of 64; recipe key
-    /// `fit_range.headroom_stops`). Fit range is extended Reinhard, which compresses
+    /// `fit_range.highlight_range_stops`). Fit range is extended Reinhard, which compresses
     /// the whole curve against that white point while holding mid-grey where it is, so
     /// a wider range changes the highlights without darkening the midtones. `0` turns
     /// the compression off; the dark end still applies. Rendered destinations only; the
@@ -1260,7 +1262,7 @@ pub struct DisplayOverrides {
     // A negative headroom must reach the value check, whose message names this very
     // flag: without this, clap refused `-1` as "unexpected argument".
     #[arg(
-        long = "display-tone-headroom",
+        long = "highlight-range",
         value_name = "STOPS",
         allow_hyphen_values = true
     )]
@@ -1284,8 +1286,8 @@ pub struct DisplayOverrides {
     /// The dark target: the frame's darkest 1 % (its measured dark end, from `hanten
     /// measure-roll`) renders this many stops below mid-grey on the display, or `off`
     /// (recipe key `fit_range.dark_end`, `{"target": STOPS}`; the `default` rendering's, at
-    /// 5.5, about L* 3.6; `direct` has display black instead). It replaces the dark floor
-    /// and display black: the three set one key. Unlike the floor it moves the dark end **either way** — a
+    /// 5.5, about L* 3.6; `direct` has the dark base instead). It replaces the dark floor
+    /// and the dark base: the three set one key. Unlike the floor it moves the dark end **either way** — a
     /// lighter dark end is pushed down, a deeper one raised — fading to nothing at
     /// mid-grey. A push is capped at two thirds of the way to mid-grey, so a high-key
     /// frame keeps its light shadows; a raise is capped as the floor's. Without a measured
@@ -1298,14 +1300,14 @@ pub struct DisplayOverrides {
         conflicts_with = "display_black"
     )]
     pub dark_target: Option<crate::pipeline::fit_range::DarkEnd>,
-    /// Display black: where the film base — the darkest thing on the film — renders,
+    /// The dark base: where the film base — the darkest thing on the film — renders,
     /// in stops below mid-grey on the display, or `off` (recipe key `fit_range.dark_end`,
-    /// `{"black": STOPS}`; `--rendering direct` pins 6, about L* 2.5). It replaces the
+    /// `{"base": STOPS}`; `--rendering direct` pins 6, about L* 2.5). It replaces the
     /// dark target: the three set one key. Fewer stops give lighter shadows with more
     /// detail, more stops a deeper black. A base already that deep is left alone.
     /// Mid-grey and everything above it do not move.
     #[arg(
-        long = "display-black",
+        long = "dark-base",
         value_name = "STOPS|off",
         allow_hyphen_values = true,
         value_parser = crate::pipeline::fit_range::DarkEnd::parse_black
@@ -1332,6 +1334,16 @@ pub struct RemovedPrintFlags {
     pub display_tone: Option<String>,
     #[arg(long, hide = true, value_name = "AMOUNT", allow_hyphen_values = true)]
     pub highlight_compress: Option<String>,
+}
+
+/// Fit range's flags renamed to the quantity they set (`core/rename-fit-range-misnomers`).
+/// Hidden, kept only for their migration errors; there is no alias.
+#[derive(Args, Debug, Default)]
+pub struct RemovedFitRangeFlags {
+    #[arg(long = "display-tone-headroom", hide = true, value_name = "STOPS", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub removed_display_tone_headroom: Option<String>,
+    #[arg(long = "display-black", hide = true, value_name = "STOPS|off", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub removed_display_black: Option<String>,
 }
 
 /// `--roll-frame-slope` and `--frame-lift`, retired when a thin frame's lift became its own
@@ -1401,7 +1413,7 @@ pub struct ReuseReady {
 /// embedded ICC profile describes the colorimetry (the gamut's primaries, D65, a linear
 /// TRC) but its PCS stops at the media white, so no v4 profile can express that
 /// `1.0` is 203 cd/m² and that highlights legitimately run to
-/// `linear_headroom`. Anything consuming these files for luminance must read this,
+/// `peak_sample`. Anything consuming these files for luminance must read this,
 /// not the profile — `interoperability` says so in the artifact itself rather than
 /// leaving it to documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -1423,9 +1435,10 @@ pub struct HdrLinearTiffResult {
     pub reference_white_nits: f32,
     /// Mastering target peak in cd/m² (the binding 1000).
     pub target_peak_nits: f32,
-    /// The sample value that represents `target_peak_nits` (≈4.926108) — the
-    /// largest value the renderer will produce, and the reason this output cannot
-    /// be a 16-bit integer TIFF.
+    /// The sample value that represents `target_peak_nits` (≈4.926108), the display
+    /// peak: the largest value the renderer will produce, and the reason this output
+    /// cannot be a 16-bit integer TIFF.
+    #[serde(rename = "peak_sample")]
     pub linear_headroom: f32,
     /// Pinned tone-curve / gamut-mapping / linear-domain identifiers, straight from
     /// the renderer's own metadata rather than restated here.
@@ -1521,8 +1534,8 @@ pub struct ChainResult {
     /// grade and highlight desaturation. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub look: Option<resolve::LookReport>,
-    /// Fit range's operator by name, with the headroom, white point and display peak
-    /// it ran at — what a non-default `fit_range.headroom_stops` changes. Absent for
+    /// Fit range's operator by name, with the highlight range, white point and display peak
+    /// it ran at — what a non-default `fit_range.highlight_range_stops` changes. Absent for
     /// the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit_range: Option<fit_range::FitRange>,
@@ -3269,6 +3282,26 @@ fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool, on_roll: bool)
     if let Some(message) = removed_print_message(&args.removed_print) {
         return Err(NcError::Usage(message));
     }
+    if args
+        .removed_fit_range
+        .removed_display_tone_headroom
+        .is_some()
+    {
+        return Err(NcError::Usage(
+            "--display-tone-headroom was renamed --highlight-range (recipe \
+             `fit_range.highlight_range_stops`): it sets the highlight range, the stops \
+             above diffuse white that fit range compresses. There is no alias."
+                .into(),
+        ));
+    }
+    if args.removed_fit_range.removed_display_black.is_some() {
+        return Err(NcError::Usage(
+            "--display-black was renamed --dark-base (recipe `fit_range.dark_end` \
+             `{\"base\": STOPS}`): it places the film base, in stops below mid-grey on the \
+             display, and sets no black level. There is no alias."
+                .into(),
+        ));
+    }
     // `--roll-frame-slope` first: its message migrates a `--frame-lift` beside it too.
     if let Some(slope) = &args.removed_roll.roll_frame_slope {
         return Err(NcError::Usage(removed_frame_slope_message(
@@ -3296,7 +3329,7 @@ fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool, on_roll: bool)
         (
             "--clip-low",
             args.simple.clip_low.is_some(),
-            "--display-black (recipe `fit_range.dark_end`), which places black",
+            "--dark-base (recipe `fit_range.dark_end`), which places the film base",
         ),
         (
             "--clip-high",
@@ -3389,7 +3422,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
     if flags.black_point.is_some() {
         return Some(
             "--black-point was removed with the print stage: it was one linear subtraction \
-             on film RGB. Where black renders is now display black, `--display-black` \
+             on film RGB. Where black renders is now the dark base, `--dark-base` \
              (recipe `fit_range.dark_end`), which places the film base in stops below \
              mid-grey. There is no alias."
                 .into(),
@@ -3408,7 +3441,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
         return Some(
             "--linear-range was removed with the print stage: the levels remap retired, \
              since its gain is `--exposure` (recipe `scene_correction.exposure`) and its \
-             black is `--display-black` (recipe `fit_range.dark_end`). There is no \
+             black is `--dark-base` (recipe `fit_range.dark_end`). There is no \
              alias."
                 .into(),
         );
@@ -3419,9 +3452,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
             "reinhard" => "extended Reinhard is now the only display tone and is always \
                            applied, so there is nothing to select — drop the flag"
                 .to_string(),
-            "none" => {
-                "the nearest to `none` is `--display-tone-headroom 0`, no compression".to_string()
-            }
+            "none" => "the nearest to `none` is `--highlight-range 0`, no compression".to_string(),
             "shoulder" => "`shoulder` has no replacement — drop the flag for the default \
                            tone"
                 .to_string(),
@@ -3429,15 +3460,15 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
         };
         return Some(format!(
             "--display-tone was removed with the `shoulder` and `none` tones: {why}. The \
-             tone's one parameter is `--display-tone-headroom` (recipe \
-             `fit_range.headroom_stops`). There is no alias."
+             tone's one parameter is `--highlight-range` (recipe \
+             `fit_range.highlight_range_stops`). There is no alias."
         ));
     }
     if flags.highlight_compress.is_some() {
         return Some(
             "--highlight-compress was removed with the `shoulder` display tone, whose knee \
              it placed. The remaining tone, extended Reinhard, has no knee: its shape is \
-             `--display-tone-headroom` (recipe `fit_range.headroom_stops`). There is no \
+             `--highlight-range` (recipe `fit_range.highlight_range_stops`). There is no \
              alias."
                 .into(),
         );
@@ -3543,7 +3574,7 @@ fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> S
 /// The first retired sigmoid flag the user passed, with its remedy.
 fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'static str)> {
     const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
-                        fit range (`--display-tone-headroom`)";
+                        fit range (`--highlight-range`)";
     const PLACEMENT: &str = "reference-based placement retired with the reference \
                              density; the exponential's one placement is \
                              `--anchor-mid-offset`, mid-grey a stated density above the \
@@ -3627,7 +3658,7 @@ fn removed_characteristic_message(flags: &RemovedCharacteristicFlags) -> Option<
                  decode is stock-agnostic now. {REFERENCE}."
             ),
             "sigmoid" => " The `sigmoid` retired before it; highlight roll-off belongs to \
-                          fit range (`--display-tone-headroom`)."
+                          fit range (`--highlight-range`)."
                 .to_string(),
             _ => String::new(),
         };
@@ -6037,13 +6068,26 @@ fn resolve_frames(
             for mf in manifest.frames {
                 let mut own = own(&mf.input);
                 let (recipe, overrides) = match mf.params {
-                    Some(mut ov) => {
+                    Some(ov) => {
                         // A per-frame override carrying a removed key gets the same
                         // migration guidance as the shared recipe, not an opaque
                         // `deny_unknown_fields` serde error.
                         let context =
                             format!("frame {}: per-frame `params` override", mf.input.display());
-                        recipe::strip_retired_nulls(&mut ov);
+                        let null_refused = |key: &str| {
+                            NcError::Usage(format!(
+                                "{context}: `{key}` is null, and a `null` states nothing — \
+                                 it cannot unset the roll's value. Omit `{key}` to use the \
+                                 roll's value"
+                            ))
+                        };
+                        // A retired key's `null` is omitted, not renamed: its rename
+                        // would be refused as a null in turn.
+                        if recipe::strip_retired_nulls(&mut ov.clone())
+                            && let Some(key) = first_null_key(&ov)
+                        {
+                            return Err(null_refused(&key));
+                        }
                         recipe::check_body(&ov, false, &context)?;
                         if ov.pointer("/roll/frames").is_some() {
                             return Err(NcError::Usage(format!(
@@ -6080,11 +6124,7 @@ fn resolve_frames(
                         if let Some(key) = first_null_key(&ov) {
                             restore_unknown(&mut v, &ov);
                             serde_json::from_value::<Recipe>(v).map_err(invalid)?;
-                            return Err(NcError::Usage(format!(
-                                "{context}: `{key}` is null, and a `null` states nothing — \
-                                 it cannot unset the roll's value. Omit `{key}` to use the \
-                                 roll's value"
-                            )));
+                            return Err(null_refused(&key));
                         }
                         let states = |key: &str| {
                             ov.pointer(&format!("/roll/{key}"))
@@ -10460,14 +10500,8 @@ mod tests {
     fn the_sigmoid_flags_are_migration_errors() {
         for (flags, remedy) in [
             (["--sigmoid-contrast", "2"].as_slice(), "--contrast"),
-            (
-                ["--sigmoid-toe", "0.2"].as_slice(),
-                "--display-tone-headroom",
-            ),
-            (
-                ["--sigmoid-shoulder", "0"].as_slice(),
-                "--display-tone-headroom",
-            ),
+            (["--sigmoid-toe", "0.2"].as_slice(), "--highlight-range"),
+            (["--sigmoid-shoulder", "0"].as_slice(), "--highlight-range"),
             (
                 ["--sigmoid-mid-fraction", "0.5"].as_slice(),
                 "--anchor-mid-offset",
@@ -10529,7 +10563,7 @@ mod tests {
                 .to_string()
         };
         assert!(why("characteristic").contains("reference-snapshot"));
-        assert!(why("sigmoid").contains("--display-tone-headroom"));
+        assert!(why("sigmoid").contains("--highlight-range"));
         // Every flag the `--preset` remedy names parses.
         for named in [
             "--exposure",
@@ -10605,7 +10639,7 @@ mod tests {
             (
                 vec!["--black-point", "0.01"],
                 "--black-point was removed",
-                Some("--display-black"),
+                Some("--dark-base"),
             ),
             (
                 vec!["--auto-wb", "percentile"],
@@ -10625,7 +10659,7 @@ mod tests {
             (
                 vec!["--linear-range", "0.1,0.9"],
                 "--linear-range was removed",
-                Some("--display-black"),
+                Some("--dark-base"),
             ),
             (
                 vec!["--output-preset", "display-p3"],
@@ -10677,7 +10711,7 @@ mod tests {
             (
                 vec!["--clip-low", "0.1"],
                 "--clip-low was removed",
-                Some("--display-black"),
+                Some("--dark-base"),
             ),
             (
                 vec!["--clip-high", "0.9"],
@@ -10863,10 +10897,10 @@ mod tests {
 
     #[test]
     fn the_retired_display_tone_flags_are_refused_with_a_migration_error() {
-        // Every remedy names only the headroom flag, which exists.
+        // Every remedy names only the highlight-range flag, which exists.
         for (value, remedy) in [
             ("shoulder", "has no replacement"),
-            ("none", "--display-tone-headroom 0"),
+            ("none", "--highlight-range 0"),
             ("reinhard", "always"),
             ("sigmoid", "was never a tone"),
         ] {
@@ -10875,15 +10909,48 @@ mod tests {
                 .to_string();
             assert!(msg.contains("--display-tone was removed"), "{value}: {msg}");
             assert!(msg.contains(remedy), "{value}: {msg}");
-            assert!(msg.contains("fit_range.headroom_stops"), "{value}: {msg}");
+            assert!(
+                msg.contains("fit_range.highlight_range_stops"),
+                "{value}: {msg}"
+            );
         }
         let msg = removed(&parse_convert(&["--highlight-compress", "0"]))
             .unwrap_err()
             .to_string();
         assert!(msg.contains("--highlight-compress was removed"), "{msg}");
-        assert!(msg.contains("--display-tone-headroom"), "{msg}");
-        // Falsifiable: the headroom flag itself is not a removed flag.
-        removed(&parse_convert(&["--display-tone-headroom", "4"])).unwrap();
+        assert!(msg.contains("--highlight-range"), "{msg}");
+        // Falsifiable: the highlight-range flag itself is not a removed flag.
+        removed(&parse_convert(&["--highlight-range", "4"])).unwrap();
+    }
+
+    #[test]
+    fn the_renamed_fit_range_flags_are_refused_naming_the_new_spelling() {
+        for args in [
+            ["--display-tone-headroom", "4"].as_slice(),
+            &["--display-tone-headroom", "-1"],
+            &["--display-tone-headroom"],
+        ] {
+            let msg = removed(&parse_convert(args)).unwrap_err().to_string();
+            assert!(
+                msg.contains("--display-tone-headroom was renamed --highlight-range")
+                    && msg.contains("`fit_range.highlight_range_stops`"),
+                "{args:?}: {msg}"
+            );
+        }
+        for args in [
+            ["--display-black", "6"].as_slice(),
+            &["--display-black", "off"],
+            &["--display-black"],
+        ] {
+            let msg = removed(&parse_convert(args)).unwrap_err().to_string();
+            assert!(
+                msg.contains("--display-black was renamed --dark-base")
+                    && msg.contains(r#"`{"base": STOPS}`"#),
+                "{args:?}: {msg}"
+            );
+        }
+        // Falsifiable: the new spelling is no removed flag.
+        removed(&parse_convert(&["--dark-base", "6"])).unwrap();
     }
 
     /// The output target a `convert` command line's destination flags resolve.

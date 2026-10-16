@@ -84,8 +84,8 @@ A stops figure states its reference and its sign.
 |---|---|---|---|---|
 | **scene stops** | `log2(value / 0.18)` on the decode's output; the linearization is already in. The statistic varies: the roll white is in film RGB (see the whites below), a dark end or level is ACEScg luminance | dark is negative | public | `roll.white_stops`, `roll.dark_stops`, `envelope_stops` (`[dark end, white]`), `level_stops` |
 | **look stops** | scene stops × the tone slope | dark is negative | public | `roll.hybrid_span_stops`, `placement.frame_white_look_stops` |
-| **display stops below mid-grey** | distance below mid-grey after fit range | **positive is darker** — the opposite of `roll.dark_stops` | public | `fit_range.dark_end`, `film_base_stops`, `frame_dark_stops` |
-| **stops from diffuse white** | relative to graded 1.0 | signed | public | `fit_range.headroom_stops` (+6), `highlight_desaturation.start_stops` (−1) |
+| **display stops below mid-grey** | distance below mid-grey after fit range | **positive is darker** — the opposite of `roll.dark_stops` | public | `fit_range.dark_end`, `film_base_below_mid_stops`, `frame_dark_below_mid_stops` |
+| **stops from diffuse white** | relative to graded 1.0 | signed | public | `fit_range.highlight_range_stops` (+6), `highlight_desaturation.start_stops` (−1) |
 
 **EV** is an exposure change: `log2` of a neutral gain (`--exposure`, `lift_ev`).
 
@@ -144,11 +144,12 @@ A slope is a power on linear values: a multiplier on stops or decades.
 | **anchor `A`** | the corrected density that renders to film RGB 1.0, derived as `d + log10(1/0.18) / linearization` ≈ 1.034. A scalar (a per-channel anchor would be a white balance). Reported, never an input; not scene white | `D′` | public | `chain.decode.anchor` |
 | **diffuse white** | graded ACEScg 1.0, a convention. The datasheets' diffuse white (`d + 0.36`) decodes to ≈0.80 in film RGB at the default decode; where it grades depends on the tone slope | graded | public | `--highlight-desaturation-start` help |
 | **reference white** | display-linear 1.0; 203 cd/m² in an HDR destination (an SDR file states no absolute level). Diffuse white renders below it (≈0.55 at the default highlight range) | display | public | `reference_white_nits`, `reference_white_sample` |
-| **highlight range** | the stops above diffuse white that fit range compresses into the display: a knob, default 6. Not "headroom" in prose | stops from diffuse white | public | `--display-tone-headroom`, `fit_range.headroom_stops` (misnomers) |
+| **highlight range** | the stops above diffuse white that fit range compresses into the display: a knob, default 6. Not "headroom" in prose | stops from diffuse white | public | `--highlight-range`, `fit_range.highlight_range_stops` |
 | **white point** | reinhard's `W = 2^highlight range` (64): the graded value that lands about at the display peak (reference white for SDR) | graded | public | `chain.fit_range.white_point` |
 | **HDR headroom** | the destination's peak over reference white, **in stops** (ISO 21496-1's term): 0 for SDR, `log2(1000/203)` ≈ 2.30 at 1000 nits. A bare "headroom" means this | display | public | — |
-| **display peak** | the same, as a ratio: 1.0 for SDR, ≈4.93 for HDR. *Peak nits* is the absolute form | display | public | `chain.fit_range.display_peak`, `target_peak_nits`, `linear_headroom` |
-| **dark end** | where fit range places the frame's darkest 1 % (target or floor) or the film base (display black), in display stops below mid-grey | display | public | `--dark-target`, `--dark-floor`, `--display-black` |
+| **display peak** | the same, as a ratio: 1.0 for SDR, ≈4.93 for HDR. *Peak nits* is the absolute form | display | public | `chain.fit_range.display_peak`, `target_peak_nits`, `hdr_linear_tiff.peak_sample` |
+| **dark end** | where fit range places the frame's darkest 1 % (target or floor) or the film base (the dark base), in display stops below mid-grey | display | public | `--dark-target`, `--dark-floor`, `--dark-base` |
+| **dark base** | the film base's placement on the display: one setting of the dark end. Sets no black level | display stops below mid-grey | public | `--dark-base`, `fit_range.dark_end` `{"base": STOPS}` |
 | **roll white, tilt white, fade end** | three whites measured from a roll: the brightest channel's p97 in film RGB; green's p99 in ACEScg; the luminance of the per-channel p99s after balance. Never a bare "the roll's white" | scene stops | public | `roll.white_stops`, `roll.white_balance_stops`, `midtone_line.fade_end_stops` |
 | **content white** | a roll's bright end in picture density. Not measured and not shipped; the roll white replaces it | — | internal | — |
 
@@ -244,18 +245,14 @@ Fit range compresses ACEScg luminance; fit gamut works in destination luminance.
 ## Known public misnomers
 
 Each changes the scripting contract, so it waits for a migration
-(`core/rename-fit-range-misnomers`, `core/rename-roll-report-misnomers`). Prose names
-the right concept and quotes the public name once. Internal identifiers that
-contradict this doc are `core/internal-term-renames`.
+(`core/rename-roll-report-misnomers`). Prose names the right concept and quotes
+the public name once. Internal identifiers that contradict this doc are
+`core/internal-term-renames`.
 
 | | Public name | What it really is |
 |---|---|---|
-| P4 | `--display-tone-headroom`, `fit_range.headroom_stops` | the highlight range (and a retired stage name) |
-| P5 | `--display-black`, `{"black"}` | places the film base in display stops; sets no black level |
 | P6 | `roll.frames.*.exposure` | the small lift, `roll.frame_exposure` |
 | P7 | `slope_bound` | an enum in `frames[].hybrid`, a number in `thin_lift` |
-| P8 | `roll.dark_stops` vs `frame_dark_stops` | opposite signs for one word |
-| P9 | `hdr_linear_tiff.linear_headroom` | duplicates `chain.fit_range.display_peak` |
 | P10 | `area_uniformity.tilt` | collides with the WB form `tilt` |
 | P11 | `--neutral-balance`, `roll.neutral_balance` | switches the roll colour correction |
 | P12 | `saturation_margin_stops` | film saturation, beside `look.saturation` (colourfulness) |

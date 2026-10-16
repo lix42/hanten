@@ -443,11 +443,12 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
         assert_eq!(block["reference_white_nits"], 203.0);
         assert_eq!(block["target_peak_nits"], 1000.0);
         assert!(block["icc_bytes"].as_u64().unwrap() > 0);
-        let headroom = block["linear_headroom"].as_f64().unwrap();
+        let peak = block["peak_sample"].as_f64().unwrap();
         assert!(
-            (headroom - 1000.0 / 203.0).abs() < 1e-6,
-            "headroom {headroom} is not 1000/203"
+            (peak - 1000.0 / 203.0).abs() < 1e-6,
+            "peak {peak} is not 1000/203"
         );
+        assert!(block.get("linear_headroom").is_none(), "{block}");
         // Measured content light, not the mastering policy: a real frame must not
         // report the 1000/203 constants back.
         let cll = block["max_cll_nits"].as_u64().unwrap();
@@ -6418,7 +6419,7 @@ fn a_suffix_mismatch_outranks_the_missing_base() {
 }
 
 #[test]
-fn the_display_tone_headroom_reaches_the_pixels() {
+fn the_highlight_range_reaches_the_pixels() {
     let tmp = TempDir::new("reinhard-tone");
     let scan = fixture("hdr-48bit.tif");
     let render = |tag: &str, extra: &[&str]| {
@@ -6439,8 +6440,8 @@ fn the_display_tone_headroom_reaches_the_pixels() {
 
     // The headroom reaches the operator, and naming the default is naming nothing.
     let default = render("default", &[]);
-    assert_eq!(default, render("w64", &["--display-tone-headroom", "6"]));
-    let w16 = render("w16", &["--display-tone-headroom", "4"]);
+    assert_eq!(default, render("w64", &["--highlight-range", "6"]));
+    let w16 = render("w16", &["--highlight-range", "4"]);
     assert_ne!(default, w16, "the headroom did not reach the render");
 }
 
@@ -6469,14 +6470,14 @@ fn the_retired_display_tone_flags_are_refused_with_a_migration_error() {
         let (code, _stdout, err) = run(&argv);
         assert_eq!(code, 2, "{extra:?}: {err}");
         assert!(err.contains("was removed"), "{extra:?}: {err}");
-        assert!(err.contains("--display-tone-headroom"), "{extra:?}: {err}");
+        assert!(err.contains("--highlight-range"), "{extra:?}: {err}");
         assert!(!err.contains("possible values"), "{extra:?}: {err}");
         assert!(!out.exists(), "{extra:?}: a refused run wrote a file");
     }
 }
 
 #[test]
-fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
+fn the_highlight_range_is_gated_before_anything_is_opened() {
     // The headroom bound is a **value** rule, so it runs with the recipe's validation —
     // not in the stage, which runs after the decode. Proof: a nonexistent input still
     // exits 2 (usage), never 3 (decode).
@@ -6486,15 +6487,15 @@ fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
     // Each case asserts the **rule's own wording**, not just exit 2: clap also exits 2,
     // so a bare code check cannot tell a parse error from the validation rule. That
     // mattered here — `-1` was refused by clap as an "unexpected argument" until
-    // `--display-tone-headroom` gained `allow_hyphen_values`, leaving the rule's
+    // `--highlight-range` gained `allow_hyphen_values`, leaving the rule's
     // negative branch unreachable from the flag whose name its own message prints.
     let bad = [
         (
-            vec!["--display-tone-headroom", "30"],
+            vec!["--highlight-range", "30"],
             "beyond the supported maximum",
         ),
         (
-            vec!["--display-tone-headroom", "-1"],
+            vec!["--highlight-range", "-1"],
             "must be finite and non-negative",
         ),
     ];
@@ -6513,7 +6514,7 @@ fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
         assert_eq!(code, 2, "{extra:?} reached the decoder: {err}");
         assert!(err.contains(expected), "{extra:?}: {err}");
         assert!(
-            err.contains("--display-tone-headroom"),
+            err.contains("--highlight-range"),
             "{extra:?}: clap answered for the validation rule: {err}"
         );
     }
@@ -6527,7 +6528,7 @@ fn the_display_tone_headroom_is_gated_before_anything_is_opened() {
         out.to_str().unwrap(),
         "--film-base",
         "0.9,0.6,0.5",
-        "--display-tone-headroom",
+        "--highlight-range",
         "6",
     ]);
     assert_eq!(code, 3, "a valid headroom must reach the decoder: {err}");
@@ -6547,7 +6548,7 @@ fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
   "calibration": {
     "film_base": { "explicit": [0.9, 0.55, 0.42] }
   },
-  "fit_range": { "headroom_stops": 60.0 }
+  "fit_range": { "highlight_range_stops": 60.0 }
 }"#,
     );
     let out_dir = tmp.path("out");
@@ -6561,8 +6562,176 @@ fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
         recipe.to_str().unwrap(),
     ]);
     assert_eq!(code, 2, "the shared recipe must be refused up front: {err}");
-    assert!(err.contains("fit_range.headroom_stops"), "{err}");
+    assert!(err.contains("fit_range.highlight_range_stops"), "{err}");
     assert!(!out_dir.exists(), "a frame was written before refusing");
+}
+
+#[test]
+fn the_dark_base_s_old_spellings_are_refused_and_the_report_names_the_new_ones() {
+    let tmp = TempDir::new("dark-base-rename");
+    let input = fixture("hdr-48bit.tif");
+    let (code, _out, err) = convert_p3(&input, &tmp.path("flag.tiff"), &["--display-black", "6"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--display-black was renamed --dark-base"),
+        "{err}"
+    );
+    let (code, _out, err) = run(&[
+        "roll",
+        input.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--display-black",
+        "off",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--display-black was renamed --dark-base"),
+        "{err}"
+    );
+
+    let old = write_file(
+        &tmp.path("old.json"),
+        r#"{"recipe_version": 3, "fit_range": {"dark_end": {"black": 6}}}"#,
+    );
+    let (code, _out, err) = convert_p3(
+        &input,
+        &tmp.path("old.tiff"),
+        &["--params", old.to_str().unwrap()],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains(r#"is now `{"base": <stops>}`"#), "{err}");
+
+    // The new spelling renders, the report and a written recipe carry it, and the dark
+    // end's display-stops fields say which way they count.
+    let saved = tmp.path("saved.json");
+    let (code, stdout, err) = convert_p3(
+        &input,
+        &tmp.path("new.tiff"),
+        &["--dark-base", "6", "--save-recipe", saved.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let dark_end = &report["chain"]["fit_range"]["dark_end"];
+    assert_eq!(dark_end["setting"], serde_json::json!({"base": 6.0}));
+    assert!(dark_end["film_base_below_mid_stops"].is_f64(), "{dark_end}");
+    assert!(
+        dark_end.get("frame_dark_below_mid_stops").is_some(),
+        "{dark_end}"
+    );
+    assert!(dark_end.get("film_base_stops").is_none(), "{dark_end}");
+    assert_eq!(
+        written_recipe(&saved)["fit_range"]["dark_end"],
+        serde_json::json!({"base": 6.0})
+    );
+}
+
+#[test]
+fn the_highlight_range_s_old_spellings_are_refused_and_its_old_default_replays() {
+    let tmp = TempDir::new("highlight-range-rename");
+    let input = fixture("hdr-48bit.tif");
+    // The old flag, on both subcommands, names the new one.
+    let (code, _out, err) = convert_p3(
+        &input,
+        &tmp.path("flag.tiff"),
+        &["--display-tone-headroom", "4"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--display-tone-headroom was renamed --highlight-range"),
+        "{err}"
+    );
+    let (code, _out, err) = run(&[
+        "roll",
+        input.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--display-tone-headroom",
+        "4",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--display-tone-headroom was renamed --highlight-range"),
+        "{err}"
+    );
+
+    // A stated value of the old key is refused naming the new key.
+    let stated = write_file(
+        &tmp.path("stated.json"),
+        r#"{"recipe_version": 3, "fit_range": {"headroom_stops": 4}}"#,
+    );
+    let (code, _out, err) = convert_p3(
+        &input,
+        &tmp.path("stated.tiff"),
+        &["--params", stated.to_str().unwrap()],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`fit_range.headroom_stops` is not a recipe key any more")
+            && err.contains("`fit_range.highlight_range_stops`"),
+        "{err}"
+    );
+
+    // Its old default, `null`, which every earlier `--save-recipe` wrote, replays as
+    // the rendering's base; and a recipe written now carries only the new key.
+    let old = write_file(
+        &tmp.path("old.json"),
+        r#"{"recipe_version": 3, "fit_range": {"headroom_stops": null, "dark_end": null}}"#,
+    );
+    let saved = tmp.path("saved.json");
+    let (code, _out, err) = convert_p3(
+        &input,
+        &tmp.path("old.tiff"),
+        &[
+            "--params",
+            old.to_str().unwrap(),
+            "--save-recipe",
+            saved.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, _out, err) = convert_p3(&input, &tmp.path("default.tiff"), &[]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        read_u16_tiff(&tmp.path("old.tiff")),
+        read_u16_tiff(&tmp.path("default.tiff"))
+    );
+    let fit = &written_recipe(&saved)["fit_range"];
+    assert_eq!(
+        fit,
+        &serde_json::json!({"highlight_range_stops": null, "dark_end": null})
+    );
+
+    // A `--frames` override is hand-written, never a document hanten wrote, so the old
+    // key's `null` is refused as any null there is: omit it, in one step.
+    let frames = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{"frames": [{{"input": {:?}, "params": {{"fit_range": {{"headroom_stops": null}}}}}}]}}"#,
+            input.to_str().unwrap()
+        ),
+    );
+    let (code, _out, err) = run(&[
+        "roll",
+        "--frames",
+        frames.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("frames").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("per-frame `params` override")
+            && err.contains("`fit_range.headroom_stops` is null, and a `null` states nothing")
+            && err.contains("Omit `fit_range.headroom_stops`")
+            && !err.contains("highlight_range_stops"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -7185,13 +7354,13 @@ fn the_headroom_changes_the_sdr_render_and_the_report_records_it() {
             "--film-base",
             "0.9,0.6,0.5",
             "--exposure=-2.2",
-            "--display-tone-headroom",
+            "--highlight-range",
             stops,
         ]);
         assert_eq!(code, 0, "{stops}: {err}");
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(
-            report["chain"]["fit_range"]["headroom_stops"],
+            report["chain"]["fit_range"]["highlight_range_stops"],
             stops.parse::<f64>().unwrap(),
             "{stops}"
         );
@@ -7244,7 +7413,7 @@ fn film_master_refuses_a_stated_headroom_and_accepts_the_reset() {
             "--film-base",
             "1,1,1",
             "--film-master",
-            "--display-tone-headroom",
+            "--highlight-range",
             stops,
             "-o",
             out.to_str().unwrap(),
@@ -8091,21 +8260,21 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     };
 
     let (default, report) = convert("default.tiff", &[]);
-    assert_eq!(report["chain"]["fit_range"]["headroom_stops"], 6.0);
+    assert_eq!(report["chain"]["fit_range"]["highlight_range_stops"], 6.0);
     let default_clipped = clipped(&report);
     let report_default_dark_end = report["chain"]["fit_range"]["dark_end"].clone();
 
-    let (four, report) = convert("four.tiff", &["--display-tone-headroom", "4"]);
+    let (four, report) = convert("four.tiff", &["--highlight-range", "4"]);
     let fr = &report["chain"]["fit_range"];
     assert_eq!(fr["operator"], "reinhard-peak-lifted-v1", "{fr}");
-    assert_eq!(fr["headroom_stops"], 4.0);
+    assert_eq!(fr["highlight_range_stops"], 4.0);
     assert_eq!(fr["white_point"], 16.0);
     assert_ne!(read_u16_tiff(&four), read_u16_tiff(&default));
 
     // Zero headroom leaves reinhard out; display black still runs when it is on.
     let (_, report) = convert(
         "zero-black.tiff",
-        &["--display-tone-headroom", "0", "--display-black", "6"],
+        &["--highlight-range", "0", "--dark-base", "6"],
     );
     assert_eq!(report["chain"]["fit_range"]["operator"], "identity");
     assert_eq!(
@@ -8114,7 +8283,7 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     );
     let (_, report) = convert(
         "zero.tiff",
-        &["--display-tone-headroom", "0", "--display-black", "off"],
+        &["--highlight-range", "0", "--dark-base", "off"],
     );
     assert_eq!(report["chain"]["fit_range"]["operator"], "identity");
     assert_eq!(report["chain"]["stages"][2]["applied"], "identity");
@@ -8133,20 +8302,24 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         "{dark_end}"
     );
     assert_eq!(dark_end["curve"], "identity");
-    assert_eq!(dark_end["frame_dark_stops"], serde_json::Value::Null);
+    assert_eq!(
+        dark_end.get("frame_dark_below_mid_stops"),
+        Some(&serde_json::Value::Null),
+        "{dark_end}"
+    );
     assert_eq!(dark_end["shift_stops"], 0.0);
     let (off, _) = convert("off.tiff", &["--dark-floor", "off"]);
     assert_eq!(read_u16_tiff(&off), read_u16_tiff(&default));
-    let (on, report) = convert("on.tiff", &["--display-black", "6"]);
+    let (on, report) = convert("on.tiff", &["--dark-base", "6"]);
     assert_eq!(
         report["chain"]["fit_range"]["dark_end"]["curve"],
         "log-shift-to-mid-grey-v1"
     );
     assert_ne!(read_u16_tiff(&on), read_u16_tiff(&default));
-    let (deeper, report) = convert("deeper.tiff", &["--display-black", "7"]);
+    let (deeper, report) = convert("deeper.tiff", &["--dark-base", "7"]);
     assert_eq!(
         report["chain"]["fit_range"]["dark_end"]["setting"],
-        serde_json::json!({"black": 7.0})
+        serde_json::json!({"base": 7.0})
     );
     assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&on));
 
@@ -8158,11 +8331,11 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         tmp.path("bad.tiff").to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
-        "--display-tone-headroom",
+        "--highlight-range",
         "-1",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`fit_range.headroom_stops`"), "{err}");
+    assert!(err.contains("`fit_range.highlight_range_stops`"), "{err}");
 
     // A bad dark end is refused naming its flag and key, and the two flags that set it
     // together are refused.
@@ -8181,9 +8354,9 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         assert_eq!(code, 2, "{extra:?}: {err}");
         err
     };
-    let err = refused(&["--display-black", "0"]);
+    let err = refused(&["--dark-base", "0"]);
     assert!(
-        err.contains("--display-black (recipe `fit_range.dark_end`)"),
+        err.contains("--dark-base (recipe `fit_range.dark_end`)"),
         "{err}"
     );
     let err = refused(&["--dark-floor", "0"]);
@@ -8191,9 +8364,9 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
         err.contains("--dark-floor (recipe `fit_range.dark_end`)"),
         "{err}"
     );
-    let err = refused(&["--dark-floor", "4", "--display-black", "6"]);
+    let err = refused(&["--dark-floor", "4", "--dark-base", "6"]);
     assert!(
-        err.contains("--dark-floor") && err.contains("--display-black"),
+        err.contains("--dark-floor") && err.contains("--dark-base"),
         "{err}"
     );
 }
@@ -8242,7 +8415,7 @@ fn the_dark_floor_lifts_a_measured_frame_s_dark_end_to_it() {
     assert_eq!(d["setting"], serde_json::json!({"floor": 4.5}), "{d}");
     assert_eq!(d["curve"], "log-shift-to-mid-grey-v1", "{d}");
     let (dark, shift) = (
-        d["frame_dark_stops"].as_f64().unwrap(),
+        d["frame_dark_below_mid_stops"].as_f64().unwrap(),
         d["shift_stops"].as_f64().unwrap(),
     );
     assert!(dark > 4.5 && shift > 0.0, "{d}");
@@ -8385,7 +8558,7 @@ fn the_dark_target_pushes_a_measured_frame_s_dark_end_down_to_it() {
     assert_eq!(d["setting"], serde_json::json!({"target": 6.0}), "{d}");
     assert_eq!(d["curve"], "log-shift-to-mid-grey-v1", "{d}");
     let (dark, shift) = (
-        d["frame_dark_stops"].as_f64().unwrap(),
+        d["frame_dark_below_mid_stops"].as_f64().unwrap(),
         d["shift_stops"].as_f64().unwrap(),
     );
     assert!(dark < 6.0 && shift < 0.0, "{d}");
@@ -8476,7 +8649,7 @@ fn a_frame_whose_black_cannot_approach_black_warns_and_each_remedy_clears_it() {
         "0",
         "--contrast",
         "0.7",
-        "--display-black",
+        "--dark-base",
         "6",
     ]);
     assert!(!w.iter().any(squeezed), "{w:?}");
@@ -8601,7 +8774,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
         );
         let fr = &nf["fit_range"];
         assert_eq!(fr["operator"], "reinhard-peak-lifted-v1", "{stdout}");
-        assert_eq!(fr["headroom_stops"], 6.0);
+        assert_eq!(fr["highlight_range_stops"], 6.0);
         assert_eq!(fr["white_point"], 64.0);
         assert_eq!(fr["display_peak"], 1.0);
         // The dark end is the target by default, and an unmeasured frame has nothing for
@@ -8614,7 +8787,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             "{stdout}"
         );
         assert_eq!(dark_end["curve"], "identity");
-        let base = dark_end["film_base_stops"].as_f64().unwrap();
+        let base = dark_end["film_base_below_mid_stops"].as_f64().unwrap();
         assert!((base - 4.96).abs() < 0.05, "{dark_end}");
         assert_eq!(dark_end["shift_stops"], 0.0, "{dark_end}");
         // No section of the removed chain's report survives to claim an operation this
@@ -9117,7 +9290,7 @@ const LOOK: [&str; 8] = [
     "1.2",
     "--saturation",
     "0.9",
-    "--display-black",
+    "--dark-base",
     "5",
     "--gamut",
     "srgb",
@@ -9242,7 +9415,7 @@ fn a_profile_refuses_what_it_cannot_hold() {
     let err = refused(&["--film-master", "--contrast", "1.2"]);
     assert!(err.contains("cannot apply the look"), "{err}");
     // A look no film base renders, found by the probe at the thinnest base.
-    let err = refused(&["--display-black", "off", "--density-offset", "1e6,1e6,1e6"]);
+    let err = refused(&["--dark-base", "off", "--density-offset", "1e6,1e6,1e6"]);
     assert!(err.contains("no film base renders this look"), "{err}");
     // A meaning no frame can convert is refused before any scan exists.
     let (code, _, err) = run(&["profile", "--input-meaning", "colorimetric"]);
@@ -9308,8 +9481,8 @@ fn the_removed_print_controls_are_refused_with_where_they_went() {
     let fixture_path = fixture("hdr-48bit.tif").display().to_string();
     let cases: &[(&[&str], &str)] = &[
         (&["--print-exposure", "1"], "`--exposure`"),
-        (&["--black-point", "0.01"], "`--display-black`"),
-        (&["--linear-range", "0,1"], "`--display-black`"),
+        (&["--black-point", "0.01"], "`--dark-base`"),
+        (&["--linear-range", "0,1"], "`--dark-base`"),
         (&["--auto-wb", "percentile"], "hanten measure-roll"),
     ];
     for (i, (extra, expect)) in cases.iter().enumerate() {
@@ -12945,7 +13118,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         "{roll}"
     );
     let base_stops = |r: &serde_json::Value| {
-        r["chain"]["fit_range"]["dark_end"]["film_base_stops"]
+        r["chain"]["fit_range"]["dark_end"]["film_base_below_mid_stops"]
             .as_f64()
             .unwrap()
     };
@@ -13169,7 +13342,8 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
     );
 
     // A file an earlier build wrote states the retired keys at `null`, which replay as
-    // absent, in an envelope, bare, or in a manifest's `params`.
+    // absent, in an envelope or bare. A manifest's `params` is hand-written, so there
+    // one is refused as any null is: omit it.
     let mut old =
         serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&plain).unwrap())
             .unwrap();
@@ -13198,7 +13372,14 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
         r#"{"roll":{"frame_slope":null,"frame_lift":null}}"#,
     );
     let (code, _, err) = roll_with(&null_in_params, "rolled-null");
-    assert_eq!(code, 0, "{err}");
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`roll.frame_lift` is null, and a `null` states nothing")
+            && err.contains("Omit `roll.frame_lift`")
+            && !err.contains("thin_slope")
+            && !err.contains("small_lift"),
+        "{err}"
+    );
     // A non-null one names the rename, which replays the old render.
     let mut old_thin = old["params"].clone();
     old_thin["roll"]["frames"]["thin.tif"] =
@@ -14881,9 +15062,9 @@ fn contrast_leaves_colour_alone_and_saturation_reaches_the_pixels() {
             "linear",
             "--gamut",
             "bt2020",
-            "--display-tone-headroom",
+            "--highlight-range",
             "0",
-            "--display-black",
+            "--dark-base",
             "off",
             "--highlight-desaturation",
             "0",
@@ -15513,7 +15694,7 @@ fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
             "pq",
             "--exposure",
             "3",
-            "--display-tone-headroom",
+            "--highlight-range",
             "0",
         ],
     ]
@@ -15565,8 +15746,8 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     for (i, (extra, stage)) in [
         (&["--exposure", "2"][..], "scene correction"),
         (&["--white-balance", "1.2,1,1.1"][..], "scene correction"),
-        (&["--display-tone-headroom", "3"][..], "fit range"),
-        (&["--display-black", "5"][..], "fit range"),
+        (&["--highlight-range", "3"][..], "fit range"),
+        (&["--dark-base", "5"][..], "fit range"),
         (&["--dark-floor", "5"][..], "fit range"),
         (&["--dark-target", "5"][..], "fit range"),
         (&["--contrast", "1.3"][..], "the look"),
@@ -15580,7 +15761,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
         assert!(err.contains(stage), "{extra:?}: {err}");
         assert!(err.contains("choose a rendered destination"), "{err}");
         // A dark end's remedy is its own flag's `off`, which the parser accepts beside it.
-        if extra[0].starts_with("--dark") || extra[0] == "--display-black" {
+        if extra[0].starts_with("--dark") {
             let off = format!("{} off", extra[0]);
             assert!(err.contains(&off), "{extra:?}: {err}");
             let (code, _, err) = convert_48bit(
@@ -15592,16 +15773,16 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     }
     // A typed dark end at `off` asks for nothing: the remedy names only the headroom, and
     // following it beside that flag converts.
-    for flag in ["--dark-target", "--display-black", "--dark-floor"] {
+    for flag in ["--dark-target", "--dark-base", "--dark-floor"] {
         let (code, _, err) = convert_48bit(
             &tmp.path("off-headroom"),
-            &["--film-master", "--display-tone-headroom", "3", flag, "off"],
+            &["--film-master", "--highlight-range", "3", flag, "off"],
         );
         assert_eq!(code, 2, "{flag}: {err}");
-        assert!(err.contains("(--display-tone-headroom 0)"), "{flag}: {err}");
+        assert!(err.contains("(--highlight-range 0)"), "{flag}: {err}");
         let (code, _, err) = convert_48bit(
             &tmp.path("off-headroom-ok"),
-            &["--film-master", "--display-tone-headroom", "0", flag, "off"],
+            &["--film-master", "--highlight-range", "0", flag, "off"],
         );
         assert_eq!(code, 0, "{flag}: {err}");
     }
@@ -15614,7 +15795,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
             "2",
             "--white-balance",
             "1.2,1,1.1",
-            "--display-tone-headroom",
+            "--highlight-range",
             "3",
         ],
     );
@@ -15630,9 +15811,9 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     // spared — the flags-win reset of a recipe that asks for a stage.
     for (i, extra) in [
         &["--exposure", "0", "--white-balance", "1,1,1"][..],
-        &["--display-tone-headroom", "0"][..],
-        &["--display-tone-headroom", "6"][..],
-        &["--display-black", "off"][..],
+        &["--highlight-range", "0"][..],
+        &["--highlight-range", "6"][..],
+        &["--dark-base", "off"][..],
         &["--dark-floor", "off"][..],
         &["--dark-target", "5.5"][..],
     ]
@@ -15646,7 +15827,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     let recipe = write_file(
         &tmp.path("stages.json"),
         r#"{"recipe_version": 3, "scene_correction": {"exposure": 1.5},
-            "fit_range": {"headroom_stops": 4, "dark_end": {"black": 5}}}"#,
+            "fit_range": {"highlight_range_stops": 4, "dark_end": {"base": 5}}}"#,
     );
     let r = recipe.to_str().unwrap();
     let (code, _, err) = convert_48bit(&tmp.path("rec"), &["--film-master", "--params", r]);
@@ -15664,7 +15845,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
             r,
             "--exposure",
             "0",
-            "--display-tone-headroom",
+            "--highlight-range",
             "0",
             "--dark-floor",
             "off",

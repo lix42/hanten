@@ -320,7 +320,7 @@ pub fn look(r: &Recipe) -> LookSection {
     r.look.resolve(slope(r), r.base().highlight_desaturation)
 }
 
-/// Fit range's headroom and dark end as the stage receives them: stated, else the
+/// Fit range's highlight range and dark end as the stage receives them: stated, else the
 /// rendering's base. Destructured without `..`, like [`LookKeys::resolve`].
 ///
 /// [`LookKeys::resolve`]: super::LookKeys::resolve
@@ -719,7 +719,7 @@ mod tests {
                 "1.2",
                 "--highlight-desaturation",
                 "0.5",
-                "--display-black",
+                "--dark-base",
                 "off",
             ],
         ));
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn the_destination_states_fit_ranges_peak() {
-        // The recipe carries the headroom; the peak comes from the destination, so a
+        // The recipe carries the highlight range; the peak comes from the destination, so a
         // recipe cannot name a peak its destination does not have.
         let mut r = Recipe::default();
         r.fit_range.headroom_stops = Some(4.0);
