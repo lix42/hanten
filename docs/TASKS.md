@@ -180,9 +180,9 @@ graph TD
 > roll-fixed `Dmax` density anchor. `Dmin` and `Dmax` are **different quantities**
 > (design-spec §4) that happen to share this code.
 
-- [ ] [Can the content base use the rebate?](tasks/film-base/content-base-rebate.md) — spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases
 - [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) — **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both references (HP5 frame 1330 is one)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
+- [x] [Can the content base use the rebate?](tasks/film-base/content-base-rebate.md) — spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases
 - [x] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — shipped as `measure-roll --base-content` and `roll --base-content`: the pooled p99 of the picture frames' effective areas, written as an explicit base with `content_base` evidence
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy
 - [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)

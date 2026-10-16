@@ -2857,3 +2857,134 @@ mod content_probe {
         }
     }
 }
+
+/// Probe (`film-base/content-base-rebate`): the band between the effective area at
+/// inset 0 and at the default inset, per edge, against the base from the roll's
+/// unexposed frame — how much is base-like (rebate), clearer (sprocket holes,
+/// backlight) or denser (picture, holder) — and each frame's p99 with and without it.
+/// Prints `CSV,` lines of derived numbers only.
+#[cfg(test)]
+mod rebate_band_probe {
+    use super::*;
+
+    /// Within this density of the base on every channel is base-like.
+    const NEAR: f32 = 0.05;
+
+    /// `[base-like, clearer, denser, total]` pixel counts of `rect`.
+    fn classify(image: &LinearImage, rect: [u32; 4], base: [f32; 3]) -> [u64; 4] {
+        let [x, y, w, h] = rect;
+        let (lo, hi) = (10f32.powf(-NEAR), 10f32.powf(NEAR));
+        let mut out = [0u64; 4];
+        for row in y..y + h {
+            let start = (row as usize * image.width as usize + x as usize) * 3;
+            for px in image.rgb[start..start + w as usize * 3].as_chunks::<3>().0 {
+                let r: [f32; 3] = std::array::from_fn(|c| px[c] / base[c]);
+                let k = if r.iter().all(|v| (lo..=hi).contains(v)) {
+                    0
+                } else if r.iter().any(|&v| v > hi) {
+                    1
+                } else {
+                    2
+                };
+                out[k] += 1;
+                out[3] += 1;
+            }
+        }
+        out
+    }
+
+    /// The band's four strips, `outer` minus `inner`: top and bottom at full width,
+    /// left and right at the inner height.
+    fn strips(outer: [u32; 4], inner: [u32; 4]) -> [(&'static str, [u32; 4]); 4] {
+        let [ox, oy, ow, oh] = outer;
+        let [ix, iy, iw, ih] = inner;
+        [
+            ("top", [ox, oy, ow, iy - oy]),
+            ("bottom", [ox, iy + ih, ow, oy + oh - (iy + ih)]),
+            ("left", [ox, iy, ix - ox, ih]),
+            ("right", [ix + iw, iy, ox + ow - (ix + iw), ih]),
+        ]
+    }
+
+    /// Density of each channel of `v` above `base`, comma-joined.
+    fn density(base: [f32; 3], v: [f32; 3]) -> String {
+        (0..3)
+            .map(|c| format!("{:.4}", (base[c] / v[c]).log10()))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[test]
+    #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+    fn rebate_band_on_real_rolls() {
+        let Some((root, m)) = super::polarity_probe::manifest() else {
+            return;
+        };
+        let decode = |f: &serde_json::Value| {
+            crate::io::decode::decode_within(&root.join(f["file"].as_str().unwrap()), u64::MAX)
+                .unwrap()
+                .0
+        };
+        println!("CSV,strip,roll,file,w,h,edge,width_px,base_like,clearer,denser,total");
+        println!(
+            "CSV,p99,roll,file,holder_applied,inset0_px,inset_px,\
+             in_r,in_g,in_b,out_r,out_g,out_b"
+        );
+        for (roll, entry) in m["rolls"].as_object().unwrap() {
+            let frames = entry["frames"].as_array().unwrap();
+            let Some(unexposed) = frames.iter().find(|f| f["role"] == "unexposed") else {
+                continue;
+            };
+            let scan = decode(unexposed);
+            let area = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None).unwrap();
+            let b = measure_area(&scan.image, &area).unwrap().base;
+            let base = [b.r, b.g, b.b];
+            let mut pooled: Option<(AreaCounts, AreaCounts)> = None;
+            for f in frames.iter().filter(|f| f["role"] == "real") {
+                let name = f["file"].as_str().unwrap().rsplit('/').next().unwrap();
+                let scan = decode(f);
+                let (Ok(outer), Ok(inner)) = (
+                    effective_area(&scan, 0.0, None),
+                    effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None),
+                ) else {
+                    eprintln!("{name}: no area");
+                    continue;
+                };
+                let (w, h) = (scan.image.width, scan.image.height);
+                for (edge, rect) in strips(outer.region, inner.region) {
+                    let width = if matches!(edge, "top" | "bottom") {
+                        rect[3]
+                    } else {
+                        rect[2]
+                    };
+                    let [a, c, d, n] = classify(&scan.image, rect, base);
+                    println!("CSV,strip,{roll},{name},{w},{h},{edge},{width},{a},{c},{d},{n}");
+                }
+                let hi = AreaCounts::of(&scan.image, inner.region).unwrap();
+                let ho = AreaCounts::of(&scan.image, outer.region).unwrap();
+                println!(
+                    "CSV,p99,{roll},{name},{},{},{},{},{}",
+                    outer.holder_applied,
+                    outer.inset,
+                    inner.inset,
+                    density(base, hi.percentiles(CONTENT_PERCENTILE)),
+                    density(base, ho.percentiles(CONTENT_PERCENTILE)),
+                );
+                match &mut pooled {
+                    None => pooled = Some((hi, ho)),
+                    Some((pi, po)) => {
+                        pi.merge(&hi);
+                        po.merge(&ho);
+                    }
+                }
+            }
+            if let Some((hi, ho)) = pooled {
+                println!(
+                    "CSV,p99,{roll},pooled,-,-,-,{},{}",
+                    density(base, hi.percentiles(CONTENT_PERCENTILE)),
+                    density(base, ho.percentiles(CONTENT_PERCENTILE)),
+                );
+            }
+        }
+    }
+}

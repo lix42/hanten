@@ -322,12 +322,10 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
   (`core/crop-rotate`, `core/half-frame-split`).
 - Checking the content base on camera scans (a rebate area the user marks only if it
   falls short), with the spike below.
-- Spike: can the content base use the rebate? Compare `measure-roll --base-content` at
-  the default inset and at `--measure-inset 0` against measured bases, on rolls that show
-  rebate and on camera scans. The risk is sprocket holes and backlight, which are clearer
-  than the base and would pull the estimate up, and a result that depends on how much
-  rebate each scan shows. If the rebate helps, it needs a rebate search, not a wider area
-  (`film-base/content-base-rebate`).
+- Spike: can the content base use the rebate? Answered on the scanner archive: barely.
+  `--measure-inset 0` moves one roll of 13, and adding a rebate search isn't worth it
+  ([spike](../spike/content-base-rebate.md), `film-base/content-base-rebate`). Camera
+  scans are still open, and there the sprocket holes are the likely risk.
 - Message codes behind every warning and error (§3.3, `core/message-codes`).
 - Naming a truncated file as its own fault (spike unknown 11, `io/truncated-file-fault`).
 - Frame keys by relative path in the recipe (§3.4, `core/frame-keys-by-path`).
