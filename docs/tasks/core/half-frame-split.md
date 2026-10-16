@@ -15,7 +15,7 @@ A flag and recipe key first, as with every knob.
 
 ## What is known
 
-- Crop and rotate come first or alongside (`core/crop-rotate`); a split is two crops of
+- Crop and rotate come first (`core/crop-rotate`); a split is two crops of
   one file.
 - Each half needs its own `roll.frames` key (`core/frame-keys-by-path`).
 - The pricing cap counts scan files, not pictures, so a split file counts once

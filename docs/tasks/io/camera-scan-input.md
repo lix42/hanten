@@ -2,7 +2,7 @@
 title: Read camera scans
 status: todo
 deps: []
-summary: accept camera-scanned negatives (raw/DNG first); a release gate for the desktop app
+summary: accept camera-scanned negatives (the asserted-linear TIFF path, or raw/DNG); a release gate for the desktop app
 ---
 # Read camera scans
 
@@ -14,9 +14,13 @@ for the app ([desktop app design](../../design/desktop-app.md) §2.12).
 
 ## What is known
 
-- Today only SilverFast HDR/HDRi is read. `--input-meaning colorimetric` is recognized
-  and refused, and camera RAW / DNG is out of scope in the design spec (§2, roadmap
-  item 4).
+- SilverFast HDR/HDRi is read with its provenance. Any other 3-channel 16-bit RGB TIFF
+  is refused unless the user asserts `--input-transfer linear --input-meaning
+  scanner-device`, which converts it (`tests/pipeline.rs`'s
+  `explicit_assertion_escape_hatch_converts_generic_rgb16`) — so a linear TIFF from a
+  raw converter may already work, treated as if a scanner had made it.
+- Not read: `--input-meaning colorimetric` (recognized and refused) and camera RAW /
+  DNG (out of scope in the design spec, §2, roadmap item 4).
 - A camera file has no IR plane, so holder detection falls back to the static inset
   alone, and IR dust removal (when it exists) cannot apply.
 - The decode was tuned against scanner data (`docs/design-update.md` Part 3); how far it
@@ -25,13 +29,16 @@ for the app ([desktop app design](../../design/desktop-app.md) §2.12).
 
 ## Open questions
 
-1. Which formats first: raw (Bayer/X-Trans) through a decoder, DNG, or a linear TIFF
-   from a raw converter?
+1. Is the asserted-linear TIFF path good enough for camera scans (camera RGB read as
+   scanner-device), so the app only needs to make the assertion? If not, which comes
+   first: raw (Bayer/X-Trans) through a decoder, DNG, or a colorimetric TIFF?
 2. What the samples measure (a camera's native space vs a colorimetric one) and how
    they reach the density path.
 3. Whether the content base and roll measurements hold on camera scans
    (`film-base/content-base-rebate`).
 4. What `inspect`, `measure-base` and `measure-roll` report for a camera file.
+5. If the app sets the input assertions per file, how the core tells a camera file from
+   a scanner one.
 
 ## How to Verify
 

@@ -25,6 +25,10 @@ offline, checked in the core.
 2. Where unspent tokens live on macOS (Keychain?) and how a reinstall recovers them.
 3. What the token website must provide (accounts, licence keys, a recovery path).
 4. How the replacement allowance (a limited number of rescanned frames) is recorded.
+5. How a token is bound to one roll. The server signs before the roll's hashes exist,
+   so the signature cannot cover them: a paid record copied to another project or
+   hand-edited must still fail the check (a spent-token ledger outside the project
+   file, a sealed record).
 
 ## How to Verify
 

@@ -16,7 +16,7 @@ shooters. It is for two groups:
   apps.
 
 The app **replaces the CLI** for most users: every step a typical roll needs, measuring
-included, works without a terminal. The CLI stays internal and is not published; any future
+included, works without a terminal. The CLI stays internal and is not published (its source is, §5); any future
 public CLI or MCP tool carries the same payment (§2.11).
 
 It is **not** a photo library and **not** a general editor. Editing stays within Hanten's
@@ -44,7 +44,7 @@ are Hanten features not yet implemented in the CLI (§4).
 | 1. Placement | placement | `--placement` | always visible | three named choices |
 | 2. Taste | exposure, contrast, saturation, overall cast, tone cast | `--exposure`, `--contrast`, `--saturation`, `--white-balance`, `--channel-grade` | collapsed, easy to find | sliders and a colour control |
 | 3. Behaviour switches | highlight desaturation, lifts, midtone neutral, neutral balance, dark end, … | `--highlight-desaturation`, `--small-lift`, `--thin-lift`, `--midtone-neutral`, `--neutral-balance`, `--dark-target`, … | hidden deeper; meaning may change | on/off or a few named steps |
-| Not in the app | debug rendering, decode and calibration, film master | `--rendering` (always `default`), `--density-*`, `--anchor-mid-offset`, `--input-*`, `--film-master` (leaning) | — | — |
+| Not in the app | debug rendering, decode and calibration, film master | `--rendering` (always `default`), `--density-*`, `--anchor-mid-offset`, `--input-*` (as controls; the core may set them per camera file, `io/camera-scan-input`), `--film-master` (leaning) | — | — |
 
 - Every app control maps to a flag and recipe key; not every flag gets a control. Output
   axes belong to the export dialog; operational flags (`--report`, `--telemetry`,
@@ -93,8 +93,10 @@ are Hanten features not yet implemented in the CLI (§4).
 - One handler in the UI decides per message: retry or update silently, prompt the user to
   change config, or show an error. Silent retry only for transient faults, never for one
   that changes the image.
-- The core installs the colour-management (lcms2) fault handler, so a fault is an error,
-  not a quietly wrong preview (spike unknown 5).
+- A colour-management (lcms2) fault is an error, not a quietly wrong preview (spike
+  unknown 5), scoped to the render that raised it and sent to the report channel. Today's
+  handler is one process-global flag that writes to stderr; lcms2's per-context handlers
+  are a lead (unverified).
 
 ### 2.8 Files and persistence
 
@@ -140,7 +142,8 @@ are Hanten features not yet implemented in the CLI (§4).
 
 ### 2.12 Release gates
 
-- **Camera-scan input.** Hanten reads only SilverFast HDR/HDRi today.
+- **Camera-scan input.** Hanten reads SilverFast HDR/HDRi; any other 16-bit RGB TIFF
+  converts only when the user asserts it is a linear raw scan, and RAW/DNG is not read.
 - **A website selling tokens** (outside this repository): a payment provider that handles
   sales tax, a server that signs tokens (the signing key never ships), getting tokens into
   the app, and recovery after a reinstall. The Mac App Store's in-app purchase is a
@@ -193,6 +196,8 @@ flowchart LR
   offsets and frame operations, and resolves each frame's recipe from them. The UI sends
   intents (set a knob on a selection, lift, reset, crop …) and receives state and
   messages.
+- The roll session is an orchestrator beside the CLI; stages stay pure and never touch
+  files (design-spec §3, principle 6).
 
 ### 3.3 Report channel (proposal)
 
@@ -226,14 +231,18 @@ flowchart LR
 ### 3.6 Export (proposal: in-process)
 
 - Export runs **in the core process** as a queue, not by spawning a bundled `hanten`
-  binary. A shipped binary would be an unpaid public CLI, and a second process would need
-  its own route for messages and its own fault handler.
+  binary. A shipped binary would be an unpaid public CLI (though not the only free route,
+  §5), and a second process would need its own route for messages.
 - Preview takes priority over the queue for CPU and memory.
 
 ### 3.7 Payment
 
 - The core checks a roll's paid record before each export and records content hashes at
   the first export. Tokens are verified with a public key built into the core.
+- The token is signed before the roll exists, so its signature cannot cover the hashes.
+  Without a binding, a paid record copied to another project or hand-edited passes the
+  check; the binding (a spent-token ledger outside the project file, a sealed record) is
+  open (`app/offline-token-spike`).
 
 ## 4. New work the app needs first
 
@@ -264,6 +273,10 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 - After a lift, what happens to other frames' overrides of that knob, and to the source
   frame's.
 - The replacement limit per roll (§2.11).
+- How a token is bound to its roll so a paid record cannot be copied or edited (§3.7).
+- The repository is public, so the CLI and the core can be built from source and the
+  payment check removed: whether the core goes private before release, or light
+  protection accepts this.
 - Memory-only cache, or also a disk cache of downsampled scans so a reopened roll is quick.
 - Preview faithfulness: downsample factor, Display P3 canvas, HDR preview.
 - How the export dialog presents the four destination axes.

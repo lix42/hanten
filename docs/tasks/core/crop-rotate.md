@@ -21,13 +21,15 @@ re-measures that frame and can shift the roll's measurements.
 - The effective area (`pipeline/film_base.rs`) is the IR holder cut then a static inset;
   a crop would be a third cut.
 - Not in scope: straighten (arbitrary angles), auto-crop.
+- "The image is never cropped" (design-spec §9) and "It never crops the image"
+  (`docs/using-nc.md`) change with this task.
 
 ## Open questions
 
 1. Rotation in quarter turns only, plus flips?
 2. Crop coordinates: before or after rotation, and in pixels or fractions.
-3. Whether the roll's pooled measurements (white, envelope, content base) read the
-   cropped area.
+3. How a crop's re-measure of the roll's pooled measurements (white, envelope, content
+   base) is batched and reported.
 4. Whether a crop affects the memory model (`pipeline/memory.rs`).
 
 ## How to Verify

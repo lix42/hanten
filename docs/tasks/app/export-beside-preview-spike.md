@@ -26,6 +26,9 @@ preview stuttering ([desktop app design](../../design/desktop-app.md) §3.6).
 1. Preview latency while a roll exports, with and without a priority scheme.
 2. How many exports run at once, given memory and cores.
 3. Whether export reuses the preview's decode or decodes again.
+4. How an lcms2 fault stays with the render that raised it: today's handler is one
+   process-global flag, cleared after each render, so a preview and an export can swallow
+   or take each other's fault (design §2.7).
 
 ## How to Verify
 

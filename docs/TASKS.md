@@ -129,7 +129,7 @@ graph TD
 > work that lands in those files.
 
 - [ ] [Crop and rotate](tasks/core/crop-rotate.md) — crop and rotate as flags and recipe keys; a crop also narrows the measurement region
-- [ ] [Key roll frames by relative path](tasks/core/frame-keys-by-path.md) — roll.frames is keyed by file name, so two frames with one name share an entry
+- [ ] [Key roll frames by relative path](tasks/core/frame-keys-by-path.md) — roll.frames is keyed by file name; a recipe applied to a same-named file elsewhere shares its entry
 - [ ] [Split a two-half-frame file](tasks/core/half-frame-split.md) — one file holding two half-frames becomes two pictures, each its own frame · **waits on** `core/crop-rotate`, `core/frame-keys-by-path`
 - [ ] [Rename internal identifiers to docs/terminology.md's terms](tasks/core/internal-term-renames.md) — Rust identifiers, constants and the remaining doc comments that contradict docs/terminology.md
 - [ ] [Stable codes for warnings and errors](tasks/core/message-codes.md) — every warning and error carries a code and facts; the CLI formats its prose from them, the app maps codes to its own handling
@@ -160,7 +160,7 @@ graph TD
 > `pipeline/input_semantics.rs` (the resolver that interprets the SilverFast XMP
 > packet), and the buffer/atomicity strategy for whole-image and streamed I/O.
 
-- [ ] [Read camera scans](tasks/io/camera-scan-input.md) — accept camera-scanned negatives (raw/DNG first); a release gate for the desktop app
+- [ ] [Read camera scans](tasks/io/camera-scan-input.md) — accept camera-scanned negatives (the asserted-linear TIFF path, or raw/DNG); a release gate for the desktop app
 - [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — accept a 16-bit grayscale primary (IR page unchanged); nc refuses these HP5 scans today · **low priority**
 - [ ] [Scanner Density Calibration](tasks/io/scanner-density-calibration.md) — turn the density-scale question into a shipped, reusable scanner profile · **waits on** `analysis/calibration-frame-capture`
 - [ ] [Slide film input](tasks/io/slide-film-input.md) — convert positive (E-6) film: no film base or decode, enters at the working space; no slide scans to verify against yet · **low priority**

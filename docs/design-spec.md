@@ -86,7 +86,8 @@ The deterministic core owns the image science. Any future ML assistance (see
 5. **Every knob is a flag.** No conversion behavior is reachable only through code.
 6. **Pure functions over classes.** Each pipeline stage is a pure function
    `(input, params) -> output`, deterministic in its image output and free of
-   filesystem access. The CLI layer is the only orchestrator. *One narrow
+   filesystem access. Only the CLI layer orchestrates (and the desktop app's roll
+   session, `docs/design/desktop-app.md` §3.2). *One narrow
    exception:* a stage clock reads a monotonic wall clock to fill the telemetry
    record's per-stage timings — a report-only channel that leaves the pixels
    untouched.
