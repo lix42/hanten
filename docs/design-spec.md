@@ -805,9 +805,9 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe. Per-frame outputs into `--out-dir` + a roll-level JSON report. Each frame runs the same core as `convert`. In measure mode (`--measure-roll`, or implied by `--unexposed` or `--base-content`) it first measures the roll as `measure-roll` does and layers the measurement last; its report carries it as `measurement` (`docs/design/roll-workflow.md`). |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
 | `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`, in the §8 envelope. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5); a frame above the cap is clamped to the cap and disclosed. Each frame's dark end is the p1 of its ACEScg luminance in scene stops, and the roll's is the p10 over its picture frames; the look's slope spreads the span from the roll's dark end to its white over 9.049 stops, mid-grey pinned, held within the cap's slope and 3.5 (`nf-calibration/span-roll-slope`); a clamped frame's spreads the cap's span instead. The roll's envelope is its frames' lowest dark end and highest white, unclamped; each frame's tones (white, level, dark end) go in its `roll.frames` entry, and the report gives each frame's hybrid placement at the defaults (`frames[].hybrid`, `nf-calibration/envelope-hybrid-placement`) and its per-frame one (`frames[].frame`, `nf-calibration/per-frame-placement`). The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luminance (over pixels with positive luminance) to mid-grey, within ±3 EV (a bound that binds warns). `--white-balance-form gain|tilt` (unset, the recipe's `roll.white_balance_form`) sets how the gains apply, which the line and the whites are measured after; the form is written as `roll.white_balance_form`, and the white the gains equalize as `roll.white_balance_stops`. Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-dark … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written), and each measured frame's own (`frames[].flag`, adding its tones and lifts); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.envelope_stops` and `roll.frames` giving each measured frame, by path relative to the recipe, its tones, each clamped frame the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input and measure sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `--unexposed auto` and `--leader auto` find those frames among the inputs and leave them out of the pictures, recording each input's class in the report's `references`; a roll with no trustworthy unexposed frame is refused (`core/auto-calibration`). `--base-content` estimates the base from the frames instead, for a roll with no unexposed film (§9 film base, Tier 3). `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
+| `hanten measure-roll` | Measure a roll's white balance, midtone line, white and exposure once, for its recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`, `nf-calibration/roll-exposure`, `nf-scene-correction/midtone-neutral`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. On a roll of 10 frames or more it fits the midtone line (`--midtone-neutral auto|on|off`; `on` fits a shorter roll of 3 frames or more, if enough bands count) from the unguarded sample, after the gains, of every frame the leader guard did not empty. Each frame's white is the p97 of its pixels' brightest film-RGB channel **after the roll's colour correction** (the gains and the line, mapped back through the 3×3), in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5); a frame above the cap is clamped to the cap and disclosed. Each frame's dark end is the p1 of its ACEScg luminance in scene stops, and the roll's is the p10 over its picture frames; the look's slope spreads the span from the roll's dark end to its white over 9.049 stops, mid-grey pinned, held within the cap's slope and 3.5 (`nf-calibration/span-roll-slope`); a clamped frame's spreads the cap's span instead. The roll's envelope is its frames' lowest dark end and highest white, unclamped; each frame's tones (white, level, dark end) go in its `roll.frames` entry, and the report gives each frame's hybrid placement at the defaults (`frames[].hybrid`, `nf-calibration/envelope-hybrid-placement`) and its per-frame one (`frames[].frame`, `nf-calibration/per-frame-placement`). The roll's exposure is measured independently of the white, which stays measured at exposure 0: it brings the median of the frames' log-average ACEScg luminance (over pixels with positive luminance) to mid-grey, within ±3 EV (a bound that binds warns). `--white-balance-form gain|tilt` (unset, the recipe's `roll.white_balance_form`) sets how the gains apply, which the line and the whites are measured after; the form is written as `roll.white_balance_form`, and the white the gains equalize as `roll.white_balance_stops`. Reported as a reuse-ready `--roll-white-balance … --roll-white … --roll-dark … --roll-exposure …` flag (with `--roll-midtone-line …` when a line is written), and each measured frame's own (`frames[].flag`, adding its tones and lifts); `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.envelope_stops` and `roll.frames` giving each measured frame, by path relative to the recipe, its tones, each clamped frame the cap as its white and each lifted frame its lifts (a low-key frame's small lift, and a thin frame's slope and exposure beside it; none on a flat frame; `--no-small-lift` leaves out the small lift, `--no-thin-lift` the thin one, which is solved from the small-lifted render either way), the decode (`reconstruction`) it measured through, and the input, measure and geometry sections when stated — in the §8 envelope, that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, leaves a frame it empties out of the exposure, and warns on a frame whose decoded white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. `--unexposed auto` and `--leader auto` find those frames among the inputs and leave them out of the pictures, recording each input's class in the report's `references`; a roll with no trustworthy unexposed frame is refused (`core/auto-calibration`). `--base-content` estimates the base from the frames instead, for a roll with no unexposed film (§9 film base, Tier 3). `confidence` grades the white balance and the line by frame count: `confident` from 16 frames, else `in-doubt`, with one advisory note (`confidence.advice`; not a warning, so `--strict` ignores it) (`nf-scene-correction/correction-confidence`). |
 | `hanten telemetry` | Opt-in upload of anonymous `convert` telemetry: `enable`, `disable`, `status`, `preview`, `flush`, `purge` (§9 telemetry, `docs/telemetry-strategy.md`). |
-| `hanten profile` | Write a **look** from the conversion flags, with no scan: every recipe key but what belongs to one roll — `calibration`, `roll` and `scene_correction` (whose flags it refuses: a recipe white balance or exposure would warn beside every measured roll) — as annotated JSONC in the §8 envelope, to stdout or `--out PATH` (refused over an existing file unless `--force`). Checked against every rule that needs no pixels, and the render probe at a base thinner than any measured, so a look no base could render is refused; what depends on the base or the scan is checked when it converts. A key the rendering decides is written `null`. It restates the decode, so it is layered before a roll's measured file. `hanten params` is its removed name. |
+| `hanten profile` | Write a **look** from the conversion flags, with no scan: every recipe key but what belongs to one roll — `calibration`, `roll`, `geometry` and `scene_correction` (whose flags it refuses: a recipe white balance or exposure would warn beside every measured roll) — as annotated JSONC in the §8 envelope, to stdout or `--out PATH` (refused over an existing file unless `--force`). Checked against every rule that needs no pixels, and the render probe at a base thinner than any measured, so a look no base could render is refused; what depends on the base or the scan is checked when it converts. A key the rendering decides is written `null`. It restates the decode, so it is layered before a roll's measured file. `hanten params` is its removed name. |
 
 ### Recipes (JSON in/out)
 
@@ -818,9 +818,10 @@ no interactive prompts (but `telemetry enable` / `purge` on a terminal, which
   layer states no `calibration` or `roll`, which is what `hanten profile` writes; a
   `--save-recipe` file is the whole run, its `roll.frames` table included); a tagged
   value that switches variant (`region` → `explicit`) is replaced whole, and
-  `roll.frames` merges as a table, entry by entry. Flags win **by
+  `roll.frames` and `geometry.frames` merge as tables, entry by entry. Flags win **by
   source**: an explicit `--white-balance 1,1,1` means identity gains, not "fall back to
-  the recipes". A frame's `roll.frames` entry applies before the flags, so
+  the recipes". A frame's `geometry.frames` entry applies before the flags too, so
+  `--crop` beats it. A frame's `roll.frames` entry applies before the flags, so
   `--roll-white` or `--roll-dark` beats it, and a thin frame's lift (slope and exposure) with it; on
   `roll`, a frame's manifest `params` land after the flags, so they win over both, a
   white there likewise (`docs/design/roll-workflow.md`).
@@ -845,6 +846,7 @@ top level, one section per stage in chain order, the destination last:
   "calibration": { "film_base": {"explicit": [0.163, 0.080, 0.0377]} },
   "roll": { "white_balance": [1.002, 1.0, 1.277], "white_stops": 1.5, "dark_stops": -3.79, "envelope_stops": [-4.6, 2.3], "exposure": 0.455, "frames": {} },
   "measure": { "inset": 0.05 },
+  "geometry": { "crop": null, "rotate": null, "flip": null, "frames": {} },
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
     "offset": [0.0, 0.0, 0.0],
@@ -1333,7 +1335,7 @@ holder that is maximum density, so a whole-frame statistic measures the holder r
 than the picture (a per-frame density percentile taken that way once rendered every
 frame black).
 
-The area is **two cuts, in order — never one or the other**:
+The area is **cuts in order — the first two always, never one or the other**:
 
 1. **The film holder**, measured per edge from the IR plane by marching inward
    until IR reads film. Only where `film_base::ir_separability` measures the plane
@@ -1354,6 +1356,10 @@ The area is **two cuts, in order — never one or the other**:
    180 px against an 18 px step), and is reported, so a stated `0` on a measured
    frame is deliberately not honoured exactly. Where cut 1 did not run there is no
    measurement resolution to respect and the stated fraction is exact.
+3. **The crop**, when one is stated (`geometry`, below): what remains is intersected
+   with it, so every measurement reads only the picture. Cut 1 still marches on the
+   whole scan, from its edges. A crop sharing no pixel with what remains leaves
+   nothing to measure, and is treated as any empty region is.
 
 The inset is **not a fallback** for cut 1 — it runs either way, and where cut 1 did
 not run it is simply the only cut. Because it is then sized for a rebate rather than
@@ -1367,9 +1373,9 @@ the user raises the fraction instead. The report records which case a run was in
 over it blind. Where a measurement needs unexposed film, it is taken over the whole
 effective area of a reference frame or over a region the user states.
 
-**The image is never cropped.** The effective area changes only *which pixels a
-statistic is computed over*; written dimensions, aspect ratio and pixel count are
-exactly as decoded.
+**Only the crop cuts the image.** The holder and the inset change only *which pixels a
+statistic is computed over*; without a crop, written dimensions, aspect ratio and pixel
+count are exactly as decoded.
 
 **Every command that decodes resolves the area and reports it**, under the report
 key `effective_area` — the resolved rectangle, the per-edge holder depths (with a
@@ -1377,9 +1383,9 @@ per-edge `capped` and the frame-wide `converged`), `holder_applied`, and the app
 inset — for a `roll`, inside each frame's entry.
 `convert` and every roll frame resolve it unconditionally so `--measure-inset` and
 the `measure.inset` recipe key (including a per-frame override) are observable rather
-than accepted-and-ignored. A `capped` edge or `converged: false` also emits a
-`--strict`-promotable warning: both mean the reported rectangle is not a
-measurement. The march stops at 25% of the shorter edge on the premise that no film
+than accepted-and-ignored. A `capped` edge (where `holder_applied`) or
+`converged: false` also emits a `--strict`-promotable warning: both mean the reported
+rectangle is not a measurement. The march stops at 25% of the shorter edge on the premise that no film
 holder is that deep, so a cap is an IR misread and errs only toward an over-cut (the
 edges perpendicular to it can cap with it); a holder that really is deeper is
 covered by raising the inset, which is added on top of the cap.
@@ -1389,6 +1395,43 @@ which an *empty* region skips — so an empty region is a warning there (with no
 area), never a refusal. `measure.inset` stays live for `hanten measure-base` and
 `hanten measure-roll`, which measure over the area. A marched holder moves no rendered
 pixel, but it can change whether the polarity warning fires, and so a `--strict` exit.
+
+### Crop and orientation (`geometry`)
+A crop and an orientation, for every frame and per frame (`pipeline::geometry`,
+`core/crop-rotate`). All unset by default, which writes the scan as decoded.
+
+| Key | Flag | Meaning |
+|---|---|---|
+| `geometry.crop` | `--crop X,Y,W,H` | the picture, in the scan's own pixels before any turn — the `--base-region` convention, so a stated crop keeps its meaning whatever the orientation |
+| `geometry.flip` | `--flip none\|horizontal\|vertical` | a mirror, applied before the turn; `none` is stated, so a frame can undo the roll's |
+| `geometry.rotate` | `--rotate 0\|90\|180\|270` | a clockwise quarter turn |
+| `geometry.frames` | — | a frame's own `crop` / `flip` / `rotate`, keyed by file name like `roll.frames`, over the section's |
+
+- **The crop is applied twice.** It is the effective area's third cut (above), so every
+  command that measures reads only the picture: `measure-base` (`--crop`),
+  `measure-roll` (`--crop`, and the table in its `--params`) and `roll`'s measure mode.
+  So changing a frame's crop re-measures that frame and can move the roll's pooled
+  values. The reference frames (`--unexposed`, `--leader`, and those `auto` finds) are
+  read uncropped: a crop is the picture's. And `convert` and `roll` cut the scan to it before the fixed decode, after
+  the film base and the area are read, so every stage after sees only the picture.
+- **The orientation comes last**, on the rendered image just before the destination's
+  encode and `--export-pre-encode`: it only moves pixels, so the turned output is the
+  upright one rearranged, sample for sample. `--export-film-rgb` is the decode, so it
+  is cropped but never turned.
+- **A crop past the scan refuses** (exit 2): on `convert` and `roll` before the decode,
+  from the probed size (on a `roll`, that frame fails), and on the measuring commands
+  once the frame is read. Width and height must be positive.
+- **A frame's own values:** `Recipe::for_frame` moves its `geometry.frames` entry into
+  the section before the flags merge, as with `roll.frames`, so `--crop` / `--rotate` /
+  `--flip` beat it (`recipe::merge` drops the value a flag beat from every entry, so a
+  measuring command agrees with the render); a `roll --frames` manifest's `params` set a frame's `geometry.crop`
+  directly and refuse a `geometry.frames` table. `measure-roll --out` carries the section
+  when stated, so `roll` renders the pictures that were measured. `hanten profile`
+  refuses it: it belongs to the roll's frames, not a look.
+- **The report** carries `geometry` (the crop, flip, turn and written size) only when it
+  changed the image, and `effective_area.crop` when a crop cut the region;
+  `measure-roll`'s `frames[].crop` likewise.
+- **Memory:** both run in place (`pipeline::memory`), so no buffer is added.
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key

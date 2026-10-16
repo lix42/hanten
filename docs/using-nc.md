@@ -104,7 +104,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `thin_lift.max_thin_slope` and `white.rule.film_saturation_margin_stops`) §4's
 > `area_uniformity` and `measure-roll --out` file, §5's default recipe, §7's
 > `measure-roll` report and roll-key table, and the old spellings' refusals were re-run
-> against the binary. The staleness
+> against the binary. At `core/crop-rotate`
+> (`pipeline_version` 17 unchanged: `--crop`, `--rotate`, `--flip`) §5's recipe shape
+> and profile, the per-frame override note and §9's measurement region and crop section
+> were re-run on the fixtures. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -707,6 +710,7 @@ and the measuring commands write parts of it):
                      "midtone_line": null, "midtone_neutral": null,
                      "frames": {} },
     "measure":     { "inset": 0.05 },
+    "geometry":    { "crop": null, "rotate": null, "flip": null, "frames": {} },
     "reconstruction": {
       "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
@@ -737,7 +741,8 @@ can be the bare `params` object. `calibration.film_base` is `null` here because 
 **no default**: `convert` and `roll` reject an unstated base.
 
 `input`, `calibration` and `measure` describe the scan (§4, §9), and `roll` holds
-what `hanten measure-roll` measured — nothing by default (§7). `reconstruction` is the
+what `hanten measure-roll` measured — nothing by default (§7). `geometry` crops and
+turns the picture, for every frame or one — nothing by default (§9). `reconstruction` is the
 fixed decode (§6). `rendering` chooses what the stages start from (§7);
 `scene_correction`, `look` and `fit_range` are the rendering stages, and a `null` knob
 there is unstated and takes the rendering's value — highlight desaturation, highlight range
@@ -749,8 +754,9 @@ by default: every axis is derived.
 ### A look: `hanten profile`
 
 `hanten profile` takes the conversion flags and writes the recipe they describe, with
-no scan — every section above but the three that belong to one roll: `calibration` and
-`roll`, its measurements, and `scene_correction`, the adjustment made on top of them:
+no scan — every section above but the four that belong to one roll: `calibration` and
+`roll`, its measurements, `geometry`, its frames' crop and orientation, and
+`scene_correction`, the adjustment made on top of them:
 
 ```sh
 hanten profile --contrast 1.2 --out look.jsonc
@@ -758,8 +764,9 @@ hanten profile --contrast 1.2 --out look.jsonc
 
 ```jsonc
 // A Hanten look profile, written by `hanten profile`. It writes every setting but what
-// belongs to one roll (`calibration`, `roll`, `scene_correction`); a null takes the
-// rendering's value, which a later build may move. `meta` names the build that wrote it.
+// belongs to one roll (`calibration`, `roll`, `geometry`, `scene_correction`); a null
+// takes the rendering's value, which a later build may move. `meta` names the build that
+// wrote it.
 // …
 {
   "meta": { … },
@@ -1016,6 +1023,11 @@ hanten: warning: frame b.tif: its `params` override resolves `reconstruction.lin
 ```
 
 A per-frame `output.display` joins the shared recipe's axes, axis by axis.
+
+A frame's crop or turn can go here too (`"geometry": {"crop": […]}`), but a manifest is
+not read by `measure-roll`, so the roll would be measured over the uncropped frame:
+state it in the shared recipe's `geometry.frames` instead (§9). A `geometry.frames`
+table in a manifest's `params` is refused (exit 2).
 
 ---
 
@@ -2085,7 +2097,8 @@ unmixed, which is what a per-channel decode measurement wants. It is a 32-bit fl
 TIFF with **no ICC profile**: the channels have no primaries, so a viewer shows it
 untagged. Measure it with `nctool metrics --space film-rgb`, whose `channels` block
 compares field for field with a film master's measured with `--channels`. The report names it in
-`film_rgb_exported`. Through the pinned 3×3 it is the film master to the bit.
+`film_rgb_exported`. Through the pinned 3×3 it is the film master to the bit — unless
+`--rotate` or `--flip` turned the master, since the export is never turned.
 
 On `roll` the flag takes **no path**: each frame writes `<input-stem>_film-rgb.tiff`
 beside its own output (an explicit `--frames` output's folder included), byte for byte
@@ -2359,12 +2372,14 @@ picture rather than the film holder: on an uncropped scan the holder is maximum
 density, so a whole-frame statistic measures the holder instead. `hanten measure-base`
 (its film base, §4) and `hanten measure-roll` (§7) measure over it; a `convert`
 resolves and reports it, and reads it only for the polarity warning. The area is two
-cuts, in order:
+cuts, in order, and a third when you crop:
 
 1. **The film holder**, measured per edge from the IR plane — the same separability
    verdict above. Nothing to configure.
 2. **A static inset** of what is left, `--measure-inset FRAC` (recipe key
    `measure.inset`), default `0.05` of the shorter edge.
+3. **Your crop**, `--crop` (below): what is left is cut to it, so a measurement reads
+   only the picture. The holder is still measured on the whole scan.
 
 The inset is **not** a fallback for the first cut: it runs either way. Where the
 holder could not be measured, it is simply the only cut.
@@ -2403,7 +2418,8 @@ hanten inspect scan.tif | jq -c '.effective_area'
 
 `region` is `[x, y, w, h]`, in the same convention as `--base-region`.
 `holder_applied` is the short answer to "did reading the IR plane change this
-rectangle?" — true only when the holder was measured *and* some edge is non-zero.
+rectangle?" — true only when the holder was measured *and* moved it: some edge is
+non-zero, or, with a crop, the holder cut into the cropped region.
 Read `holder` itself carefully, because the three cases are different answers:
 
 | `holder` | meaning |
@@ -2434,7 +2450,8 @@ leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2
 from every command, before the file is read.
 
 Two fields on `holder` say the measurement is not what it looks like. **Both emit a
-warning, which `--strict` promotes to a failure.**
+warning, which `--strict` promotes to a failure** — `capped` only where the holder
+moved the region, since a capped edge only over-cuts.
 
 - `capped` — one flag per edge. A capped edge marched as deep as `hanten` looks (25% of
   the shorter edge) without finding film. No film holder is that deep (real scans
@@ -2461,19 +2478,70 @@ settles and reports `converged: true`. Read the two together.
 
 Two things this does *not* do:
 
-- **It never crops the image.** Written dimensions, aspect ratio and pixel count are
-  exactly as decoded. The effective area changes only which pixels a statistic is
-  computed over.
+- **The holder and the inset never crop the image.** They change only which pixels a
+  statistic is computed over; only `--crop` changes what is written (below).
 - **It never looks for the rebate.** The inset passes over it blind. That is why
   `measure-base` wants an unexposed frame, where the whole area is unexposed film; on a
   picture frame, give it a region (`--base-region`).
 
 Every command that decodes resolves the area and reports it; a conversion reads it
-only for the polarity warning (below), never for a rendered pixel. So if the two cuts
+only for the polarity warning (below), never for a rendered pixel. So if the cuts
 leave **nothing**, `measure-base` (with no source flag) refuses (exit 2), but `convert`
 and `roll` warn rather than refuse, skip the polarity check, and the report omits
 `effective_area` — there is no region to report, and `--measure-inset` has no effect on
 that run.
+
+### Cropping and turning the picture
+
+`--crop X,Y,W,H` keeps that rectangle of the scan, in the scan's own pixels **before any
+turn** — the `--base-region` convention, so a crop means the same whatever the
+orientation. `--flip horizontal|vertical` mirrors the picture, then `--rotate
+90|180|270` turns it clockwise. All three are recipe keys under `geometry`, on `convert`
+and `roll`:
+
+```sh
+hanten convert scan.tif -o out --params roll.json --crop 40,30,400,300 --rotate 90 \
+  | jq -c '{geometry, area: (.effective_area | {region, crop})}'
+```
+```json
+{"geometry":{"crop":[40,30,400,300],"flip":"none","rotate":90,"width":300,"height":400},"area":{"region":[40,30,400,300],"crop":[40,30,400,300]}}
+```
+
+- **A crop also narrows every measurement**: it is the effective area's third cut
+  (above). `measure-base --crop` reads the base inside it, and `measure-roll` reads each
+  frame inside its own, so **changing a frame's crop re-measures it and can move the
+  roll's values** — measure again after cropping. A crop is the picture's: the
+  `--unexposed` and `--leader` frames, and the reference frames `auto` searches the
+  inputs for, are read whole.
+- **The turn only moves pixels.** It runs after every rendering stage, so a turned output
+  is the upright one rearranged, sample for sample. `--export-film-rgb` is cropped but
+  **not turned**: it is the decode, before the turn.
+- **One frame's own crop** goes in the shared recipe's `geometry.frames`, keyed by file
+  name like `roll.frames`, with any of `crop`, `rotate` and `flip`; unset ones are the
+  section's:
+
+  ```json
+  { "recipe_version": 3,
+    "geometry": { "rotate": 90, "frames": { "971.tif": { "crop": [400, 300, 3000, 2000] } } } }
+  ```
+
+  Layer it into `measure-roll --params` and the frames are measured over their crops,
+  and the `--out` file carries the section, so `roll --params roll.json` renders the
+  pictures that were measured. A `--crop`, `--rotate` or `--flip` flag beats every
+  frame's entry, as `--roll-white` beats a clamp. `--flip none` states no flip, over a
+  recipe's.
+- **A crop past the scan refuses** (exit 2), before the decode on `convert`:
+
+  ```
+  usage: the crop [400, 0, 200, 10] (--crop, recipe `geometry.crop` or the frame's `geometry.frames` entry) reaches past the 502x462 scan: it is [x, y, w, h] in the scan's own pixels, before any rotation
+  ```
+
+  A crop inside the scan but outside the effective area leaves nothing to measure:
+  refused by the measuring commands, a warning on `convert`, as above.
+- **Reports**: `geometry` (the crop, flip, turn and written size) appears only when the
+  image was cropped or turned, and `effective_area.crop` (and `measure-roll`'s
+  `frames[].crop`) when a crop cut the region. `hanten profile` refuses the three flags:
+  a crop belongs to the roll's frames, not a look.
 
 ---
 

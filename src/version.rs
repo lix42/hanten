@@ -562,12 +562,13 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
     // by `core/rename-fit-range-misnomers` (was `587435112f061c76`):
     // `fit_range.headroom_stops` renamed `highlight_range_stops`, no value moved; and by
     // `core/rename-roll-report-misnomers` (was `00c0144665fa1587`): `roll.neutral_balance`
-    // renamed `colour_correction`, no value moved.
+    // renamed `colour_correction`, no value moved; and by `core/crop-rotate` (was
+    // `b5eec6c8437ff02c`): the `geometry` section, every key unset, so no pixel moved.
     PipelineFingerprint {
         pipeline_version: 17,
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
-        recipe: "b5eec6c8437ff02c",
+        recipe: "f2ee438037fe8b41",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

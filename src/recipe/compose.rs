@@ -58,7 +58,7 @@ pub fn merge_json(base: &mut Value, overlay: &Value) {
 /// tags, so two one-entry tables must union rather than read as a variant switch; and
 /// their entries are structs of optional fields, so `{"white_stops": …}` and
 /// `{"frame_exposure": …}` for one file merge too.
-const MAPS: &[&[&str]] = &[&["roll", "frames"]];
+const MAPS: &[&[&str]] = &[&["roll", "frames"], &["geometry", "frames"]];
 
 /// [`merge_json`] at `path` from the document root.
 fn merge_at<'a>(base: &mut Value, overlay: &'a Value, path: &mut Vec<&'a str>) {
@@ -112,7 +112,8 @@ pub(crate) fn is_variant_switch(base: &Value, overlay: &Value) -> bool {
 /// `r` as the frame at `input`, a resolved path ([`super::frame_keys`]), renders it: the
 /// frame's [`RollSection::frames`] entry, if any, moves into the roll section's own
 /// fields (`white_stops`, `frame_exposure`, `thin_slope`, `thin_exposure`,
-/// `frame_tones`). `convert` and every `roll` frame go through it, so the two stay
+/// `frame_tones`), and its `geometry.frames` entry into `geometry`.
+/// `convert` and every `roll` frame go through it, so the two stay
 /// byte-identical. The entry is removed, not copied, so a flag that then
 /// beats it is what a `--save-recipe` replay renders; the other entries stay for
 /// [`validate`].
@@ -137,6 +138,7 @@ pub fn for_frame(mut r: Recipe, input: &Path) -> Recipe {
             r.roll.frame_tones = Some(tones);
         }
     }
+    r.geometry.take_frame(input);
     r
 }
 

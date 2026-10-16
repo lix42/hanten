@@ -36,6 +36,7 @@
 use serde::Serialize;
 
 use super::area_uniformity::{self, AreaUniformity};
+use crate::pipeline::geometry;
 use crate::types::{
     FilmBase, FilmBaseSource, LinearImage, NcError, Result, Scan, check_measure_inset,
 };
@@ -562,12 +563,19 @@ impl ContentPool {
         }
     }
 
-    /// Add input `frame`'s counts; returns their [`AreaCounts::median_and_spread`], which
-    /// decided whether the frame is held apart, for the leader classifier.
+    /// [`Self::add_classified`] by the counts' own statistics, returned.
+    #[cfg(test)]
     pub fn add(&mut self, frame: usize, counts: AreaCounts) -> ([f32; 3], f32) {
+        let stats = counts.median_and_spread();
+        self.add_classified(frame, counts, stats);
+        stats
+    }
+
+    /// Add `counts`, holding the frame apart by `stats` — the whole frame's, when
+    /// `counts` are a crop's, since a leader is classified uncropped.
+    pub fn add_classified(&mut self, frame: usize, counts: AreaCounts, stats: ([f32; 3], f32)) {
         self.frames
             .push((frame, counts.percentiles(CONTENT_PERCENTILE)));
-        let stats = counts.median_and_spread();
         if self.hold_flat && stats.1 <= AREA_MAX_RELATIVE_SPREAD {
             self.held.push((frame, counts));
         } else if let Some(sum) = &mut self.sum {
@@ -575,7 +583,6 @@ impl ContentPool {
         } else {
             self.sum = Some(counts);
         }
-        stats
     }
 
     /// The base over every added frame but `exclude` (found leaders), and the evidence
@@ -808,12 +815,12 @@ fn median_ir_band(
 /// letting every consumer clamp its walk to bounds instead of testing each pixel,
 /// which is what keeps `pipeline::memory` free of a mask buffer.
 ///
-/// The image is **never cropped**: this describes where a statistic is read, not
-/// what is written.
+/// It describes where a statistic is read, not what is written; a stated crop
+/// (`pipeline::geometry`) is its third cut, and cuts the written image too.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct EffectiveArea {
-    /// The resolved rectangle `[x, y, w, h]`, in the same convention as
-    /// `--base-region`.
+    /// The resolved rectangle `[x, y, w, h]`, in the scan's own pixels — the
+    /// `--base-region` convention.
     pub region: [u32; 4],
     /// The measured holder depths, or `None` when the holder was **not measured**
     /// (no IR plane, a shape-only plane, or IR that does not separate on this
@@ -835,7 +842,8 @@ pub struct EffectiveArea {
     /// constructed — not a second measurement.
     pub holder: Option<HolderDepths>,
     /// Whether the holder measurement **moved this rectangle**: the holder was
-    /// measured *and* at least one edge's depth is non-zero.
+    /// measured *and* the region differs from the inset and crop alone — with no
+    /// crop, at least one edge's depth is non-zero.
     ///
     /// Returned rather than left to the caller, because it is the fact callers
     /// actually want — "did consuming the IR plane change anything?" — and
@@ -853,6 +861,9 @@ pub struct EffectiveArea {
     /// a stated fraction near `0` can report more than it asked for. That is the
     /// point of reporting it.
     pub inset: u32,
+    /// The crop the region was cut to, the third cut; absent when none was stated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[u32; 4]>,
 }
 
 /// Which edges' marches reached [`HOLDER_MARCH_MAX_FRAC`] without finding film.
@@ -950,14 +961,17 @@ pub struct HolderDepths {
     pub converged: bool,
 }
 
-/// Resolve the [`EffectiveArea`]: measure the holder where IR permits, then inset
-/// what remains.
+/// Resolve the [`EffectiveArea`]: measure the holder where IR permits, inset what
+/// remains, then cut it to `crop`, if one is stated.
 ///
-/// **Two cuts, in order — never one or the other.** The inset is not a fallback for
-/// a missing holder measurement: it runs on every path, and where the holder could
-/// not be measured it is simply the only cut. Sizing it is the user's call
-/// (`inset_frac`, default [`crate::types::DEFAULT_MEASURE_INSET`]) precisely because nc declines to
-/// guess a holder depth it cannot measure.
+/// The holder march runs on the whole scan whatever the crop, since it marches in from
+/// the scan's edges; the crop only narrows the result (`pipeline::geometry`).
+///
+/// **The holder and the inset both cut, in order — never one or the other.** The inset
+/// is not a fallback for a missing holder measurement: it runs on every path, and where
+/// the holder could not be measured it is simply the only cut. Sizing it is the user's
+/// call (`inset_frac`, default [`crate::types::DEFAULT_MEASURE_INSET`]) precisely
+/// because nc declines to guess a holder depth it cannot measure.
 ///
 /// `inset_frac` is a fraction of the **original** frame's shorter dimension, so a
 /// given scan insets the same pixel count whatever the holder measured. Where the
@@ -972,7 +986,11 @@ pub struct HolderDepths {
 /// a user-stated region does not call this at all and a future per-usage
 /// distinction must be able to extend the arguments instead of rewriting every
 /// call site.
-pub fn effective_area(scan: &Scan, inset_frac: f32) -> Result<EffectiveArea> {
+pub fn effective_area(
+    scan: &Scan,
+    inset_frac: f32,
+    crop: Option<[u32; 4]>,
+) -> Result<EffectiveArea> {
     // The same check `cli::validate_shared` runs, so a programmatic caller cannot bypass
     // the bound and the two gates cannot disagree about it.
     check_measure_inset(inset_frac)?;
@@ -1011,10 +1029,6 @@ pub fn effective_area(scan: &Scan, inset_frac: f32) -> Result<EffectiveArea> {
         ),
         None => (inset, inset, inset, inset),
     };
-    // Recorded here, where the arithmetic happens, so no caller has to re-derive
-    // "did the IR plane change anything?".
-    let holder_applied =
-        holder.is_some_and(|h| [h.top, h.bottom, h.left, h.right].iter().any(|&d| d != 0));
     if left + right >= image.width || top + bottom >= image.height {
         // The measured depths and the inset are printed as **separate** quantities.
         // `top`/`bottom`/`left`/`right` above are the post-inset totals, and
@@ -1045,16 +1059,71 @@ pub fn effective_area(scan: &Scan, inset_frac: f32) -> Result<EffectiveArea> {
             image.width, image.height
         )));
     }
+    // The holder's cut plus `inset` on every edge.
+    let cut_at = |inset: u32| {
+        let (t, b, l, r) = match holder {
+            Some(h) => (
+                h.top + inset,
+                h.bottom + inset,
+                h.left + inset,
+                h.right + inset,
+            ),
+            None => (inset, inset, inset, inset),
+        };
+        [
+            l,
+            t,
+            image.width.saturating_sub(l + r),
+            image.height.saturating_sub(t + b),
+        ]
+    };
+    let cut = cut_at(inset);
+    let region = match crop {
+        None => cut,
+        Some(c) => {
+            geometry::check_crop_fits(crop, image.width, image.height)?;
+            geometry::intersect(cut, c).ok_or_else(|| {
+                // Lowering the fraction is offered only when the lowest inset this frame
+                // allows would reach the crop.
+                let floor = if holder.is_some() {
+                    holder_probe_depth(image)
+                } else {
+                    0
+                };
+                let lower = if inset > floor && geometry::intersect(cut_at(floor), c).is_some() {
+                    format!(", or lower the inset fraction (currently {inset_frac})")
+                } else {
+                    String::new()
+                };
+                NcError::Usage(format!(
+                    "the measurement region is empty: the crop {c:?} shares no pixel with \
+                     {cut:?}, what the holder cut and the {inset} px inset leave of this \
+                     {}x{} scan. Move or widen the crop to overlap it{lower}.",
+                    image.width, image.height
+                ))
+            })?
+        }
+    };
+    // Recorded here, where the arithmetic happens, so no caller has to re-derive
+    // "did the IR plane change anything?": the same inset and crop without the holder.
+    // A crop inside the holder's cut leaves it nothing to move.
+    let without_holder = [
+        inset,
+        inset,
+        image.width.saturating_sub(2 * inset),
+        image.height.saturating_sub(2 * inset),
+    ];
+    let holder_applied = holder.is_some()
+        && Some(region)
+            != crop.map_or(Some(without_holder), |c| {
+                geometry::intersect(without_holder, c)
+            });
     Ok(EffectiveArea {
-        region: [
-            left,
-            top,
-            image.width - left - right,
-            image.height - top - bottom,
-        ],
+        region,
         holder,
         holder_applied,
         inset,
+        crop,
     })
 }
 
@@ -1073,7 +1142,8 @@ pub fn effective_area_warnings(area: &EffectiveArea) -> Vec<String> {
     let Some(h) = area.holder else {
         return out;
     };
-    if h.capped.any() {
+    // A capped edge only over-cuts, so it matters only where the holder moved the region.
+    if h.capped.any() && area.holder_applied {
         let edges = h.capped.names().join(", ");
         let depth_pct = (HOLDER_MARCH_MAX_FRAC * 100.0).round();
         // The premise and its remedy are `HOLDER_MARCH_MAX_FRAC`'s.
@@ -1343,9 +1413,7 @@ pub(crate) fn check_rect(image: &LinearImage, [x, y, w, h]: [u32; 4]) -> Result<
             "base-region must be non-empty (got {w}x{h})"
         )));
     }
-    // Use u64 for the right edge so a region near u32::MAX can't wrap.
-    let (right, bottom) = (x as u64 + w as u64, y as u64 + h as u64);
-    if right > image.width as u64 || bottom > image.height as u64 {
+    if !geometry::rect_within([x, y, w, h], image.width, image.height) {
         return Err(NcError::Usage(format!(
             "base-region [{x},{y},{w},{h}] is outside the {}x{} image",
             image.width, image.height
@@ -1742,7 +1810,7 @@ mod tests {
         // an understated density. The measurement takes the median.
         let scan = Scan::from(grainy_film(200, 150, [0.53, 0.26, 0.16]));
         let img = &scan.image;
-        let area = effective_area(&scan, 0.05).unwrap();
+        let area = effective_area(&scan, 0.05, None).unwrap();
         let est = measure_area(img, &area).unwrap();
         assert_eq!(est.percentile, Some(AREA_PERCENTILE));
         assert!(est.warnings.is_empty(), "{:?}", est.warnings);
@@ -1778,9 +1846,9 @@ mod tests {
         };
         let dark = with_holder([0.0; 3]);
         let bright = with_holder([1.0; 3]);
-        let area = effective_area(&dark, 0.0).unwrap();
+        let area = effective_area(&dark, 0.0, None).unwrap();
         assert!(area.holder_applied, "{area:?}");
-        assert_eq!(area, effective_area(&bright, 0.0).unwrap());
+        assert_eq!(area, effective_area(&bright, 0.0, None).unwrap());
 
         let base = |img| <[f32; 3]>::from(measure_area(img, &area).unwrap().base);
         assert_eq!(base(&dark.image), base(&bright.image));
@@ -1798,7 +1866,7 @@ mod tests {
             image: grainy_film(300, 200, [0.53, 0.26, 0.16]),
             ir: ir_holder_edges(300, 200, [6, 6, 30, 6]).ir,
         };
-        let area = effective_area(&img, 0.0).unwrap();
+        let area = effective_area(&img, 0.0, None).unwrap();
         let holder = area.holder.expect("the holder was measured");
         let [x, _, w, _] = area.region;
         let right_margin = 300 - x - w;
@@ -1826,7 +1894,7 @@ mod tests {
             }
         }
         let scan = Scan::from(LinearImage::new(w, h, buf).unwrap());
-        let est = measure_area(&scan.image, &effective_area(&scan, 0.05).unwrap()).unwrap();
+        let est = measure_area(&scan.image, &effective_area(&scan, 0.05, None).unwrap()).unwrap();
         assert!(
             est.warnings
                 .iter()
@@ -1839,7 +1907,8 @@ mod tests {
     #[test]
     fn a_dark_area_errors_loudly_naming_a_remedy() {
         let scan = Scan::from(solid(50, 50, [0.4, 0.0, 0.2]));
-        let err = measure_area(&scan.image, &effective_area(&scan, 0.05).unwrap()).unwrap_err();
+        let err =
+            measure_area(&scan.image, &effective_area(&scan, 0.05, None).unwrap()).unwrap_err();
         assert!(matches!(err, NcError::Other(_)), "{err:?}");
         assert!(err.to_string().contains("--base-region"), "{err}");
     }
@@ -1915,7 +1984,7 @@ mod tests {
         ] {
             fill_rect(&mut scan.image, rect, [0.01; 3]);
         }
-        let est = measure_area(&scan.image, &effective_area(&scan, 0.0).unwrap()).unwrap();
+        let est = measure_area(&scan.image, &effective_area(&scan, 0.0, None).unwrap()).unwrap();
         let u = est.uniformity.expect("the area is large enough to tile");
         assert_eq!(u.verdict, area_uniformity::Verdict::Uniform, "{u:?}");
         assert_eq!(u.between, [0.0; 3], "{u:?}");
@@ -2081,7 +2150,7 @@ mod tests {
         assert!(holder_depths(&tiny).is_none());
 
         // Only the inset is left, and the area still reports honestly.
-        let area = effective_area(&tiny, 0.0).unwrap();
+        let area = effective_area(&tiny, 0.0, None).unwrap();
         assert!(area.holder.is_none() && !area.holder_applied);
 
         // Falsifiability: one step bigger and the same frame *is* measured.
@@ -2095,18 +2164,52 @@ mod tests {
         // and it is returned rather than re-derived from the inputs.
         // All-zero depths are a *measurement* that moved nothing, which is what both
         // committed fixtures and the 2026-09 rolls read.
-        let moved = effective_area(&ir_holder_edges(200, 200, [4, 8, 12, 2]), 0.05).unwrap();
+        let moved = effective_area(&ir_holder_edges(200, 200, [4, 8, 12, 2]), 0.05, None).unwrap();
         assert!(moved.holder.is_some() && moved.holder_applied);
 
-        let cropped =
-            effective_area(&with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM), 0.05).unwrap();
+        let cropped = effective_area(
+            &with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM),
+            0.05,
+            None,
+        )
+        .unwrap();
         assert!(
             cropped.holder.is_some() && !cropped.holder_applied,
             "measured, no holder — the plane was read and moved nothing"
         );
 
-        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05).unwrap();
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05, None).unwrap();
         assert!(not_measured.holder.is_none() && !not_measured.holder_applied);
+    }
+
+    #[test]
+    fn a_crop_is_the_third_cut_and_the_holder_is_still_marched_on_the_whole_scan() {
+        let scan = ir_holder_edges(200, 200, [20, 20, 20, 20]);
+        let whole = effective_area(&scan, 0.05, None).unwrap();
+        // The crop reaches into the holder on the left: the holder cut still binds there.
+        let cut = effective_area(&scan, 0.05, Some([0, 50, 100, 60])).unwrap();
+        assert_eq!(cut.holder, whole.holder);
+        assert_eq!(cut.crop, Some([0, 50, 100, 60]));
+        assert_eq!(cut.region, [whole.region[0], 50, 100 - whole.region[0], 60]);
+        assert!(cut.holder_applied, "the holder moved the left edge");
+        // Inside the holder's cut, the holder moves nothing the crop has not.
+        let inside = effective_area(&scan, 0.05, Some([60, 60, 50, 50])).unwrap();
+        assert_eq!(inside.region, [60, 60, 50, 50]);
+        assert!(!inside.holder_applied, "{inside:?}");
+    }
+
+    #[test]
+    fn a_crop_outside_the_area_or_the_scan_leaves_nothing_to_measure() {
+        let scan = ir_holder_edges(200, 200, [20, 20, 20, 20]);
+        let err = effective_area(&scan, 0.05, Some([0, 0, 15, 200])).unwrap_err();
+        assert!(err.to_string().contains("shares no pixel"), "{err}");
+        // Inside the holder, no inset reaches the crop, so lowering it is not offered.
+        assert!(!err.to_string().contains("lower the inset"), "{err}");
+        // Inside the inset band, the floor inset would reach it.
+        let err = effective_area(&scan, 0.05, Some([24, 0, 4, 200])).unwrap_err();
+        assert!(err.to_string().contains("lower the inset"), "{err}");
+        let err = effective_area(&scan, 0.05, Some([150, 0, 60, 10])).unwrap_err();
+        assert!(err.to_string().contains("reaches past"), "{err}");
     }
 
     #[test]
@@ -2118,9 +2221,9 @@ mod tests {
         let d = holder_depths(&cropped).expect("measured");
         assert_eq!((d.top, d.bottom, d.left, d.right), (0, 0, 0, 0));
 
-        let measured = effective_area(&cropped, 0.05).unwrap();
+        let measured = effective_area(&cropped, 0.05, None).unwrap();
         assert!(measured.holder.is_some(), "measured, no holder");
-        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05).unwrap();
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]).into(), 0.05, None).unwrap();
         assert!(not_measured.holder.is_none(), "not measured at all");
         assert_eq!(
             measured.region, not_measured.region,
@@ -2144,13 +2247,17 @@ mod tests {
             (true, true, true, false),
             "every edge reporting the cap is flagged, the inflated ones included"
         );
-        let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
+        let warnings = effective_area_warnings(&effective_area(&img, 0.05, None).unwrap());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].contains("hit its cap") && warnings[0].contains("left"),
             "the count alone would pass on the *unsettled* warning instead: {}",
             warnings[0]
         );
+        // A crop inside the capped cut: the over-cut moves nothing, so nothing to warn of.
+        let inside = effective_area(&img, 0.05, Some([80, 80, 40, 40])).unwrap();
+        assert!(!inside.holder_applied);
+        assert!(effective_area_warnings(&inside).is_empty());
 
         let shallow = ir_holder_edges(200, 200, [4, 4, 4, 4]);
         assert!(
@@ -2158,7 +2265,7 @@ mod tests {
             "falsifiability: `capped` is not simply always set"
         );
         assert!(
-            effective_area_warnings(&effective_area(&shallow, 0.05).unwrap()).is_empty(),
+            effective_area_warnings(&effective_area(&shallow, 0.05, None).unwrap()).is_empty(),
             "falsifiability: an uncapped settled frame warns about nothing"
         );
     }
@@ -2188,7 +2295,7 @@ mod tests {
             "the inflated edges cap too, which is what makes them visible"
         );
 
-        let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
+        let warnings = effective_area_warnings(&effective_area(&img, 0.05, None).unwrap());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         for expect in [
             "top, left, right",
@@ -2239,6 +2346,7 @@ mod tests {
             }),
             holder_applied: true,
             inset: 10,
+            crop: None,
         };
         let warnings = effective_area_warnings(&unsettled);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -2272,8 +2380,9 @@ mod tests {
     fn the_inset_is_a_fraction_of_the_original_frame_not_the_remainder() {
         // Same frame size, very different holder depths: the inset is identical, so
         // a stated fraction does not move with an IR measurement.
-        let shallow = effective_area(&ir_holder_edges(200, 200, [2, 2, 2, 2]), 0.05).unwrap();
-        let deep = effective_area(&ir_holder_edges(200, 200, [30, 30, 30, 30]), 0.05).unwrap();
+        let shallow = effective_area(&ir_holder_edges(200, 200, [2, 2, 2, 2]), 0.05, None).unwrap();
+        let deep =
+            effective_area(&ir_holder_edges(200, 200, [30, 30, 30, 30]), 0.05, None).unwrap();
         assert_eq!(shallow.inset, 10, "5% of the 200 px short edge");
         assert_eq!(deep.inset, shallow.inset);
 
@@ -2287,7 +2396,7 @@ mod tests {
         // The inset is not a fallback for a missing holder cut — it is the second
         // cut, and where the first did not run it is simply the only one.
         let no_ir: Scan = solid(200, 200, [0.2, 0.2, 0.2]).into();
-        let area = effective_area(&no_ir, 0.05).unwrap();
+        let area = effective_area(&no_ir, 0.05, None).unwrap();
         assert!(area.holder.is_none());
         assert_eq!(area.region, [10, 10, 180, 180]);
     }
@@ -2307,7 +2416,7 @@ mod tests {
             "the march under-reports the 3 px holder by design"
         );
 
-        let area = effective_area(&img, 0.0).unwrap();
+        let area = effective_area(&img, 0.0, None).unwrap();
         assert_eq!(area.inset, 2, "a stated 0 is floored at the probe step");
         let ir = img
             .verified_ir()
@@ -2325,21 +2434,25 @@ mod tests {
         );
 
         // It binds only near zero: the default is well above one step.
-        assert_eq!(effective_area(&img, 0.05).unwrap().inset, 10);
+        assert_eq!(effective_area(&img, 0.05, None).unwrap().inset, 10);
 
         // A measured **zero** is floored too, not only a moved rectangle: "no holder
         // in the outermost band" is not "no holder", since the band's median can
         // hide up to half a band of it. So the floor is keyed on the march having
         // *run*, not on `holder_applied`.
-        let cropped = effective_area(&with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM), 0.0)
-            .expect("measured, no holder");
+        let cropped = effective_area(
+            &with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM),
+            0.0,
+            None,
+        )
+        .expect("measured, no holder");
         assert!(cropped.holder.is_some() && !cropped.holder_applied);
         assert_eq!(cropped.inset, 2);
 
         // Where the holder was *not* measured there is no measurement resolution to
         // respect, and a stated 0 is exact.
         assert_eq!(
-            effective_area(&solid(200, 200, [0.2; 3]).into(), 0.0)
+            effective_area(&solid(200, 200, [0.2; 3]).into(), 0.0, None)
                 .unwrap()
                 .inset,
             0
@@ -2356,14 +2469,14 @@ mod tests {
             holder_depths(&img).is_some_and(|d| d.left == 40),
             "the fixture must actually measure a holder, or this tests the wrong path"
         );
-        let err = effective_area(&img, 0.3).unwrap_err();
+        let err = effective_area(&img, 0.3, None).unwrap_err();
         assert!(
             format!("{err}").contains("empty"),
             "an empty measurement region must be loud: {err}"
         );
         for bad in [-0.1, 0.5, 1.0, f32::NAN] {
             assert!(
-                effective_area(&img, bad).is_err(),
+                effective_area(&img, bad, None).is_err(),
                 "inset fraction {bad} must be refused"
             );
         }
@@ -2375,7 +2488,7 @@ mod tests {
         // past the frame would index out of bounds in every one of them.
         for depths in [[0, 0, 0, 0], [2, 9, 13, 4], [40, 1, 1, 40]] {
             let img = ir_holder_edges(200, 200, depths);
-            let [x, y, w, h] = effective_area(&img, 0.05).unwrap().region;
+            let [x, y, w, h] = effective_area(&img, 0.05, None).unwrap().region;
             assert!(w > 0 && h > 0, "non-empty for {depths:?}");
             assert!(
                 x + w <= 200 && y + h <= 200,
@@ -2613,7 +2726,7 @@ mod polarity_probe {
                     let (scan, _) = crate::io::decode::decode_within(p, u64::MAX).unwrap();
                     measure_area(
                         &scan.image,
-                        &effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET).unwrap(),
+                        &effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None).unwrap(),
                     )
                     .unwrap()
                     .base
@@ -2629,7 +2742,7 @@ mod polarity_probe {
             );
             for p in of("real") {
                 let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
-                let region = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET)
+                let region = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None)
                     .unwrap()
                     .region;
                 let s: Vec<String> = [1.0f32, 1.1, 1.25, 1.5]
@@ -2680,7 +2793,8 @@ mod content_probe {
                 let role = f["role"].as_str().unwrap();
                 let p = root.join(f["file"].as_str().unwrap());
                 let (scan, _) = crate::io::decode::decode_within(&p, u64::MAX).unwrap();
-                let Ok(area) = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET) else {
+                let Ok(area) = effective_area(&scan, crate::types::DEFAULT_MEASURE_INSET, None)
+                else {
                     eprintln!("{}: no area", p.display());
                     continue;
                 };

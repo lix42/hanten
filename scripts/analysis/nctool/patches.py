@@ -3,9 +3,9 @@
 A patch is a labelled region of a scan that an analysis measures: a neutral
 (white / grey) to judge a cast, or a saturated `colour` to judge desaturation.
 `kind` keeps the two apart so a consumer never averages a colour patch in as a
-neutral. `rect` is `[x, y, w, h]` as fractions of the **source scan** — Hanten
-never crops, so a render's frame is the scan's frame, and the review app's
-percentages divide straight down.
+neutral. `rect` is `[x, y, w, h]` as fractions of the **source scan** — a render with no
+crop or turn (`geometry`, which no nctool render states) has the scan's frame, so
+the review app's percentages divide straight down.
 
 `import` folds the review app's **Copy all** text into the manifest. Its headings
 name an image's *label*, so the review set's `review.json` maps them back to image
