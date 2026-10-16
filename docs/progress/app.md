@@ -17,6 +17,9 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
   preview should apply the curve directly (37–54 ms render, 56–70 ms from slider to the next
   frame).
   Coalescing (one request in flight, newest value next) is enough for newest-wins.
+- **Payment** (`offline-token-spike`): a proposal, not the final scheme — tokens bound
+  to a device's P-256 key at download, the device sealing the paid record; see
+  `docs/spike/offline-token.md`.
 
 ## webkit-display-spike
 
@@ -52,10 +55,14 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## offline-token-spike
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-10-15
 
 - 2026-10-15: filed. Goal: how tokens are signed, verified, stored and recovered on macOS
+- 2026-10-15: Decided: the server binds each token to the device's P-256 public key at download; the device seals the paid record (token, sorted SHA-256 content hashes of the RGB u16 samples, replacements); a Keychain spent-token list stops a second spend. Bearer tokens cannot be bound offline: any self-made key seals any roll. Throwaway round trip in ../temp/offline-token-spike/ (not kept), 21 cases as designed. P-256 rather than Ed25519 because SecKey has no Ed25519 and the Secure Enclave is P-256 only. SHA-256 75 ms per 192 MB frame vs BLAKE3 90 ms single-threaded. Result: docs/spike/offline-token.md. Handoff: design §3.4/§3.7/§2.12 updated, §5 binding question removed; packaging-spike gains the data protection keychain question (needs a provisioning profile, TN3137).
+- 2026-10-15: Review fixes: the ledger keeps each spent token's frame hashes, so copies of one record share one budget (cap + allowance; round trip: a second grown copy refused, 23 cases). Seal covers the hash scheme id; a scheme change keeps the old hashing path. Accepted limits now list ledger deletion, re-bind duplication on an offline old Mac and synced-Mac races; not settled adds key sync (packaging-spike verifies it) and adding frames on a new Mac without iCloud Keychain.
+- 2026-10-15: Framing: the result is a spike proposal, not the final payment scheme. Design §3.7 says so and §5 keeps the binding question, now pointing to the note.
+- 2026-10-15: Main finding (user): device binding confines an account's tokens to one Mac. Likely direction: spend online, or download one token just before spending it; adding frames to a paid roll on another Mac needs its own rule either way. Recorded at the top of the note and in design §5.
 
 ## packaging-spike
 

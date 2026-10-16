@@ -1,8 +1,9 @@
 ---
 title: Offline token spike
-status: todo
+status: done
 deps: []
 summary: how tokens are signed, verified, stored and recovered on macOS
+done: 2026-10-15
 ---
 # Offline token spike
 
