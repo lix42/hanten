@@ -51,7 +51,7 @@ not record). A `--grid` JSON overrides keys; its `extra` adds named
 runs, e.g. a decode offset:
 
 ```json
-{"extra": {"hybrid.offset.wb-off": {"recipe": "gain",
+{"extra": {"hybrid.offset.cc-off": {"recipe": "gain",
   "args": ["--density-offset", "0,0,0.0447", "--colour-correction", "off"]}}}
 ```
 
@@ -102,7 +102,7 @@ Say what each number measures in plain words before quoting it.
   it.
 - **The chart frames' placement comes from a second measurement.** The pictures-only
   measurement has no per-frame entries for them, so `render` takes their whole
-  `roll.frames` entries (tones, white stops, small lift) from one that includes them, and
+  `roll.frames` entries (tones, white stops, small and thin lift) from one that includes them, and
   prints how far its `roll.white_balance` lands from the pictures-only one.
 - **Only `role: chart` frames are measured.** A chart inside a picture (`role: real`,
   planned in `analysis/calibration-frame-capture`) is not, and that picture votes in the

@@ -50,7 +50,7 @@ DEFAULT_GRID = {
     "highlight_desaturation": ["0.8", "0"],
     "white_balance_form": ["gain", "tilt"],
     "midtone_neutral": ["on", "off", "red", "blue"],
-    "balance_off": True,
+    "colour_correction_off": True,
     "direct": True,
     "extra": {},
 }
@@ -68,8 +68,8 @@ def expand_grid(grid: dict) -> dict[str, dict]:
     for p in grid.get("placement", []):
         for hd in grid.get("highlight_desaturation", []):
             common = ["--placement", p, "--highlight-desaturation", hd]
-            if grid.get("balance_off") and forms:
-                configs[f"{p}.hd{hd}.wb-off"] = {
+            if grid.get("colour_correction_off") and forms:
+                configs[f"{p}.hd{hd}.cc-off"] = {
                     "recipe": forms[0], "args": ["--colour-correction", "off", *common]}
             for form in forms:
                 for mn in grid.get("midtone_neutral", []):

@@ -44,7 +44,7 @@ Cs41, an early roll of the kit); Plustek 8300i, SilverFast with automatic adjust
 locked. Conditions in full: the manifest's roll `conditions`.
 **Build**: measured at `c40951c` (pipeline 17), reproduced exactly at `ce5a9e5` (render
 fingerprint `f51d3397c7364160`) and on `248190f`. Roll measured on its 29 pictures; the
-chart frames' per-frame placement entries (tones, white stops, small lift) taken from a
+chart frames' per-frame placement entries (tones, white stops, small and thin lift) taken from a
 measurement that included them, whose white-balance gains differ by up to 3.5 %. Outside
 exports: NLP, SilverFast and SilverFast CCR, Adobe RGB, at the scan's size.
 **Charts**: a private claude.ai Artifact, <https://claude.ai/artifact/JRAGP79niJ2JPmiuAp4Q8K>.

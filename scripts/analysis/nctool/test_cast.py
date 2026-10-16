@@ -65,7 +65,7 @@ class TestGrid(unittest.TestCase):
         self.assertEqual(c["recipe"], "tilt")
         self.assertEqual(c["args"], ["--midtone-neutral", "red", "--placement", "hybrid",
                                      "--highlight-desaturation", "0.8"])
-        self.assertIn("--colour-correction", configs["frame.hd0.wb-off"]["args"])
+        self.assertIn("--colour-correction", configs["frame.hd0.cc-off"]["args"])
 
     def test_extra_configurations_join_and_may_not_repeat_a_name(self):
         grid = {**cast.DEFAULT_GRID, "placement": ["hybrid"], "highlight_desaturation": ["0.8"],

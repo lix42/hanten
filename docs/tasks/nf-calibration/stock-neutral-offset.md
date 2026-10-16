@@ -11,7 +11,7 @@ summary: remove the part of the residual cast fixed per stock, measured from cha
 
 Remove the part of the residual cast that is the stock's own, the same on every roll of
 it, so that what the roll's (or a frame's) white balance still removes is the light. A
-declared stock would then render neutral greys with the roll colour correction off
+declared stock would then render greys at a\* = b\* = 0 (CIELAB) with the roll colour correction off
 (`--colour-correction off`), and keeping the illuminant cast becomes a real choice.
 
 ## Known
@@ -52,7 +52,7 @@ declared stock would then render neutral greys with the roll colour correction o
 - Two or more chart rolls of one stock, in different light, agree on the value within a
   stated tolerance (`docs/reports/chart-cast.md`).
 - With the value declared and the roll colour correction off, a held-out chart roll's greys read
-  within that tolerance of neutral, apart from its light.
+  within that tolerance of a\* = b\* = 0, apart from its light.
 - The pictures of those rolls reviewed by eye under the change (`render-review-set`).
 
 ## Dependencies
