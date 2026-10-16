@@ -330,8 +330,8 @@ abridged):
 ```
 
 Like every recipe file Hanten writes, it is the recipe (`params`) beside the build that
-wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by file name,
-every measured frame's `tones` (its white, level and dark end, from which `convert` places
+wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by the frame's path relative to
+the recipe's folder (so a roll folder holding scans and recipe can move), every measured frame's `tones` (its white, level and dark end, from which `convert` places
 it), the cap as the white of a frame above it, the small lift of a low-key frame
 (`"frame_exposure"`; none on this roll), and the `"thin_slope"` and `"thin_exposure"` of a thin
 frame beside it (§7). `roll.envelope_stops` is the roll's darkest dark end and brightest
@@ -1484,7 +1484,7 @@ L\* 7–8 on the reviewed rolls.
 
 - **Without a measured dark end it does nothing**: `frame_dark_below_mid_stops` is `null`. Stated
   then, the report warns and names the remedy: measure the roll, or, on a measured roll,
-  give this frame its tones (`roll.frames` is keyed by file name). Under `direct`,
+  give this frame its tones (`roll.frames` is keyed by the frame's path, relative to the recipe). Under `direct`,
   which leaves the roll out, a typed `--dark-floor STOPS` is refused before anything is
   decoded (its `off` is accepted: it turns `direct`'s dark base off).
 - **The raise is capped** at a third of the stops between the darkest 1 % and mid-grey,
@@ -1659,7 +1659,7 @@ measured value is never mistaken for a chosen one:
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
 | `--midtone-neutral on\|red\|blue\|off` | `roll.midtone_neutral` | which of the midtone line's terms apply: both, red or blue alone, or none; the line stays in the recipe |
 | `--colour-correction on\|off` | `roll.colour_correction` | whether the roll's colour correction applies: its white balance and the midtone line measured after it. Off keeps both in the recipe. A typed `--midtone-neutral` other than `off` against a typed or recipe off is refused (exit 2); a recipe's value is spared, and a `roll` manifest frame's own off wins over the flag |
-| — | `roll.frames` | `{"<file name>": {"white_stops": …, "frame_exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}}`, any `null`: a frame's own white, in place of the roll's, its lifts and its tones. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
+| — | `roll.frames` | `{"<path>": {"white_stops": …, "frame_exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}}`, any `null`: a frame's own white, in place of the roll's, its lifts and its tones. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. A key is the frame's path relative to the recipe's folder (for a pipe or stdin: the working directory); a written recipe keys relative to its own folder, the report's `recipe` by absolute path. Keys are written by real path: a symlink is followed. An empty key, two keys naming one file, or a key (or a measured input, with `--out` or in `roll`'s measure mode) whose path is not UTF-8 exits 2. A key naming no file warns |
 
 A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
 `roll.thin_exposure` in the shared recipe or as a flag (exit 2), since it would lift every
@@ -2011,8 +2011,7 @@ hanten: warning: the roll section has no `roll.exposure`, so the roll renders at
   unexposed base, the leader and any calibration frame, or pass the leader and unexposed
   frame with them and use `auto` (§4). A frame named twice is
   refused (exit 2) — it would weigh double — and so are the `--leader` and
-  `--unexposed` files among the inputs. With `--out`, two inputs sharing a file name are
-  refused too, since `roll.frames` keys by it. A frame that contributes nothing, or whose
+  `--unexposed` files among the inputs. A frame that contributes nothing, or whose
   holder cut is not a measurement (the same warning `convert` gives), is warned about
   by name, so `--strict` catches both.
 - **The base is measured or explicit** — `--unexposed`, or `--film-base`, or
@@ -2491,7 +2490,8 @@ hanten convert scan.tif -o out --film-base … | jq '.loss, .warnings'
 ```
 
 A `convert` report also carries `recipe`, the resolved recipe `--save-recipe` would
-write as its `params` — save it and it reloads through `--params` to the same image —
+write as its `params` but with `roll.frames` keys as absolute paths — save it and it
+reloads through `--params` to the same image —
 and `identity.params_hash`, a stable hash of that recipe as Hanten pretty-prints it
 (the telemetry record's `conversion.params_hash`). Each `roll` frame's `identity.params_hash` hashes
 the recipe that frame ran, the shared one plus its overrides; the roll report does not

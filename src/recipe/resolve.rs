@@ -440,7 +440,7 @@ mod tests {
         let roll = r#"{"recipe_version": 3, "roll": {"exposure": 1.0,
             "frames": {"a.tif": {"white_stops": null, "frame_exposure": 0.25}}}}"#;
         let frame = |extra: &[&str]| {
-            let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));
+            let r = for_frame(parse(roll).unwrap(), Path::new("a.tif"));
             merge(r, &cli_flags(extra))
         };
         // `for_frame` moves the entry's lift into `roll.frame_exposure`, as it moves a white.
@@ -467,7 +467,7 @@ mod tests {
         let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
             "frames": {"a.tif": {"frame_exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7}}}}"#;
         let frame = |extra: &[&str]| {
-            let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));
+            let r = for_frame(parse(roll).unwrap(), Path::new("a.tif"));
             merge(r, &cli_flags(extra))
         };
         let roll_slope = (roll_white::span_slope(1.5, -3.75), SlopeBase::Roll);
@@ -536,7 +536,7 @@ mod tests {
             "frames": {"a.tif": {"frame_exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7,
                 "tones": {"white_stops": 0.6, "level_stops": -1.8, "dark_stops": -2.9}}}}}"#;
         let frame = |extra: &[&str]| {
-            let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));
+            let r = for_frame(parse(roll).unwrap(), Path::new("a.tif"));
             merge(r, &cli_flags(extra))
         };
         let tones = FrameStops {

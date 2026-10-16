@@ -161,6 +161,7 @@ Read the module docs before changing these; they hold the traps.
 |---|---|
 | output paths, suffixes, destination → container | `cli::resolve_output_path`, `OutputTarget`, `Unappendable` |
 | knob merge, `--params` layering, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::compose`, `recipe::validate`, `recipe::validate_render`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
+| `roll.frames` keys (paths relative to the recipe) | `recipe::frame_keys` |
 | roll and style combined into stage params, the report's `chain.roll` / `chain.look` provenance | `recipe::resolve` |
 | renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | destination set (axes, table, derivation) | `src/destination.rs` |

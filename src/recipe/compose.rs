@@ -54,7 +54,7 @@ pub fn merge_json(base: &mut Value, overlay: &Value) {
     merge_at(base, overlay, &mut Vec::new());
 }
 
-/// The recipe's maps, by path. Their keys are data (a frame's file name), not enum
+/// The recipe's maps, by path. Their keys are data (a frame's path), not enum
 /// tags, so two one-entry tables must union rather than read as a variant switch; and
 /// their entries are structs of optional fields, so `{"white_stops": …}` and
 /// `{"frame_exposure": …}` for one file merge too.
@@ -109,18 +109,18 @@ pub(crate) fn is_variant_switch(base: &Value, overlay: &Value) -> bool {
     }
 }
 
-/// `r` as `input` renders it: the frame's [`RollSection::frames`] entry, if any, moves
-/// into the roll section's own fields (`white_stops`, `frame_exposure`, `thin_slope`,
-/// `thin_exposure`, `frame_tones`). `convert` and every `roll` frame go through it, so
-/// the two stay byte-identical. The entry is removed, not copied, so a flag that then
+/// `r` as the frame at `input`, a resolved path ([`super::frame_keys`]), renders it: the
+/// frame's [`RollSection::frames`] entry, if any, moves into the roll section's own
+/// fields (`white_stops`, `frame_exposure`, `thin_slope`, `thin_exposure`,
+/// `frame_tones`). `convert` and every `roll` frame go through it, so the two stay
+/// byte-identical. The entry is removed, not copied, so a flag that then
 /// beats it is what a `--save-recipe` replay renders; the other entries stay for
 /// [`validate`].
 ///
 /// [`RollSection::frames`]: super::RollSection::frames
 /// [`validate`]: super::validate
 pub fn for_frame(mut r: Recipe, input: &Path) -> Recipe {
-    let name = input.file_name().and_then(|n| n.to_str());
-    if let Some(frame) = name.and_then(|n| r.roll.frames.remove(n)) {
+    if let Some(frame) = input.to_str().and_then(|k| r.roll.frames.remove(k)) {
         if let Some(stops) = frame.white_stops {
             r.roll.white_stops = Some(stops);
         }

@@ -1,6 +1,7 @@
 //! The recipe (`nf-core/recipe-schema`): parsing, merging the flags and validation.
 //! Layering documents is [`compose`](mod@compose)'s; resolving the recipe into each
-//! stage's params is [`resolve`]'s.
+//! stage's params is [`resolve`]'s; how `roll.frames` keys name frames is
+//! [`frame_keys`]'.
 //!
 //! One document, versioned **as a document**: a recipe states `"recipe_version": 3` at
 //! top level, and that marker is what makes it self-describing. A document without it
@@ -34,13 +35,13 @@
 //! ships its knob — design-spec §9 states the shape, not keys written ahead of the code.
 
 mod compose;
+pub mod frame_keys;
 pub mod resolve;
 
 pub(crate) use compose::is_variant_switch;
 pub use compose::{compose, for_frame, merge_json};
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -280,9 +281,9 @@ pub struct RollSection {
     /// switches.
     pub midtone_neutral: Option<MidtoneTerms>,
     /// The frames with their own values — a white clamped to the cap, a lift
-    /// (`roll_white::small_lift`, `roll_white::thin_lift`) — keyed by **file name** so the
-    /// recipe still applies after the scans move. [`for_frame`] applies an entry; a `roll --frames`
-    /// manifest's `params` beat it.
+    /// (`roll_white::small_lift`, `roll_white::thin_lift`) — keyed by path
+    /// ([`frame_keys`]). [`for_frame`] applies an entry; a `roll --frames` manifest's
+    /// `params` beat it.
     pub frames: BTreeMap<String, FrameRoll>,
 }
 
@@ -2006,11 +2007,11 @@ fn exposure_fault(ev: f32, name: &str) -> Result<()> {
     }
 }
 
-/// `roll.frames`' rules, each entry named as itself: a file-name key, and a white
-/// finite and positive whose whole slopes — at `linearization`, times the `contrast`,
-/// the rendering's saturation and the `saturation` multiplier the frame renders under —
-/// fit f32. Public so `convert` can judge the table as stated, before
-/// [`for_frame`] moves its own entry into `roll.white_stops`.
+/// `roll.frames`' rules, each entry named as itself: a white finite and positive whose
+/// whole slopes — at `linearization`, times the `contrast`, the rendering's saturation
+/// and the `saturation` multiplier the frame renders under — fit f32. Public so
+/// `convert` can judge the table as stated, before [`for_frame`] moves its own entry
+/// into `roll.white_stops`.
 pub fn validate_roll_frames(
     p: &RollSection,
     linearization: f32,
@@ -2022,11 +2023,6 @@ pub fn validate_roll_frames(
     let contrast_name = knob_name(names, "look", "--contrast", "contrast");
     let saturation_name = knob_name(names, "look", "--saturation", "saturation");
     for (name, frame) in &p.frames {
-        if name.is_empty() || Path::new(name).file_name() != Some(name.as_ref()) {
-            return Err(NcError::Usage(format!(
-                "recipe `roll.frames` keys are file names, not paths: got {name:?}"
-            )));
-        }
         if *frame == FrameRoll::default() {
             return Err(NcError::Usage(format!(
                 "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops`, \
@@ -2866,8 +2862,8 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 
 impl Recipe {
     /// The recipe's `params_hash` (`version::stable_hash`) over its pretty JSON — the
-    /// `params` `--save-recipe` writes, dedented — so a dumped recipe hashes to the run
-    /// it came from. The report's `identity` and the telemetry record carry the same value.
+    /// `params` `--save-recipe` writes, dedented, with `roll.frames` keys absolute as
+    /// loaded — so a dumped recipe, once loaded, hashes to the run it came from. The report's `identity` and the telemetry record carry the same value.
     pub fn params_hash(&self) -> String {
         // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
         // which must never fail a run, total.
@@ -3064,6 +3060,7 @@ impl Recipe {
 mod tests {
     use super::*;
     use crate::pipeline::look::{DEFAULT_SATURATION, DEFAULT_SLOPE};
+    use std::path::Path;
 
     pub(super) fn parse(json: &str) -> std::result::Result<Recipe, serde_json::Error> {
         serde_json::from_str(json)
