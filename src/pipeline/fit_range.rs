@@ -83,7 +83,7 @@
 //! **Reinhard is kept on purpose** (`nf-display-stages/parametric-shoulder`,
 //! 2026-09-27). With mid-grey, the rendered white and the peak all pinned, any smooth
 //! shoulder stays within about 0.15 stop of it. A brighter white with mid-grey pinned
-//! lost to it in review. Where white renders is the look's contrast (the roll's white
+//! lost to it in review. Where white renders is the look's tone slope (the roll's white
 //! rule). The headroom barely moves white (0.09 stop from 6 stops to 2); it sets how
 //! hard the stops above white are compressed.
 
@@ -93,7 +93,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::look::GradedImage;
 use crate::pipeline::pixels;
 use crate::pipeline::working_image::WorkingBuffer;
@@ -410,7 +410,7 @@ pub struct ResolvedDarkEnd {
 /// packs the whole shift into a narrow band — at 2 stops under and a 6-stop target,
 /// a 4-stop shift over 2 stops steepens the band's middle 4× — and at mid-grey or
 /// above black cannot run at all. Only a strong exposure gets a base here (the numbers
-/// for the default contrast: `docs/using-nc.md`, "The dark end").
+/// for the default tone slope: `docs/using-nc.md`, "The dark end").
 pub const MIN_FILM_BASE_STOPS: f32 = 2.0;
 
 impl ResolvedDarkEnd {
@@ -579,7 +579,7 @@ pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedI
         if identity {
             return Ok(());
         }
-        let luminance = dot(*px, ACESCG_LUMA);
+        let luminance = dot(*px, ACESCG_LUMINANCE);
         let scale = operator.scale(luminance);
         for channel in px.iter_mut() {
             *channel *= scale;

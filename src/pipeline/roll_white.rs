@@ -61,8 +61,8 @@
 //! reviewed in. The orchestrator reads the film RGB before mapping it.
 //!
 //! **The roll's exposure** (`nf-calibration/roll-exposure`) lifts an under-exposed roll,
-//! which the white rule cannot: it pins mid-grey and only moves contrast. It is one
-//! neutral gain for the whole roll (`roll.exposure`, added to scene correction's), so a
+//! which the white rule cannot: it pins mid-grey and only moves the roll slope. It is
+//! one neutral gain for the whole roll (`roll.exposure`, added to scene correction's), so a
 //! frame darker than its roll stays dark, beyond a bounded lift. Each frame's level is the log-average of its
 //! luminance in ACEScg ([`frame_level`]); the roll's exposure brings the median frame level to
 //! [`LEVEL_TARGET_STOPS`], within [`EXPOSURE_BOUND_EV`] ([`roll_exposure`]). A median over
@@ -91,7 +91,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::midtone_neutral::MidtoneLine;
 use crate::pipeline::roll_balance::RollBalance;
@@ -134,15 +134,16 @@ pub const WHITE_PERCENTILE: f32 = 0.97;
 /// is clamped to it. Chosen by review over +2.5 and +3.0 (flatter).
 pub const WHITE_CAP_STOPS: f32 = 2.0;
 
-/// The dimmest a roll's white may sit, in scene stops above mid-grey: the contrast lifts
-/// an underexposed roll's white only this far (its level is the roll's exposure's).
-/// Chosen by review over +1.0 (contrast 4.45, worst on nearly every frame) and +2.0.
+/// The dimmest a roll's white may sit, in scene stops above mid-grey: the roll slope
+/// raises an underexposed roll's white only this far (its level is the roll's exposure's).
+/// Chosen by review over +1.0 (whole slope 4.45, worst on nearly every frame) and +2.0.
 pub const WHITE_FLOOR_STOPS: f32 = 1.5;
 
 /// The white a render without a roll measurement is placed as if the roll had, in scene
 /// stops above mid-grey: the `default` rendering's fallback slope
-/// ([`crate::pipeline::look::DEFAULT_SLOPE`]). Chosen by review over +2.23 (the bundled
-/// decode's contrast, above the cap) and the floor (`nf-calibration/no-roll-defaults`).
+/// ([`crate::pipeline::look::DEFAULT_SLOPE`]). Chosen by review over +2.23 (where the
+/// bundled decode's whole slope of 2.0 put the white, above the cap) and the floor
+/// (`nf-calibration/no-roll-defaults`).
 pub const FALLBACK_WHITE_STOPS: f32 = 1.75;
 
 /// How close to the leader, in scene stops, a frame's white may come before the frame
@@ -190,7 +191,7 @@ pub const THIN_BASE_SHARE: f32 = 0.3;
 /// [`THIN_BASE_SHARE`].
 pub const NEAR_BASE_STOPS: f32 = 1.0;
 
-/// How far a thin-frame lift raises the frame's white, in rendered stops, with the film
+/// How far a thin-frame lift raises the frame's white, in look stops, with the film
 /// base held about where the frame's small lift renders it ([`thin_lift`]). Chosen by
 /// review over 0.5.
 pub const THIN_LIFT_STOPS: f32 = 1.0;
@@ -265,7 +266,7 @@ fn leader_region(width: u32, height: u32) -> [u32; 4] {
 
 /// Measure the guard from a decoded leader (`rgb`, `width` x `height`, at the
 /// decode's output), over its centre half, at a decode of the given `linearization`
-/// (`reconstruction.linearization` — the decode's slope, not the look's contrast).
+/// (`reconstruction.linearization` — the decode's slope, not the look's tone slope).
 ///
 /// The guard is stated in density because that is what the leader's nearness means,
 /// but it is applied to linear ACEScg, where the decode's `10^(linearization·D′)` makes a
@@ -385,7 +386,7 @@ pub fn acescg_sample(film: &[f32]) -> Vec<f32> {
 ///
 /// **The brightest channel, not one channel**, so a highlight reads bright whatever its
 /// colour. The review measured red; on a blue- or green-lit highlight red under-reads —
-/// on two Ektar rolls, by 0.5–2 stops on most frames — and the solved contrast then
+/// on two Ektar rolls, by 0.5–2 stops on most frames — and the solved roll slope then
 /// pushes that highlight past white. On a neutral or warm highlight the two agree, so the
 /// reviewed cap and floor keep their meaning (the roll's white moved ≤ 0.2 stop on nine
 /// rolls). A saturated coloured highlight now sets the white; highlight desaturation
@@ -452,7 +453,7 @@ pub fn frame_level(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f
         .0
         .iter()
         .filter(|px| px.iter().all(|v| v.is_finite()))
-        .map(luma)
+        .map(luminance)
         .filter(|y| *y > 0.0)
         .fold((0.0f64, 0usize), |(s, n), y| {
             (s + f64::from(y).log2(), n + 1)
@@ -768,7 +769,7 @@ pub fn frame_tones(
         .0
         .iter()
         .filter(|px| px.iter().all(|v| v.is_finite()))
-        .map(luma)
+        .map(luminance)
         .filter(|y| *y > 0.0)
         .map(scene_stops)
         .collect();
@@ -807,14 +808,14 @@ pub fn frame_tones(
     }))
 }
 
-fn luma(px: &[f32; 3]) -> f32 {
-    (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum()
+fn luminance(px: &[f32; 3]) -> f32 {
+    (0..3).map(|c| ACESCG_LUMINANCE[c] * px[c]).sum()
 }
 
 /// The decoded film base (one ACEScg pixel, `algo::fixed::decode_film_base` mapped) as a
 /// luminance in scene stops: where every frame's shadows bottom out.
 pub fn base_stops(px: [f32; 3]) -> f32 {
-    scene_stops(luma(&px))
+    scene_stops(luminance(&px))
 }
 
 /// Whether a frame qualifies for a thin-frame lift: its white renders low after the roll's
@@ -833,7 +834,7 @@ pub struct ThinLift {
     /// Its exposure in EV, a delta on the roll's: `roll.thin_exposure`, in place of the
     /// frame's [`small_lift`].
     pub exposure: f32,
-    /// How far its white rises, in rendered stops, by [`thin_lift`]'s measure:
+    /// How far its white rises, in look stops, by [`thin_lift`]'s measure:
     /// [`THIN_LIFT_STOPS`] unless bounded.
     pub lift_stops: f32,
     /// Whether [`THIN_SLOPE_BOUND`] held the lift under [`THIN_LIFT_STOPS`].
@@ -1025,11 +1026,11 @@ pub fn pooled_white_stops(samples: &[Vec<f32>], balance: &RollBalance) -> f32 {
         .filter(|px| !unusable(px));
     let cap = samples.iter().map(|s| s.len() / 3).sum();
     let p = percentile_levels_of(usable, cap, PERCENTILE);
-    let luma: f32 = match balance {
-        RollBalance::Gain(gains) => (0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum(),
-        RollBalance::Tilt(t) => luma(&t.apply(p)),
+    let y: f32 = match balance {
+        RollBalance::Gain(gains) => (0..3).map(|c| ACESCG_LUMINANCE[c] * p[c] * gains[c]).sum(),
+        RollBalance::Tilt(t) => luminance(&t.apply(p)),
     };
-    scene_stops(luma)
+    scene_stops(y)
 }
 
 /// Green's level at the white [`roll_gains`] equalizes, in scene stops: where a tilt
@@ -1058,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn a_frames_level_is_its_log_average_luma() {
+    fn a_frames_level_is_its_log_average_luminance() {
         // Half the pixels a stop over mid-grey, half a stop under: the log-average is
         // mid-grey, where the arithmetic mean would sit a quarter-stop over it.
         let mut rgb = field([0.36, 0.36, 0.36], 50);
@@ -1077,7 +1078,7 @@ mod tests {
         );
         // An out-of-gamut pixel whose luminance is positive counts, negative channel and all.
         let px = [-0.05f32, 0.2, 0.2];
-        let y: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum();
+        let y: f32 = (0..3).map(|c| ACESCG_LUMINANCE[c] * px[c]).sum();
         assert!(y > 0.0);
         let level = frame_level(&field(px, 4), 4, [0, 0, 4, 1])
             .unwrap()
@@ -1126,11 +1127,12 @@ mod tests {
         assert!((t.exposure - 0.696).abs() < 1e-3, "{t:?}");
         assert!((t.lift_stops - THIN_LIFT_STOPS).abs() < 1e-5, "{t:?}");
         assert!(!t.bounded);
-        let rendered = |k: f32, e: f32, s: f32| k * (s + e);
+        let look_stops = |k: f32, e: f32, s: f32| k * (s + e);
         let e = roll_ev + t.exposure;
-        assert!((rendered(t.slope, e, base) - rendered(k0, e0, base)).abs() < 1e-4);
+        assert!((look_stops(t.slope, e, base) - look_stops(k0, e0, base)).abs() < 1e-4);
         assert!(
-            (rendered(t.slope, e, white) - rendered(k0, e0, white) - THIN_LIFT_STOPS).abs() < 1e-4
+            (look_stops(t.slope, e, white) - look_stops(k0, e0, white) - THIN_LIFT_STOPS).abs()
+                < 1e-4
         );
         // A white close to the base asks for a slope past the bound: capped, and said so.
         let t = thin_lift(base + 0.5, base, roll_ev, k0, e0).unwrap();
@@ -1195,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn a_frames_dark_end_is_its_lumas_low_percentile() {
+    fn a_frames_dark_end_is_its_luminances_low_percentile() {
         // 200 levels a hundredth of a stop apart: nearest-rank p1 is the third.
         let rgb: Vec<f32> = (0..200)
             .flat_map(|i| [MID_GREY * (-4.0 + 0.01 * i as f32).exp2(); 3])
@@ -1398,8 +1400,8 @@ mod tests {
         let frame = stops(0.5, -1.0, -3.0);
         let p = per_frame_placement(frame, e0);
         assert_eq!(p.exposure_bound, ExposureBound::None);
-        let rendered = p.slope * (frame.white_stops + e0 + p.exposure);
-        assert!((rendered - FRAME_WHITE_LOOK_STOPS).abs() < 1e-5, "{p:?}");
+        let look_stops = p.slope * (frame.white_stops + e0 + p.exposure);
+        assert!((look_stops - FRAME_WHITE_LOOK_STOPS).abs() < 1e-5, "{p:?}");
         // A night frame's white wants 3.5 EV of lift: held at the limit over the roll's.
         let p = per_frame_placement(stops(-3.0, -4.0, -6.0), e0);
         assert_eq!(p.exposure_bound, ExposureBound::Limit);
@@ -1591,8 +1593,8 @@ mod tests {
     }
 
     #[test]
-    fn the_contrast_renders_the_white_at_diffuse_white_with_mid_pinned() {
-        // The reviewed values: whole contrast 2.23 at the cap and 2.97 at the floor, at
+    fn the_roll_slope_renders_the_white_at_diffuse_white_with_mid_pinned() {
+        // The reviewed values: whole slope 2.23 at the cap and 2.97 at the floor, at
         // the decode's linearization 1.8.
         let lin = crate::algo::fixed::LINEARIZATION;
         assert!((slope_for(WHITE_CAP_STOPS) * lin - 2.23).abs() < 0.01);
@@ -1626,7 +1628,7 @@ mod tests {
     #[test]
     fn a_blue_or_green_highlight_reads_as_bright_as_a_red_one() {
         // A frame whose highlights are sky blue: red sits at +1.2, blue at +2.4. Read on
-        // red, the white would be +1.2 (floored to +1.5, contrast 1.65) and the sky would
+        // red, the white would be +1.2 (floored to +1.5, tone slope 1.65) and the sky would
         // land 1.5 stops past white; on the brightest channel the frame is clamped.
         for sky in [[at(1.2), at(1.8), at(2.4)], [at(1.2), at(2.4), at(1.6)]] {
             let mut frame = field([at(0.0); 3], 900);
@@ -1700,13 +1702,13 @@ mod tests {
     }
 
     #[test]
-    fn the_pooled_white_is_the_scene_stop_of_the_balanced_lumas_p99() {
+    fn the_pooled_white_is_the_scene_stop_of_the_balanced_luminances_p99() {
         let px = [0.5, 0.4, 0.3];
         let gains = [0.8, 1.0, 1.4];
         let samples = vec![field(px, 50), field(px, 30)];
-        let luma: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c] * gains[c]).sum();
+        let y: f32 = (0..3).map(|c| ACESCG_LUMINANCE[c] * px[c] * gains[c]).sum();
         let w = pooled_white_stops(&samples, &RollBalance::Gain(gains));
-        assert!((w - scene_stops(luma)).abs() < 1e-6, "{w}");
+        assert!((w - scene_stops(y)).abs() < 1e-6, "{w}");
         // Read without a flattened copy, bit for bit as the copy read.
         let samples = vec![
             ramp([1.0, 0.8, 0.6]),
@@ -1721,7 +1723,7 @@ mod tests {
             .copied()
             .collect();
         let p = percentile_levels(&flat, PERCENTILE);
-        let want = scene_stops((0..3).map(|c| ACESCG_LUMA[c] * p[c] * gains[c]).sum());
+        let want = scene_stops((0..3).map(|c| ACESCG_LUMINANCE[c] * p[c] * gains[c]).sum());
         assert_eq!(
             pooled_white_stops(&samples, &RollBalance::Gain(gains)).to_bits(),
             want.to_bits()

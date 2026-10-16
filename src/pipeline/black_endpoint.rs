@@ -28,7 +28,7 @@
 
 use crate::pipeline::chain::graded_tone;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::fit_range::{MIN_FILM_BASE_STOPS, display_stops};
 use crate::pipeline::roll_white::{FrameStops, WHITE_CAP_STOPS, slope_for};
 
@@ -71,7 +71,7 @@ pub struct Inputs {
 impl Inputs {
     /// The stated scene correction's gain on luminance, in EV.
     fn stated_gain(&self) -> f32 {
-        self.stated_exposure + dot(self.stated_white_balance, ACESCG_LUMA).log2()
+        self.stated_exposure + dot(self.stated_white_balance, ACESCG_LUMINANCE).log2()
     }
 
     /// Where a tone (scene stops from mid-grey, before exposure) lands on the display, in

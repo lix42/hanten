@@ -32,7 +32,6 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::hdr::{HdrTransfer, LINEAR_HEADROOM};
 use crate::types::Result;
@@ -318,25 +317,30 @@ impl Axis for Transfer {
 }
 axis_serde!(Transfer);
 
-/// The primaries the render is mapped into.
+/// The destination gamut: the primaries (all at a D65 white) fit gamut maps the render
+/// into, and the encoder tags. It rides out of the chain on
+/// `pipeline::fit_gamut::DisplayReferredImage`, so the encoder reads it off the image.
+///
+/// **Display-referred encodings with a bounded range only** — the cube fit gamut maps
+/// into ends at the display's peak. A scene-referred or unbounded working space
+/// (ACEScg, ProPhoto as nc used it) does not qualify; `film-master` is the output for
+/// those. Which destination renders into which gamut is decided by [`ROWS`].
+///
+/// **Adding a variant** means a pinned ACEScg → destination matrix and luminance row
+/// (`docs/colorimetry-maintenance.md`), arms in `pipeline::fit_gamut`'s methods and in
+/// `color`'s encoders, and entries in `ALL` and [`ROWS`]. A missed match arm fails to
+/// compile; a missed list entry does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gamut {
+    /// Display P3 primaries.
     DisplayP3,
+    /// Adobe RGB (1998) primaries — Rec.709's red and blue with a wider green.
     AdobeRgb,
+    /// sRGB (Rec.709) primaries — the gamut a viewer that ignores profiles assumes.
     Srgb,
+    /// ITU-R BT.2020 primaries — the gamut of the Rec.2100 signals (PQ, HLG), and one of
+    /// the linear HDR TIFF's. No SDR destination renders into it.
     Bt2020,
-}
-
-impl Gamut {
-    /// The gamut fit gamut maps into.
-    pub fn destination(self) -> DestinationGamut {
-        match self {
-            Gamut::DisplayP3 => DestinationGamut::DisplayP3,
-            Gamut::AdobeRgb => DestinationGamut::AdobeRgb,
-            Gamut::Srgb => DestinationGamut::Srgb,
-            Gamut::Bt2020 => DestinationGamut::Bt2020,
-        }
-    }
 }
 
 impl Axis for Gamut {

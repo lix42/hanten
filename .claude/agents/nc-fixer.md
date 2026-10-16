@@ -47,7 +47,7 @@ in-progress changes, fix them, and prove the tree green — nothing more.
 - **Recipe shape mirrors design-spec §8–§9** (`deny_unknown_fields`); `params` is
   a reserved top-level key; mutually-exclusive knobs are one enum field.
 - **Standards coefficients live only in `pipeline/colorimetry/`** — never add a
-  matrix or luma literal inline in a stage; import it.
+  matrix or luminance-vector literal inline in a stage; import it.
 - **Determinism is per build/architecture** — never fix a test by checksumming
   a full frame, an encoded file, or post-lcms2 pixels; cross-platform pins use
   the curated `pipeline::chain_golden` vectors.

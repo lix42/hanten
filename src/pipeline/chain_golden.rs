@@ -18,21 +18,22 @@
 //!   (`cli::render_frame`) and are not covered here.
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
-//! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
-//! (`exp2`), fit range one (`log2`) for an HDR peak above diffuse white and, with
-//! display black on, five per frame (the target's `exp2`, exact at a whole-stop
-//! setting, three `log2` and the whole shift's `exp2`) and two per pixel below mid-grey
-//! (`log2`, `exp2`); its golden runs a whole-stop setting (6) — so its reinhard vectors run with display black off — the look's contrast one `powf` per positive channel, its per-channel
-//! grade one on red and one on blue (both entering its luminance restore), and highlight
-//! desaturation one per pixel at most: `log10` inside
-//! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
-//! only classify, never enter the arithmetic); all are pinned within a window [`reachable_window`] *derives* by
-//! enumerating what a 1-ULP-accurate libm can return (CLAUDE.md, determinism). Every
-//! other stage here is IEEE `+ − × /` and `sqrt` with no FMA contraction — Rust never
-//! fuses implicitly — plus sorts and fixed-order sums, so it is pinned bit for bit.
-//! A whole-stop exposure still calls `exp2`, but at an integer, and is **taken as
-//! exact** there — a power of two every shipped libm returns exactly, and an
-//! assumption the 1-ULP premise alone does not give.
+//! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one (`exp2`),
+//! fit range one (`log2`) for an HDR peak above diffuse white and, with display black
+//! on, five per frame (the target's `exp2`, exact at a whole-stop setting, three `log2`
+//! and the whole shift's `exp2`) and two per pixel below mid-grey (`log2`, `exp2`); its
+//! golden runs a whole-stop setting (6) — so its reinhard vectors run with display
+//! black off — the look's tone slope one `powf` per pixel (on its luminance), its
+//! per-channel grade one on red and one on blue (both entering its luminance restore),
+//! and highlight desaturation one per pixel at most: `log10` inside its band's ramp,
+//! `log2` inside its brightness ramp (its constants' `powf` / `exp2` only classify,
+//! never enter the arithmetic); all are pinned within a window [`reachable_window`]
+//! *derives* by enumerating what a 1-ULP-accurate libm can return (CLAUDE.md,
+//! determinism). Every other stage here is IEEE `+ − × /` and `sqrt` with no FMA
+//! contraction — Rust never fuses implicitly — plus sorts and fixed-order sums, so it
+//! is pinned bit for bit. A whole-stop exposure still calls `exp2`, but at an integer,
+//! and is **taken as exact** there — a power of two every shipped libm returns exactly,
+//! and an assumption the 1-ULP premise alone does not give.
 //!
 //! **Read a failure from the most upstream red golden — and never read a green one as
 //! covering the stages above it.** A stage's input can only be minted by the stage
@@ -59,9 +60,10 @@
 use crate::algo::FilmRgbImage;
 use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::algo::fixed::{self, DENSITY_OFFSET, DecodeParams, SCAN_FLOOR};
+use crate::destination::Gamut;
 use crate::pipeline::chain::{self, ChainParams, DisplayTarget, SharedParams};
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
-use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
+use crate::pipeline::fit_gamut::{self, FitGamutParams};
 use crate::pipeline::fit_range::{self, DarkEnd, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
 use crate::pipeline::midtone_neutral::MidtoneLine;
@@ -567,11 +569,13 @@ fn midtone_pixel(px: [f32; 3], k: [i32; 6]) -> [f32; 3] {
     };
     let log2 = |n: usize, x: f32| step(n, f64::from(x).log2() as f32);
     let exp2 = |n: usize, x: f32| step(n, f64::from(x).exp2() as f32);
-    let luma = |p: [f32; 3]| ACESCG_LUMA[0] * p[0] + ACESCG_LUMA[1] * p[1] + ACESCG_LUMA[2] * p[2];
+    let luminance = |p: [f32; 3]| {
+        ACESCG_LUMINANCE[0] * p[0] + ACESCG_LUMINANCE[1] * p[1] + ACESCG_LUMINANCE[2] * p[2]
+    };
     let g = MIDTONE_GAINS;
     let l = MIDTONE_LINE;
     let b = [px[0] * g[0], px[1] * g[1], px[2] * g[2]];
-    let (y, yw) = (luma(px), luma(b));
+    let (y, yw) = (luminance(px), luminance(b));
     if !(y > 0.0 && yw > 0.0) {
         return px;
     }
@@ -597,7 +601,7 @@ fn midtone_pixel(px: [f32; 3], k: [i32; 6]) -> [f32; 3] {
     let mut out = px;
     out[0] *= exp2(4, -cr * gate);
     out[2] *= exp2(5, -cb * gate);
-    let y2 = luma(out);
+    let y2 = luminance(out);
     if y2 > 0.0 {
         let r = y / y2;
         out = out.map(|c| c * r);
@@ -724,7 +728,7 @@ const HDR_PEAK: f32 = 1000.0 / 203.0;
 /// The HDR peak's operator for one pixel, written out independently of the stage,
 /// with `log2(Y)` supplied — the one libm call, which the window enumerates.
 fn hdr_fit_range_pixel(px: [f32; 3], log2_luminance: f32) -> [f32; 3] {
-    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
     let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
     let k = 1.0 - 0.18;
     let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
@@ -747,7 +751,8 @@ fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window
     let input = finite_aces().rgb().to_vec();
     let (mut lifted, mut widest) = (0, 0);
     for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
-        let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+        let y =
+            px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
         if y <= DIFFUSE_WHITE {
             // Below diffuse white the lift is zero: the HDR peak renders the SDR
             // pixel bit for bit — the gain-map contract, at the stage.
@@ -822,7 +827,7 @@ fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32
     let stops = libm(0, (target / b).log2());
     let base = libm(1, b.log2());
     let knee = libm(2, 0.18f64.log2());
-    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
     let scale = if y <= 0.0 {
         (gain * libm(4, stops.exp2())) as f32
     } else {
@@ -931,7 +936,7 @@ fn dark_end_fit_range_pixel(
     let stops = libm(0, (target / b).log2());
     let base = libm(1, b.log2());
     let knee = libm(2, 0.18f64.log2());
-    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
     let scale = if y <= 0.0 {
         (gain * libm(4, stops.exp2())) as f32
     } else {
@@ -1080,9 +1085,9 @@ const LOOK_FILM: [f32; 12] = [
     1.25, 1.2, 1.18, 1.3, 1.21, 1.14, 0.8, 0.78, 0.77, 1.6, 1.2, 0.9,
 ];
 
-/// Highlight desaturation alone, at a whole contrast of 2 carried by the linearization
-/// with the look's contrast at its identity — so these vectors pin the pull without the
-/// contrast's `powf` (which [`LOOK_CONTRAST_FILM`] pins).
+/// Highlight desaturation alone, at a whole slope of 2 carried by the linearization
+/// with the look's tone slope at its identity — so these vectors pin the pull without the
+/// tone slope's `powf` (which [`LOOK_TONE_SLOPE_FILM`] pins).
 fn look_params() -> LookParams {
     LookParams {
         section: LookSection {
@@ -1109,7 +1114,7 @@ fn look_input() -> AcesCgImage {
 /// [`look_params`], with its one libm result supplied: `log10(max/min)` for a pixel in
 /// the band's ramp, `log2(Y)` for one in the brightness ramp.
 fn look_pixel(px: [f32; 3], log10_ratio: Option<f32>, log2_luminance: Option<f32>) -> [f32; 3] {
-    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
     let [s0, s1] = HighlightDesaturation::default().band;
     let key = log10_ratio.map_or(1.0, |l| ((s1 - l / 2.0) / (s1 - s0)).clamp(0.0, 1.0));
     let brightness = log2_luminance.map_or(1.0, |l| {
@@ -1131,8 +1136,9 @@ fn golden_look_highlight_desaturation_is_correct_within_its_libm_window() {
         .rgb;
     let input = look_input().rgb().to_vec();
     let px = |p: usize| [input[p * 3], input[p * 3 + 1], input[p * 3 + 2]];
-    let luminance =
-        |q: [f32; 3]| q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2];
+    let luminance = |q: [f32; 3]| {
+        q[0] * ACESCG_LUMINANCE[0] + q[1] * ACESCG_LUMINANCE[1] + q[2] * ACESCG_LUMINANCE[2]
+    };
 
     for p in 0..4 {
         assert_clear_of_look_edges(&format!("look pixel {p}"), px(p));
@@ -1196,14 +1202,14 @@ fn golden_look_highlight_desaturation_is_correct_within_its_libm_window() {
 }
 
 /// A pixel whose path through the look is pinned must sit clear of every threshold a
-/// conforming libm can move: the band edges `10^(contrast·s)` (`powf`) and the
+/// conforming libm can move: the band edges `10^(colour slope · s)` (`powf`) and the
 /// brightness start `2^start_stops` (`exp2`), each enumerated at the correctly rounded
 /// value and one ULP either side — otherwise a 1-ULP libm difference could send the
 /// pixel down another path.
 fn assert_clear_of_look_edges(label: &str, px: [f32; 3]) {
     let [s0, s1] = HighlightDesaturation::default().band;
     let ratio = px[0].max(px[1]).max(px[2]) / px[0].min(px[1]).min(px[2]);
-    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let y = px[0] * ACESCG_LUMINANCE[0] + px[1] * ACESCG_LUMINANCE[1] + px[2] * ACESCG_LUMINANCE[2];
     let start = HighlightDesaturation::default().start_stops;
     for (name, value, edge) in [
         ("band s0", ratio, 10f64.powf(f64::from(2.0 * s0)) as f32),
@@ -1221,49 +1227,49 @@ const LOOK_FULL: [u32; 3] = [0x3f9b5286, 0x3f9aa512, 0x3f9a2494];
 const LOOK_BAND_RAMP: [u32; 3] = [0x3f9f996c, 0x3f9c0a9a, 0x3f971ca4];
 const LOOK_BRIGHTNESS_RAMP: [u32; 3] = [0x3f498013, 0x3f48597c, 0x3f474de1];
 
-/// Film RGB for the look's contrast: a near-neutral mid-grey, a deep shadow, a
+/// Film RGB for the look's tone slope: a near-neutral mid-grey, a deep shadow, a
 /// saturated midtone and a highlight above diffuse white. Each pixel makes one libm
 /// call (`powf` on its luminance), and every channel is scaled by it.
-const LOOK_CONTRAST_FILM: [f32; 12] = [
+const LOOK_TONE_SLOPE_FILM: [f32; 12] = [
     0.18, 0.18, 0.18, 0.01, 0.012, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2,
 ];
 
-/// The contrast alone, at a pinned slope (the fallback until
+/// The tone slope alone, at a pinned value (the fallback until
 /// `nf-calibration/no-roll-defaults`), so a retuned default needs no recapture.
-fn look_contrast_params() -> LookParams {
+fn look_tone_slope_params() -> LookParams {
     let mut params = LookParams::off();
     params.section.slope = 2.0 / 1.8;
     params
 }
 
-/// Recaptured 2026-10-09 when contrast moved onto luminance
+/// Recaptured 2026-10-09 when the tone slope moved onto luminance
 /// (`nf-look/contrast-on-luminance`); first captured 2026-09-24 as a per-channel power.
-const LOOK_CONTRAST: [u32; 12] = [
+const LOOK_TONE_SLOPE: [u32; 12] = [
     0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3c0418c9, 0x3c10013a, 0x3c304b3e, 0x3ee23728, 0x3eaa7a50,
     0x3e0e899e, 0x40159811, 0x4004eae8, 0x3fce7837,
 ];
 
 /// ACEScg luminance, in the stage's order of operations (`colorimetry::dot`).
 fn look_luminance(q: [f32; 3]) -> f32 {
-    q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2]
+    q[0] * ACESCG_LUMINANCE[0] + q[1] * ACESCG_LUMINANCE[1] + q[2] * ACESCG_LUMINANCE[2]
 }
 
-/// The contrast for one pixel, written out independently of the stage, with its libm
+/// The tone slope for one pixel, written out independently of the stage, with its libm
 /// result supplied: `(Y / MID_GREY)^slope`.
-fn look_contrast_pixel(px: [f32; 3], powered: f32) -> [f32; 3] {
-    let scale = look::MID_GREY * powered / look_luminance(px);
-    px.map(|c| c * scale)
+fn look_tone_slope_pixel(px: [f32; 3], powered: f32) -> [f32; 3] {
+    let gain = look::MID_GREY * powered / look_luminance(px);
+    px.map(|c| c * gain)
 }
 
 #[test]
-fn golden_look_contrast_is_correct_within_its_libm_window() {
+fn golden_look_tone_slope_is_correct_within_its_libm_window() {
     let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
-        LinearImage::new(4, 1, LOOK_CONTRAST_FILM.to_vec()).unwrap(),
+        LinearImage::new(4, 1, LOOK_TONE_SLOPE_FILM.to_vec()).unwrap(),
     ));
     let before = input.rgb().to_vec();
     let (corrected, _) =
         scene_correction::apply(input, &SceneCorrectionParams::default(), None).unwrap();
-    let params = look_contrast_params();
+    let params = look_tone_slope_params();
     assert_eq!(params.applied(), "contrast");
     let out = look::apply(corrected, &params)
         .unwrap()
@@ -1280,11 +1286,11 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
             ulps_between(base.powf(k), rounded) <= LIBM_MAX_ERROR_ULPS,
             "this host's `powf` is not conforming on pixel {p}"
         );
-        let centre = look_contrast_pixel(px, rounded);
+        let centre = look_tone_slope_pixel(px, rounded);
         for c in 0..3 {
-            let window = reachable_window(|v| look_contrast_pixel(px, v)[c], rounded, 0);
+            let window = reachable_window(|v| look_tone_slope_pixel(px, v)[c], rounded, 0);
             widest = widest.max(window);
-            let want = LOOK_CONTRAST[p * 3 + c];
+            let want = LOOK_TONE_SLOPE[p * 3 + c];
             assert_eq!(
                 centre[c].to_bits(),
                 want,
@@ -1293,7 +1299,7 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
             let drift = ulps_between(out[p * 3 + c], f32::from_bits(want));
             assert!(
                 drift <= window,
-                "stage `look` (contrast) pixel {p} sample {c}: {drift} ULP from the \
+                "stage `look` (tone slope) pixel {p} sample {c}: {drift} ULP from the \
                  capture, outside the {window} ULP a conforming libm can reach"
             );
         }
@@ -1306,7 +1312,7 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
 /// largest), and all three enter the luminance restore.
 const LOOK_SATURATION_FILM: [f32; 9] = [0.02, 0.018, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2];
 
-/// The saturation alone: contrast 1, desaturation off.
+/// The saturation alone: tone slope 1, desaturation off.
 const LOOK_SATURATION_SLOPE: f32 = 1.4;
 
 /// Captured 2026-10-09 when saturation landed (`nf-look/contrast-on-luminance`);
@@ -1395,7 +1401,7 @@ fn golden_look_saturation_is_correct_within_its_libm_window() {
 /// green's exponent is 1 and skips it), and both enter the luminance restore.
 const LOOK_GRADE_FILM: [f32; 9] = [0.02, 0.018, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2];
 
-/// The grade alone: contrast 1, desaturation off.
+/// The grade alone: tone slope 1, desaturation off.
 const LOOK_GRADE_EXPONENTS: [f32; 2] = [1.15, 0.9];
 
 /// Captured 2026-09-24 when the grade landed (`nf-look/per-channel-grade`).
@@ -1407,8 +1413,9 @@ const LOOK_GRADE: [u32; 9] = [
 /// The grade for one pixel, written out independently of the stage, with its two libm
 /// results supplied: `(x_r / MID_GREY)^r` and `(x_b / MID_GREY)^b`.
 fn look_grade_pixel(px: [f32; 3], red: f32, blue: f32) -> [f32; 3] {
-    let luminance =
-        |q: [f32; 3]| q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2];
+    let luminance = |q: [f32; 3]| {
+        q[0] * ACESCG_LUMINANCE[0] + q[1] * ACESCG_LUMINANCE[1] + q[2] * ACESCG_LUMINANCE[2]
+    };
     let powered = [look::MID_GREY * red, px[1], look::MID_GREY * blue];
     let restore = luminance(px) / luminance(powered);
     powered.map(|c| c * restore)
@@ -1495,11 +1502,11 @@ const FIT_GAMUT_P3: [u32; 21] = [
 fn golden_fit_gamut_is_bit_identical() {
     let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
     let params = FitGamutParams {
-        target: DestinationGamut::DisplayP3,
+        target: Gamut::DisplayP3,
     };
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut", &out.rgb, &FIT_GAMUT_P3);
-    assert_eq!(gamut, DestinationGamut::DisplayP3);
+    assert_eq!(gamut, Gamut::DisplayP3);
 }
 
 /// [`FIT_GAMUT_P3`]'s input into Adobe RGB, which runs the same map through a
@@ -1516,11 +1523,11 @@ const FIT_GAMUT_ADOBE_RGB: [u32; 21] = [
 fn golden_fit_gamut_adobe_rgb_is_bit_identical() {
     let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
     let params = FitGamutParams {
-        target: DestinationGamut::AdobeRgb,
+        target: Gamut::AdobeRgb,
     };
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-adobe-rgb", &out.rgb, &FIT_GAMUT_ADOBE_RGB);
-    assert_eq!(gamut, DestinationGamut::AdobeRgb);
+    assert_eq!(gamut, Gamut::AdobeRgb);
 }
 
 /// [`FIT_GAMUT_P3`]'s input into BT.2020, the HDR destinations' gamut: the same map
@@ -1540,11 +1547,11 @@ const FIT_GAMUT_BT2020: [u32; 21] = [
 fn golden_fit_gamut_bt2020_is_bit_identical() {
     let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
     let params = FitGamutParams {
-        target: DestinationGamut::Bt2020,
+        target: Gamut::Bt2020,
     };
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-bt2020", &out.rgb, &FIT_GAMUT_BT2020);
-    assert_eq!(gamut, DestinationGamut::Bt2020);
+    assert_eq!(gamut, Gamut::Bt2020);
 }
 
 // --- threaded ----------------------------------------------------------------
@@ -1552,7 +1559,7 @@ fn golden_fit_gamut_bt2020_is_bit_identical() {
 /// The default destination: an SDR display in Display P3.
 const SDR_P3: DisplayTarget = DisplayTarget {
     peak: DisplayPeak::SDR,
-    gamut: DestinationGamut::DisplayP3,
+    gamut: Gamut::DisplayP3,
 };
 
 /// Every stage at its shipped setting except scene correction, which is not an
@@ -1638,7 +1645,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
     );
     let (out, gamut) = rendered.image.into_parts();
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
-    assert_eq!(gamut, DestinationGamut::DisplayP3);
+    assert_eq!(gamut, Gamut::DisplayP3);
 }
 
 /// Two bright pixels for the look inside the chain: (0) near-neutral only *after* the
@@ -1730,9 +1737,9 @@ const FIT_GAMUT_SRGB: [u32; 21] = [
 fn golden_fit_gamut_srgb_is_bit_identical() {
     let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
     let params = FitGamutParams {
-        target: DestinationGamut::Srgb,
+        target: Gamut::Srgb,
     };
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut-srgb", &out.rgb, &FIT_GAMUT_SRGB);
-    assert_eq!(gamut, DestinationGamut::Srgb);
+    assert_eq!(gamut, Gamut::Srgb);
 }

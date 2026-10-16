@@ -26,10 +26,10 @@
 //!
 //! Several definitions here have no *runtime* consumer by design: the runtime
 //! multiplies by [`super::pinned`]'s reviewed literals and never derives, so both
-//! cone-response matrices and the tabulated BT.2020 luma are reached only from the
-//! `#[cfg(test)]` derivation and audit harness. A source-of-truth module is meant
-//! to describe the colorimetry completely, not only the parts today's code paths
-//! happen to touch.
+//! cone-response matrices and the tabulated BT.2020 luminance vector are reached
+//! only from the `#[cfg(test)]` derivation and audit harness. A source-of-truth
+//! module is meant to describe the colorimetry completely, not only the parts
+//! today's code paths happen to touch.
 //!
 //! ## The lcms2-consumed spaces are a pixel-change hazard
 //!
@@ -187,8 +187,8 @@ pub const DISPLAY_P3: ColorSpace = ColorSpace {
 /// gamuts, and it is also the easiest pair to transcribe wrongly, so the tests
 /// assert both halves of the relationship rather than just the values.
 ///
-/// Two consumers. The chain renders into it (`fit_gamut::DestinationGamut`'s
-/// Adobe RGB arm, through the pinned `ACESCG_TO_ADOBE_RGB`), and
+/// Two consumers. The chain renders into it (fit gamut's
+/// `Gamut::AdobeRgb` arm, through the pinned `ACESCG_TO_ADOBE_RGB`), and
 /// `scripts/analysis/nctool/metrics.py` measures Adobe RGB output against it. That
 /// analysis tool's tests re-read this file, because a set of primaries transcribed
 /// into the Python would be a second source of truth.
@@ -305,20 +305,22 @@ pub const BRADFORD_PUBLISHED_INVERSE: ConeResponse = ConeResponse {
 
 // -- normatively tabulated vectors --------------------------------------------
 
-/// BT.2020 non-constant-luminance luma coefficients, **as tabulated**.
+/// BT.2020 non-constant-luminance coefficients, **as tabulated**.
 ///
 /// `[0.2627, 0.6780, 0.0593]`. Source: ITU-R BT.2020-2 (and BT.2100-2, which
-/// reuses them).
+/// reuses them). BT.2020 applies them to encoded values (luma); Hanten applies
+/// them only to linear light, as BT.2100's HLG OOTF does, so they are a luminance
+/// vector here.
 ///
 /// This is a *standard definition*, not a derived artifact, and the distinction
-/// is load-bearing: deriving the luma row from the BT.2020 primaries instead
+/// is load-bearing: deriving the luminance row from the BT.2020 primaries instead
 /// gives `[0.262700212, 0.677998072, 0.059301716]`, which agrees only to ~2e-6.
 /// The standard rounds to four decimals and encoders are expected to use the
 /// rounded values, so NC uses them too — and the verification rule for this
 /// vector is "matches the tabulated value exactly", not "matches a derivation".
-/// Contrast [`super::pinned::DISPLAY_P3_LUMA`], which has no tabulated form and
+/// Contrast [`super::pinned::DISPLAY_P3_LUMINANCE`], which has no tabulated form and
 /// *is* derived.
-pub const BT2020_LUMA_TABULATED: [f64; 3] = [0.2627, 0.6780, 0.0593];
+pub const BT2020_LUMINANCE_TABULATED: [f64; 3] = [0.2627, 0.6780, 0.0593];
 
 // -- transfer-function constants ----------------------------------------------
 

@@ -12791,7 +12791,7 @@ fn measure_roll_thin_lift_steepens_a_thin_frame_and_spares_the_rest() {
             .as_f64()
             .unwrap()
     };
-    // About, not exactly: the solve reads the base's luma before the roll's gains
+    // About, not exactly: the solve reads the base's luminance before the roll's gains
     // (`roll_white::thin_lift`).
     assert!(
         (base_stops(&steep_report) - base_stops(&small_report)).abs() < 0.05,

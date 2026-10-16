@@ -21,8 +21,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::algo::fixed;
+use crate::destination::Gamut;
 use crate::pipeline::chain::{self, contract};
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::gain_ratio;
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
@@ -184,20 +184,14 @@ fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayP
         aces(),
         film_base(),
         &shared,
-        DestinationGamut::DisplayP3,
+        Gamut::DisplayP3,
         peak,
         &mut Untimed,
     )
     .unwrap();
     let (sdr, _) = pair.sdr.image.into_parts();
     let (hdr, _) = pair.hdr.image.into_parts();
-    let agreement = contract::check(
-        &graded,
-        &sdr.rgb,
-        &hdr.rgb,
-        DestinationGamut::DisplayP3,
-        peak,
-    );
+    let agreement = contract::check(&graded, &sdr.rgb, &hdr.rgb, Gamut::DisplayP3, peak);
 
     let p = peak.value();
     let over: Vec<f32> = hdr.rgb.iter().copied().filter(|v| *v > p).collect();

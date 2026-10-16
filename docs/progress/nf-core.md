@@ -54,7 +54,7 @@ output, and each boundary type can be minted only inside the module that produce
 so an out-of-order chain does not compile. Crossing a boundary **moves** the buffers,
 so a type per stage costs no allocation. Each stage's `Params` is a struct — not an
 `Option`, because "this stage is off" is deliberately not expressible. Fit gamut owns
-the change of primaries into the destination's gamut (`DestinationGamut`, carried by
+the change of primaries into the destination's gamut (`destination::Gamut`, carried by
 `FitGamutParams`, which has no `Default`), and its recipe section is the separate,
 empty `recipe::FitGamut`. `GradedImage` is the boundary the SDR/HDR split splits
 *from*.

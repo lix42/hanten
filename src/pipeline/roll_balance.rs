@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::roll_white::scene_stops;
 
@@ -53,7 +53,7 @@ impl Tilt {
             white_stops,
             log_base: base.map(f32::log2),
             inv_span: std::array::from_fn(|c| 1.0 / (green / gains[c] / base[c]).log2()),
-            base_stops: scene_stops(dot(base, ACESCG_LUMA)),
+            base_stops: scene_stops(dot(base, ACESCG_LUMINANCE)),
         }
     }
 

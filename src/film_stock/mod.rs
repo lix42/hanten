@@ -433,9 +433,9 @@ mod tests {
     }
 
     /// Every stock's blue layer is steeper than its red one — the property that makes a
-    /// single scalar contrast wrong, and the reason the decode carries a per-channel
-    /// `density.scale`. If a regenerated
-    /// table ever loses it, the data is wrong, not the film.
+    /// single scalar linearization wrong, and the reason the decode carries a
+    /// per-channel `density.scale`. If a regenerated table ever loses it, the data is
+    /// wrong, not the film.
     #[test]
     fn blue_is_steeper_than_red_on_every_stock() {
         for stock in FilmStock::ALL {

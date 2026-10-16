@@ -2,7 +2,7 @@
 //!
 //! No transform here changes primaries: `fit_gamut` has already moved the pixels into
 //! the destination's, so [`encode_display_linear`] applies only the transfer, and the
-//! profile is chosen by `DestinationGamut` — Display P3 or sRGB (their primaries, D65,
+//! profile is chosen by `Gamut` — Display P3 or sRGB (their primaries, D65,
 //! the sRGB curve) or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law. The
 //! film master's pixels are already linear ACEScg, so [`icc_profile`] only tags them
 //! (AP1, ~D60, linear). The HDR profiles are built for their encoders below.
@@ -16,14 +16,16 @@ use lcms2::{
 };
 use rayon::prelude::*;
 
+use crate::destination::Gamut;
 use crate::pipeline::colorimetry::definitions::{self, ColorSpace, transfer};
 use crate::pipeline::colorimetry::pinned;
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::hdr;
 use crate::pipeline::pixels;
 use crate::types::{LinearImage, NcError, Result};
 
-/// The output color space to transform into and tag the file with.
+/// The ICC profile a file is tagged with: the film master's ACEScg (tag only) or
+/// Display P3 (whose transfer-encode lcms2 runs). Not the destination gamut
+/// (`destination::Gamut`), which fit gamut has already mapped into.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OutputSpace {
     AcesCg,
@@ -74,16 +76,16 @@ fn profile_icc(profile: &Profile) -> Result<Vec<u8>> {
 /// image, so no second full-frame buffer exists.
 pub fn encode_display_linear(
     mut image: LinearImage,
-    gamut: DestinationGamut,
+    gamut: Gamut,
 ) -> Result<(LinearImage, Vec<u8>)> {
     let (linear, output) = match gamut {
-        DestinationGamut::DisplayP3 => display_p3_transfer_profiles()?,
-        DestinationGamut::AdobeRgb => adobe_rgb_transfer_profiles()?,
-        DestinationGamut::Srgb => srgb_transfer_profiles()?,
+        Gamut::DisplayP3 => display_p3_transfer_profiles()?,
+        Gamut::AdobeRgb => adobe_rgb_transfer_profiles()?,
+        Gamut::Srgb => srgb_transfer_profiles()?,
         // BT.2020 is rendered only for HDR, whose transfers (PQ, HLG, or none) and
         // profiles are `pipeline::hdr`'s and the HDR encoders'. The destination table
         // (`crate::destination::ROWS`) has no SDR row in it.
-        DestinationGamut::Bt2020 => {
+        Gamut::Bt2020 => {
             return Err(NcError::Other(
                 "BT.2020 has no SDR display encoding; its destinations are HDR".into(),
             ));
@@ -166,12 +168,12 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
 /// *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing automated
 /// catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
 /// pinned artifacts. Treat such an edit as an output change.
-pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
+pub fn hdr_linear_icc(gamut: Gamut) -> Result<Vec<u8>> {
     let space = match gamut {
-        DestinationGamut::DisplayP3 => definitions::DISPLAY_P3,
-        DestinationGamut::AdobeRgb => definitions::ADOBE_RGB,
-        DestinationGamut::Srgb => definitions::REC709,
-        DestinationGamut::Bt2020 => definitions::BT2020,
+        Gamut::DisplayP3 => definitions::DISPLAY_P3,
+        Gamut::AdobeRgb => definitions::ADOBE_RGB,
+        Gamut::Srgb => definitions::REC709,
+        Gamut::Bt2020 => definitions::BT2020,
     };
     let (white, primaries) = lcms_inputs(space);
     let mut profile = synth(white, primaries, 1.0)?;
@@ -1256,11 +1258,11 @@ mod tests {
     }
 
     /// Every gamut a linear HDR TIFF is written in.
-    const LINEAR_GAMUTS: [DestinationGamut; 4] = [
-        DestinationGamut::DisplayP3,
-        DestinationGamut::AdobeRgb,
-        DestinationGamut::Srgb,
-        DestinationGamut::Bt2020,
+    const LINEAR_GAMUTS: [Gamut; 4] = [
+        Gamut::DisplayP3,
+        Gamut::AdobeRgb,
+        Gamut::Srgb,
+        Gamut::Bt2020,
     ];
 
     #[test]
@@ -1286,10 +1288,10 @@ mod tests {
                 .info(lcms2::InfoType::Description, lcms2::Locale::none())
                 .unwrap_or_default();
             let expected = match gamut {
-                DestinationGamut::DisplayP3 => "NC Display-Linear Display P3 (D65)",
-                DestinationGamut::AdobeRgb => "NC Display-Linear Adobe RGB (D65)",
-                DestinationGamut::Srgb => "NC Display-Linear sRGB (D65)",
-                DestinationGamut::Bt2020 => "NC Display-Linear BT.2020 (D65)",
+                Gamut::DisplayP3 => "NC Display-Linear Display P3 (D65)",
+                Gamut::AdobeRgb => "NC Display-Linear Adobe RGB (D65)",
+                Gamut::Srgb => "NC Display-Linear sRGB (D65)",
+                Gamut::Bt2020 => "NC Display-Linear BT.2020 (D65)",
             };
             assert_eq!(description, expected);
             seen.push(first);
@@ -1542,7 +1544,7 @@ mod tests {
         // Display P3 profile.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
         let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
-        let (encoded, icc) = encode_display_linear(image, DestinationGamut::DisplayP3).unwrap();
+        let (encoded, icc) = encode_display_linear(image, Gamut::DisplayP3).unwrap();
         assert_eq!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
         for (got, inp) in encoded.rgb.iter().zip(linear) {
             let want = srgb_encode(inp);
@@ -1560,9 +1562,7 @@ mod tests {
     /// The Adobe RGB profile's bytes, as [`encode_display_linear`] embeds them.
     fn adobe_rgb_icc() -> Vec<u8> {
         let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
-        encode_display_linear(image, DestinationGamut::AdobeRgb)
-            .unwrap()
-            .1
+        encode_display_linear(image, Gamut::AdobeRgb).unwrap().1
     }
 
     /// Colorant XYZ (Bradford D65→D50) of Adobe's own `AdobeRGB1998.icc` — external
@@ -1617,7 +1617,7 @@ mod tests {
         // sample tells a pure power law from a curve with a linear toe.
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
         let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
-        let (encoded, icc) = encode_display_linear(image, DestinationGamut::AdobeRgb).unwrap();
+        let (encoded, icc) = encode_display_linear(image, Gamut::AdobeRgb).unwrap();
         assert_eq!(icc, adobe_rgb_icc());
         // Little CMS evaluates the parametric curve in float, measured within 4e-9.
         const TOLERANCE: f32 = 1e-6;
@@ -1661,9 +1661,7 @@ mod tests {
     /// The sRGB profile's bytes, as [`encode_display_linear`] embeds them.
     fn srgb_icc() -> Vec<u8> {
         let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
-        encode_display_linear(image, DestinationGamut::Srgb)
-            .unwrap()
-            .1
+        encode_display_linear(image, Gamut::Srgb).unwrap().1
     }
 
     #[test]
@@ -1701,7 +1699,7 @@ mod tests {
     fn srgb_encode_applies_only_the_srgb_curve_and_is_named() {
         let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
         let image = LinearImage::new(3, 1, linear.to_vec()).unwrap();
-        let (encoded, icc) = encode_display_linear(image, DestinationGamut::Srgb).unwrap();
+        let (encoded, icc) = encode_display_linear(image, Gamut::Srgb).unwrap();
         assert_eq!(icc, srgb_icc(), "must serialize to identical bytes");
         assert!(icc[24..36].iter().all(|&b| b == 0), "dateTime not zeroed");
         assert_ne!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());

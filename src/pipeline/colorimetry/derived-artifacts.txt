@@ -117,36 +117,36 @@
   [2][1] derived=-0.02529007181078518     shipped=-0.025290072     ulps=0
   [2][2] derived=1.0303034232788748       shipped=1.0303035        ulps=0
 
-[DISPLAY_P3_LUMA]
+[DISPLAY_P3_LUMINANCE]
   luminance row of display-p3/d65 normalized primary matrix (derived)
   compared as f32
   [0]    derived=0.2289745640697487       shipped=0.22897457       ulps=0
   [1]    derived=0.6917385218365062       shipped=0.69173855       ulps=0
   [2]    derived=0.079286914093745        shipped=0.07928691       ulps=0
 
-[ADOBE_RGB_LUMA]
+[ADOBE_RGB_LUMINANCE]
   luminance row of adobe-rgb/d65 normalized primary matrix (derived)
   compared as f32
   [0]    derived=0.29734497525053605      shipped=0.29734498       ulps=0
   [1]    derived=0.6273635662554661       shipped=0.62736356       ulps=0
   [2]    derived=0.07529145849399786      shipped=0.075291455      ulps=0
 
-[ACESCG_LUMA]
+[ACESCG_LUMINANCE]
   luminance row of acescg (ap1/aces white) normalized primary matrix (derived)
   compared as f32
   [0]    derived=0.27222871678091454      shipped=0.27222872       ulps=0
   [1]    derived=0.6740817658111485       shipped=0.67408174       ulps=0
   [2]    derived=0.05368951740793706      shipped=0.053689517      ulps=0
 
-[SRGB_LUMA]
+[SRGB_LUMINANCE]
   luminance row of rec709/d65 normalized primary matrix, SHIPPED ROUNDED TO 6 DECIMALS
   compared as f32
   [0]    derived=0.21263900587151024      shipped=0.212639         ulps=0
   [1]    derived=0.715168678767756        shipped=0.715169         ulps=-6
   [2]    derived=0.07219231536073371      shipped=0.072192         ulps=43
 
-[BT2020_LUMA]
-  bt2020 non-constant-luminance luma, TABULATED by the standard (not derived)
+[BT2020_LUMINANCE]
+  bt2020 non-constant-luminance coefficients, TABULATED by the standard (not derived)
   compared as f32
   [0]    derived=0.2627                   shipped=0.2627           ulps=0
   [1]    derived=0.678                    shipped=0.678            ulps=0

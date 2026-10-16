@@ -16,9 +16,9 @@ use serde::Serialize;
 
 use super::{FitRangeSection, Placement, Recipe, RollSection};
 use crate::algo::fixed;
+use crate::destination::Gamut;
 use crate::destination::OutputSection;
 use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
-use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::{DarkEnd, DisplayPeak};
 use crate::pipeline::look::{LookParams, LookSection};
 use crate::pipeline::midtone_neutral::MidtoneLine;
@@ -171,7 +171,7 @@ pub struct RollReport {
 /// One rendition's parameters for `pipeline::chain::render` — the recipe's shared
 /// half ([`shared_params`]) plus the destination's peak and gamut, which
 /// only the destination states.
-pub fn chain_params(r: &Recipe, peak: DisplayPeak, gamut: DestinationGamut) -> ChainParams {
+pub fn chain_params(r: &Recipe, peak: DisplayPeak, gamut: Gamut) -> ChainParams {
     ChainParams {
         shared: shared_params(r),
         target: DisplayTarget { peak, gamut },
@@ -297,12 +297,12 @@ pub fn slope(r: &Recipe) -> ResolvedSlope {
         (None, Rendering::Direct) => (r.base().slope, SlopeBase::Direct),
     };
     // Neither a thin slope nor a frame placement's reaches colour: it is the roll's.
-    let (colour_slope, saturation_base_from) = match (base_from, white_slope) {
+    let (colour_base_slope, saturation_base_from) = match (base_from, white_slope) {
         (SlopeBase::Thin | SlopeBase::Placement, Some(w)) => (w, SlopeBase::Roll),
         (SlopeBase::Thin | SlopeBase::Placement, None) => (r.base().slope, SlopeBase::Fallback),
         (from, _) => (base_slope, from),
     };
-    let saturation_base_slope = colour_slope * r.base().saturation;
+    let saturation_base_slope = colour_base_slope * r.base().saturation;
     ResolvedSlope {
         contrast: r.look.contrast,
         base_slope,
@@ -422,7 +422,7 @@ mod tests {
                 "look": {"contrast": 1.2, "highlight_desaturation": {"strength": 0.5}}}"#,
         )
         .unwrap();
-        let look = chain_params(&r, DisplayPeak::SDR, DestinationGamut::DisplayP3)
+        let look = chain_params(&r, DisplayPeak::SDR, Gamut::DisplayP3)
             .shared
             .look;
         assert_eq!(look.linearization, 3.1);
@@ -756,7 +756,7 @@ mod tests {
         // recipe cannot name a peak its destination does not have.
         let mut r = Recipe::default();
         r.fit_range.headroom_stops = Some(4.0);
-        let p = chain_params(&r, DisplayPeak::SDR, DestinationGamut::DisplayP3);
+        let p = chain_params(&r, DisplayPeak::SDR, Gamut::DisplayP3);
         assert_eq!(p.shared.headroom_stops, 4.0);
         assert_eq!(p.target.peak, DisplayPeak::SDR);
         let err = parse(r#"{"recipe_version": 3, "fit_range": {"peak": 4.9}}"#)

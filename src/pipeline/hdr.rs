@@ -8,10 +8,11 @@
 
 use serde::Serialize;
 
+use crate::destination::{Axis, Gamut};
 use crate::pipeline::colorimetry::definitions::transfer;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::BT2020_LUMA;
-use crate::pipeline::fit_gamut::{DestinationGamut, radial_to_boundary};
+use crate::pipeline::colorimetry::pinned::BT2020_LUMINANCE;
+use crate::pipeline::fit_gamut::radial_to_boundary;
 use crate::pipeline::pixels;
 use crate::types::{LinearImage, NcError, Result};
 
@@ -115,7 +116,7 @@ pub struct HdrRenderMetadata {
 #[derive(Debug)]
 pub struct LinearHdr {
     image: LinearImage,
-    gamut: DestinationGamut,
+    gamut: Gamut,
     metadata: LinearHdrMetadata,
     /// Measured here, where the pixels are still reference-white-relative linear
     /// light, and carried forward — after the transfer they are nonlinear
@@ -125,7 +126,7 @@ pub struct LinearHdr {
 
 impl LinearHdr {
     /// The primaries the pixels are in.
-    pub fn gamut(&self) -> DestinationGamut {
+    pub fn gamut(&self) -> Gamut {
         self.gamut
     }
 
@@ -252,8 +253,8 @@ pub struct LinearLabels {
 }
 
 /// [`LinearLabels`] for `gamut`: every per-gamut spelling in one place.
-pub fn linear_labels(gamut: DestinationGamut) -> LinearLabels {
-    // `$slug` is `DestinationGamut::name` (pinned by a test), `$icc` the profile's
+pub fn linear_labels(gamut: Gamut) -> LinearLabels {
+    // `$slug` is `Axis::name` (pinned by a test), `$icc` the profile's
     // name for it, `$primaries` the report's.
     macro_rules! labels {
         ($slug:literal, $icc:literal, $primaries:literal) => {
@@ -276,10 +277,10 @@ pub fn linear_labels(gamut: DestinationGamut) -> LinearLabels {
         };
     }
     match gamut {
-        DestinationGamut::DisplayP3 => labels!("display-p3", "Display P3", "Display P3/D65"),
-        DestinationGamut::AdobeRgb => labels!("adobe-rgb", "Adobe RGB", "Adobe RGB (1998)/D65"),
-        DestinationGamut::Srgb => labels!("srgb", "sRGB", "sRGB/D65"),
-        DestinationGamut::Bt2020 => labels!("bt2020", "BT.2020", "BT.2020/D65"),
+        Gamut::DisplayP3 => labels!("display-p3", "Display P3", "Display P3/D65"),
+        Gamut::AdobeRgb => labels!("adobe-rgb", "Adobe RGB", "Adobe RGB (1998)/D65"),
+        Gamut::Srgb => labels!("srgb", "sRGB", "sRGB/D65"),
+        Gamut::Bt2020 => labels!("bt2020", "BT.2020", "BT.2020/D65"),
     }
 }
 
@@ -355,7 +356,7 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
 /// A non-finite sample is refused: the chain never writes one.
 pub fn from_new_chain(
     mut image: LinearImage,
-    gamut: DestinationGamut,
+    gamut: Gamut,
     tone_curve: &'static str,
     gamut_mapping: &'static str,
 ) -> Result<(LinearHdr, PeakClamp)> {
@@ -390,7 +391,7 @@ pub fn from_new_chain(
 /// A Rec.2100 signal is BT.2020 by definition, so other primaries are refused rather
 /// than encoded under a BT.2020 tag.
 pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<RenderedHdr> {
-    if linear.gamut != DestinationGamut::Bt2020 {
+    if linear.gamut != Gamut::Bt2020 {
         return Err(NcError::Other(format!(
             "a Rec.2100 signal reached its encoder in {} rather than BT.2020",
             linear.gamut.name()
@@ -402,7 +403,7 @@ pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<R
             HdrTransfer::Hlg => {
                 let display = px.map(|channel| channel / LINEAR_HEADROOM);
                 let scene = hlg_inverse_ootf(display);
-                let scene_luminance = dot(scene, BT2020_LUMA);
+                let scene_luminance = dot(scene, BT2020_LUMINANCE);
                 radial_to_boundary(scene, scene_luminance, 1.0).map(hlg_oetf)
             }
         };
@@ -528,7 +529,7 @@ pub fn hlg_reference_white_signal() -> f32 {
 /// Inverse of the BT.2100 HLG reference OOTF for a 1000-nit display with a
 /// zero-black reference model.
 fn hlg_inverse_ootf(display_linear: [f32; 3]) -> [f32; 3] {
-    let display_luminance = dot(display_linear, BT2020_LUMA);
+    let display_luminance = dot(display_linear, BT2020_LUMINANCE);
     if display_luminance <= 0.0 {
         return [0.0; 3];
     }
@@ -561,7 +562,7 @@ mod tests {
     #[test]
     fn a_rec2100_signal_refuses_primaries_other_than_bt2020() {
         let image = LinearImage::new(1, 1, vec![0.5; 3]).unwrap();
-        let (p3, _) = from_new_chain(image, DestinationGamut::DisplayP3, "tone", "gamut").unwrap();
+        let (p3, _) = from_new_chain(image, Gamut::DisplayP3, "tone", "gamut").unwrap();
         let err = encode_transfer(p3, HdrTransfer::Pq).unwrap_err();
         assert!(
             err.to_string().contains("display-p3 rather than BT.2020"),
@@ -571,7 +572,7 @@ mod tests {
 
     #[test]
     fn linear_labels_keep_the_shipped_bt2020_strings_and_name_each_gamut() {
-        let bt2020 = linear_labels(DestinationGamut::Bt2020);
+        let bt2020 = linear_labels(Gamut::Bt2020);
         assert_eq!(
             bt2020.domain,
             "bt2020-linear-relative-to-203-nit-reference-white"
@@ -589,10 +590,10 @@ mod tests {
              semantics of these samples"
         );
         for gamut in [
-            DestinationGamut::DisplayP3,
-            DestinationGamut::AdobeRgb,
-            DestinationGamut::Srgb,
-            DestinationGamut::Bt2020,
+            Gamut::DisplayP3,
+            Gamut::AdobeRgb,
+            Gamut::Srgb,
+            Gamut::Bt2020,
         ] {
             let l = linear_labels(gamut);
             assert!(
@@ -611,8 +612,7 @@ mod tests {
     /// the peak, so nothing is clamped and the values reach the encoder as given.
     fn linear(rgb: &[f32]) -> LinearHdr {
         let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec()).unwrap();
-        let (hdr, clamp) =
-            from_new_chain(image, DestinationGamut::Bt2020, "tone", "gamut").unwrap();
+        let (hdr, clamp) = from_new_chain(image, Gamut::Bt2020, "tone", "gamut").unwrap();
         assert_eq!(clamp, PeakClamp::default(), "a fixture must not clamp");
         hdr
     }
@@ -733,9 +733,9 @@ mod tests {
     #[test]
     fn out_of_gamut_color_uses_one_chroma_scale_at_constant_luminance() {
         let input = [-0.4, 1.5, 0.3];
-        let luminance = dot(input, BT2020_LUMA);
+        let luminance = dot(input, BT2020_LUMINANCE);
         let output = radial_to_boundary(input, luminance, LINEAR_HEADROOM);
-        close(dot(output, BT2020_LUMA), luminance);
+        close(dot(output, BT2020_LUMINANCE), luminance);
         let before = input.map(|channel| channel - luminance);
         let after = output.map(|channel| channel - luminance);
         let scales = [
@@ -836,7 +836,7 @@ mod tests {
         // CTA-861.3: a red at twice reference white is a 406-nit pixel, though its
         // BT.2020 luminance is ~122 nits.
         let red = [2.0, 0.1, 0.1];
-        assert!(dot(red, BT2020_LUMA) * REFERENCE_WHITE_NITS < 125.0);
+        assert!(dot(red, BT2020_LUMINANCE) * REFERENCE_WHITE_NITS < 125.0);
         assert_eq!(linear(&red).content_light.max_cll_nits, 406);
         // MaxFALL is the mean of the per-pixel maxima: (2.0 + 0.5) / 2 x 203 = 253.75.
         let frame = linear(&[2.0, 0.1, 0.1, 0.1, 0.5, 0.2]).content_light;
@@ -883,7 +883,7 @@ mod tests {
         // A saturated channel above white is above-SDR content even when the pixel's
         // luminance is below white.
         let saturated = [1.5, 0.2, 0.2];
-        assert!(dot(saturated, BT2020_LUMA) < 1.0);
+        assert!(dot(saturated, BT2020_LUMINANCE) < 1.0);
         assert_eq!(sdr_range_warning(linear(&saturated).content_light()), None);
 
         // The transfer encode carries the same measurement, so PQ and HLG renditions
@@ -979,8 +979,7 @@ mod tests {
             0.0, // exactly at the peak: not counted
         ];
         let image = LinearImage::new(3, 1, rgb.clone()).unwrap();
-        let (hdr, clamp) =
-            from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap();
+        let (hdr, clamp) = from_new_chain(image, Gamut::Bt2020, "reinhard", "radial").unwrap();
         assert_eq!(
             clamp,
             PeakClamp {
@@ -1017,7 +1016,7 @@ mod tests {
         // Nothing out of range: nothing counted.
         let image = LinearImage::new(1, 1, vec![0.2, 0.3, 0.4]).unwrap();
         assert_eq!(
-            from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial")
+            from_new_chain(image, Gamut::Bt2020, "reinhard", "radial")
                 .unwrap()
                 .1,
             PeakClamp::default()
@@ -1026,8 +1025,7 @@ mod tests {
         // A non-finite sample is refused, naming the pixel — never clamped into range.
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let image = LinearImage::new(2, 1, vec![0.1, 0.1, 0.1, 0.2, bad, 0.2]).unwrap();
-            let err =
-                from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap_err();
+            let err = from_new_chain(image, Gamut::Bt2020, "reinhard", "radial").unwrap_err();
             assert!(err.to_string().contains("pixel 1"), "{bad}: {err}");
             assert!(err.to_string().contains("non-finite"), "{bad}: {err}");
         }

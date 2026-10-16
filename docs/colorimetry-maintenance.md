@@ -9,7 +9,7 @@ The code lives in `src/pipeline/colorimetry/`:
 | File | Holds | Edit it when |
 | --- | --- | --- |
 | `definitions.rs` | **Standard definitions** — primaries, white points, cone-response matrices, transfer constants, normatively tabulated vectors, each with its standard and edition | A standard revises a value, or you are adding a colour space |
-| `pinned.rs` | **Derived artifacts** — the reviewed `f32`/`f64` matrices and luminance vectors (`*_LUMA`) the runtime multiplies by | Only as a deliberate, reviewed pixel change (see step 6) |
+| `pinned.rs` | **Derived artifacts** — the reviewed `f32`/`f64` matrices and luminance vectors (`*_LUMINANCE`) the runtime multiplies by | Only as a deliberate, reviewed pixel change (see step 6) |
 | `derive.rs` | The canonical binary64 derivation. `#[cfg(test)]`, so the runtime can never derive | You are changing *how* something is derived, not what from |
 | `audit.rs` | The check/regeneration command | You are adding an artifact to the catalog |
 | `tests.rs` | **Verification** — tolerances, invariants, independent reference vectors | Always: a new artifact needs an independent anchor |
@@ -179,13 +179,14 @@ Lindbloom's printed 7-decimal inverse, and exists solely because
 one shifts it by 9.1e-8, which is a pixel change to a frozen identifier. Do not
 "tidy up" by collapsing them — a test fails loudly if you try.
 
-**The luminance vectors are different kinds of number.** `BT2020_LUMA` is
+**The luminance vectors are different kinds of number.** `BT2020_LUMINANCE` is
 transcribed from BT.2020's table and deliberately does *not* match a derivation
 from the BT.2020 primaries (they differ by ~2e-6, about 17 ulps). The standard
-rounds and encoders are expected to use the rounded values. `DISPLAY_P3_LUMA`,
-`ADOBE_RGB_LUMA` and `ACESCG_LUMA` have no tabulated form and *are* derived; `SRGB_LUMA` is the
-derivation rounded to six decimals. Their verification rules differ accordingly,
-and a test pins the gap so nobody "corrects" the tabulated one.
+rounds and encoders are expected to use the rounded values.
+`DISPLAY_P3_LUMINANCE`, `ADOBE_RGB_LUMINANCE` and `ACESCG_LUMINANCE` have no
+tabulated form and *are* derived; `SRGB_LUMINANCE` is the derivation rounded to
+six decimals. Their verification rules differ accordingly, and a test pins the
+gap so nobody "corrects" the tabulated one.
 
 ## Known deviation
 

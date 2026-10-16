@@ -30,7 +30,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMINANCE;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::roll_balance::RollBalance;
 use crate::pipeline::roll_white::scene_stops;
@@ -174,9 +174,9 @@ impl MidtoneLine {
     /// `correct`'s arithmetic: the cast is keyed on, and gated by, `balanced`, and removed
     /// from `px`.
     fn remove(&self, px: &mut [f32; 3], balanced: [f32; 3], floor: Option<f32>) {
-        let luma = |p: [f32; 3]| dot(p, ACESCG_LUMA);
-        let y = luma(*px);
-        let yw = luma(balanced);
+        let luminance = |p: [f32; 3]| dot(p, ACESCG_LUMINANCE);
+        let y = luminance(*px);
+        let yw = luminance(balanced);
         if !(y > 0.0 && yw > 0.0 && y.is_finite() && yw.is_finite()) {
             return;
         }
@@ -191,7 +191,7 @@ impl MidtoneLine {
         };
         px[0] *= (-cr * gate).exp2();
         px[2] *= (-cb * gate).exp2();
-        let y2 = luma(*px);
+        let y2 = luminance(*px);
         if y2 > 0.0 {
             let k = y / y2;
             for c in px.iter_mut() {
@@ -312,7 +312,7 @@ fn frame_votes(frame: &[f32], balance: &RollBalance) -> Vec<Option<[f64; 2]>> {
         if b.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
             continue;
         }
-        let s = (f64::from(dot(b, ACESCG_LUMA)) / f64::from(MID_GREY)).log2();
+        let s = (f64::from(dot(b, ACESCG_LUMINANCE)) / f64::from(MID_GREY)).log2();
         let at = ((s - f64::from(BAND_LOW_STOPS)) / f64::from(BAND_WIDTH_STOPS)).floor();
         if at >= 0.0 && at < BAND_COUNT as f64 {
             let (r, g, bl) = (f64::from(b[0]), f64::from(b[1]), f64::from(b[2]));
@@ -388,7 +388,7 @@ mod tests {
     /// `log2 r/g = rho[0]`, `log2 b/g = rho[1]`.
     fn pixel(s: f64, rho: [f64; 2]) -> [f32; 3] {
         let (r, b) = (rho[0].exp2(), rho[1].exp2());
-        let l = ACESCG_LUMA.map(f64::from);
+        let l = ACESCG_LUMINANCE.map(f64::from);
         let g = 0.18 * s.exp2() / (l[0] * r + l[1] + l[2] * b);
         [(g * r) as f32, g as f32, (g * b) as f32]
     }
@@ -469,9 +469,17 @@ mod tests {
         let l = line();
         for s in [-2.0, -0.5, 0.0, 0.6] {
             let mut px = pixel(s, l.cast(s as f32, None).map(f64::from));
-            let y = ACESCG_LUMA.iter().zip(px).map(|(w, v)| w * v).sum::<f32>();
+            let y = ACESCG_LUMINANCE
+                .iter()
+                .zip(px)
+                .map(|(w, v)| w * v)
+                .sum::<f32>();
             l.correct(&mut px, &RollBalance::Gain([1.0; 3]));
-            let y2 = ACESCG_LUMA.iter().zip(px).map(|(w, v)| w * v).sum::<f32>();
+            let y2 = ACESCG_LUMINANCE
+                .iter()
+                .zip(px)
+                .map(|(w, v)| w * v)
+                .sum::<f32>();
             assert!(
                 (px[0] / px[1] - 1.0).abs() < 1e-5 && (px[2] / px[1] - 1.0).abs() < 1e-5,
                 "{s}: {px:?}"
@@ -636,7 +644,7 @@ mod tests {
         for (c, want) in [(0, 1.0f32), (2, 1.0)] {
             assert!((px[c] / px[1] - want).abs() < 1e-5, "{c}: {px:?}");
         }
-        let y = |p: [f32; 3]| dot(p, ACESCG_LUMA);
+        let y = |p: [f32; 3]| dot(p, ACESCG_LUMINANCE);
         assert!(
             (y(px) / y(tilted) - 1.0).abs() < 1e-5,
             "luminance kept: {px:?}"

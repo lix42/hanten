@@ -153,34 +153,33 @@ class ColorimetrySource(unittest.TestCase):
         body = text.split(f"[{section}]", 1)[1].split("\n[", 1)[0]
         return [float(v) for v in re.findall(r"derived=(-?[\d.e+-]+)", body)]
 
-    def test_luma_matches_rust_audit_derivation(self):
+    def test_luminance_matches_rust_audit_derivation(self):
         """Python's derivation reproduces the Rust audit's binary64 derivation.
 
         Both derive from the same primaries, so agreement to 1e-12 says the two
         implementations of the same standard math agree — a real check, since
         this module derives its matrices independently rather than importing them.
         """
-        for space, section in (("srgb", "SRGB_LUMA"),
-                               ("display-p3", "DISPLAY_P3_LUMA"),
-                               ("adobe-rgb", "ADOBE_RGB_LUMA")):
+        for space, section in (("srgb", "SRGB_LUMINANCE"),
+                               ("display-p3", "DISPLAY_P3_LUMINANCE"),
+                               ("adobe-rgb", "ADOBE_RGB_LUMINANCE")):
             derived = self._audit_derived(section)
             ours = metrics.luminance_weights(metrics.SPACES[space])
             for got, want in zip(ours, derived):
                 self.assertAlmostEqual(got, want, delta=1e-12,
-                                       msg=f"{space} luma vs {section}")
+                                       msg=f"{space} luminance vs {section}")
 
     def test_bt2020_derivation_deliberately_differs_from_the_tabulated_vector(self):
-        """BT.2020's tabulated luma is not a linear-light luminance weighting.
+        """BT.2020's tabulated vector is a rounded table, not the derived row.
 
-        `definitions::BT2020_LUMA_TABULATED` is `[0.2627, 0.6780, 0.0593]`, the
-        rounded non-constant-luminance coefficients an encoder applies to
-        *transfer-encoded* values. Deriving from the primaries — which is what a
-        luminance statistic needs — gives something ~2e-6 away. This test pins the
-        gap so nobody "corrects" one to match the other; `pinned.rs` records that
-        the standard's rounding is deliberate and that decoders invert the rounded
-        form.
+        `definitions::BT2020_LUMINANCE_TABULATED` is `[0.2627, 0.6780, 0.0593]`,
+        the standard's coefficients rounded to four decimals. Deriving from the
+        primaries — which is what a luminance statistic needs — gives something
+        ~2e-6 away. This test pins the gap so nobody "corrects" one to match the
+        other; `pinned.rs` records that the standard's rounding is deliberate and
+        that decoders invert the rounded form.
         """
-        tabulated = self._audit_derived("BT2020_LUMA")
+        tabulated = self._audit_derived("BT2020_LUMINANCE")
         ours = metrics.luminance_weights(metrics.SPACES["linear-bt2020"])
         largest = max(abs(a - b) for a, b in zip(ours, tabulated))
         self.assertGreater(largest, 1e-7, "the two forms have become identical")
@@ -211,9 +210,9 @@ class ColorimetrySource(unittest.TestCase):
         self.assertEqual(adobe[2], rec709[2])
         self.assertNotEqual(adobe[1], rec709[1])
 
-    def test_adobe_rgb_luma_moves_the_way_its_green_primary_implies(self):
+    def test_adobe_rgb_luminance_moves_the_way_its_green_primary_implies(self):
         """The relationship to Rec.709, beside the exact check against the Rust
-        audit in `test_luma_matches_rust_audit_derivation`.
+        audit in `test_luminance_matches_rust_audit_derivation`.
 
         Adobe RGB's green primary is less yellow and more saturated than
         Rec.709's, so normalizing to the same white shifts luminance weight off
@@ -264,7 +263,7 @@ class ColorimetrySource(unittest.TestCase):
         self.assertNotAlmostEqual(unadapted[0], adapted[0], places=3)
         self.assertAlmostEqual(sum(adapted), 1.0, places=9)
 
-    def test_luma_rows_sum_to_one(self):
+    def test_luminance_rows_sum_to_one(self):
         for name, space in COLORIMETRIC.items():
             self.assertAlmostEqual(sum(metrics.luminance_weights(space)), 1.0,
                                    places=9, msg=name)
@@ -1755,15 +1754,15 @@ class Histogram(unittest.TestCase):
     def test_the_luminance_series_is_the_same_quantity_as_the_percentiles(self):
         """The histogram's luminance and `tone.percentiles_stops` must describe
         one quantity, or an overlaid histogram and a percentile curve of the same
-        frame disagree with each other. Both take the declared space's own luma
+        frame disagree with each other. Both take the declared space's own luminance
         weighting, so the median read off the bins has to land in the bin the
-        50th percentile falls in — a per-channel mean or a different luma vector
+        50th percentile falls in — a per-channel mean or a different luminance vector
         would drift, and on a cast frame it would drift visibly.
         """
         rng = np.random.default_rng(11)
         array = rng.random((128, 128, 3), dtype=np.float32)
         # Strongly separated channels: the weighting is what is under test, so
-        # the fixture has to be one where a wrong luma vector moves the answer.
+        # the fixture has to be one where a wrong luminance vector moves the answer.
         array[..., 0] *= 0.25
         array[..., 2] *= 0.6
         record = metrics.measure(write_tiff(self.dir, "sameq.tif", array),

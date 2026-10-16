@@ -64,7 +64,7 @@ directly. What remains:
   reference build) and reads their reports, and those builds can write AVIF.
 - **The colorimetry catalogue lost one entry**, `BT2020_NCL_RGB_TO_YCBCR` (and
   `derive::ycbcr_from_luma`): the BT.2020 Y'CbCr matrix existed only for AVIF's
-  `matrix_coefficients = 9`. `BT2020_LUMA`, which the HDR render uses, stays.
+  `matrix_coefficients = 9`. `BT2020_LUMINANCE`, which the HDR render uses, stays.
 
 ## Bringing it back
 

@@ -122,7 +122,7 @@ fn channel_levels(channels: [Vec<f32>; 3], level: impl Fn(&[f32]) -> f32) -> [f3
 }
 
 /// The gains `[g/r, 1, g/b]` that equalize per-channel `level`s — green-anchored.
-/// The gains still move ACEScg luminance — a neutral's by `dot(gains, ACESCG_LUMA)`,
+/// The gains still move ACEScg luminance — a neutral's by `dot(gains, ACESCG_LUMINANCE)`,
 /// which `chain::graded_tone` accounts for.
 ///
 /// Fails loudly ([`NcError::Other`], exit 1) when a level is unusable (non-finite
