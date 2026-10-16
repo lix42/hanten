@@ -48,6 +48,12 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
     `ETIMEDOUT`. Branch on the errno: Rust gives the first two the same `ErrorKind`.
   - An iCloud file is downloaded whole by its first read (~1.3 s per frame).
   - A 34-frame roll on the external SSD exports in 41 s.
+- **Frame offsets** (`frame-offset-spike`, `docs/spike/frame-offset.md`; design §2.3).
+  - Exposure is a step in EV.
+  - Contrast, saturation and both colour controls are ratios, per channel for colour.
+  - Tier-3 switches and named steps are plain overrides.
+  - Lift keeps the picture of every other frame that overrides the knob.
+  - Open: dragging over a mixed selection.
 
 ## webkit-display-spike
 
@@ -79,10 +85,14 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## frame-offset-spike
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: is a frame's contrast or saturation offset a ratio or a step? settled by a review round
+- 2026-10-16: Started. Plan: analysis note docs/spike/frame-offset.md (offset meaning per knob kind, ratio vs step algebra, lift keeps other frames' look); real roll with placed and thin frames, base slopes read from reports; targeted 4-arm review (contrast and saturation, ratio vs step at the points they differ most); decision into design §2.3, §5.
+- 2026-10-16: Contrast review (user, 8 frames of 09-29 Ektar, hybrid): roll 1.0 -> 1.5 with a frame tweaked to 0.7; the ratio rule's 1.05 against roll 1.5 looks like the tweak against roll 1.0, the step rule's 1.2 does not. Set ../temp/frame-offset-spike/contrast/.
+- 2026-10-16: Saturation review (user, same 8 frames): roll 1.0 -> 1.5 with a frame at 0.6; ratio 0.9 preferred over step 1.1, but hard to tell (weak). Decision: both are ratios, on the review and the algebra (a step leaves the positive range, a ratio composes with the knob's own ratio on its base). Set ../temp/frame-offset-spike/saturation/.
+- 2026-10-16: Done: note docs/spike/frame-offset.md, design §2.3/§3.4/§5 updated. Exposure a step in EV; contrast, saturation and both colour controls ratios (per channel for colour); tier-3 switches and named steps plain overrides that pin the frame. An identity offset is no override. Lift: roll takes the source's value, source clears, other frames overriding the knob keep their picture (offset restated), frames without one follow; unavailable over a mixed selection. A roll grade change pushing a frame past the spread bound is refused, naming the frame. UI: frame value with the roll's beside it, offset in the knob's unit, log-scale sliders for ratios. Review fixes: lift wording aligned across note, design and epic summary; the grade's reason no longer claims exponents compose (the grade rescales luminance). Open (design §5): dragging over a mixed selection.
 
 ## offline-token-spike
 

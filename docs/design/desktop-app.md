@@ -59,10 +59,21 @@ are Hanten features not yet implemented in the CLI (§4).
 - **Tiers 2 and 3** work at both levels: with no frame selected a change applies to the
   roll; with frames selected it overrides those frames.
 - **A frame override is an offset on the roll**: a frame at +0.3 follows to +0.8 when the
-  roll is raised by 0.5.
-- **Copy config** applies a frame's override to other selected frames; **lift config**
-  promotes it to the roll; **reset** clears it. No "sync settings" and no Lightroom-style
-  copy/paste.
+  roll is raised by 0.5. Per kind of knob (`docs/spike/frame-offset.md`):
+  - exposure: a step in EV;
+  - contrast and saturation: a ratio on the roll's multiplier, so a frame at × 0.7 stays
+    30 % flatter wherever the roll moves (contrast by review, saturation by the algebra);
+  - overall and tone cast: a ratio per channel;
+  - tier-3 switches and named steps: a plain override, which does not follow the roll.
+  A roll change that would push a frame's grade out of range is refused, naming the frame.
+- **Copy config** applies a frame's override to other selected frames; **reset** clears it.
+  **Lift config** promotes one frame's value to the roll and clears that frame's override.
+  Other frames that override that knob keep their picture: their offsets are restated
+  against the new roll value. Frames with no override follow it. Lift needs one source
+  value, so it is unavailable over frames with different values. No "sync settings" and
+  no Lightroom-style copy/paste.
+- A frame's control shows its value, the roll's beside it, and the offset in the knob's
+  unit (`+0.3 EV`, `× 0.7`); ratio knobs use log-scale sliders.
 
 ### 2.4 Frame operations
 
@@ -201,7 +212,7 @@ flowchart LR
 - The core stamps `recipe_version` on every layer it builds; the UI never sees recipes
   (spike unknown 3).
 - The **roll session** owns the project: the roll's measurements, roll config, per-frame
-  offsets and frame operations, and resolves each frame's recipe from them. The UI sends
+  overrides and frame operations, and resolves each frame's recipe from them. The UI sends
   intents (set a knob on a selection, lift, reset, crop …) and receives state and
   messages.
 - The roll session is an orchestrator beside the CLI; stages stay pure and never touch
@@ -229,9 +240,9 @@ flowchart LR
 - Frames keyed by path relative to the project file (absolute when it can't be), as
   `roll.frames` is keyed relative to its recipe (`core/frame-keys-by-path`; spike unknown 9). A missing file
   prompts the user to locate it.
-- Holds the measurements, every resolved value, overrides as offsets, frame operations, and
-  the paid record (the token, per-frame content hashes, replacements and the device's seal;
-  `docs/spike/offline-token.md`).
+- Holds the measurements, every resolved value, frame overrides (offsets, or plain values
+  for tier 3; §2.3), frame operations, and the paid record (the token, per-frame content
+  hashes, replacements and the device's seal; `docs/spike/offline-token.md`).
 
 ### 3.5 Preview and cache
 
@@ -325,12 +336,8 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 ## 5. Open questions
 
 - The exact tier-3 list and the named steps for each number knob.
-- What a frame override means per kind of knob: a ratio or a step for contrast and
-  saturation (each frame has its own base slope), a per-channel offset for the colour
-  controls, and for tier-3 switches and named steps probably a plain override, since an
-  offset has no meaning there.
-- After a lift, what happens to other frames' overrides of that knob, and to the source
-  frame's.
+- Dragging a control with several frames of different values selected: one ratio or step
+  for each, or one value for all (`docs/spike/frame-offset.md`).
 - The replacement limit per roll (§2.11).
 - How a token is bound to its roll so a paid record cannot be copied or edited (§3.7).
   The spike (`docs/spike/offline-token.md`) found that binding to a device strands a

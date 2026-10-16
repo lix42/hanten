@@ -1,8 +1,9 @@
 ---
 title: Frame offsets on multiplicative knobs
-status: todo
+status: done
 deps: []
 summary: is a frame's contrast or saturation offset a ratio or a step? settled by a review round
+done: 2026-10-16
 ---
 # Frame offsets on multiplicative knobs
 

@@ -496,11 +496,11 @@ graph TD
 > over `nc` as a library, preview, export and payment. Spikes come first; the CLI work the
 > app needs lives in `io`, `core` and `film-base` (the design's §4).
 
-- [ ] [Frame offsets on multiplicative knobs](tasks/app/frame-offset-spike.md) — is a frame's contrast or saturation offset a ratio or a step? settled by a review round
 - [ ] [Preview cache and memory spike](tasks/app/preview-cache-spike.md) — a whole roll: cold load, one decode shared by measuring and preview, a memory budget, a disk cache
 - [ ] [Signed build spike](tasks/app/signed-build-spike.md) — notarize the Tauri app and run a synced P-256 key in the data protection keychain across two Macs; waits on Apple Developer Program enrollment · **blocked**
 - [x] [Export beside preview spike](tasks/app/export-beside-preview-spike.md) — an in-process export queue while sliders move: does the preview stay smooth, how do they share CPU and memory
 - [x] [File access spike](tasks/app/file-access-spike.md) — the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update
+- [x] [Frame offsets on multiplicative knobs](tasks/app/frame-offset-spike.md) — is a frame's contrast or saturation offset a ratio or a step? settled by a review round
 - [x] [Offline token spike](tasks/app/offline-token-spike.md) — how tokens are signed, verified, stored and recovered on macOS
 - [x] [Packaging spike](tasks/app/packaging-spike.md) — unsigned Tauri app with the Rust core: hardened runtime, updater, dev keychain fallback, telemetry consent
 - [x] [WebKit display spike](tasks/app/webkit-display-spike.md) — Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron
