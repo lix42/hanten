@@ -71,9 +71,11 @@ transmission — so user-facing text leads with "film base".
 
 **Glossary.** *rebate* — the unexposed strip between holder and picture.
 *holder* — the opaque scanner carrier (transmission `< 0.05`). *effective area* — a
-frame minus its measured holder and a static inset; `measure-base` reads an
-unexposed frame's film base over it. *base region* — a user rectangle sampled for
-the film base. *scene white / scene black* — the brightest / darkest depicted
+frame minus its measured holder and a static inset, cut to any crop; `measure-base`
+reads an unexposed frame's film base over it. *base region* — a user rectangle sampled
+for the film base. *crop* — a user rectangle that is the picture: it cuts the written
+image and the effective area, in scan pixels before any turn. *turn* — `--rotate`'s
+clockwise quarter turn, after the flip; it moves pixels only. *scene white / scene black* — the brightest / darkest depicted
 luminance.
 
 ## Stops: four kinds
