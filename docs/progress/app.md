@@ -28,6 +28,16 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 - **Payment** (`offline-token-spike`): a proposal, not the final scheme — tokens bound
   to a device's P-256 key at download, the device sealing the paid record; see
   `docs/spike/offline-token.md`.
+- **Packaging** (`packaging-spike`, `docs/spike/packaging.md`; design §3.8). An ad-hoc
+  Tauri bundle with the core in-process runs under the hardened runtime with no
+  entitlements. The Tauri updater works, and `requireSignedVersion` should be on.
+  Gotchas:
+  - `SecKey`'s RFC 4754 output is padded, so sign X9.62 DER.
+  - The telemetry helper re-launches the app binary.
+  - A file-keychain key prompts after every ad-hoc update.
+
+  File access is `file-access-spike`; signing and the synced key are
+  `signed-build-spike` (needs enrollment).
 
 ## webkit-display-spike
 
@@ -78,7 +88,24 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## packaging-spike
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: sign and notarize a Tauri app with the Rust core; write the project file into any user-picked folder
+- 2026-10-16: Started. Split (user): signing, notarization and the synced data protection keychain key moved to app/signed-build-spike, blocked on Apple Developer Program enrollment (this Mac has no code-signing identity, Command Line Tools only). Plan here: throwaway core spike/packaging-core (lib target, open/measure/export), Tauri 2 shell in ../temp/packaging-spike/shell, ad-hoc signed .app with the hardened runtime, updater v1->v2 on a local server, dev keychain fallback, telemetry consent answer; report docs/spike/packaging.md. File access (external drive, real roll, project file, export) deferred to another machine: the SSD isn't mounted here.
+- 2026-10-16: Unsigned half run on the M4 Pro (macOS 26.7.1), report docs/spike/packaging.md. Ad-hoc bundle (adhoc,runtime, no entitlements, lcms2 static) exports in-process, byte-identical to the CLI. Updater v0.1.0->v0.2.0 swaps the bundle in place, no quarantine xattr; a foreign signature is refused; set requireSignedVersion (the CLI already signs the version). Gotchas: a file-keychain key prompts (SecurityAgent) after every ad-hoc update; SecKey RFC 4754 returns 144 bytes for P-256 (r and s right-aligned in 72-byte halves), so sign X9.62 DER and convert; the telemetry helper re-launches current_exe(), i.e. the app, so main must route a leading 'telemetry' arg headless before Tauri; the consent record sits in ~/.config/nc, shared with the CLI. Dev fallback: P-256 key in a file behind a dev-key feature, absent from the release binary (strings). Still to run on another machine: external drive, Documents/Desktop, iCloud Drive, read-only folder, TCC grants across relaunch and ad-hoc update (checklist in the report). offline-token.md's RFC 4754 sentence corrected.
+- 2026-10-16: Closed (user): file access split into app/file-access-spike (checklist in the report), signing into app/signed-build-spike. Handoff: design §3.8 Packaging and updates added, plus §2.12 enrollment gate, §3.2 allocator and current_exe() relaunch, §3.6 in-process export result, §5 open questions; report status closed. Portable copy of the spike code (core as a patch against 966c853, shell, scripts, results; no build outputs, no updater private key, which the auto-mode check refused to upload) in the user's Google Drive, temp/hanten/packaging-spike.
+
+## signed-build-spike
+
+**Status:** not started
+**Updated:** 2026-10-16
+
+- 2026-10-16: filed. Goal: notarize the Tauri app and run a synced P-256 key in the data protection keychain across two Macs; waits on Apple Developer Program enrollment
+
+## file-access-spike
+
+**Status:** not started
+**Updated:** 2026-10-16
+
+- 2026-10-16: filed. Goal: the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update
