@@ -5,9 +5,10 @@ How the desktop app's per-roll tokens are signed, verified, stored and recovered
 2026-10-15. **A spike proposal, not the final payment scheme**: it shows one offline
 binding that holds and what it costs, for the payment design to start from.
 
-**Main finding:** binding a token to a device confines it to one Mac. Tokens downloaded
-to Mac A cannot be spent on Mac B without a server re-bind, which duplicates them while
-A stays offline. A roll paid on A re-exports anywhere but grows only on A. The likely
+**Main finding:** binding a token to a device confines it to one Mac, unless the key
+syncs through iCloud Keychain (a signed app, and only for users who turn it on).
+Tokens downloaded to Mac A cannot be spent on Mac B without a server re-bind, which
+duplicates them while A stays offline. A roll paid on A re-exports anywhere but grows only on A. The likely
 direction is to **spend online** (the server signs the spend) or to **download one token
 to a Mac just before spending it there**. Either fixes stranded tokens; adding frames to
 a paid roll on another Mac still needs its own rule (online, or a server hand-over).
@@ -70,7 +71,8 @@ Server-signed bytes, base64url, prefixed `hanten1.` (168 characters):
 - frame cap (40) and replacement allowance,
 - issue day.
 
-The signature covers a domain tag plus those bytes: P-256 ECDSA, 64-byte `r‖s`.
+The signature covers a domain tag plus those bytes: ECDSA P-256 with SHA-256 (the record
+seal too), 64-byte `r‖s`.
 **P-256, not Ed25519,** because the device key should be a Keychain *key* item.
 `SecKey` has no Ed25519 algorithm, and the Secure Enclave handles only P-256. One curve
 for both signatures keeps one verifier in the core.
