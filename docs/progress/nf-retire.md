@@ -60,9 +60,9 @@ the `print` section).
 
 **What `display-tones` means for the rest of the epic.**
 
-- **The display tone's one knob already lives at its final key**, `fit_range.headroom_stops`,
-  on both chains (`ResolvedConfig::fit_range` is `recipe::FitRange`). `print-prefix-rename`
-  has no display-tone key left to move — `print` is now exposure, black point, white
+- **The display tone's one knob lives in `fit_range`**: `fit_range.highlight_range_stops`
+  (renamed by `core/rename-fit-range-misnomers`). `print-prefix-rename` has no
+  display-tone key left to move — `print` is now exposure, black point, white
   balance and `linear_range` only.
 - **`ConversionPreset` sets three knobs** (curve, `density.scale`, `print_exposure`), not
   the tone; the presets' old reinhard-at-6 is simply the default.

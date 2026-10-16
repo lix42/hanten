@@ -154,9 +154,8 @@ impl<'de> Deserialize<'de> for RecipeVersion {
 #[serde(default, deny_unknown_fields)]
 pub struct FitRangeSection {
     /// The highlight range, in stops above diffuse white: reinhard's white point is
-    /// `2^headroom_stops`, and `0` turns the compression off.
-    #[serde(rename = "highlight_range_stops")]
-    pub headroom_stops: Option<f32>,
+    /// `2^highlight_range_stops`, and `0` turns the compression off.
+    pub highlight_range_stops: Option<f32>,
     /// Where the dark end renders: `{"target": stops}`, `{"floor": stops}`,
     /// `{"base": stops}` or `"off"` (`pipeline::fit_range`'s dark end).
     pub dark_end: Option<DarkEnd>,
@@ -171,13 +170,13 @@ impl FitRangeSection {
     /// they ask for nothing such a destination does not already do, and refusing them
     /// would kill the flags-win reset.
     pub fn asks_for_a_fit(&self) -> bool {
-        let headroom = self
-            .headroom_stops
-            .is_some_and(|h| h != crate::types::DEFAULT_HEADROOM_STOPS && h != 0.0);
+        let highlight_range = self
+            .highlight_range_stops
+            .is_some_and(|h| h != crate::types::DEFAULT_HIGHLIGHT_RANGE_STOPS && h != 0.0);
         let dark_end = self
             .dark_end
             .is_some_and(|d| d != DarkEnd::default() && d != DarkEnd::Off);
-        headroom || dark_end
+        highlight_range || dark_end
     }
 }
 
@@ -1431,8 +1430,8 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(v) = args.look.highlight_desaturation_band {
         desat.band = Some(v);
     }
-    if let Some(stops) = args.display.display_tone_headroom {
-        r.fit_range.headroom_stops = Some(stops);
+    if let Some(stops) = args.display.highlight_range {
+        r.fit_range.highlight_range_stops = Some(stops);
     }
     // The destination. `--film-master` and the axis flags are exclusive at the parser,
     // so at most one arm fires. An axis flag over a recipe's `"film-master"` starts
@@ -1456,7 +1455,7 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
         .display
         .dark_floor
         .or(args.display.dark_target)
-        .or(args.display.display_black)
+        .or(args.display.dark_base)
     {
         r.fit_range.dark_end = Some(dark_end);
     }
@@ -2129,7 +2128,7 @@ pub fn validate_roll_frames(
 
 /// Whether `r`'s values combine into a render: every sample a scan can hold stays finite
 /// through the decode, scene correction and the look, and the film base grades to a
-/// positive luminance for display black. Fit range refuses either as a wiring bug.
+/// positive luminance for the dark base. Fit range refuses either as a wiring bug.
 /// Run by `convert` and `roll` (not `measure-roll`, which renders nothing) after
 /// `cli::validate_shared`, on the recipe a frame renders: another frame's `roll.frames`
 /// entry is that frame's to refuse. `own` names `r`'s frame and its roll section before
@@ -2195,7 +2194,7 @@ fn render_fault(r: &Recipe) -> Result<Option<RenderFault>> {
         &r.reconstruction,
     )?;
     let graded = chain::graded_pixels(map_nc_film_rgb_v1(film), &resolve::shared_params(r))?;
-    if matches!(resolve::fit_range(r).1, DarkEnd::Black(_)) {
+    if matches!(resolve::fit_range(r).1, DarkEnd::Base(_)) {
         let luminance = dot(
             [graded.rgb[0], graded.rgb[1], graded.rgb[2]],
             ACESCG_LUMINANCE,
@@ -2332,12 +2331,12 @@ const PROBE_KNOBS: [ProbeKnob; 15] = [
         section: "fit_range",
         flag: "--dark-base",
         key: "dark_end",
-        // Only display black reads the base, so the rendering's (the target under
+        // Only the dark base reads the base, so the rendering's (the target under
         // `default`) clears it.
         stated: |r| {
             r.fit_range
                 .dark_end
-                .is_some_and(|d| matches!(d, DarkEnd::Black(_)) && d != r.base().dark_end)
+                .is_some_and(|d| matches!(d, DarkEnd::Base(_)) && d != r.base().dark_end)
         },
         reset: |r| r.fit_range.dark_end = None,
     },
@@ -2567,8 +2566,8 @@ fn scene_correction_fault(p: &SceneCorrectionParams, names: KnobNames) -> Result
     Err(NcError::Usage(message))
 }
 
-/// Fit range's value rules — the headroom's, [`crate::types::headroom_fault`], and
-/// the dark end's, [`DarkEnd::check`] —
+/// Fit range's value rules — the highlight range's,
+/// [`crate::types::highlight_range_fault`], and the dark end's, [`DarkEnd::check`] —
 /// rendered as a usage error for this recipe's keys.
 fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
     // Only stated values: an unset one is the rendering's base, a constant.
@@ -2582,7 +2581,10 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
             knob_name(names, "fit_range", flag, "dark_end")
         )));
     }
-    let Some(fault) = p.headroom_stops.and_then(crate::types::headroom_fault) else {
+    let Some(fault) = p
+        .highlight_range_stops
+        .and_then(crate::types::highlight_range_fault)
+    else {
         return Ok(());
     };
     let name = knob_name(
@@ -2591,7 +2593,7 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
         "--highlight-range",
         "highlight_range_stops",
     );
-    Err(NcError::Usage(crate::types::headroom_fault_message(
+    Err(NcError::Usage(crate::types::highlight_range_fault_message(
         fault, &name,
     )))
 }
@@ -2708,7 +2710,7 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
         // The asked setting's own flag: another dark-end flag beside a typed one conflicts.
         let identity = match r.fit_range.dark_end {
             Some(DarkEnd::Target(_)) => "--highlight-range 0 --dark-target off",
-            Some(DarkEnd::Black(_)) => "--highlight-range 0 --dark-base off",
+            Some(DarkEnd::Base(_)) => "--highlight-range 0 --dark-base off",
             Some(DarkEnd::Floor(_)) => "--highlight-range 0 --dark-floor off",
             // Unset or `off`: only the highlight range asks.
             None | Some(DarkEnd::Off) => "--highlight-range 0",
@@ -4098,11 +4100,15 @@ mod tests {
     fn validate_refuses_an_unusable_highlight_range() {
         let with = |stops: f32, names| {
             let mut r = Recipe::default();
-            r.fit_range.headroom_stops = Some(stops);
+            r.fit_range.highlight_range_stops = Some(stops);
             validate(&r, names).map_err(|e| e.message().to_string())
         };
         with(0.0, KnobNames::FlagAndKey).unwrap();
-        with(crate::types::MAX_HEADROOM_STOPS, KnobNames::FlagAndKey).unwrap();
+        with(
+            crate::types::MAX_HIGHLIGHT_RANGE_STOPS,
+            KnobNames::FlagAndKey,
+        )
+        .unwrap();
         for bad in [-1.0, f32::NAN, f32::INFINITY] {
             let err = with(bad, KnobNames::FlagAndKey).unwrap_err();
             assert!(
@@ -4654,7 +4660,8 @@ mod tests {
             "fit_range": {"highlight_range_stops": 6.0, "dark_end": {"base": 6.0}}}"#;
         let w = parse(old).unwrap().recipe_warnings(TypedStyle::default());
         assert_eq!(w.len(), 1, "{w:?}");
-        // Only what moves the base is named: the highlight range and black match it.
+        // Only what moves the base is named: the highlight range and the dark base
+        // match it.
         assert!(
             w[0].contains("`look.highlight_desaturation.strength` 0.8")
                 && !w[0].contains("`look.contrast`")
@@ -5101,7 +5108,7 @@ mod tests {
         );
         let mut r = master();
         r.scene_correction.exposure = 1.0;
-        r.fit_range.headroom_stops = Some(3.0);
+        r.fit_range.highlight_range_stops = Some(3.0);
         let msg = destination(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
         assert!(
@@ -5114,17 +5121,17 @@ mod tests {
         let mut r = master();
         r.scene_correction.white_balance = WhiteBalance::Explicit([2.0, 2.0, 2.0]);
         r.scene_correction.exposure = -1.0;
-        r.fit_range.headroom_stops = Some(0.0);
+        r.fit_range.highlight_range_stops = Some(0.0);
         destination(&r, KnobNames::FlagAndKey).unwrap();
-        let fit = |headroom: f32, dark_end: DarkEnd| FitRangeSection {
-            headroom_stops: Some(headroom),
+        let fit = |range: f32, dark_end: DarkEnd| FitRangeSection {
+            highlight_range_stops: Some(range),
             dark_end: Some(dark_end),
         };
         assert!(!FitRangeSection::default().asks_for_a_fit());
         assert!(!fit(0.0, DarkEnd::Off).asks_for_a_fit());
         assert!(!fit(0.0, DarkEnd::default()).asks_for_a_fit());
         assert!(fit(5.0, DarkEnd::default()).asks_for_a_fit());
-        assert!(fit(0.0, DarkEnd::Black(5.0)).asks_for_a_fit());
+        assert!(fit(0.0, DarkEnd::Base(5.0)).asks_for_a_fit());
         assert!(fit(0.0, DarkEnd::Floor(5.0)).asks_for_a_fit());
     }
 
@@ -5136,11 +5143,11 @@ mod tests {
             validate(&r, names).map_err(|e| e.message().to_string())
         };
         with(DarkEnd::Off, KnobNames::FlagAndKey).unwrap();
-        with(DarkEnd::Black(MAX_DARK_END_STOPS), KnobNames::FlagAndKey).unwrap();
+        with(DarkEnd::Base(MAX_DARK_END_STOPS), KnobNames::FlagAndKey).unwrap();
         with(DarkEnd::Floor(MAX_DARK_END_STOPS), KnobNames::FlagAndKey).unwrap();
         for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
             for (dark_end, flag) in [
-                (DarkEnd::Black(bad), "--dark-base"),
+                (DarkEnd::Base(bad), "--dark-base"),
                 (DarkEnd::Floor(bad), "--dark-floor"),
                 (DarkEnd::Target(bad), "--dark-target"),
             ] {
@@ -5152,7 +5159,7 @@ mod tests {
                 );
             }
         }
-        let err = with(DarkEnd::Black(-1.0), KnobNames::KeyOnly).unwrap_err();
+        let err = with(DarkEnd::Base(-1.0), KnobNames::KeyOnly).unwrap_err();
         assert!(err.contains("`fit_range.dark_end`"), "{err}");
         assert!(!err.contains("--dark-base"), "{err}");
     }
@@ -5161,7 +5168,7 @@ mod tests {
     fn the_dark_end_reads_from_a_recipe() {
         for (json, want) in [
             (r#""off""#, DarkEnd::Off),
-            (r#"{"base": 5}"#, DarkEnd::Black(5.0)),
+            (r#"{"base": 5}"#, DarkEnd::Base(5.0)),
             (r#"{"floor": 4}"#, DarkEnd::Floor(4.0)),
             (r#"{"target": 5.5}"#, DarkEnd::Target(5.5)),
         ] {
@@ -5172,7 +5179,7 @@ mod tests {
             assert_eq!(r.fit_range.dark_end, Some(want), "{json}");
         }
         assert!(parse(r#"{"recipe_version": 3, "fit_range": {"dark_end": 5}}"#).is_err());
-        // The rendering's base: the target under `default`, display black under `direct`.
+        // The rendering's base: the target under `default`, the dark base under `direct`.
         assert_eq!(resolve::fit_range(&Recipe::default()).1, DarkEnd::default());
         let direct = parse(r#"{"recipe_version": 3, "rendering": "direct"}"#).unwrap();
         assert_eq!(
@@ -5203,7 +5210,7 @@ mod tests {
         check_body(&v, true, "recipe r.json").unwrap();
         let r: Recipe = serde_json::from_value(v).unwrap();
         assert_eq!(r.fit_range.dark_end, None);
-        assert_eq!(r.fit_range.headroom_stops, Some(4.0));
+        assert_eq!(r.fit_range.highlight_range_stops, Some(4.0));
     }
 
     #[test]
@@ -5221,7 +5228,7 @@ mod tests {
             );
         }
         let r = parse(r#"{"recipe_version": 3, "fit_range": {"dark_end": {"base": 6}}}"#).unwrap();
-        assert_eq!(r.fit_range.dark_end, Some(DarkEnd::Black(6.0)));
+        assert_eq!(r.fit_range.dark_end, Some(DarkEnd::Base(6.0)));
     }
 
     #[test]
@@ -5245,7 +5252,7 @@ mod tests {
         assert!(strip_retired_nulls(&mut v));
         check_body(&v, true, "recipe r.json").unwrap();
         let r: Recipe = serde_json::from_value(v).unwrap();
-        assert_eq!(r.fit_range.headroom_stops, None);
+        assert_eq!(r.fit_range.highlight_range_stops, None);
         assert_eq!(r.fit_range.dark_end, Some(DarkEnd::Off));
     }
 
@@ -5525,10 +5532,10 @@ mod tests {
                 r.output == OutputSection::FilmMaster
             }),
             ("--highlight-range", &["--highlight-range", "4"], |r| {
-                r.fit_range.headroom_stops == Some(4.0)
+                r.fit_range.highlight_range_stops == Some(4.0)
             }),
             ("--dark-base", &["--dark-base", "5"], |r| {
-                r.fit_range.dark_end == Some(DarkEnd::Black(5.0))
+                r.fit_range.dark_end == Some(DarkEnd::Base(5.0))
             }),
             ("--dark-floor", &["--dark-floor", "5"], |r| {
                 r.fit_range.dark_end == Some(DarkEnd::Floor(5.0))
@@ -5604,7 +5611,7 @@ mod tests {
             ("--anchor-mid-offset", "30", "reconstruction.anchor_rule"),
             ("--contrast", "100", "look.contrast"),
         ] {
-            // `direct`, whose pinned display black reads the base without being stated.
+            // `direct`, whose pinned dark base reads the base without being stated.
             let err =
                 render_err(V3, &["--rendering", "direct", &format!("{flag}={value}")]).expect(flag);
             assert!(
@@ -5618,7 +5625,7 @@ mod tests {
                 "{flag}: {err}"
             );
         }
-        // A display black stated under `default` is named too: its default, the target,
+        // A dark base stated under `default` is named too: its default, the target,
         // reads no base.
         let err = render_err(V3, &["--dark-base", "6", "--density-offset=-30,-30,-30"]).unwrap();
         assert!(
@@ -5643,7 +5650,7 @@ mod tests {
         );
         // The region clause belongs to a base read from a region only.
         assert!(!err.contains("region"), "{err}");
-        // Display black off reads no base, but the overflow is still the render's.
+        // The dark base off reads no base, but the overflow is still the render's.
         let err = render_err(V3, &["--dark-base", "off", "--density-offset=1e6,1e6,1e6"]).unwrap();
         assert!(err.starts_with("the densest sample"), "{err}");
     }

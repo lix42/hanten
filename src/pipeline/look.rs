@@ -5,7 +5,7 @@
 //! normalization. Scene-referred and linear. Each control lands here with its own
 //! task under `nf-look`, as its own key in the recipe's `look` section — not one
 //! CDL-style object, whose slope and offset would duplicate white balance, which scene
-//! correction owns, and display black, which fit range owns.
+//! correction owns, and the dark base, which fit range owns.
 //!
 //! **Its position is a constraint, not a preference.** The look sits after scene
 //! correction and *above* the SDR/HDR branch, because a gain map requires the two

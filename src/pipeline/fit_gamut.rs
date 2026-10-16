@@ -204,7 +204,7 @@ mod tests {
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
 
     /// Film RGB through the stages above at their identities — fit range at zero
-    /// headroom — against `peak`, and the ACEScg values that reach this stage.
+    /// highlight range — against `peak`, and the ACEScg values that reach this stage.
     fn fitted(film_rgb: &[f32], peak: DisplayPeak) -> (RangeFittedImage, Vec<f32>) {
         let image = LinearImage::new((film_rgb.len() / 3) as u32, 1, film_rgb.to_vec());
         let aces = map_nc_film_rgb_v1(FilmRgbImage::fixture(image.unwrap()));
@@ -213,7 +213,7 @@ mod tests {
             scene_correction::apply(aces, &SceneCorrectionParams::default(), None).unwrap();
         let graded = look::apply(corrected, &LookParams::off()).unwrap();
         let params = FitRangeParams {
-            headroom_stops: 0.0,
+            highlight_range_stops: 0.0,
             peak,
             dark_end: fit_range::DarkEnd::Off,
             film_base: 1.0,
@@ -388,8 +388,8 @@ mod tests {
 
     #[test]
     fn an_overflowing_change_of_primaries_is_refused_naming_the_pixel() {
-        // Finite through fit range at zero headroom, but the 3×3's first row passes
-        // `f32::MAX` (`1.379 × 3.3e38`). Refused, not handed to the encoder.
+        // Finite through fit range at zero highlight range, but the 3×3's first row
+        // passes `f32::MAX` (`1.379 × 3.3e38`). Refused, not handed to the encoder.
         let input = [0.18, 0.18, 0.18, 3.3e38, 3.3e38, 3.3e38];
         let (image, aces) = fitted(&input, DisplayPeak::SDR);
         assert!(aces.iter().all(|v| v.is_finite()), "{aces:?}");
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn two_ceilings_disagree_only_where_one_of_them_binds() {
         // The callers share this function and differ only in the ceiling they pass —
-        // SDR's display white, HDR's and the gain map's linear headroom. Every colour
+        // SDR's display white, HDR's and the gain map's display peak. Every colour
         // here sits at a luminance under both, in four groups by which boundary, if
         // any, limits it. Saturated on purpose: on the neutral axis the two ceilings
         // could never be told apart.
@@ -580,7 +580,7 @@ mod tests {
         0x3fcecada, 0x3fcecada, 0x3fcecada,
     ];
 
-    /// At the HDR renderer's and the gain map's linear headroom, 1000/203.
+    /// At the HDR renderer's and the gain map's display peak, 1000/203.
     const GOLDEN_HDR: [u32; 24] = [
         0x00000000, 0x3ebc9dd6, 0x3f4c55a8, 0x3fb33333, 0x3e99999a, 0x3d4ccccd, 0x3e246a26,
         0x3f8fdce1, 0x00000000, 0x00000000, 0x3ddd6e0d, 0x3f2f4c74, 0x3f2cd2a8, 0x00000000,

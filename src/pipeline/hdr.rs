@@ -20,8 +20,8 @@ use crate::types::{LinearImage, NcError, Result};
 pub const REFERENCE_WHITE_NITS: f32 = 203.0;
 /// Initial mastering-display peak selected by the HDR output spike.
 pub const TARGET_PEAK_NITS: f32 = 1000.0;
-/// Linear capacity above reference white: `1000 / 203`.
-pub const LINEAR_HEADROOM: f32 = TARGET_PEAK_NITS / REFERENCE_WHITE_NITS;
+/// The display peak as a sample value: `1000 / 203`.
+pub const PEAK_SAMPLE: f32 = TARGET_PEAK_NITS / REFERENCE_WHITE_NITS;
 
 // The renderer works in f32; every constant below (and the HLG OETF's `a`, in
 // `hlg_oetf`) is narrowed from the single f64 definition in `colorimetry`. The PQ
@@ -88,8 +88,7 @@ pub struct LinearHdrMetadata {
     pub reference_white_nits: f32,
     pub target_peak_nits: f32,
     /// The display peak as a sample value, `target_peak_nits / reference_white_nits`.
-    #[serde(rename = "peak_sample")]
-    pub linear_headroom: f32,
+    pub peak_sample: f32,
     pub tone_curve: &'static str,
     pub gamut_mapping: &'static str,
     pub linear_domain: &'static str,
@@ -317,7 +316,7 @@ pub struct PeakClamp {
     pub below_zero: u64,
 }
 
-/// Clamp an HDR rendition's interleaved `rgb` to `[0, LINEAR_HEADROOM]` in place,
+/// Clamp an HDR rendition's interleaved `rgb` to `[0, PEAK_SAMPLE]` in place,
 /// counting what it clamps — the hand-off every new-chain HDR destination makes,
 /// whatever its primaries ([`from_new_chain`] for one rendition, the gain map for its
 /// HDR rendition). A non-finite sample is refused, naming the lowest pixel: the chain never
@@ -333,12 +332,12 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
                     "the HDR rendition has a non-finite sample at pixel {index} ({px:?})"
                 )));
             }
-            clamp.above_peak += u64::from(*v > LINEAR_HEADROOM);
+            clamp.above_peak += u64::from(*v > PEAK_SAMPLE);
             clamp.below_zero += u64::from(*v < 0.0);
         }
     }
     pixels::map_in_place(rgb, |px| {
-        *px = px.map(|v| v.clamp(0.0, LINEAR_HEADROOM));
+        *px = px.map(|v| v.clamp(0.0, PEAK_SAMPLE));
     });
     Ok(clamp)
 }
@@ -346,7 +345,7 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
 /// The chain's HDR rendition, handed to the HDR encoders (`nf-destinations/preset-set`).
 ///
 /// `image` is fit gamut's output in linear `gamut`, relative to reference white. **Every
-/// channel is clamped to `[0, LINEAR_HEADROOM]` here, and what that clamps is counted and
+/// channel is clamped to `[0, PEAK_SAMPLE]` here, and what that clamps is counted and
 /// returned**: fit range sets no hard ceiling above diffuse white (the branch contract),
 /// so content can sit above the peak, and the PQ encode would otherwise store it past the
 /// peak the file declares — with nothing counting it. The caller folds the counts into
@@ -372,7 +371,7 @@ pub fn from_new_chain(
             metadata: LinearHdrMetadata {
                 reference_white_nits: REFERENCE_WHITE_NITS,
                 target_peak_nits: TARGET_PEAK_NITS,
-                linear_headroom: LINEAR_HEADROOM,
+                peak_sample: PEAK_SAMPLE,
                 tone_curve,
                 gamut_mapping,
                 linear_domain: linear_labels(gamut).domain,
@@ -403,7 +402,7 @@ pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<R
         let encoded = match transfer {
             HdrTransfer::Pq => px.map(|channel| pq_encode_nits(channel * REFERENCE_WHITE_NITS)),
             HdrTransfer::Hlg => {
-                let display = px.map(|channel| channel / LINEAR_HEADROOM);
+                let display = px.map(|channel| channel / PEAK_SAMPLE);
                 let scene = hlg_inverse_ootf(display);
                 let scene_luminance = dot(scene, BT2020_LUMINANCE);
                 radial_to_boundary(scene, scene_luminance, 1.0).map(hlg_oetf)
@@ -726,8 +725,8 @@ mod tests {
 
     #[test]
     fn rendered_peak_lands_at_1000_nits_in_both_transfer_systems() {
-        let pq = encode_transfer(linear(&[LINEAR_HEADROOM; 3]), HdrTransfer::Pq).unwrap();
-        let hlg = encode_transfer(linear(&[LINEAR_HEADROOM; 3]), HdrTransfer::Hlg).unwrap();
+        let pq = encode_transfer(linear(&[PEAK_SAMPLE; 3]), HdrTransfer::Pq).unwrap();
+        let hlg = encode_transfer(linear(&[PEAK_SAMPLE; 3]), HdrTransfer::Hlg).unwrap();
         close(pq.image().rgb()[0], 0.751_827_1);
         close(hlg.image().rgb()[0], 1.0);
     }
@@ -736,7 +735,7 @@ mod tests {
     fn out_of_gamut_color_uses_one_chroma_scale_at_constant_luminance() {
         let input = [-0.4, 1.5, 0.3];
         let luminance = dot(input, BT2020_LUMINANCE);
-        let output = radial_to_boundary(input, luminance, LINEAR_HEADROOM);
+        let output = radial_to_boundary(input, luminance, PEAK_SAMPLE);
         close(dot(output, BT2020_LUMINANCE), luminance);
         let before = input.map(|channel| channel - luminance);
         let after = output.map(|channel| channel - luminance);
@@ -750,7 +749,7 @@ mod tests {
         assert!(
             output
                 .iter()
-                .all(|value| (0.0..=LINEAR_HEADROOM).contains(value))
+                .all(|value| (0.0..=PEAK_SAMPLE).contains(value))
         );
     }
 
@@ -759,7 +758,7 @@ mod tests {
         // HLG's boundary is `1.0` in scene-linear light: a display colour whose inverse
         // OOTF lands above 1 is mapped onto the cube, so its signal tops out at exactly 1.
         let display = [4.5, 0.05, 0.05];
-        let scene = hlg_inverse_ootf(display.map(|channel| channel / LINEAR_HEADROOM));
+        let scene = hlg_inverse_ootf(display.map(|channel| channel / PEAK_SAMPLE));
         assert!(scene[0] > 1.0, "{scene:?}");
         let hlg = encode_transfer(linear(&display), HdrTransfer::Hlg).unwrap();
         let signal = hlg.image().rgb();
@@ -798,7 +797,7 @@ mod tests {
     #[test]
     fn content_light_is_measured_from_the_frame_in_absolute_nits() {
         // Black, reference white, and the mastering peak in one row, all neutral:
-        // 0, 1 and LINEAR_HEADROOM relative to reference white, so the
+        // 0, 1 and PEAK_SAMPLE relative to reference white, so the
         // measurement must read 0, 203 and 1000 cd/m² — and the frame average is the
         // mean of those three, 401.
         let measured = linear(&[
@@ -808,9 +807,9 @@ mod tests {
             1.0,
             1.0,
             1.0,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
+            PEAK_SAMPLE,
+            PEAK_SAMPLE,
+            PEAK_SAMPLE,
         ])
         .content_light;
         assert_eq!(measured.max_cll_nits, TARGET_PEAK_NITS as u16);
@@ -871,15 +870,8 @@ mod tests {
 
         // The falsifiable half: one pixel above reference white silences it, so the
         // warning tracks the frame rather than the destination.
-        let bright = linear(&[
-            0.0,
-            0.0,
-            0.0,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
-        ])
-        .content_light();
+        let bright =
+            linear(&[0.0, 0.0, 0.0, PEAK_SAMPLE, PEAK_SAMPLE, PEAK_SAMPLE]).content_light();
         assert!(bright.max_cll_nits > REFERENCE_WHITE_NITS as u16);
         assert_eq!(sdr_range_warning(bright), None);
         // A saturated channel above white is above-SDR content even when the pixel's
@@ -919,9 +911,9 @@ mod tests {
             1.0,
             1.0,
             1.0,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
-            LINEAR_HEADROOM,
+            PEAK_SAMPLE,
+            PEAK_SAMPLE,
+            PEAK_SAMPLE,
         ]);
         assert_eq!(rendered.image().width, 3);
         assert_eq!(rendered.image().height, 1);
@@ -931,17 +923,17 @@ mod tests {
                 .image()
                 .rgb
                 .iter()
-                .all(|value| value.is_finite() && (0.0..=LINEAR_HEADROOM).contains(value))
+                .all(|value| value.is_finite() && (0.0..=PEAK_SAMPLE).contains(value))
         );
         for channel in &rendered.image().rgb[3..6] {
             close(*channel, 1.0);
         }
         for channel in &rendered.image().rgb[6..9] {
-            close(*channel, LINEAR_HEADROOM);
+            close(*channel, PEAK_SAMPLE);
         }
         assert_eq!(rendered.metadata().reference_white_nits, 203.0);
         assert_eq!(rendered.metadata().target_peak_nits, 1000.0);
-        close(rendered.metadata().linear_headroom, 1000.0 / 203.0);
+        close(rendered.metadata().peak_sample, 1000.0 / 203.0);
         assert_eq!(
             rendered.metadata().linear_domain,
             "bt2020-linear-relative-to-203-nit-reference-white"
@@ -968,7 +960,7 @@ mod tests {
 
     #[test]
     fn the_new_chain_hand_off_clamps_to_the_peak_and_counts_what_it_clamped() {
-        let over = LINEAR_HEADROOM * 2.0;
+        let over = PEAK_SAMPLE * 2.0;
         let rgb = vec![
             over,
             1.0,
@@ -976,7 +968,7 @@ mod tests {
             0.5,
             0.5,
             0.5, // within range: untouched
-            LINEAR_HEADROOM,
+            PEAK_SAMPLE,
             0.0,
             0.0, // exactly at the peak: not counted
         ];
@@ -989,17 +981,7 @@ mod tests {
                 below_zero: 1
             }
         );
-        let clamped = [
-            LINEAR_HEADROOM,
-            1.0,
-            0.0,
-            0.5,
-            0.5,
-            0.5,
-            LINEAR_HEADROOM,
-            0.0,
-            0.0,
-        ];
+        let clamped = [PEAK_SAMPLE, 1.0, 0.0, 0.5, 0.5, 0.5, PEAK_SAMPLE, 0.0, 0.0];
         assert_eq!(
             hdr.image()
                 .rgb
@@ -1013,7 +995,7 @@ mod tests {
         assert_ne!(hdr.content_light(), measure_content_light(&rgb));
         let m = hdr.metadata();
         assert_eq!((m.tone_curve, m.gamut_mapping), ("reinhard", "radial"));
-        assert_eq!(m.linear_headroom, LINEAR_HEADROOM);
+        assert_eq!(m.peak_sample, PEAK_SAMPLE);
 
         // Nothing out of range: nothing counted.
         let image = LinearImage::new(1, 1, vec![0.2, 0.3, 0.4]).unwrap();

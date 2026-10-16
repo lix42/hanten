@@ -432,7 +432,7 @@ fn approximate(value: f32, max_numerator: u64) -> Result<(u64, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::hdr::LINEAR_HEADROOM;
+    use crate::pipeline::hdr::PEAK_SAMPLE;
 
     /// What a per-channel map over the default HDR destination states: distinct
     /// extrema per channel, the offsets the map is ratioed with, unit gamma.
@@ -443,7 +443,7 @@ mod tests {
             gamma: [1.0; 3],
             base_offset: [1.0 / 64.0; 3],
             alternate_offset: [1.0 / 64.0; 3],
-            alternate_headroom_linear: LINEAR_HEADROOM,
+            alternate_headroom_linear: PEAK_SAMPLE,
         }
     }
 
@@ -510,7 +510,7 @@ mod tests {
     fn inexact_values_round_trip_within_the_field_resolution() {
         // 0.1 and log2(1000/203) are not dyadic; the expansion must still land
         // close enough that a decoder recovers the intended value.
-        for value in [0.1_f32, 2.300_448, 1.0 / 3.0, LINEAR_HEADROOM] {
+        for value in [0.1_f32, 2.300_448, 1.0 / 3.0, PEAK_SAMPLE] {
             let signed = Rational::from_f32(value).unwrap();
             close(signed.value(), f64::from(value));
             assert!(signed.denominator > 0);

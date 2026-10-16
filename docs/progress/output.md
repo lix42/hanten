@@ -116,11 +116,11 @@ What other epics need to know about `output`:
   (reference white for SDR, the 1000-nit peak for HDR), so the same overshoot is
   refused on `display-p3` and renders on `hdr-pq`. `reinhard` is
   `extended-reinhard-mid-preserving-v2` since **2026-09-09**: it preserves scene
-  mid-grey at every headroom, `headroom_stops` (default 6, display-referred) is the
-  curve's *scale*, and diffuse white costs ≈0.86 stop on both branches. Anything
-  holding a `reinhard` rendition from before that date must re-render. The gain-map
-  pair was admitted only because `gain_map::build` ratios against the base **as
-  stored** (`min(sdr, 1)`); never relax the check instead.
+  mid-grey at every highlight range, `fit_range.highlight_range_stops` (default 6,
+  display-referred) is the curve's *scale*, and diffuse white costs ≈0.86 stop on
+  both branches. Anything holding a `reinhard` rendition from before that date must
+  re-render. The gain-map pair was admitted only because `gain_map::build` ratios
+  against the base **as stored** (`min(sdr, 1)`); never relax the check instead.
 - **Native dependency packaging:** the shipped Ultra HDR implementation keeps
   the audited libultrahdr/libjpeg-turbo snapshot in-tree. **The plan changed on
   2026-08-05** (`output/ultrahdr-dependency-externalization`, id kept, scope now

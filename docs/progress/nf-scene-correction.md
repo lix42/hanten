@@ -36,11 +36,11 @@ has no consumer inside a new-flow render.
 **There is no scene-side black-point term (`flare-removal`, closed as not needed
 2026-09-26).** Base fog is already in the measured film base, lens glare is part of the
 photograph, and scanner veil is a highlight question. Placing black is fit range's
-`--display-black`. So this stage produces no negative channels, and display black's
+`--dark-base`. So this stage produces no negative channels, and the dark base's
 film-base reference has no scene subtraction to account for.
 
 **`linear_range` retired, with no successor (`levels-knob`, 2026-09-30).** Its gain is
-`--exposure` and its black is `--display-black`. Its refusals (`--linear-range`, the
+`--exposure` and its black is `--dark-base`. Its refusals (`--linear-range`, the
 `print` section, `simple`'s `--clip-low` / `--clip-high`) now name those two knobs. A
 lifted black (a faded look) is the one thing it could do that nothing does now. If anyone
 wants it, it is a look control.

@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::pipeline::gain_encode::{self, OFFSET};
     use crate::pipeline::gain_ratio::between;
-    use crate::pipeline::hdr::LINEAR_HEADROOM;
+    use crate::pipeline::hdr::PEAK_SAMPLE;
 
     /// The marker sequence of one JPEG image up to its first scan, with a label for
     /// the APP segments that carry one.
@@ -252,7 +252,7 @@ mod tests {
         let image = |rgb| LinearImage::new(width, height, rgb).unwrap();
         let ratios = between(&image(sdr.clone()), &image(hdr), OFFSET).unwrap();
         let map = gain_encode::encode(&ratios).unwrap();
-        let fields = fields(&map, LINEAR_HEADROOM).unwrap();
+        let fields = fields(&map, PEAK_SAMPLE).unwrap();
         let (base, _) =
             encode_display(&image(sdr), &[0; 16], "SDR base", base_app2(&fields)).unwrap();
         let bytes = assemble(base, &map, &fields).unwrap();
@@ -352,7 +352,7 @@ mod tests {
         let (_, map, fields, _) = sample();
         assert!(fields.is_multichannel && fields.use_base_colour_space);
         assert_eq!(fields.base_hdr_headroom_log2.value(), 0.0);
-        let headroom = f64::from(LINEAR_HEADROOM).log2();
+        let headroom = f64::from(PEAK_SAMPLE).log2();
         assert!((fields.alternate_hdr_headroom_log2.value() - headroom).abs() < 1e-6);
         // Red is live, green and blue are flat: one window each.
         assert!(fields.gain_map_max_log2[0].value() > 1.0);
@@ -423,7 +423,7 @@ mod tests {
         let sdr = read(&path, staged);
         let (_, map, ..) = sample();
         let path = dir.join("gain.jpg");
-        let (staged, base_outcome) = encode(&image, &icc, &map, LINEAR_HEADROOM, &path).unwrap();
+        let (staged, base_outcome) = encode(&image, &icc, &map, PEAK_SAMPLE, &path).unwrap();
         let gain = read(&path, staged);
         std::fs::remove_dir_all(&dir).unwrap();
         let (_, entries) = mp_entries(&gain);

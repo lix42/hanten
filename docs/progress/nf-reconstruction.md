@@ -56,12 +56,12 @@ reachable as `--anchor-mid-offset`. What the anchor is *referenced to* was
 base-referenced, and the roll's white acts through `look.contrast`.
 
 **A washed-out black warns** (`curve-endpoint-warning`, 2026-10-10;
-`pipeline::black_endpoint`). With display black off (the default), the report warns when
+`pipeline::black_endpoint`). With the dark base off (the default), the report warns when
 the look's slope is under 1.237 (a `--contrast` under 1, or a stated thin slope), when a
 measured frame's middle lands above +1.5 display stops *and* its dark end above −1.5, or,
 without tones, when the graded base lands under 2 stops below mid-grey (a roll's exposure
 alone is exempt, a stated exposure on top of it is not). Silent on every archive frame at
-its default; with display black on, its own warning stands instead.
+its default; with the dark base on, its own warning stands instead.
 
 ## fixed-decode
 

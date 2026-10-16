@@ -1170,7 +1170,7 @@ mod tests {
     /// `exposure` (stops) is the lever that reaches the HDR headroom: the values these
     /// tests pass sit in `[0, 1]`, so without it nothing would ever exceed reference
     /// white and a "highlights survive" assertion would pass vacuously. At 2.4 stops a
-    /// `0.9` lands at ≈4.75, just under `LINEAR_HEADROOM`, so nothing is clamped.
+    /// `0.9` lands at ≈4.75, just under `PEAK_SAMPLE`, so nothing is clamped.
     fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, exposure: f32) -> LinearHdr {
         let gain = exposure.exp2();
         let scaled = rgb.iter().map(|v| v * gain).collect();

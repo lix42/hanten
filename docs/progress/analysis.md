@@ -84,9 +84,9 @@ What other epics need to know about `analysis`:
   unit over **L\* 0..200**, i.e. to twice diffuse white, with `above_range` past
   that and separate counters for samples with no lightness. Diffuse white sits on
   the bin-100 boundary and the record names `mid_grey_bin` / `diffuse_white_bin`.
-  The `luminance` series uses the **declared space's own luma weighting**, the same
+  The `luminance` series uses the **declared space's own luminance weighting**, the same
   one `tone.percentiles_stops` is built from, so the two cannot disagree — and it
-  is emitted rather than derived at draw time because luma is a weighted sum of
+  is emitted rather than derived at draw time because luminance is a weighted sum of
   linear channel values and is not recoverable from three per-channel histograms.
   It is there for `analysis/metrics-visualization` to draw; the band edges fall
   exactly on bin edges, so bands and bars share one axis. It streams, so it costs

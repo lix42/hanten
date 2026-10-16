@@ -49,11 +49,11 @@ const WITHIN_PERCENTILES: [f32; 2] = [0.05, 0.95];
 /// 0.114, blue left to right as `docs/reports/sigmoid-reference-baseline.md` found, Gold
 /// 200's 0.027.
 /// Set above the unexposed worst with headroom, and below Portra 160's leader.
-pub const MAX_TILT: f32 = 0.05;
+pub const MAX_GRADIENT: f32 = 0.05;
 
 /// Largest `|offset|`, on any channel, of a tile from the plane through the others.
 ///
-/// Measured with [`MAX_TILT`]: no unexposed frame has a tile more than 0.012 off the
+/// Measured with [`MAX_GRADIENT`]: no unexposed frame has a tile more than 0.012 off the
 /// plane through its other 15, so 0.03 (0.1 stops) leaves 2.5× headroom. On a leader,
 /// edge falloff that is not planar can set aside a whole edge column.
 pub const MAX_TILE_OFFSET: f32 = 0.03;
@@ -106,7 +106,7 @@ impl OutlierTile {
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Uniform,
-    /// The gradient exceeds [`MAX_TILT`] on some channel.
+    /// The gradient exceeds [`MAX_GRADIENT`] on some channel.
     Sloped,
     /// Some tile is more than [`MAX_TILE_OFFSET`] off the plane.
     OutlierTiles,
@@ -121,7 +121,7 @@ pub fn warnings(u: &AreaUniformity) -> Vec<String> {
         let [x, y] = u.gradient[c];
         out.push(format!(
             "the effective area is sloped: its {} density changes by {x:+.3} from the left \
-             edge to the right and {y:+.3} from the top to the bottom (more than {MAX_TILT} \
+             edge to the right and {y:+.3} from the top to the bottom (more than {MAX_GRADIENT} \
              in all; grain within a tile is {:.3}), so the median is a base for its middle, \
              not its edges. Uneven light on the scan, or film that is not unexposed: measure \
              another unexposed frame, or a flat region of this one (`hanten measure-base \
@@ -294,7 +294,9 @@ fn decompose(medians: &[[f32; 3]; TILE_COUNT], within: [f32; 3]) -> AreaUniformi
             });
         between[c] = hi - lo;
     }
-    let sloped = gradient.iter().any(|[x, y]| x.abs() + y.abs() > MAX_TILT);
+    let sloped = gradient
+        .iter()
+        .any(|[x, y]| x.abs() + y.abs() > MAX_GRADIENT);
     let verdict = match (sloped, !outlier_tiles.is_empty()) {
         (false, false) => Verdict::Uniform,
         (true, false) => Verdict::Sloped,
@@ -426,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn a_smooth_ramp_is_tilt_not_grain() {
+    fn a_smooth_ramp_is_a_gradient_not_grain() {
         let u = measure_all(&frame(200, 200, |x, _| 0.2 * x as f32 / 200.0));
         for c in 0..3 {
             let [lr, tb] = u.gradient[c];
@@ -445,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn one_bad_tile_is_located_and_does_not_tilt_the_plane() {
+    fn one_bad_tile_is_located_and_does_not_skew_the_gradient() {
         let u = measure_all(&frame(200, 200, |x, y| {
             noise(x, y, 0.05) + in_tile(x, y, (2, 1), 0.1)
         }));
@@ -463,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn two_bad_tiles_are_both_set_aside_and_do_not_read_as_tilt() {
+    fn two_bad_tiles_are_both_set_aside_and_do_not_read_as_a_gradient() {
         let u = measure_all(&frame(200, 200, |x, y| {
             in_tile(x, y, (0, 0), 0.1) + in_tile(x, y, (1, 0), 0.1)
         }));

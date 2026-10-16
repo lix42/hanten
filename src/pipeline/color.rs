@@ -1410,14 +1410,14 @@ mod tests {
         }
         assert!(worst < 0.005, "worst error above 20 nits was {worst:.5}");
 
-        // Extended range, and the peak lands on the renderer's own headroom.
+        // Extended range, and 1000 nits lands on `PEAK_SAMPLE`.
         let peak = pcs_y_of(&icc, 1.0);
         assert!(peak > 40.0, "PCS peak {peak} is not an extended range");
         let thousand = pcs_y_of(&icc, 0.751_827_096);
         assert!(
-            (thousand - f64::from(hdr::LINEAR_HEADROOM)).abs() < 0.01,
-            "1000 nits should land on LINEAR_HEADROOM ({}), got {thousand}",
-            hdr::LINEAR_HEADROOM
+            (thousand - f64::from(hdr::PEAK_SAMPLE)).abs() < 0.01,
+            "1000 nits should land on PEAK_SAMPLE ({}), got {thousand}",
+            hdr::PEAK_SAMPLE
         );
     }
 

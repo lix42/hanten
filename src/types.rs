@@ -593,68 +593,68 @@ impl From<&FilmBaseSource> for FilmBaseProvenance {
 /// scored better on clipped fraction alone but leaves a pre-clamp peak of 1.016 —
 /// nothing above diffuse white — which is the condition that makes a gain map inert, so
 /// it is deliberately not the default.
-pub const DEFAULT_HEADROOM_STOPS: f32 = 6.0;
+pub const DEFAULT_HIGHLIGHT_RANGE_STOPS: f32 = 6.0;
 
 /// The largest accepted highlight range, in stops.
 ///
 /// Beyond this the operator is indistinguishable from plain `v/(1 + v)` and the number
 /// only looks like a setting. The measured useful range is 4–8 stops.
 ///
-/// Lives here beside the default and [`headroom_white_point`] so the recipe's validation
-/// and fit range cannot bound the knob differently — the failure that pattern produces
-/// is a recipe validation accepts and the render then refuses, at exit 1 after a whole
-/// roll has decoded.
-pub const MAX_HEADROOM_STOPS: f32 = 24.0;
+/// Lives here beside the default and [`highlight_range_white_point`] so the recipe's
+/// validation and fit range cannot bound the knob differently — the failure that
+/// pattern produces is a recipe validation accepts and the render then refuses, at
+/// exit 1 after a whole roll has decoded.
+pub const MAX_HIGHLIGHT_RANGE_STOPS: f32 = 24.0;
 
 /// The white point a highlight range asks for: `2^stops`.
 ///
 /// The **single** definition: `pipeline::fit_range` and its tests read it, so the
 /// stops→white-point meaning has one home.
-pub fn headroom_white_point(stops: f32) -> f32 {
+pub fn highlight_range_white_point(stops: f32) -> f32 {
     stops.exp2()
 }
 
-/// Which part of the highlight-range rule a value breaks — see [`headroom_fault`].
+/// Which part of the highlight-range rule a value breaks — see [`highlight_range_fault`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum HeadroomFault {
+pub enum HighlightRangeFault {
     /// Negative or non-finite.
     Negative(f32),
-    /// Above [`MAX_HEADROOM_STOPS`].
+    /// Above [`MAX_HIGHLIGHT_RANGE_STOPS`].
     TooLarge(f32),
 }
 
-/// The highlight-range rule, as data: the **single** definition the recipe's
-/// validation and fit range both check. Both refuse through [`headroom_fault_message`],
+/// The highlight-range rule, as data: the **single** definition the recipe's validation
+/// and fit range both check. Both refuse through [`highlight_range_fault_message`],
 /// naming the knob as its provenance spells it.
 ///
 /// A negative range is not loud on its own: `2^-40` is a white point of ~9e-13, which
 /// maps essentially every sample past the ceiling and turns the render into a solid
 /// white field at exit 0 with the clip merely *counted*.
-pub fn headroom_fault(stops: f32) -> Option<HeadroomFault> {
+pub fn highlight_range_fault(stops: f32) -> Option<HighlightRangeFault> {
     if !stops.is_finite() || stops < 0.0 {
-        Some(HeadroomFault::Negative(stops))
-    } else if stops > MAX_HEADROOM_STOPS {
-        Some(HeadroomFault::TooLarge(stops))
+        Some(HighlightRangeFault::Negative(stops))
+    } else if stops > MAX_HIGHLIGHT_RANGE_STOPS {
+        Some(HighlightRangeFault::TooLarge(stops))
     } else {
         None
     }
 }
 
-/// The refusal for a [`HeadroomFault`], with `name` spelling the knob — one wording, so
-/// the same bad value is explained the same way wherever it is caught.
-pub fn headroom_fault_message(fault: HeadroomFault, name: &str) -> String {
+/// The refusal for a [`HighlightRangeFault`], with `name` spelling the knob — one
+/// wording, so the same bad value is explained the same way wherever it is caught.
+pub fn highlight_range_fault_message(fault: HighlightRangeFault, name: &str) -> String {
     match fault {
-        HeadroomFault::Negative(stops) => format!(
+        HighlightRangeFault::Negative(stops) => format!(
             "{name} must be finite and non-negative (got {stops}). It is the highlight \
              range: the stops above diffuse white fit range compresses into the display; \
              `0` turns the compression off."
         ),
-        HeadroomFault::TooLarge(stops) => format!(
-            "{name} is {stops} stops, beyond the supported maximum of {MAX_HEADROOM_STOPS}. \
+        HighlightRangeFault::TooLarge(stops) => format!(
+            "{name} is {stops} stops, beyond the supported maximum of {MAX_HIGHLIGHT_RANGE_STOPS}. \
              Above ~8 stops the operator converges on plain Reinhard and a wider range \
              buys nothing; the measured useful range is 4–8 (the default \
-             {DEFAULT_HEADROOM_STOPS} is a white point of {}).",
-            headroom_white_point(DEFAULT_HEADROOM_STOPS)
+             {DEFAULT_HIGHLIGHT_RANGE_STOPS} is a white point of {}).",
+            highlight_range_white_point(DEFAULT_HIGHLIGHT_RANGE_STOPS)
         ),
     }
 }

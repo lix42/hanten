@@ -353,7 +353,7 @@ fn check_base(base: &FilmBase) -> Result<()> {
 }
 
 /// Decode the film base itself, as a one-pixel image: where the unexposed film lands
-/// in the positive, which is display black's reference (`pipeline::chain::render`).
+/// in the positive, which is the dark base's reference (`pipeline::chain::render`).
 ///
 /// Through [`decode`] rather than a formula beside it, so the base follows every
 /// parameter the decode reads — scale, offset, linearization, anchor — by construction.

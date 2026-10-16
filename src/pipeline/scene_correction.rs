@@ -3,7 +3,7 @@
 //! Photographic corrections toward what the scene was: the roll's **midtone neutral**,
 //! **white balance** and **exposure**. There is no flare/fog subtraction here: base fog is already in the
 //! measured film base, lens glare is part of the photograph, and placing black is fit
-//! range's display black (`nf-scene-correction/flare-removal`, closed). Scene-referred
+//! range's dark base (`nf-scene-correction/flare-removal`, closed). Scene-referred
 //! and linear: white balance and exposure are per-channel gains on linear ACEScg, so the
 //! two fold into one multiply and nothing is clamped. The roll's gains are folded in too,
 //! unless they apply as a tilt ([`crate::pipeline::roll_balance`]), which runs per pixel

@@ -1259,14 +1259,14 @@ pub struct DisplayOverrides {
     /// a wider range changes the highlights without darkening the midtones. `0` turns
     /// the compression off; the dark end still applies. Rendered destinations only; the
     /// film master applies no fit range.
-    // A negative headroom must reach the value check, whose message names this very
-    // flag: without this, clap refused `-1` as "unexpected argument".
+    // A negative highlight range must reach the value check, whose message names this
+    // very flag: without this, clap refused `-1` as "unexpected argument".
     #[arg(
         long = "highlight-range",
         value_name = "STOPS",
         allow_hyphen_values = true
     )]
-    pub display_tone_headroom: Option<f32>,
+    pub highlight_range: Option<f32>,
     /// The dark floor: the frame's darkest 1 % (its measured dark end, from `hanten
     /// measure-roll`) renders no deeper than this many stops below mid-grey on the
     /// display, or `off` (recipe key `fit_range.dark_end`, `{"floor": STOPS}`; 4.5, about
@@ -1280,7 +1280,7 @@ pub struct DisplayOverrides {
         value_name = "STOPS|off",
         allow_hyphen_values = true,
         value_parser = crate::pipeline::fit_range::DarkEnd::parse_floor,
-        conflicts_with_all = ["display_black", "dark_target"]
+        conflicts_with_all = ["dark_base", "dark_target"]
     )]
     pub dark_floor: Option<crate::pipeline::fit_range::DarkEnd>,
     /// The dark target: the frame's darkest 1 % (its measured dark end, from `hanten
@@ -1297,7 +1297,7 @@ pub struct DisplayOverrides {
         value_name = "STOPS|off",
         allow_hyphen_values = true,
         value_parser = crate::pipeline::fit_range::DarkEnd::parse_target,
-        conflicts_with = "display_black"
+        conflicts_with = "dark_base"
     )]
     pub dark_target: Option<crate::pipeline::fit_range::DarkEnd>,
     /// The dark base: where the film base — the darkest thing on the film — renders,
@@ -1310,9 +1310,9 @@ pub struct DisplayOverrides {
         long = "dark-base",
         value_name = "STOPS|off",
         allow_hyphen_values = true,
-        value_parser = crate::pipeline::fit_range::DarkEnd::parse_black
+        value_parser = crate::pipeline::fit_range::DarkEnd::parse_base
     )]
-    pub display_black: Option<crate::pipeline::fit_range::DarkEnd>,
+    pub dark_base: Option<crate::pipeline::fit_range::DarkEnd>,
 }
 
 /// The removed chain's print controls (`nf-core/default-flip`), and the two display
@@ -1441,8 +1441,7 @@ pub struct HdrLinearTiffResult {
     /// The sample value that represents `target_peak_nits` (≈4.926108), the display
     /// peak: the largest value the renderer will produce, and the reason this output
     /// cannot be a 16-bit integer TIFF.
-    #[serde(rename = "peak_sample")]
-    pub linear_headroom: f32,
+    pub peak_sample: f32,
     /// Pinned tone-curve / gamut-mapping / linear-domain identifiers, straight from
     /// the renderer's own metadata rather than restated here.
     pub tone_curve: &'static str,
@@ -2297,9 +2296,10 @@ fn reject_a_tilt_without_its_gains(
 }
 
 /// `--dark-floor STOPS` or `--dark-target STOPS` under `direct`: each holds a frame's
-/// measured dark end, and `direct` leaves the roll's measurements out, so it could never
-/// act. Their `off` is spared: it turns off `direct`'s display black. A film master is left to its own refusal, whose
-/// remedy works where `--rendering default` alone would not.
+/// measured dark end, and `direct` leaves the roll's measurements out, so it could
+/// never act. Their `off` is spared: it turns off `direct`'s dark base. A film master
+/// is left to its own refusal, whose remedy works where `--rendering default` alone
+/// would not.
 fn reject_a_floor_nothing_measures(args: &ConversionFlags, r: &Recipe) -> Result<()> {
     if r.rendering != crate::rendering::Rendering::Direct || r.output == OutputSection::FilmMaster {
         return Ok(());
@@ -4278,7 +4278,7 @@ fn report_hdr_linear_tiff(
         reference_white_sample: 1.0,
         reference_white_nits: linear.reference_white_nits,
         target_peak_nits: linear.target_peak_nits,
-        linear_headroom: linear.linear_headroom,
+        peak_sample: linear.peak_sample,
         tone_curve: linear.tone_curve,
         gamut_mapping: linear.gamut_mapping,
         linear_domain: linear.linear_domain,
@@ -4370,12 +4370,12 @@ enum DestinationPixels {
     /// A Rec.2100 signal for the 16-bit TIFF.
     HdrCoded(hdr::RenderedHdr, hdr::PeakClamp),
     /// The SDR base with the display curve applied and its ICC profile, and the gain
-    /// map to the HDR rendition clamped to `headroom`.
+    /// map to the HDR rendition clamped to `display_peak`.
     GainMap {
         base: LinearImage,
         icc: Vec<u8>,
         map: gain_encode::GainMapImage,
-        headroom: f32,
+        display_peak: f32,
         clamp: hdr::PeakClamp,
         /// Boxed: its gain range and fit-range account dwarf the other arms.
         report: Box<GainMapResult>,
@@ -4446,7 +4446,7 @@ impl DestinationRender {
 /// Render the fixed decode's ACEScg for `destination`: nothing for the film master; the
 /// chain, then the destination's transfer, for a rendered one. A rendered destination
 /// also decodes the film base itself, one pixel through the same decode and 3×3 —
-/// display black's reference (`chain::render`); the film master never reads it.
+/// the dark base's reference (`chain::render`); the film master never reads it.
 ///
 /// With `export`, the buffers the encoder receives are staged there too
 /// (`--export-pre-encode`): linear, before any transfer or quantization, written from
@@ -4654,7 +4654,7 @@ fn render_gain_map(
             base,
             icc,
             map,
-            headroom: peak.value(),
+            display_peak: peak.value(),
             clamp,
             report: Box::new(report),
         },
@@ -4740,9 +4740,9 @@ fn encode_render(
             base,
             icc,
             map,
-            headroom,
+            display_peak,
             ..
-        } => iso_gain_map::encode(&base, &icc, &map, headroom, output)?,
+        } => iso_gain_map::encode(&base, &icc, &map, display_peak, output)?,
     })
 }
 
@@ -4877,7 +4877,7 @@ fn render_frame(
         );
     }
     if let Some(r) =
-        rendered.filter(|r| !matches!(r.fit_range.dark_end.setting, fit_range::DarkEnd::Black(_)))
+        rendered.filter(|r| !matches!(r.fit_range.dark_end.setting, fit_range::DarkEnd::Base(_)))
     {
         let slope = resolve::slope(recipe);
         let inputs = black_endpoint::Inputs {
@@ -4892,8 +4892,8 @@ fn render_frame(
                     recipe.scene_correction.white_balance;
                 gains
             },
-            film_base_stops: r.fit_range.dark_end.film_base_stops,
-            headroom_stops: r.fit_range.headroom_stops,
+            film_base_below_mid_stops: r.fit_range.dark_end.film_base_below_mid_stops,
+            highlight_range_stops: r.fit_range.highlight_range_stops,
             contrast: slope.contrast,
             base_slope: slope.base_slope,
             base_from: slope.base_from.phrase(),
@@ -8554,7 +8554,8 @@ fn measured_roll_white(
             percentile: roll_white::WHITE_PERCENTILE,
             cap_stops: roll_white::WHITE_CAP_STOPS,
             floor_stops: roll_white::WHITE_FLOOR_STOPS,
-            film_saturation_margin_stops: guarded.then_some(roll_white::SATURATION_MARGIN_STOPS),
+            film_saturation_margin_stops: guarded
+                .then_some(roll_white::FILM_SATURATION_MARGIN_STOPS),
         },
     })
 }
@@ -9638,7 +9639,7 @@ fn measure_roll(
                      leader (margin {} stop); the film compresses highlights there, which \
                      the decode renders flat",
                     input.display(),
-                    roll_white::SATURATION_MARGIN_STOPS
+                    roll_white::FILM_SATURATION_MARGIN_STOPS
                 ),
             );
         }
@@ -9816,8 +9817,8 @@ fn measure_roll(
             }
             Some(t) if t.bounded => {
                 log.info(format_args!(
-                    "{name}: thin lift held by the slope bound {}: its white rises {:.2} stop",
-                    roll_white::THIN_SLOPE_BOUND,
+                    "{name}: thin lift held by the max thin slope {}: its white rises {:.2} stop",
+                    roll_white::MAX_THIN_SLOPE,
                     t.lift_stops
                 ));
                 thin_bounded.push(f.input.clone());
@@ -9888,7 +9889,7 @@ fn measure_roll(
         base_share: roll_white::THIN_BASE_SHARE,
         near_base_stops: roll_white::NEAR_BASE_STOPS,
         lift_stops: roll_white::THIN_LIFT_STOPS,
-        max_thin_slope: roll_white::THIN_SLOPE_BOUND,
+        max_thin_slope: roll_white::MAX_THIN_SLOPE,
         bounded: thin_bounded,
         unlifted: thin_unlifted,
     };

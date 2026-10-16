@@ -33,7 +33,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::pipeline::fit_range::DisplayPeak;
-use crate::pipeline::hdr::{HdrTransfer, LINEAR_HEADROOM};
+use crate::pipeline::hdr::{HdrTransfer, PEAK_SAMPLE};
 use crate::types::Result;
 
 /// One axis of the destination set: its values, its default, and how a message names
@@ -239,7 +239,7 @@ impl Range {
     pub fn peak(self) -> Result<DisplayPeak> {
         match self {
             Range::Sdr => Ok(DisplayPeak::SDR),
-            Range::Hdr => DisplayPeak::new(LINEAR_HEADROOM),
+            Range::Hdr => DisplayPeak::new(PEAK_SAMPLE),
         }
     }
 }
