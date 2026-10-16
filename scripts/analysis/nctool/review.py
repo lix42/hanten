@@ -418,7 +418,7 @@ def reject_owned_flags(args: list[str], at: str) -> None:
         # and it would then beat the generator's own `-o`, writing the image
         # somewhere `review.json` does not name.
         name = arg[:2] if arg.startswith("-o") and not arg.startswith("--") else arg.split("=", 1)[0]
-        if name in GEOMETRY_FLAGS and not _geometry_identity(name, arg, args[i + 1:]):
+        if name in GEOMETRY_FLAGS and not geometry_identity(name, arg, args[i + 1:]):
             raise ReviewError(
                 f"{at}: {name} is refused: patch rects are fractions of the source "
                 "scan, which a cropped or turned render no longer shows")
@@ -431,9 +431,12 @@ def reject_owned_flags(args: list[str], at: str) -> None:
                                "--container", "--film-master") else ""))
 
 
-def _geometry_identity(name: str, arg: str, rest: list[str]) -> bool:
+def geometry_identity(name: str, arg: str, rest: list[str]) -> bool:
     """Whether a geometry flag asks for nothing (`--rotate 0`, `--flip none`)."""
     value = arg.split("=", 1)[1] if "=" in arg else (rest[0] if rest else None)
+    # hanten reads `--flip` case-insensitively.
+    if name == "--flip" and value is not None:
+        value = value.lower()
     return (name, value) in (("--rotate", "0"), ("--flip", "none"))
 
 

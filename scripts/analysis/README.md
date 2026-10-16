@@ -84,7 +84,9 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool manifest charts cast meas
 - `charts cast render` measures a roll on its pictures (`measure-roll`, the chart
   frames left out) and renders its chart frames through a grid of settings (default
   `nctool.cast.DEFAULT_GRID`; `--grid` overrides keys) into `<work>/renders/`, SDR Display
-  P3 16-bit TIFF. It needs a current build (destination flags). `charts cast measure`
+  P3 16-bit TIFF. It needs a current build (destination flags); a grid's `extra` args
+  may not crop or turn (`--crop`, or `--rotate`/`--flip` other than `0`/`none`), since
+  the patches are fractions of the scan. `charts cast measure`
   samples every labelled patch of those renders and of each `--source` (another
   producer's exports at the scan's size) as CIELAB D50 and writes `<work>/cast.json`:
   the grey patches' residual cast by tone and by bracket frame, colour-patch CIELAB hue

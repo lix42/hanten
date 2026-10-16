@@ -257,7 +257,8 @@ class TestOwnedFlags(unittest.TestCase):
                 load(configs=[{"id": "a", "args": args}])
 
     def test_accepts_a_turn_that_asks_for_nothing(self):
-        for args in (["--rotate=0"], ["--rotate", "0"], ["--flip=none"], ["--flip", "none"]):
+        for args in (["--rotate=0"], ["--rotate", "0"], ["--flip=none"], ["--flip", "none"],
+                     ["--flip", "NONE"]):
             load(configs=[{"id": "a", "args": args}])
 
     def test_sees_the_equals_form_too(self):
