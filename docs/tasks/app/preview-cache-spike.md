@@ -19,6 +19,13 @@ Measure the core over a whole roll, not one frame, to design the preview cache
 - Measuring ran as a separate `measure-roll` process, so every frame decoded twice
   (spike unknown 6); the design measures in the core.
 - `pipeline/memory.rs` models one run, not a long-lived cache (spike unknown 7).
+- From `app/export-beside-preview-spike` (`docs/spike/export-beside-preview.md`):
+  - Export runs one frame at a time beside the cache, adding ~300 MB. Export decodes
+    again, re-reading a file the preview already read, so the page cache (or a cold
+    cloud read) matters twice.
+  - Preparing a frame while an export runs was not measured.
+  - Background work in the core (measuring, filling a disk cache) can't use a lower QoS:
+    on Apple silicon it slowed the export 7× or more.
 
 ## Open questions
 
