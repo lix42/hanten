@@ -109,8 +109,9 @@ are Hanten features not yet implemented in the CLI (§4).
 - Non-destructive by construction: output is always re-rendered from negatives + config.
 - An unwritable folder is a write error; the app asks for another folder.
 - A cloud file not fully downloaded (spike unknown 11) is a named fault, which the handler
-  can retry. Treated as an edge case but tested; on a streamed folder it can hit most of
-  a roll.
+  can retry. In iCloud Drive the first read downloads the whole file (about 1.3 s per
+  frame) and fails with `ETIMEDOUT` when offline (`docs/spike/file-access.md`).
+  Treated as an edge case but tested; on a streamed folder it can hit most of a roll.
 
 ### 2.9 Versioning
 
@@ -279,7 +280,8 @@ From `docs/spike/packaging.md`. It ran ad-hoc signed; the signed parts are
 `app/signed-build-spike`.
 
 - **Outside the Mac App Store**, with no sandbox: Developer ID signed, hardened runtime,
-  notarized. The core and lcms2 (linked statically) need no entitlements.
+  notarized. The core and lcms2 need no entitlements. lcms2 must be linked statically
+  (`LCMS2_STATIC=1`): library validation refuses a Homebrew copy found by pkg-config.
 - **Updates** use Tauri's updater, which has its own signing key, separate from Apple's.
   - The endpoint is https.
   - `requireSignedVersion` is on, so an unsigned manifest can't pair a newer version
@@ -294,9 +296,12 @@ From `docs/spike/packaging.md`. It ran ad-hoc signed; the signed parts are
   builds never enable. The file-based keychain would prompt after every rebuild.
 - **Telemetry consent** is the app's own: a record in its Application Support folder,
   asked for in the UI. Today's record is the CLI's (`~/.config/nc`).
-- **File access** outside the sandbox is whatever the user can read. Whether macOS's
-  privacy prompts keep a picked folder open across relaunches and updates is
-  `app/file-access-spike`.
+- **File access** goes through the open panel (`docs/spike/file-access.md`). A picked
+  folder, protected or not, opens with no prompt and stays open across relaunches and
+  ad-hoc updates. Opening a protected folder the user did not pick prompts, and an ad-hoc update
+  loses that grant, so the app opens only folders the user picked. A privacy refusal is
+  `EPERM` and an unwritable folder `EACCES`; both are `PermissionDenied` in Rust, so the
+  app branches on the errno.
 
 ## 4. New work the app needs first
 
@@ -340,11 +345,12 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 - How the export dialog presents the four destination axes.
 - Roll setup details (detecting base and leader, adding files).
 - GUI ↔ CLI ↔ agents (copy a frame as a command, MCP): not designed yet.
-- File access (§3.8): external drives, protected folders and iCloud Drive; whether a
-  picked folder stays readable after a relaunch and an update; a cloud scan not yet
-  downloaded (`app/file-access-spike`).
+- File access (§3.8): removable media, network volumes, Google Drive's streamed
+  folders, a dropped folder, and how long a pick lasts (across a reboot or a moved
+  folder) were not tested.
 - The signed build (§3.8): notarization, whether the P-256 key syncs to a second Mac,
-  and whether a Developer ID update keeps keychain and folder access without asking
+  and whether a Developer ID update keeps keychain access and a prompt-based folder
+  grant without asking
   (`app/signed-build-spike`).
 - Telemetry in the app: what the consent screen shows, and whether uploads use a helper
   process or a thread.

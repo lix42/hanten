@@ -19,6 +19,10 @@ downloaded yet ([desktop app design](../../design/desktop-app.md) §2.8).
 - Seen in the prototype spike (`docs/spike/native-app-prototype.md`, unknown 11): 22 of
   36 files on a streamed roll were shorter on disk than the manifest records.
 - The app wants a stable code for it (`core/message-codes`).
+- iCloud Drive is a second case: a file whose data is only in the cloud (`SF_DATALESS`)
+  is downloaded whole by its first read. Offline, that read fails with `ETIMEDOUT`
+  (errno 60), which today surfaces as exit 3, `not a readable TIFF: Operation timed out`
+  (`docs/spike/file-access.md`).
 
 ## Open questions
 

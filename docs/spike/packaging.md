@@ -4,7 +4,7 @@
 hardened runtime, exports in-process, and updates itself. Two parts moved to later tasks:
 
 - File access on an external drive, a protected folder and a cloud folder
-  (`app/file-access-spike`; [checklist](#file-access-checklist)).
+  (`app/file-access-spike`, done: [file-access.md](file-access.md)).
 - Signing, notarization and the synced device key, which wait on Apple Developer Program
   enrollment (`app/signed-build-spike`; [steps](#q6--signed-steps-not-run)).
 
@@ -49,7 +49,8 @@ signing identity · Tauri 2.12.4, tauri-cli 2.12.3 (bundler 2.10.3), tauri-plugi
 
 - The bundle is signed `flags=0x10002(adhoc,runtime)` with no entitlements. `otool -L`
   lists only system frameworks: lcms2 is linked statically, so nothing else needs
-  signing.
+  signing. That held only because this Mac had no Homebrew lcms2; the build must set
+  `LCMS2_STATIC=1` ([file-access.md](file-access.md#packaging-the-build-must-force-a-static-lcms2)).
 - In the installed app, two fixture frames were measured and one exported in 98 ms, and
   the TIFF is **byte-identical** to the CLI's `convert` with the same recipe.
 - Sizes: the `.app` is 19 MiB (20 MB executable), the update archive 6.4 MiB.
@@ -86,15 +87,8 @@ signing identity · Tauri 2.12.4, tauri-cli 2.12.3 (bundler 2.10.3), tauri-plugi
 
 ### Q3 — File access: moved to `app/file-access-spike`
 
-Not run: the external drive wasn't mounted. Outside the sandbox the app reads
-whatever its user can. The open questions are macOS's privacy prompts (TCC):
-
-- Does a folder picked in the dialog stay readable after a relaunch and after an update?
-  An ad-hoc signature changes with every build.
-- Do removable volumes, Desktop/Documents and iCloud Drive each prompt?
-- How does a cloud file that isn't downloaded yet behave?
-
-The steps are in the [checklist](#file-access-checklist).
+Not run here: the external drive wasn't mounted. The [checklist](#file-access-checklist)
+was run later; the results are in [file-access.md](file-access.md).
 
 ### Q4 — Telemetry consent: the app must own the helper and the record
 
@@ -197,9 +191,8 @@ key. Then run `tccutil reset All app.hanten.spike` and delete
 
 ## Not settled
 
-- File access: the [checklist](#file-access-checklist) (`app/file-access-spike`).
 - Gatekeeper, notarization, the synced key, and whether a Developer ID update keeps
-  keychain and folder access (`app/signed-build-spike`).
+  keychain access and a prompt-based folder grant (`app/signed-build-spike`).
 - Telemetry in the app: what the consent screen shows, and whether uploads use a helper
   process or a thread (design §5).
 - Distribution format (dmg or zip) and the update host. Neither was needed to answer

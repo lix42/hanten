@@ -1,8 +1,9 @@
 ---
 title: File access spike
-status: todo
+status: done
 deps: [app/packaging-spike]
 summary: "the packaged app on scan folders: external drive, Documents/Desktop, iCloud Drive, a read-only folder; do access grants survive a relaunch and an update"
+done: 2026-10-16
 ---
 # File access spike
 
