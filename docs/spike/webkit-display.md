@@ -154,7 +154,8 @@ renders vary between runs by up to 1.5×, so read the ranges, not the digits.
 
 - The 3000 edge and smaller Macs: timings are from an M3 Pro at a 2048 edge only.
 - HDR on a non-XDR external HDR monitor; only the built-in XDR was tested.
-- Packaging, signing and file access: `app/packaging-spike`.
+- Packaging: `docs/spike/packaging.md`; file access and signing: `app/file-access-spike`,
+  `app/signed-build-spike`.
 
 ## How to rebuild
 

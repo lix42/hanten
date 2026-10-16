@@ -95,8 +95,8 @@ Before every export the core checks, in order:
 
 Adding a frame (up to the cap) or replacing one re-seals the record, which only the
 paying device can do, and adds the frame to the token's ledger entry, which refuses it
-past the shared budget. `SecKey`'s RFC 4754 algorithms (macOS 14+) return `r‖s`
-directly.
+past the shared budget. `SecKey` signs in X9.62 DER, which the core converts to `r‖s`.
+Its RFC 4754 algorithm pads each half to 72 bytes on macOS 26 (`docs/spike/packaging.md`).
 
 ### Content hash
 
@@ -137,9 +137,9 @@ still design §5's question.
   in Application Support is enough, and the server can re-send them.
 - **Entitlements:** the data protection keychain needs keychain access-group
   entitlements authorized by a provisioning profile, in an app-like bundle (TN3137). A
-  bare `cargo run` binary can't use it, so development builds need a fallback (the
-  file-based keychain or a test key) that never ships: Keychain Access exports any
-  file-based item.
+  bare `cargo run` binary can't use it, so development builds need a fallback that
+  never ships: a key in a file behind a dev-only Cargo feature (`docs/spike/packaging.md`).
+  The file-based keychain doesn't serve: it prompts after every rebuild.
 - **Reinstall on the same Mac:** dragging an app to the Trash runs no code, so nothing
   removes its Keychain items; key, ledger and tokens survive. (Not run here.)
 - **New Mac:** with iCloud Keychain, nothing to do. Without it, the user signs in and
@@ -214,7 +214,7 @@ a new code hash.
 | | Keychain key (file-based) | Secure Enclave key (CryptoKit blob in a file) | Hardware UUID |
 |---|---|---|---|
 | seals a record | yes | yes: the Rust `p256` crate verifies CryptoKit's `r‖s` signature and rejects an edited message | **no**: nothing secret |
-| updated app reads it | **no**: `-25293`; the item's access list names the old binary. A signed app's list names its team and bundle id (not run) | yes | yes |
+| updated app reads it | **no**: `-25293`; the item's access list names the old binary (a bare binary; a bundled app gets a dialog instead, `docs/spike/packaging.md`). A signed app's list names its team and bundle id (not run) | yes | yes |
 | another program on the Mac | only if the user approves it in a password dialog, which also lets the user read the key out | **yes, silently**: any program of that user can sign with the blob, but it can never be copied off the Mac | yes |
 | another Mac | no (a migrated keychain: not run) | never: only this Secure Enclave can use the blob (Apple) | never: a different id |
 | app deleted, reinstalled | the item stays; an unsigned reinstall can't read it | yes, if the blob file stays | yes |
@@ -239,9 +239,9 @@ a new code hash.
 - The replacement count per roll (design §5).
 - Synced key or Secure Enclave key: this note recommends synced, because multi-Mac
   editing is worth more than non-extractability at this bar.
-- The data protection keychain from the signed Tauri app, whether a P-256 key item
-  actually syncs, and the development fallback (`app/packaging-spike`). No Keychain code
-  was run.
+- The data protection keychain from the signed Tauri app, and whether a P-256 key item
+  actually syncs (`app/signed-build-spike`). The development fallback is a key in a file,
+  compiled out of release builds (`docs/spike/packaging.md`).
 - Adding frames, on a new Mac without iCloud Keychain, to a roll the old Mac paid for. A
   server-signed hand-over (token id → new device key) that the record carries would let
   the new key re-seal it; its ledger starts empty, so the per-account re-bind limit is

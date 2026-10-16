@@ -152,6 +152,9 @@ are Hanten features not yet implemented in the CLI (§4).
   (`docs/spike/offline-token.md`). The Mac App Store's in-app purchase is a
   lower-priority alternative.
 - **The WebKit checks** (§3.1): passed on macOS (`docs/spike/webkit-display.md`).
+- **Apple Developer Program enrollment**, for the Developer ID certificate, notarization
+  and the provisioning profile that the device key's keychain needs (§3.8,
+  `app/signed-build-spike`).
 
 ## 3. High-level design
 
@@ -202,6 +205,12 @@ flowchart LR
   messages.
 - The roll session is an orchestrator beside the CLI; stages stay pure and never touch
   files (design-spec §3, principle 6).
+- The app installs `nc`'s global allocator, as the CLI's `main.rs` does; the library
+  leaves the choice to its host binary.
+- The app binary is the only executable. Anything in the core that re-launches
+  `current_exe()` re-launches the app: today that is the telemetry upload helper
+  (`telemetry upload-once`). The app catches it in `main` before the UI starts, or moves
+  the upload onto a thread (`docs/spike/packaging.md`).
 
 ### 3.3 Report channel (proposal)
 
@@ -251,6 +260,8 @@ flowchart LR
     running.
 - **One export at a time** (~300 MB each; a second adds 16% throughput). Export decodes
   its frame again rather than keeping the preview's full decode.
+- An in-process export in a packaged app, under the hardened runtime, wrote a file
+  byte-identical to `hanten convert` with the same recipe (`docs/spike/packaging.md`).
 
 ### 3.7 Payment
 
@@ -261,6 +272,31 @@ flowchart LR
   to the device's public key at download, that device seals the record, and a
   spent-token list in the Keychain caps what each token pays for
   (`docs/spike/offline-token.md`).
+
+### 3.8 Packaging and updates
+
+From `docs/spike/packaging.md`. It ran ad-hoc signed; the signed parts are
+`app/signed-build-spike`.
+
+- **Outside the Mac App Store**, with no sandbox: Developer ID signed, hardened runtime,
+  notarized. The core and lcms2 (linked statically) need no entitlements.
+- **Updates** use Tauri's updater, which has its own signing key, separate from Apple's.
+  - The endpoint is https.
+  - `requireSignedVersion` is on, so an unsigned manifest can't pair a newer version
+    number with an older archive.
+  - The update swaps the bundle in place.
+- **The bundle id is permanent.** With the team id, it names the device key's keychain
+  access group, so changing it orphans every user's key.
+- **Signatures:** the core asks `SecKey` for X9.62 DER and converts it to `r‖s`. On
+  macOS 26, `SecKey`'s RFC 4754 output pads each half to 72 bytes.
+- **Development builds** can't reach the data protection keychain, because they're
+  unsigned. They keep the device key in a file, behind a Cargo feature that release
+  builds never enable. The file-based keychain would prompt after every rebuild.
+- **Telemetry consent** is the app's own: a record in its Application Support folder,
+  asked for in the UI. Today's record is the CLI's (`~/.config/nc`).
+- **File access** outside the sandbox is whatever the user can read. Whether macOS's
+  privacy prompts keep a picked folder open across relaunches and updates is
+  `app/file-access-spike`.
 
 ## 4. New work the app needs first
 
@@ -304,3 +340,12 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
 - How the export dialog presents the four destination axes.
 - Roll setup details (detecting base and leader, adding files).
 - GUI ↔ CLI ↔ agents (copy a frame as a command, MCP): not designed yet.
+- File access (§3.8): external drives, protected folders and iCloud Drive; whether a
+  picked folder stays readable after a relaunch and an update; a cloud scan not yet
+  downloaded (`app/file-access-spike`).
+- The signed build (§3.8): notarization, whether the P-256 key syncs to a second Mac,
+  and whether a Developer ID update keeps keychain and folder access without asking
+  (`app/signed-build-spike`).
+- Telemetry in the app: what the consent screen shows, and whether uploads use a helper
+  process or a thread.
+- The distribution format (dmg or zip) and where updates are hosted.
