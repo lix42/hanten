@@ -145,8 +145,9 @@ are Hanten features not yet implemented in the CLI (§4).
 - **Camera-scan input.** Hanten reads SilverFast HDR/HDRi; any other 16-bit RGB TIFF
   converts only when the user asserts it is a linear raw scan, and RAW/DNG is not read.
 - **A website selling tokens** (outside this repository): a payment provider that handles
-  sales tax, a server that signs tokens (the signing key never ships), getting tokens into
-  the app, and recovery after a reinstall. The Mac App Store's in-app purchase is a
+  sales tax, accounts, a server that signs tokens bound to a device key (the signing key
+  never ships), getting tokens into the app, and moving them to a new Mac
+  (`docs/spike/offline-token.md`). The Mac App Store's in-app purchase is a
   lower-priority alternative.
 - **The WebKit checks** (§3.1): passed on macOS (`docs/spike/webkit-display.md`).
 
@@ -217,7 +218,8 @@ flowchart LR
   bare name — today `roll.frames` is keyed by file name (spike unknown 9). A missing file
   prompts the user to locate it.
 - Holds the measurements, every resolved value, overrides as offsets, frame operations, and
-  the paid record (per-frame content hashes plus the token's signature).
+  the paid record (the token, per-frame content hashes, replacements and the device's seal;
+  `docs/spike/offline-token.md`).
 
 ### 3.5 Preview and cache
 
@@ -242,9 +244,10 @@ flowchart LR
 - The core checks a roll's paid record before each export and records content hashes at
   the first export. Tokens are verified with a public key built into the core.
 - The token is signed before the roll exists, so its signature cannot cover the hashes.
-  Without a binding, a paid record copied to another project or hand-edited passes the
-  check; the binding (a spent-token ledger outside the project file, a sealed record) is
-  open (`app/offline-token-spike`).
+  The binding is open (§5). A spike proposes one, not final: the server binds the token
+  to the device's public key at download, that device seals the record, and a
+  spent-token list in the Keychain caps what each token pays for
+  (`docs/spike/offline-token.md`).
 
 ## 4. New work the app needs first
 
@@ -276,6 +279,9 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
   frame's.
 - The replacement limit per roll (§2.11).
 - How a token is bound to its roll so a paid record cannot be copied or edited (§3.7).
+  The spike (`docs/spike/offline-token.md`) found that binding to a device strands a
+  user's tokens on one Mac; likely spend online, or download one token just before
+  spending it.
 - The repository is public, so the CLI and the core can be built from source and the
   payment check removed: whether the core goes private before release, or light
   protection accepts this.
