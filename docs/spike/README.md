@@ -11,4 +11,5 @@ that exists. A spike answers an open question before the thing exists.
 
 Sets, scripts and raw measurements stay **outside the repo** (`../temp/<set>/`) — they
 are the user's own photographs. A spike report cites them by path and carries only
-derived numbers.
+derived numbers. One exception: a test page that holds none of the photographs may sit
+beside its report (`webkit-display/`).

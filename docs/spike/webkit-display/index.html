@@ -1,0 +1,512 @@
+<!doctype html>
+<!--
+  Test page for docs/spike/webkit-display.md (app/webkit-display-spike).
+  Q1 and Q2 run in any browser; Q3 and Q4 need the spike's Tauri shell, which renders
+  real previews in-process. Exported files are read from ../media/ (not committed).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebKit display spike</title>
+<style>
+  :root { color-scheme: dark; --fg: #ddd; --muted: #999; --bg: #161616; --line: #333; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 13px/1.45 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 24px 0 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+  p.hint { color: var(--muted); margin: 4px 0 8px; max-width: 70em; }
+  pre { background: #0c0c0c; padding: 8px; overflow: auto; max-height: 22em; font-size: 12px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .cell { display: flex; flex-direction: column; gap: 4px; }
+  .cell span { color: var(--muted); font-size: 12px; }
+  canvas, img { display: block; dynamic-range-limit: no-limit; }
+  .patch { width: 120px; height: 60px; }
+  button, input, select { font: inherit; }
+  label { margin-right: 12px; }
+  #preview { width: 100%; max-width: 1400px; height: auto; background: #000; }
+  .wide { width: 100%; max-width: 900px; height: auto; }
+</style>
+</head>
+<body>
+<h1>WebKit display spike</h1>
+<pre id="env"></pre>
+
+<h2>Q1 — does a Display P3 canvas show P3 colours unclipped?</h2>
+<p class="hint">Each pair: left half is the P3 primary, right half the sRGB primary (the most
+saturated colour sRGB can hold). On a P3 display the halves differ — the left is more
+saturated. On an sRGB display, or if the canvas clips to sRGB, they look the same. The CSS
+row is the reference: WebKit's CSS is known to honour <code>color(display-p3 …)</code>.</p>
+<div class="row">
+  <div class="cell"><span>CSS reference</span><div class="row" id="css-patches"></div></div>
+  <div class="cell"><span>2D canvas, display-p3, fillStyle</span><canvas id="q1-fill" width="372" height="60"></canvas></div>
+  <div class="cell"><span>2D canvas, display-p3, putImageData (the app's path)</span><canvas id="q1-put" width="372" height="60"></canvas></div>
+  <div class="cell"><span>2D canvas, default (srgb), fillStyle</span><canvas id="q1-srgb" width="372" height="60"></canvas></div>
+</div>
+<pre id="q1-out"></pre>
+
+<h2>Q2 — can an HDR preview be shown?</h2>
+<p class="hint">Synthetic patches: in each pair the left is reference white (1.0), the right
+2× or 4× it; the ramp runs 0→4× with ticks at 1, 2 and 3. If HDR works, the right patches
+are brighter than the left, and the ramp keeps brightening past the first tick. If clamped,
+the pairs look identical and the ramp goes flat at the first tick. Judge on the XDR
+display, with brightness not at maximum.</p>
+<div class="row">
+  <div class="cell"><span>WebGPU, rgba16float, display-p3, toneMapping extended</span><canvas id="q2-gpu" width="600" height="240"></canvas></div>
+  <div class="cell"><span>WebGPU, same, toneMapping standard (control)</span><canvas id="q2-gpu-std" width="600" height="240"></canvas></div>
+  <div class="cell"><span>2D canvas, float16 (if offered)</span><canvas id="q2-f16" width="600" height="240"></canvas></div>
+</div>
+<p class="hint">Exported files in an image element (from <code>../media/</code>): the gain-map
+JPEG and the PQ TIFF should show brighter highlights than the SDR TIFF if WebKit renders
+them as HDR.</p>
+<div class="row">
+  <div class="cell"><span>SDR TIFF (Display P3)</span><img id="img-sdr" class="wide" style="max-width:440px" alt=""></div>
+  <div class="cell"><span>gain-map JPEG</span><img id="img-gm" class="wide" style="max-width:440px" alt=""></div>
+  <div class="cell"><span>PQ TIFF (BT.2020)</span><img id="img-pq" class="wide" style="max-width:440px" alt=""></div>
+</div>
+<pre id="q2-out"></pre>
+
+<h2>Q3 — slider to drawn frame, with real renders</h2>
+<p class="hint">Needs the Tauri shell. Open the frame, then drag a slider, or run the scripted
+sweep (60 input events per second for 3 seconds). "Coalesce" keeps one request in flight
+and sends only the newest value when it returns; "every input" sends each event, and the
+core skips any request older than the newest.</p>
+<div>
+  <label>scan <input id="scan" size="60"></label>
+  <label>roll recipe <input id="roll" size="50"></label>
+  <label>max edge <input id="edge" value="2048" size="5"></label>
+  <button id="open">Open</button>
+</div>
+<div style="margin-top:8px">
+  <label>exposure <input id="exposure" type="range" min="-2" max="2" step="0.01" value="0" style="width:260px"></label>
+  <label>contrast <input id="contrast" type="range" min="0.5" max="1.8" step="0.01" value="1" style="width:260px"></label>
+  <label>send <select id="mode"><option value="coalesce">coalesce</option><option value="every">every input</option></select></label>
+  <label><input id="fast" type="checkbox"> direct sRGB curve (no lcms2)</label>
+  <label><input id="hdr" type="checkbox"> HDR (WebGPU canvas)</label>
+  <button id="sweep">Scripted sweep</button>
+  <button id="reset">Reset stats</button>
+  <button id="save">Save results</button>
+</div>
+<pre id="q3-out"></pre>
+<canvas id="preview"></canvas>
+<canvas id="preview-hdr" style="display:none; width:100%; max-width:1400px; height:auto"></canvas>
+
+<h2>Q4 — the canvas against the exported file</h2>
+<p class="hint">After a render at default sliders, "Check readback" reads the canvas back
+in display-p3 and compares it with the bytes that were put (the factor-1 preview equals the
+export at 8 bits; see the report). Then open <code>sdr.tif</code> in Preview beside this
+window and compare by eye.</p>
+<button id="readback">Check readback</button>
+<pre id="q4-out"></pre>
+
+<script>
+"use strict";
+const T = window.__TAURI__;
+const $ = (id) => document.getElementById(id);
+const results = { env: {}, q1: {}, q2: {}, q3: {}, q4: {} };
+const show = (id, obj) => { $(id).textContent = JSON.stringify(obj, null, 2); };
+
+// ---------- environment ----------
+function env() {
+  const mq = (q) => matchMedia(q).matches;
+  Object.assign(results.env, {
+    host: T ? "tauri" : "browser",
+    userAgent: navigator.userAgent,
+    devicePixelRatio: devicePixelRatio,
+    "color-gamut: p3": mq("(color-gamut: p3)"),
+    "dynamic-range: high": mq("(dynamic-range: high)"),
+    "video-dynamic-range: high": mq("(video-dynamic-range: high)"),
+    webgpu: !!navigator.gpu,
+    Float16Array: typeof Float16Array !== "undefined",
+    "CSS dynamic-range-limit": CSS.supports("dynamic-range-limit", "no-limit"),
+  });
+  show("env", results.env);
+}
+
+// ---------- Q1 ----------
+const P3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+function q1() {
+  const css = $("css-patches");
+  for (const [r, g, b] of P3) {
+    const d = document.createElement("div");
+    d.className = "patch";
+    d.style.background = `linear-gradient(to right, color(display-p3 ${r} ${g} ${b}) 50%, rgb(${r * 255} ${g * 255} ${b * 255}) 50%)`;
+    d.style.width = "120px";
+    css.appendChild(d);
+  }
+  const out = {};
+  // fillStyle into a display-p3 canvas
+  const fill = $("q1-fill").getContext("2d", { colorSpace: "display-p3" });
+  out.fill_attributes = fill.getContextAttributes?.();
+  P3.forEach(([r, g, b], i) => {
+    fill.fillStyle = `color(display-p3 ${r} ${g} ${b})`;
+    fill.fillRect(i * 126, 0, 60, 60);
+    fill.fillStyle = `rgb(${r * 255} ${g * 255} ${b * 255})`;
+    fill.fillRect(i * 126 + 60, 0, 60, 60);
+  });
+  // putImageData: left half P3-coded bytes, right half the sRGB primary's P3 coordinates
+  const put = $("q1-put").getContext("2d", { colorSpace: "display-p3" });
+  out.put_attributes = put.getContextAttributes?.();
+  const srgbInP3 = [[234, 51, 35], [117, 251, 76], [0, 0, 245]]; // sRGB primaries as P3 codes
+  P3.forEach((p, i) => {
+    const img = new ImageData(120, 60, { colorSpace: "display-p3" });
+    for (let y = 0; y < 60; y++) for (let x = 0; x < 120; x++) {
+      const o = (y * 120 + x) * 4, c = x < 60 ? p.map((v) => v * 255) : srgbInP3[i];
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+    put.putImageData(img, i * 126, 0);
+  });
+  // control: an sRGB canvas, same fills
+  const s = $("q1-srgb").getContext("2d");
+  P3.forEach(([r, g, b], i) => {
+    s.fillStyle = `color(display-p3 ${r} ${g} ${b})`;
+    s.fillRect(i * 126, 0, 60, 60);
+    s.fillStyle = `rgb(${r * 255} ${g * 255} ${b * 255})`;
+    s.fillRect(i * 126 + 60, 0, 60, 60);
+  });
+  // readback: P3 half and sRGB half, read as display-p3 and as srgb
+  const px = (ctx, x, cs) => Array.from(ctx.getImageData(x, 30, 1, 1, { colorSpace: cs }).data.slice(0, 3));
+  out.readback = {};
+  for (const [name, ctx] of [["fill", fill], ["put", put], ["srgb-canvas", s]]) {
+    out.readback[name] = P3.map((_, i) => ({
+      p3_half_as_p3: px(ctx, i * 126 + 30, "display-p3"),
+      srgb_half_as_p3: px(ctx, i * 126 + 90, "display-p3"),
+      p3_half_as_srgb: px(ctx, i * 126 + 30, "srgb"),
+    }));
+  }
+  results.q1 = out;
+  show("q1-out", out);
+}
+
+// ---------- Q2 ----------
+const WGSL = `
+struct U { mode: f32, encode: f32, w: f32, h: f32 };
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> u: U;
+struct VO { @builtin(position) p: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+  var xy = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var o: VO; o.p = vec4f(xy[i], 0.0, 1.0); o.uv = xy[i] * vec2f(0.5, -0.5) + 0.5; return o;
+}
+fn enc1(x: f32) -> f32 {
+  let a = abs(x);
+  var y = 12.92 * a;
+  if (a > 0.0031308) { y = 1.055 * pow(a, 1.0 / 2.4) - 0.055; }
+  return sign(x) * y;
+}
+fn synth(uv: vec2f) -> vec3f {
+  if (uv.y < 0.3) { if (uv.x < 0.5) { return vec3f(1.0); } return vec3f(2.0); }
+  if (uv.y < 0.6) { if (uv.x < 0.5) { return vec3f(1.0); } return vec3f(4.0); }
+  if (uv.y < 0.65) { return vec3f(0.0); }
+  let v = uv.x * 4.0;
+  if (uv.y > 0.93 && abs(fract(v + 0.5) - 0.5) < 0.006 && v > 0.5) { return vec3f(0.0); }
+  return vec3f(v);
+}
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  var lin: vec3f;
+  if (u.mode < 0.5) { lin = synth(i.uv); }
+  else { lin = textureLoad(tex, vec2i(i.uv * vec2f(u.w, u.h)), 0).rgb; }
+  if (u.encode > 0.5) { lin = vec3f(enc1(lin.r), enc1(lin.g), enc1(lin.b)); }
+  return vec4f(lin, 1.0);
+}`;
+
+let gpuDevice = null;
+async function gpu() {
+  if (!navigator.gpu) return null;
+  if (gpuDevice) return gpuDevice;
+  const adapter = await navigator.gpu.requestAdapter();
+  gpuDevice = adapter && (await adapter.requestDevice());
+  return gpuDevice;
+}
+
+// A WebGPU canvas drawing the synthetic patches (mode 0) or an RGBA f32 image (mode 1).
+async function gpuCanvas(canvas, toneMapping) {
+  const device = await gpu();
+  if (!device) return { error: "no WebGPU" };
+  const ctx = canvas.getContext("webgpu");
+  const info = {};
+  try {
+    ctx.configure({ device, format: "rgba16float", colorSpace: "display-p3", toneMapping: { mode: toneMapping }, alphaMode: "opaque" });
+    const cfg = ctx.getConfiguration?.();
+    info.configured = cfg ? { format: cfg.format, colorSpace: cfg.colorSpace, toneMapping: cfg.toneMapping } : "getConfiguration missing";
+  } catch (e) { return { error: String(e) }; }
+  const module = device.createShaderModule({ code: WGSL });
+  const pipeline = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs" },
+    fragment: { module, entryPoint: "fs", targets: [{ format: "rgba16float" }] },
+  });
+  const ubuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  let tex = device.createTexture({ size: [1, 1], format: "rgba32float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  const draw = (mode, encode, w = 1, h = 1) => {
+    device.queue.writeBuffer(ubuf, 0, new Float32Array([mode, encode, w, h]));
+    const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: tex.createView() }, { binding: 1, resource: { buffer: ubuf } }] });
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }] });
+    pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.draw(3); pass.end();
+    device.queue.submit([enc.finish()]);
+  };
+  const upload = (f32, w, h) => {
+    if (tex.width !== w || tex.height !== h) {
+      tex.destroy();
+      tex = device.createTexture({ size: [w, h], format: "rgba32float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    }
+    device.queue.writeTexture({ texture: tex }, f32, { bytesPerRow: w * 16 }, [w, h]);
+  };
+  return { info, draw, upload, device };
+}
+
+function probe_replace(old, fresh) {
+  fresh.id = old.id;
+  old.replaceWith(fresh);
+}
+
+function f16Canvas() {
+  // Each option on a fresh canvas: a canvas returns its first context to every later call.
+  const out = { tried: [] };
+  let c = null, ctx = null;
+  for (const opts of [
+    { colorSpace: "display-p3", colorType: "float16", toneMapping: { mode: "extended" } },
+    { colorSpace: "display-p3", colorType: "float16" },
+    { colorSpace: "display-p3", pixelFormat: "float16" },
+  ]) {
+    const probe = document.createElement("canvas");
+    probe.width = 600; probe.height = 240;
+    let pc = null, error;
+    try { pc = probe.getContext("2d", opts); } catch (e) { error = String(e); }
+    const attributes = pc?.getContextAttributes?.();
+    const f16 = !!attributes && (attributes.colorType === "float16" || attributes.pixelFormat === "float16");
+    out.tried.push({ asked: opts, attributes, error, float16: f16 });
+    if (f16 && !ctx) { c = probe; ctx = pc; }
+  }
+  const f16 = !!ctx;
+  out.float16_offered = f16;
+  if (f16) { probe_replace($("q2-f16"), c); }
+  if (f16 && typeof Float16Array !== "undefined") {
+    try {
+      const [w, h] = [c.width, c.height];
+      const img = new ImageData(w, h, { colorSpace: "display-p3", pixelFormat: "rgba-float16" });
+      out.imagedata_pixelFormat = img.pixelFormat;
+      const enc = (x) => (x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const u = x / w, v = y / h;
+        let lin = v < 0.3 ? (u < 0.5 ? 1 : 2) : v < 0.6 ? (u < 0.5 ? 1 : 4) : v < 0.65 ? 0 : u * 4;
+        const o = (y * w + x) * 4, e = enc(lin);
+        img.data[o] = e; img.data[o + 1] = e; img.data[o + 2] = e; img.data[o + 3] = 1;
+      }
+      ctx.putImageData(img, 0, 0);
+      out.drawn = true;
+    } catch (e) { out.draw_error = String(e); }
+  }
+  return out;
+}
+
+async function q2() {
+  const out = {};
+  const ext = await gpuCanvas($("q2-gpu"), "extended");
+  out.webgpu_extended = ext.info ?? ext;
+  ext.draw?.(0, 1);
+  const std = await gpuCanvas($("q2-gpu-std"), "standard");
+  out.webgpu_standard = std.info ?? std;
+  std.draw?.(0, 1);
+  out.canvas2d_float16 = f16Canvas();
+  out.images = {};
+  for (const [id, src] of [["img-sdr", "../media/sdr.tif"], ["img-gm", "../media/gainmap.jpg"], ["img-pq", "../media/pq.tif"]]) {
+    const img = $(id);
+    out.images[id] = await new Promise((res) => {
+      img.onload = () => res({ src, loaded: true, naturalWidth: img.naturalWidth });
+      img.onerror = () => res({ src, loaded: false });
+      img.src = src;
+    });
+  }
+  results.q2 = out;
+  show("q2-out", out);
+}
+
+// ---------- Q3 ----------
+let gen = 0, lastDrawnGen = 0, inflight = false, pending = false, info = null, hdrGpu = null;
+let stats = [];
+const sent = new Map(); // generation -> {tInput, tSend}
+let lastInputT = 0, lastPut = null;
+
+function tweaks() {
+  return { scene_correction: { exposure: +$("exposure").value }, look: { contrast: +$("contrast").value } };
+}
+
+function onInput() {
+  lastInputT = performance.now();
+  if ($("mode").value === "every" || !inflight) send(lastInputT);
+  else pending = true;
+}
+
+async function send(tInput) {
+  if (!T || !info) return;
+  const g = ++gen;
+  inflight = true;
+  const tSend = performance.now();
+  sent.set(g, { tInput, tSend });
+  const hdr = $("hdr").checked;
+  try {
+    const buf = await T.core.invoke("render", { tweaks: tweaks(), generation: g, hdr, fast: $("fast").checked });
+    const tRecv = performance.now();
+    const dv = new DataView(buf);
+    const [w, h, rg, kind] = [0, 4, 8, 12].map((o) => dv.getUint32(o, true));
+    const [renderMs, waitMs, rustMs] = [16, 20, 24].map((o) => dv.getFloat32(o, true));
+    const s = sent.get(rg);
+    sent.delete(rg);
+    if (kind === 0) {
+      stats.push({ gen: rg, kind: 0, skipped: true });
+    } else if (rg < lastDrawnGen) {
+      // Renders can finish out of order in "every input" mode: never draw an older one.
+      stats.push({ gen: rg, kind, skipped: true, stale: true });
+    } else {
+      lastDrawnGen = rg;
+      if (kind === 1) {
+        const c = $("preview");
+        c.style.display = ""; $("preview-hdr").style.display = "none";
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+        const ctx = c.getContext("2d", { colorSpace: "display-p3" });
+        const img = new ImageData(new Uint8ClampedArray(buf, 28, w * h * 4), w, h, { colorSpace: "display-p3" });
+        ctx.putImageData(img, 0, 0);
+        lastPut = { bytes: new Uint8Array(buf, 28, w * h * 4), w, h };
+      } else {
+        const c = $("preview-hdr");
+        c.style.display = ""; $("preview").style.display = "none";
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; hdrGpu = null; }
+        if (!hdrGpu) {
+          const made = await gpuCanvas(c, "extended");
+          if (made.error) throw new Error("HDR canvas: " + made.error);
+          hdrGpu = made;
+        }
+        hdrGpu.upload(new Float32Array(buf, 28, w * h * 4), w, h);
+        hdrGpu.draw(1, 1, w, h);
+        await hdrGpu.device.queue.onSubmittedWorkDone();
+      }
+      const tDrawn = performance.now();
+      // The frame holding the change is composited at the next animation frame; the one
+      // after starts once it has been presented, so it bounds "on screen" from above.
+      requestAnimationFrame((tNext) => requestAnimationFrame((tAfter) => {
+        stats.push({ gen: rg, kind, renderMs, waitMs, rustMs, ipcMs: tRecv - s.tSend - rustMs,
+          drawMs: tDrawn - tRecv, inputToNextFrame: tNext - s.tInput, inputToPresented: tAfter - s.tInput,
+          bytes: buf.byteLength });
+        report();
+      }));
+    }
+  } catch (e) {
+    $("q3-out").textContent = "render failed: " + e;
+    sent.delete(g);
+    pending = false;
+  } finally {
+    if (g === gen) inflight = false;
+  }
+  if (pending && $("mode").value === "coalesce") { pending = false; send(lastInputT); }
+}
+
+const pct = (xs, p) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1); };
+function summarize() {
+  const drawn = stats.filter((s) => !s.skipped);
+  const field = (k) => ({ p50: pct(drawn.map((s) => s[k]), 0.5), p90: pct(drawn.map((s) => s[k]), 0.9), max: pct(drawn.map((s) => s[k]), 1) });
+  return {
+    mode: $("mode").value, fast: $("fast").checked, hdr: $("hdr").checked, frame: info,
+    requests: stats.length, drawn: drawn.length, skipped_by_core: stats.filter((s) => s.skipped && !s.stale).length,
+    dropped_stale: stats.filter((s) => s.stale).length,
+    payload_bytes: drawn[0]?.bytes,
+    render_ms: field("renderMs"), core_wait_ms: field("waitMs"), core_total_ms: field("rustMs"),
+    ipc_ms: field("ipcMs"), draw_ms: field("drawMs"),
+    input_to_next_frame_ms: field("inputToNextFrame"), input_to_presented_ms: field("inputToPresented"),
+  };
+}
+function report() { results.q3.current = summarize(); show("q3-out", results.q3.current); }
+
+async function sweep() {
+  stats = []; lastDrawnGen = gen;
+  const el = $("exposure"), t0 = performance.now(), dur = 3000;
+  await new Promise((done) => {
+    const tick = () => {
+      const t = performance.now() - t0;
+      if (t > dur) return done();
+      el.value = (Math.sin((t / dur) * Math.PI * 4) * 1.5).toFixed(2);
+      onInput();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await new Promise((r) => setTimeout(r, 500));
+  const key = `sweep-${$("mode").value}${$("fast").checked ? "-fast" : ""}${$("hdr").checked ? "-hdr" : ""}`;
+  results.q3[key] = summarize();
+  show("q3-out", results.q3[key]);
+}
+
+// ---------- Q4 ----------
+function readback() {
+  if (!lastPut) { $("q4-out").textContent = "render a frame first"; return; }
+  const ctx = $("preview").getContext("2d", { colorSpace: "display-p3" });
+  const back = ctx.getImageData(0, 0, lastPut.w, lastPut.h, { colorSpace: "display-p3" });
+  let diff = 0, max = 0;
+  for (let i = 0; i < back.data.length; i++) {
+    if (i % 4 === 3) continue;
+    const d = Math.abs(back.data[i] - lastPut.bytes[i]);
+    if (d) diff++;
+    if (d > max) max = d;
+  }
+  const out = { samples: lastPut.w * lastPut.h * 3, differing: diff, max_diff: max, readback_colorSpace: back.colorSpace,
+    canvas_css_px: $("preview").getBoundingClientRect().width, canvas_px: lastPut.w, devicePixelRatio };
+  results.q4 = out;
+  show("q4-out", out);
+}
+
+// ---------- wiring ----------
+async function open() {
+  info = await T.core.invoke("open", { scan: $("scan").value, roll: $("roll").value, maxEdge: +$("edge").value });
+  results.q3.open = info;
+  stats = [];
+  onInput();
+}
+
+env(); q1(); q2();
+$("open").onclick = () => open().catch((e) => ($("q3-out").textContent = "open failed: " + e));
+$("exposure").oninput = onInput;
+$("contrast").oninput = onInput;
+$("sweep").onclick = sweep;
+$("reset").onclick = () => { stats = []; report(); };
+$("readback").onclick = readback;
+$("save").onclick = async () => {
+  env(); // the window may have moved to another display
+  const text = JSON.stringify(results, null, 2);
+  if (T) $("q3-out").textContent = "saved " + (await T.core.invoke("save_results", { name: `results-${Date.now()}`, text }));
+  else { await navigator.clipboard.writeText(text); $("q3-out").textContent = "copied results to the clipboard"; }
+};
+// The shell's NC_SPIKE_AUTO: open, sweep in each setting, check readback, save.
+async function autoRun() {
+  await open();
+  await new Promise((r) => setTimeout(r, 1000));
+  for (const [mode, fast, hdr] of [["coalesce", false, false], ["every", false, false],
+    ["coalesce", true, false], ["coalesce", false, true]]) {
+    $("mode").value = mode; $("fast").checked = fast; $("hdr").checked = hdr;
+    await sweep();
+  }
+  $("hdr").checked = false; $("fast").checked = false;
+  $("exposure").value = 0; $("contrast").value = 1; onInput();
+  await new Promise((r) => setTimeout(r, 1000));
+  readback();
+  results.q2 = { ...results.q2, ...(await q2Late()) };
+  await T.core.invoke("save_results", { name: "auto", text: JSON.stringify(results, null, 2) });
+}
+// Image sizes as laid out, once decoded.
+async function q2Late() {
+  const r = {};
+  for (const id of ["img-sdr", "img-gm", "img-pq"]) {
+    const img = $(id);
+    try { await img.decode(); r[id + "_decoded"] = true; } catch (e) { r[id + "_decoded"] = String(e); }
+  }
+  return r;
+}
+if (T) T.core.invoke("defaults").then((d) => {
+  $("scan").value = d.scan; $("roll").value = d.roll;
+  if (d.auto) autoRun().catch((e) => T.core.invoke("save_results", { name: "auto-error", text: String(e) }));
+});
+else for (const id of ["open", "sweep", "readback"]) $(id).disabled = true;
+</script>
+</body>
+</html>

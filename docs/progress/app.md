@@ -6,14 +6,27 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## Epic summary
 
-_Nothing yet._
+- **Shell: Tauri on macOS** (`webkit-display-spike`, `docs/spike/webkit-display.md`).
+  WKWebView shows a Display P3 2D canvas unclipped and equal to the export. HDR preview
+  is a WebGPU canvas (`rgba16float`, `display-p3`, `toneMapping: extended`) fed linear
+  Display P3. WebKit offers no float16 2D canvas, and gives less HDR headroom to a window
+  that isn't focused.
+- **The preview's latency is the render's.** IPC and draw add ~3 ms for SDR (7 MB RGBA8)
+  and ~10 ms for HDR (29 MB f32; half-floats would halve it). At a 2048 edge the
+  lcms2 display-curve encode costs as much as the chain (34 vs 28 ms), so the app's
+  preview should apply the curve directly (37–54 ms render, 56–70 ms from slider to the next
+  frame).
+  Coalescing (one request in flight, newest value next) is enough for newest-wins.
 
 ## webkit-display-spike
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-10-15
 
 - 2026-10-15: filed. Goal: Display P3 canvas, HDR preview and slider feel in WKWebView; decides Tauri vs Electron
+- 2026-10-15: Started. Plan: real nc preview on a throwaway branch spike/webkit-display-core (lib target + preview module, never merged), Tauri 2 shell in ../temp/webkit-display-spike/shell, test page committed under docs/spike/webkit-display/. Checks: P3 canvas, HDR candidates, slider round trip with real renders, canvas vs export; Safari/Chrome for comparison.
+- 2026-10-15: Done: report docs/spike/webkit-display.md, test page docs/spike/webkit-display/. Verdict: stay on Tauri. P3 canvas unclipped (readback + by eye on XDR); HDR via WebGPU extended canvas, gain-map/PQ images also HDR; slider-to-screen 96 ms p50 with lcms2 encode, 56 ms with the direct sRGB curve (IPC+draw ~3 ms); canvas readback equals the put bytes, factor-1 preview equals the export. Gotchas: WebKit cuts HDR headroom for an unfocused window (Safari too, Chrome not); no float16 2D canvas in WebKit; Chrome ignores toneMapping standard on WebGPU and loads no TIFF in img.
+- 2026-10-15: Review fixes: the test page now probes each float16 2D option on a fresh canvas (WebKit still offers none), never draws an older frame than one drawn, waits on the GPU before timing the draw, and times both the next and the following animation frame. Re-ran in WKWebView: renders vary up to 1.5x between runs, so the report gives ranges (direct curve 56-70 ms to the next frame, 84 ms presented); sending every input was 1.5x slower than coalescing in run 2.
 
 ## preview-cache-spike
 

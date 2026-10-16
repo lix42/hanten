@@ -15,7 +15,8 @@ preview stuttering ([desktop app design](../../design/desktop-app.md) §3.6).
 ## What is known
 
 - Full-resolution `convert` took 0.33 s per frame in the prototype (warm cache); a
-  preview render is 24–35 ms.
+  preview render at a 2048 edge is ~37 ms with the display curve applied directly, ~73 ms
+  through lcms2 (`docs/spike/webkit-display.md`).
 - The design runs export in the core process, not as a spawned binary, and gives the
   preview priority.
 - Memory: a full-resolution export holds several full-frame buffers

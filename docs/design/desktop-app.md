@@ -148,7 +148,7 @@ are Hanten features not yet implemented in the CLI (§4).
   sales tax, a server that signs tokens (the signing key never ships), getting tokens into
   the app, and recovery after a reinstall. The Mac App Store's in-app purchase is a
   lower-priority alternative.
-- **The WebKit checks** (§3.1).
+- **The WebKit checks** (§3.1): passed on macOS (`docs/spike/webkit-display.md`).
 
 ## 3. High-level design
 
@@ -180,9 +180,10 @@ flowchart LR
 
 - **Tauri first**; if WebKit blocks, Electron, then Dioxus or GPUI. The core is UI-agnostic
   so a fallback replaces only the shell.
-- **Check WebKit first**, before building UI on it: a Display P3 canvas in WKWebView (never
-  run in the spike) and an HDR preview. Each later platform repeats the check, since
-  Tauri's web view differs per platform.
+- **WebKit checked on macOS** (`docs/spike/webkit-display.md`): a Display P3 2D canvas
+  shows P3 unclipped and matches the export; the HDR preview is a WebGPU canvas with
+  `toneMapping: extended`. Each later platform repeats the check, since Tauri's web view
+  differs per platform.
 
 ### 3.2 Core and the `nc` library
 
@@ -220,8 +221,9 @@ flowchart LR
 
 ### 3.5 Preview and cache
 
-- The cache point is the downsampled scan; a knob change then renders in 24–35 ms at a
-  2048 edge (spike). The costs are the first decode (~750 ms per cold cloud file) and
+- The cache point is the downsampled scan; a knob change then renders in ~37 ms at a
+  2048 edge once the display curve skips lcms2, ~73 ms through it
+  (`docs/spike/webkit-display.md`). The costs are the first decode (~750 ms per cold cloud file) and
   memory (~0.8 GB for 36 frames at a 2048 edge), so the cache needs a budget that
   `pipeline/memory.rs` doesn't model today (spike unknown 7).
 - Newest request wins during a slider drag.
@@ -278,7 +280,7 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
   payment check removed: whether the core goes private before release, or light
   protection accepts this.
 - Memory-only cache, or also a disk cache of downsampled scans so a reopened roll is quick.
-- Preview faithfulness: downsample factor, Display P3 canvas, HDR preview.
+- Preview faithfulness: the downsample factor (the canvas and HDR preview are settled).
 - How the export dialog presents the four destination axes.
 - Roll setup details (detecting base and leader, adding files).
 - GUI ↔ CLI ↔ agents (copy a frame as a command, MCP): not designed yet.
