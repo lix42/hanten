@@ -19,7 +19,7 @@ Answer whether WKWebView can show what the app needs, before any UI is built on 
   honours `colorSpace: "display-p3"`, the slider-to-frame round trip, and how
   newest-request-wins feels during a fast drag.
 - The prototype rendered a knob change in 24–35 ms at a 2048 edge (this spike measured
-  73 ms, 37 ms without lcms2); the canvas scales to the window.
+  ~73 ms, 37–54 ms without lcms2); the canvas scales to the window.
 - HDR canvas support differs between WebKit and Chromium; nothing is verified.
 
 ## Open questions

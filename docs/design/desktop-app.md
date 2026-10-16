@@ -182,8 +182,8 @@ flowchart LR
   so a fallback replaces only the shell.
 - **WebKit checked on macOS** (`docs/spike/webkit-display.md`): a Display P3 2D canvas
   shows P3 unclipped and matches the export; the HDR preview is a WebGPU canvas with
-  `toneMapping: extended`. Each later platform repeats the check, since Tauri's web view
-  differs per platform.
+  `toneMapping: extended` (tested on the built-in XDR only). Each later platform repeats
+  the check, since Tauri's web view differs per platform.
 
 ### 3.2 Core and the `nc` library
 
@@ -221,10 +221,10 @@ flowchart LR
 
 ### 3.5 Preview and cache
 
-- The cache point is the downsampled scan; a knob change then renders in ~37 ms at a
+- The cache point is the downsampled scan; a knob change then renders in 37–54 ms at a
   2048 edge once the display curve skips lcms2, ~73 ms through it
-  (`docs/spike/webkit-display.md`). The costs are the first decode (~750 ms per cold cloud file) and
-  memory (~0.8 GB for 36 frames at a 2048 edge), so the cache needs a budget that
+  (`docs/spike/webkit-display.md`). The costs are the first decode (~750 ms per cold cloud
+  file) and memory (~0.8 GB for 36 frames at a 2048 edge), so the cache needs a budget that
   `pipeline/memory.rs` doesn't model today (spike unknown 7).
 - Newest request wins during a slider drag.
 - Measuring runs in the core, so a frame is decoded once for measuring and preview, not
@@ -280,7 +280,8 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
   payment check removed: whether the core goes private before release, or light
   protection accepts this.
 - Memory-only cache, or also a disk cache of downsampled scans so a reopened roll is quick.
-- Preview faithfulness: the downsample factor (the canvas and HDR preview are settled).
+- Preview faithfulness: the downsample factor, and the HDR preview on an external HDR
+  display (settled on the built-in XDR only).
 - How the export dialog presents the four destination axes.
 - Roll setup details (detecting base and leader, adding files).
 - GUI ↔ CLI ↔ agents (copy a frame as a command, MCP): not designed yet.
