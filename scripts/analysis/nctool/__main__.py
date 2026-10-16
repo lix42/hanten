@@ -1,7 +1,7 @@
 """`python -m nctool` entry point.
 
 Seven command groups: `manifest` (generate / validate / roles / patches / charts, incl. the
-chart table), `compare`
+chart table and the chart cast), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
 deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
 converted image, whatever produced it), `review` (render a described matrix
@@ -21,6 +21,7 @@ import argparse
 import sys
 
 from . import acceptance as _acceptance
+from . import cast as _cast
 from . import chart_table as _chart_table
 from . import charts as _charts
 from . import compare as _compare
@@ -133,6 +134,31 @@ def build_parser() -> argparse.ArgumentParser:
     ctab.add_argument("--dry-run", action="store_true",
                       help="build and summarise the table; do not write it")
     ctab.set_defaults(func=_chart_table.cmd_table)
+    ccast = csub_.add_parser("cast", help="the colour cast renders and outside exports leave "
+                                          "on a roll's chart frames")
+    castsub = ccast.add_subparsers(dest="cast_cmd", required=True)
+    crend = castsub.add_parser("render", help="measure the roll on its pictures, then render "
+                                              "its chart frames through a grid of settings")
+    _add_root(crend)
+    crend.add_argument("--roll", required=True, help="the manifest roll (it needs chart frames)")
+    crend.add_argument("--work", required=True,
+                       help="the work folder: recipes/ and renders/<configuration>/ go here")
+    crend.add_argument("--nc", help="the hanten binary (default: $NC, else auto-discovery)")
+    crend.add_argument("--grid", help="a JSON file overriding keys of the default grid "
+                                      "(nctool.cast.DEFAULT_GRID)")
+    crend.add_argument("--jobs", type=int, default=6, help="parallel conversions (default 6)")
+    crend.set_defaults(func=_cast.cmd_render)
+    cmeas = castsub.add_parser("measure", help="sample every chart patch of the work folder's "
+                                               "renders and of --source exports; write cast.json")
+    _add_root(cmeas)
+    cmeas.add_argument("--roll", required=True, help="the manifest roll")
+    cmeas.add_argument("--work", required=True, help="the work folder `render` filled")
+    cmeas.add_argument("--source", action="append", metavar="NAME=DIR",
+                       help="another producer's exports of the chart frames, as <frame>.tif "
+                            "at the scan's size, e.g. NLP=<asset-root>/converted/nlp/<roll>; "
+                            "repeatable")
+    cmeas.add_argument("--out", help="write here instead of <work>/cast.json")
+    cmeas.set_defaults(func=_cast.cmd_measure)
 
     # --- compare: the conversion-versioning comparison harness ---------------
     cmp_ = sub.add_parser("compare",

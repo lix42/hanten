@@ -384,12 +384,13 @@ alternative for the ColorChecker calibration work.
 ## midtone-neutral-fit
 
 **Status:** not started
-**Updated:** 2026-10-07
+**Updated:** 2026-10-15
 
 - 2026-10-07: filed (user) from the poor-development spike (`docs/spike/poor-development.md`, `TODO.md` round 5 and
   E1): fit range and fade width could not be settled by eye or by patch medians; the
   ColorChecker rolls (Gold200, Ektar100 shot) carry picture frames, so each roll's line
   can be checked against its chart.
+- 2026-10-15: Chart evidence (`docs/reports/chart-cast.md`, 2026-10-12-Gold200): the midtone line fitted on the roll's 29 pictures pushes the chart's greys blue — b* −15 with it against −7 (gain) or −1 (tilt) without. Its blue term pushes magenta (mid a* +5 to +8), its red term green (−4 to −5 with tilt), so 'on' reads neutral in a* only because the two cancel. On this roll the line removes a warm cast of the pictures that the chart frames do not have.
 
 ## correction-confidence
 

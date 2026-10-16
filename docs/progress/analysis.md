@@ -911,7 +911,7 @@ What other epics need to know about `analysis`:
 ## calibration-frame-capture
 
 **Status:** in progress
-**Updated:** 2026-10-14
+**Updated:** 2026-10-15
 
 - Goal: shoot, develop, scan and register the ColorChecker bracket rolls three other tasks
   name as a precondition, and take a first neutrality measurement against them.
@@ -963,6 +963,7 @@ What other epics need to know about `analysis`:
 - 2026-10-14: `2026-10-12-Gold200` is the 10-07 Gold200 roll (+3/+4 added after that note);
   SilverFast's automatic adjustments were locked for its scan. The Ektar100 roll and an
   UltraMax400 roll are expected around 2026-10-21; the Ektar roll is the protocol's second.
+- 2026-10-15: First neutrality number (`docs/reports/chart-cast.md`, `chart-cast` skill): on 2026-10-12-Gold200 the default leaves the chart's greys at b* −15 and C* 15; the best setting measured without a chart, C* 3.4–4.0. Next chart roll wanted: Gold200 again, in different light (sun behind the camera) and ideally another developer, so `nf-calibration/stock-neutral-offset` can separate the stock's fixed cast from this roll's light. Shoot the 180°-rotated frame this time.
 
 ## review-reference-cells
 
@@ -1502,3 +1503,11 @@ What other epics need to know about `analysis`:
   consumers: read `charts.json` and join on roll and frame; rendered or decoded values
   are yours to derive from the density, and the roll's `film_base.hanten` names the
   build whose Dmin the densities use.
+
+## chart-cast
+
+**Status:** done
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: `nctool manifest charts cast`, the `chart-cast` skill and `docs/reports/chart-cast.md`: every chart patch through a grid of settings and beside outside tools
+- 2026-10-15: Done. `nctool manifest charts cast render` / `measure` (`nctool/cast.py`, tests in `test_cast.py`), the `chart-cast` skill, and `docs/reports/chart-cast.md` opened with 2026-10-12-Gold200 (55 grid configurations, plus NLP, SilverFast and SilverFast CCR). Gotchas: a cast that rises with lightness in Lab can be one constant ratio, so slope vs offset is read in density; colour accuracy only means something on the frame whose mid-grey renders near the card's; the roll's chart frames need their own tones grafted in from a measurement that includes them, since the pictures-only measurement has none and placement reads them. Follow-ups filed: `nf-calibration/stock-neutral-offset`, `nf-calibration/chart-default-review`.

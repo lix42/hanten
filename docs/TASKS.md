@@ -313,6 +313,7 @@ graph TD
 - [ ] [Reference Comparison: nc vs NLP and Hand-Tweaked Targets](tasks/analysis/nlp-comparison.md) — pair nc output with NLP / SmartConvert / hand-edited **targets** by `source_frame` (no registration) and report per-axis deltas, so `|nc − target| < |NLP − target|` becomes a checkable claim
 - [x] [Asset Manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs)
 - [x] [Teach the role consumers the `calibration` role](tasks/analysis/calibration-role-consumers.md) — : `manifest roles`, `nctool roll`, `viewer` and `shadow_metrics` leave a `calibration` frame out of `real`
+- [x] [Measure the cast settings and tools leave on the chart frames](tasks/analysis/chart-cast.md) — `nctool manifest charts cast`, the `chart-cast` skill and `docs/reports/chart-cast.md`: every chart patch through a grid of settings and beside outside tools
 - [x] [Extract the chart patches](tasks/analysis/chart-extraction.md) — one per-patch table from the scans, read by every calibration consumer
 - [x] [Label the charts in a frame](tasks/analysis/chart-labeling-tool.md) — a tool to mark each target's four corners, check the projected patch grid, and write chart entries to `manifest.json`
 - [x] [Comparison Review Tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc review pages from `algo/reference-anchored-sigmoid` are now a maintained tool
@@ -427,9 +428,11 @@ graph TD
 > review loop, the offset question, the neutrality release gate, and what a user would
 > actually run.
 
+- [ ] [Revisit the colour defaults against the chart record](tasks/nf-calibration/chart-default-review.md) — once more chart rolls are in docs/reports/chart-cast.md: white-balance form, midtone line, and whether a calibrated stock still needs the roll balance on · **waits on** `analysis/calibration-frame-capture`
 - [ ] [The neutrality release gate](tasks/nf-calibration/neutrality-gate.md) — the release gate · **waits on** `analysis/calibration-frame-capture`
 - [ ] [Does `density.offset` earn a value?](tasks/nf-calibration/offset-question.md) — the term is real · **waits on** `analysis/calibration-frame-capture`
 - [ ] [The saturation warning's margin, and frames near saturation](tasks/nf-calibration/saturation-margin.md) — waits on the calibration shoot's +3/+4 frames · **waits on** `analysis/calibration-frame-capture`
+- [ ] [A per-stock neutral offset from the charts](tasks/nf-calibration/stock-neutral-offset.md) — remove the stock's fixed cast, measured from chart rolls, so the roll's balance is left with the light · **waits on** `analysis/calibration-frame-capture`
 - [ ] [What a user would actually run](tasks/nf-calibration/user-calibration-procedure.md) — we fit our own chain, never a user's, so the shipped value is a prior · **waits on** `io/scanner-density-calibration`
 - [x] [Choose the white placement by rendering](tasks/nf-calibration/anchor-comparison.md)
 - [x] [One dark frame brightens the whole roll](tasks/nf-calibration/envelope-dark-end.md) — , no change

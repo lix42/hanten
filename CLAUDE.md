@@ -323,6 +323,8 @@ committed.
   `render-review-set` skill. **Never commit a review set or publish it anywhere
   public** — the images are the user's photographs. A private claude.ai Artifact is
   the one allowed place to publish frames.
+- **Measuring colour against a chart roll:** the `chart-cast` skill; its record is
+  `docs/reports/chart-cast.md`.
 
 ### Process
 

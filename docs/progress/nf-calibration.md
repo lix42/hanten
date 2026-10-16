@@ -513,8 +513,8 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## saturation-margin
 
-**Status:** not started — waits on `analysis/calibration-frame-capture`
-**Updated:** 2026-09-29
+**Status:** not started
+**Updated:** 2026-10-15
 
 - 2026-09-25: filed from `anchor-comparison`. Goal: the leader margin the saturation
   warning keys on, and whether frames near saturation need their own treatment.
@@ -556,6 +556,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
     bracket tests both references (leader distance vs an absolute white level); the
     treatment stays **the warning only**, a follow-up only if the clamp proves
     insufficient. `SATURATION_MARGIN_STOPS` stays 0.5.
+- 2026-10-15: Chart evidence (`docs/reports/chart-cast.md`, 2026-10-12-Gold200): above about 0.9 green density above base (the +3/+4 frames, 11 grey patches) red's density slope against green rises to 1.17, and every tool's greys drift blue at +3/+4 (Hanten tilt −5/−6, NLP −9/−11, SilverFast −6/−8 b*).
 
 ## no-roll-defaults
 
@@ -1339,7 +1340,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
 ## offset-question
 
 **Status:** not started
-**Updated:** 2026-10-07
+**Updated:** 2026-10-15
 
 - 2026-09-19: created with the new-flow plan. Goal: does `density.offset` earn a value?.
 - 2026-10-07: evidence from the poor-development spike (`docs/spike/poor-development.md`): the midtone line's
@@ -1350,13 +1351,15 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-10-07: now depends on `analysis/calibration-frame-capture`: the bracket is the
   one-illuminant density series this task's open question asks for. An Ektar100 chart roll
   is shot.
+- 2026-10-15: First chart evidence (`docs/reports/chart-cast.md`, 2026-10-12-Gold200, a bracket at one illuminant): after the bundled scale, blue − green is −0.037, −0.046, −0.043, −0.051 density at green 0.2 / 0.4 / 0.6 / 0.8 above base; red − green +0.017 … −0.006; slopes against green 0.973 (red) and 0.963 (blue). A blue density offset of +0.0447 with the roll balance off renders the greys at C* 2–3 across the bracket (in-sample). The residual shrinks slightly toward the base, so this roll cannot yet tell a density offset (constant to the base) from an exposure shift (fades in the toe) — the question this task answers. `nf-calibration/stock-neutral-offset` consumes the verdict.
 
 ## neutrality-gate
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-10-15
 
 - 2026-09-19: created with the new-flow plan. Goal: the neutrality release gate.
+- 2026-10-15: A first measurement against a known-neutral reference is in `docs/reports/chart-cast.md` (2026-10-12-Gold200; method: the `chart-cast` skill): the bundled scale holds to 3–4 % in slope on this stock; the residual is a near-constant blue offset of 0.045 density.
 
 ## user-calibration-procedure
 
@@ -2275,3 +2278,17 @@ frames; the look's default contrast is `no-roll-defaults`'.
   exposure), not an outlier frame; flattening there amounts to a per-frame R and moves
   reviewed rolls too; `frame` being dark on a thin roll is its exposure, not its dark
   point. Neither was filed.
+
+## stock-neutral-offset
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: remove the stock's fixed cast in the decode, measured from chart rolls, so the roll's balance is left with the light
+
+## chart-default-review
+
+**Status:** not started
+**Updated:** 2026-10-15
+
+- 2026-10-15: filed. Goal: once more chart rolls are in docs/reports/chart-cast.md: white-balance form, midtone line, and whether a calibrated stock still needs the roll balance on
