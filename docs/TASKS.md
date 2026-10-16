@@ -335,7 +335,6 @@ graph TD
 > The new flow exists and can be selected: the `--new-flow` selector, the stage
 > module tree, a minimal end-to-end render, the knob audit, and the default flip.
 
-- [ ] [Give parameter resolution its own module](tasks/nf-core/resolver-module.md) — move Recipe::shared_params and the resolved_* methods out of recipe.rs
 - [x] [Stage seams, buffers and the IR plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams are the existing typed boundaries, not one per stage
 - [x] [Flip the default to the new flow](tasks/nf-core/default-flip.md)
 - [x] [Audit every knob against the new flow](tasks/nf-core/knob-availability-audit.md) — every conversion flag classified (refused by presence, or kept) and held complete by an exhaustiveness test
@@ -345,6 +344,7 @@ graph TD
 - [x] [The recipe schema across the flow boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and each chain refuses the other's recipe by name
 - [x] [Release the decoded image after the decode](tasks/nf-core/release-decoded-image.md) — free it once `fixed::decode` has read it, lowering each frame's peak by 12–16 B/px
 - [x] [The report and telemetry shape for the new chain](tasks/nf-core/report-contract.md)
+- [x] [Give parameter resolution its own module](tasks/nf-core/resolver-module.md) — move Recipe::shared_params and the resolved_* methods out of recipe.rs
 - [x] [A scan type that ends at the decode](tasks/nf-core/scan-type.md) — split the scan (RGB, IR plane, `ir_verified`) from the post-decode image, so the types enforce that the IR plane stops at `fixed::decode`
 - [x] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the modules and typed boundaries, written fresh rather than extracted
 - [x] [`roll`'s per-frame overrides under the new chain](tasks/nf-core/subcommands.md) — a frame's override resolves as `convert` would, and an override that changes a roll-wide value warns (`roll.white_stops` per frame is legitimate)

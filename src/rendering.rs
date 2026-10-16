@@ -1,7 +1,7 @@
 //! Which base the rendering stages start from: `--rendering default|direct` (recipe
 //! `rendering`). `default` applies the recipe's `roll` section with every other knob at
 //! its default; `direct` leaves the roll out and starts from pinned values ([`DIRECT`]).
-//! A stated knob builds on either (`Recipe::shared_params`).
+//! A stated knob builds on either (`recipe::resolve::shared_params`).
 //!
 //! Design, and the procedure for changing `DIRECT`: design-spec §6,
 //! "Two renderings".

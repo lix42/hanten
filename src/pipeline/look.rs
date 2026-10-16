@@ -150,7 +150,7 @@ pub struct ChannelGradeFault(pub [f32; 2]);
 pub struct LookSection {
     /// **The slope**: the scene-to-output contrast about mid-grey, where 1 reproduces the
     /// scene's own. The rendering's base times the `look.contrast` knob
-    /// (`recipe::Recipe::resolved_slope`); the decode's linearization is not part of it.
+    /// (`recipe::resolve::slope`); the decode's linearization is not part of it.
     ///
     /// ```text
     /// Y′  = MID_GREY · (Y / MID_GREY)^slope           Y = ACEScg luminance
@@ -177,7 +177,7 @@ pub struct LookSection {
     pub slope: f32,
     /// **The saturation slope**: how far the look stretches colour ratios, where 1 keeps
     /// the decoded scene's. The base the slope multiplies (never a frame's own) times the
-    /// `look.saturation` knob (`recipe::Recipe::resolved_slope`), so saturation 1 renders
+    /// `look.saturation` knob (`recipe::resolve::slope`), so saturation 1 renders
     /// a pixel's chroma exactly as a per-channel power at the base slope did.
     ///
     /// ```text
@@ -311,7 +311,7 @@ impl LookSection {
 /// The look's parameters: the recipe's `look` section plus the decode's linearization,
 /// which the saturation measure is normalised by. **No `Default`**, for the reason
 /// `FitRangeParams` has none: the linearization is the decode's to state, and
-/// `Recipe::chain_params` adds it.
+/// `recipe::resolve::chain_params` adds it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LookParams {
     pub section: LookSection,

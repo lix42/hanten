@@ -40,7 +40,7 @@ use crate::types::{NcError, Result};
 
 /// The white-balance gains, always **stated**: a roll's are measured once by
 /// `hanten measure-roll` (`pipeline::roll_white`) and frozen into the recipe's `roll`
-/// section, which these multiply (`crate::recipe::Recipe::resolved_scene_correction`),
+/// section, which these multiply (`crate::recipe::resolve::scene_correction`),
 /// so every frame of the roll — and a lone `convert` of one — applies the same gains.
 ///
 /// There is no per-frame estimate. `gray-world` and `percentile` retired with
@@ -97,7 +97,7 @@ impl Default for SceneCorrectionParams {
 /// key of `scene_correction`: it comes from the recipe's `roll` section.
 ///
 /// The roll's **gains** are also folded into [`SceneCorrectionParams::white_balance`]
-/// (`crate::recipe::Recipe::resolved_scene_correction`), one multiply with the stated
+/// (`crate::recipe::resolve::scene_correction`), one multiply with the stated
 /// gains, so here they only key the line. A **tilt** cannot fold, so the stage applies it
 /// itself, after the line and before the folded gains.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -13,7 +13,7 @@ Known cases: `apply_contrast(slope)` and test helpers that say "contrast" for th
 linearization (`BUNDLED_CONTRAST`); the `*_LUMA` constants (luminance vectors);
 `headroom_*` for the highlight range; "lift" for fit range's dark floor and HDR ramp;
 "rendered stops" vs "look stops"; the four Rust types for the destination gamut;
-`resolved_slope`'s local `colour_slope`, which is the colour base slope, not the
+`recipe::resolve::slope`'s local `colour_slope`, which is the colour base slope, not the
 colour slope (linearization × saturation slope).
 
 ## Design

@@ -14,7 +14,7 @@ path relative to the roll's project or recipe file, absolute when no relative pa
 
 ## What is known
 
-- `Recipe::for_frame` looks entries up by file name; a path key is refused today
+- `recipe::for_frame` looks entries up by file name; a path key is refused today
   ("Keys are file names, not paths", exit 2).
 - `measure-roll --out` and `roll --measure-roll` refuse two inputs with one file name
   (exit 2, `refuse_shared_file_names`). An entry is shared silently only when a recipe

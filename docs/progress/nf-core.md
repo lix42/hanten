@@ -23,7 +23,9 @@ warns naming both values. **`buffer-strategy`** settled the buffer rule and drop
 the IR plane at the decode, and **`scan-type`** made that a type: only a `Scan` can
 carry one. **`three-step-pipeline`** (2026-10-14) kept the stages defined by
 operation: the decode supplies the image, and roll and style are combined into the
-stages' params (`Recipe::shared_params`); none is a stage. Open: `resolver-module`.
+stages' params; none is a stage. **`resolver-module`** gave that combination its own
+module, `recipe::resolve` (pure functions of `&Recipe`, and the report's `chain.roll` /
+`chain.look` provenance); `recipe.rs` keeps parsing, merging and validation.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -1511,8 +1513,12 @@ would have to carry it on. The types enforce it (`scan-type`): `io::decode` retu
 
 ## resolver-module
 
-**Status:** not started
-**Updated:** 2026-10-14
+**Status:** done
+**Updated:** 2026-10-15
 
 - 2026-10-14: filed by `three-step-pipeline`. Goal: move `Recipe::shared_params` and
   the `resolved_*` methods out of `recipe.rs`.
+- 2026-10-15: Started. Decisions (user): the resolution moves to `recipe::resolve` as free functions of `&Recipe` (a submodule, since validation reads resolved values); the report's provenance (`ResolvedSlope`, `SlopeBase`, `roll_report`, `RollReport`, `LookReport`) moves with it; `for_frame` moves to `recipe::compose`, as the frame's first layer. `recipe.rs` keeps parsing, merging, validation, `params_hash`, `base()`, the recipe warnings and the section types' own methods.
+- 2026-10-15: Implemented; awaiting review. `src/recipe/resolve.rs` holds the resolution as free functions of `&Recipe`, unprefixed (`resolve::shared_params`, `chain_params`, `scene_correction`, `roll_colour`, `roll_balance`, `slope`, `look`, `fit_range`, `frame_tones`, `applies_roll_exposure`, `applies_roll_to_scene_correction`, `decoded_base`, `roll_report`; `applied_roll` is `pub(super)` for `validate_tilt`), with `ResolvedSlope`, `SlopeBase`, `RollReport` and `LookReport`. `recipe::for_frame(r, input)` is in `compose.rs`. Bodies moved unchanged; the one edit: `roll_report`'s parameter is `recipe`, since its local `r = &recipe.roll` would shadow it. Eight tests whose subject is resolution moved with it (asserts and literals checked equal); validation tests that read a resolved value stay in `recipe.rs`. **Verified:** every CI gate on 1.99.1, 1172 tests before and after (only the eight moved names changed path), no golden, fingerprint or snapshot moved; release builds of origin/main and the branch byte-identical (`cmp`) on `hdr-48bit.tif` and `hdri-64bit.tif` × three recipes (none, a gain roll with a frame entry and tones, a tilt roll with look and white-balance adjustments) × SDR, `direct`, gain map, PQ and film master — images, reports (output path aside) and stderr. Real scans not run: the external SSD was not mounted. **Gotcha:** the call-site rewrite borrowed every receiver, so `cargo clippy --fix` removed 44 needless borrows; a rustfmt-skipped condition (a comment inside it) and a raw-string call needed wrapping by hand.
+- 2026-10-15: Review round (`/code-review high`, no correctness findings). Fixed: `compose`'s doc claimed one merge rule for every layer, which `for_frame` does not follow; `resolve::frame_tones` is back to `applied_frame_tones` (it hid the rendering filter beside `roll.frame_tones` and shadowed `roll_white::frame_tones` in name); `roll_colour` and `decoded_base` are private; `roll_balance`'s doc names its `measure-roll` caller; the module doc's "pure in `&Recipe`" and "rather than re-deriving" were looser than the code; the task file records its decisions; `docs/spike/native-app-prototype.md` names `recipe::for_frame`. Left for the user: the report re-calls `resolve::slope` rather than reading the `ResolvedSlope` the render used, `applied_roll` clones the roll section per call, and narrowing `roll_balance` to `&DecodeParams` — each pre-existing or a shape change beyond the move. Gates green, 1172 tests.
+- 2026-10-15: **Done 2026-10-15.** Parameter resolution is `recipe::resolve`: free functions of `&Recipe` from the recipe, its applied roll and the rendering's base to each stage's params, plus the report's roll and look provenance; `recipe::for_frame` is in `compose`. A pure move, byte-identical against origin/main. Ship review (`ship:diff-reviewer`; Codex skipped, spend cap): bodies, call sites, types and moved tests faithful; fixed two epic summaries (`core`, `nf-look`) that still named `Recipe::for_frame` / `Recipe::chain_params`. **For later work:** a new stage knob that combines the roll and the user's value resolves in `recipe::resolve`, not in `recipe.rs`; validation that judges a resolved value calls `resolve::`. Open follow-ups, unfiled: carry the render's `ResolvedSlope` to the report instead of re-calling `resolve::slope`; borrow rather than clone the applied roll.
