@@ -1902,8 +1902,8 @@ fn recipe_files(paths: &[PathBuf]) -> impl Iterator<Item = &PathBuf> {
 /// against its file, and then they compose, later winning ([`recipe::compose`]).
 ///
 /// `-` reads stdin, and only once: a second `-` is refused rather than read as empty.
-fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
-    let layers = load_layers(paths)?;
+fn load_recipes(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedRecipe> {
+    let layers = load_layers(paths, frames)?;
     Ok(LoadedRecipe {
         recipe: compose_layers(&layers.bodies)?,
         layer_warnings: layers.layer_warnings,
@@ -1927,8 +1927,19 @@ fn compose_layers(bodies: &[serde_json::Value]) -> Result<Recipe> {
     })
 }
 
+/// What a load does with each layer's `roll.frames`.
+#[derive(Clone, Copy)]
+enum FrameKeys {
+    /// Resolve the keys ([`resolve_frame_keys`]).
+    Resolve,
+    /// Drop the table unread: a run that discards it must not warn or refuse over it.
+    Drop,
+    /// Keep the table raw, for a run that refuses it stated: no key fault refuses first.
+    Keep,
+}
+
 /// [`load_recipes`]'s reading half.
-fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
+fn load_layers(paths: &[PathBuf], frames: FrameKeys) -> Result<LoadedLayers> {
     if paths.iter().filter(|p| is_stdin_recipe(p)).count() > 1 {
         return Err(NcError::Usage(
             "--params - is given more than once, but stdin can be read only once: save \
@@ -1951,14 +1962,26 @@ fn load_layers(paths: &[PathBuf]) -> Result<LoadedLayers> {
         };
         let mut layer = read_layer(&txt, &name)?;
         layer_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
-        // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on stdin.
-        let folder = if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
-            collision_key(Path::new("."))
-        } else {
-            let key = collision_key(p);
-            key.parent().map_or(key.clone(), Path::to_path_buf)
-        };
-        layer_warnings.extend(resolve_frame_keys(&mut layer.body, &folder, &name)?);
+        match frames {
+            FrameKeys::Keep => {}
+            FrameKeys::Drop => {
+                if let Some(roll) = layer.body.get_mut("roll").and_then(|r| r.as_object_mut()) {
+                    roll.remove("frames");
+                }
+            }
+            FrameKeys::Resolve => {
+                // A pipe (`<(jq …)`, a FIFO) has no folder of its own: keys resolve as on
+                // stdin.
+                let folder =
+                    if is_stdin_recipe(p) || !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
+                        collision_key(Path::new("."))
+                    } else {
+                        let key = collision_key(p);
+                        key.parent().map_or(key.clone(), Path::to_path_buf)
+                    };
+                layer_warnings.extend(resolve_frame_keys(&mut layer.body, &folder, &name)?);
+            }
+        }
         layers.push(layer.body);
         names.push(name);
     }
@@ -5199,7 +5222,7 @@ fn convert_attempt(
     // rule reasons about the values the recipe resolves.
     reject_removed_flags(&args.knobs, !args.recipe_in.is_empty(), false)?;
     // A recipe written for the removed chain is refused inside the load, by name.
-    let loaded = load_recipes(&args.recipe_in)?;
+    let loaded = load_recipes(&args.recipe_in, FrameKeys::Resolve)?;
     // The frame's own roll values first, then the flags win over every recipe.
     let stated_roll = loaded.recipe.roll.clone();
     let key = frame_key(&args.input);
@@ -7182,7 +7205,13 @@ fn run_roll(args: RollArgs) -> Result<()> {
         )));
     }
     reject_measure_mode_flags(&args)?;
-    let mut layers = load_layers(&args.recipe_in)?;
+    // Measure mode refuses a stated `roll.frames` by name (`refuse_stated_roll_values`).
+    let frames = if args.measures() {
+        FrameKeys::Keep
+    } else {
+        FrameKeys::Resolve
+    };
+    let mut layers = load_layers(&args.recipe_in, frames)?;
     reject_a_leader_without_measuring(&args, &layers)?;
     // Measure mode: the measurement joins the layers last, as `measure-roll --out`'s file
     // would. Under `--strict` a warning refuses before any frame is converted.
@@ -9070,7 +9099,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         ));
     }
 
-    let loaded = load_recipes(&args.recipe_in)?;
+    // Its frames table is dropped unread: `check` discards the roll section.
+    let loaded = load_recipes(&args.recipe_in, FrameKeys::Drop)?;
     let mut recipe = loaded.recipe;
     // A measured base is not overridden: it is refused beside any other statement of the
     // base, before a rule about that base could refuse first.
@@ -11676,12 +11706,15 @@ mod tests {
     #[test]
     fn load_recipe_maps_failures_to_usage() {
         // No path → defaults, infallibly.
-        let loaded = load_recipes(&[]).unwrap();
+        let loaded = load_recipes(&[], FrameKeys::Resolve).unwrap();
         assert_eq!(loaded.recipe, Recipe::default());
 
         // Missing file → Usage (exit 2), not Other.
         let missing = std::env::temp_dir().join("nc-no-such-recipe-xyz.json");
-        assert!(matches!(load_recipes(&[missing]), Err(NcError::Usage(_))));
+        assert!(matches!(
+            load_recipes(&[missing], FrameKeys::Resolve),
+            Err(NcError::Usage(_))
+        ));
 
         // Malformed JSON and unknown keys both map to Usage.
         for (tag, body) in [

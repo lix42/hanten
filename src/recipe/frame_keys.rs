@@ -4,7 +4,8 @@
 //! (absolute only where no relative path exists, as across Windows drives), so a roll
 //! folder holding its scans and recipe still converts after it moves. A bare file name
 //! is the frame beside the recipe; a recipe on stdin or a pipe is read from the working
-//! directory. Written keys separate components with `/` on every platform.
+//! directory. A written relative key separates components with `/` on every platform;
+//! an absolute one keeps the platform's form.
 //!
 //! In memory every key is the frame's resolved path: `cli` rewrites a layer's keys when
 //! it loads ([`rebase`]), matches a frame by its own resolved path ([`super::for_frame`]),
@@ -12,9 +13,9 @@
 //! `recipe` and its `params_hash` carry absolute paths: they change when the roll moves,
 //! though the image does not. Keys are written by real path: a symlink is followed.
 //!
-//! A key naming no file warns, rather than silently reaching no frame; a key whose file
-//! exists but is not among the run's inputs stays silent, since rendering a subset with
-//! the whole roll's numbers is a designed use.
+//! Where `cli` resolves the table, a key naming no file warns, rather than silently
+//! reaching no frame; a key whose file exists but is not among the run's inputs stays
+//! silent, since rendering a subset with the whole roll's numbers is a designed use.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -49,7 +50,8 @@ pub fn rebase(
 
 /// `frames` with each key, a resolved path, made relative to `dir` (itself resolved) —
 /// the keys a recipe written into `dir` states, `/`-separated, and `.` for `dir` itself
-/// (an empty key is refused). A key with no relative path stays as it is.
+/// (an empty key is refused). A key with no relative path stays as it is, in the
+/// platform's form.
 pub fn relative<T: Clone>(frames: &BTreeMap<String, T>, dir: &Path) -> BTreeMap<String, T> {
     frames
         .iter()

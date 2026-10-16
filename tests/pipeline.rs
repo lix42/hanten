@@ -14987,6 +14987,81 @@ fn two_frames_keys_naming_one_file_are_refused() {
     assert!(err.contains(r#""./a.tif" and "a.tif" both name"#), "{err}");
 }
 
+#[test]
+fn roll_measure_mode_refuses_a_stated_frames_table_before_its_keys() {
+    // Merging two keys naming one file would only lead into the measured-value refusal,
+    // so that one is diagnosed first.
+    let tmp = TempDir::new("roll-measure-frames-raw");
+    let frame = tmp.path("a.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"frames": {"a.tif": {"white_stops": 1.8}, "./a.tif": {"white_stops": 1.9}}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        frame.to_str().unwrap(),
+        "--measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("states `roll.frames`, a roll value"), "{err}");
+    assert!(!err.contains("both name"), "{err}");
+}
+
+#[test]
+fn measure_roll_drops_the_frames_table_unread() {
+    // `measure-roll` discards the recipe's roll section, so a prior roll recipe's frames
+    // table neither warns (which `--strict` would refuse) nor refuses the run.
+    let tmp = TempDir::new("measure-roll-frames-unread");
+    let frame = tmp.path("frame.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    let leader = tmp.path("leader.tif");
+    write_hdri_with_uniform_ir(&leader, 64, 64, [900, 700, 400], 40_000);
+    let recipe = |name: &str, frames: &str| {
+        write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{"recipe_version": 3,
+                    "input": {{"transfer": "linear", "meaning": "scanner-device"}},
+                    "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}}
+                    {frames}}}"#
+            ),
+        )
+    };
+    let measure = |recipe: &Path| {
+        let (code, stdout, err) = run(&[
+            "measure-roll",
+            "--params",
+            recipe.to_str().unwrap(),
+            frame.to_str().unwrap(),
+            "--leader",
+            leader.to_str().unwrap(),
+            "--strict",
+        ]);
+        assert_eq!(code, 0, "{}: {err}", recipe.display());
+        assert!(!err.contains("names no file"), "{err}");
+        assert!(!stdout.contains("names no file"), "{stdout}");
+        json(&stdout)["white_balance"]["gains"].clone()
+    };
+    // The control: the same run with no frames table.
+    let control = measure(&recipe("plain.json", ""));
+    let missing = recipe(
+        "missing.json",
+        r#", "roll": {"frames": {"gone.tif": {"white_stops": 1.8}}}"#,
+    );
+    let twice = recipe(
+        "twice.json",
+        r#", "roll": {"frames": {"frame.tif": {"white_stops": 1.8}, "./frame.tif": {"white_stops": 1.9}}}"#,
+    );
+    assert_eq!(measure(&missing), control);
+    assert_eq!(measure(&twice), control);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_recipe_saved_through_a_dangling_symlink_keys_frames_from_its_referent() {
