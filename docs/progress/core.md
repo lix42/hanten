@@ -78,7 +78,7 @@ What other epics need to know about `core`:
   --out` write `"recipe_version": 2` files, refused over an existing file unless
   `--force`. Reports no longer carry a recipe (`calibration`, `reuse.recipe`,
   `reuse.frames` are gone). Per-frame clamps are the recipe key `roll.frames`,
-  `{"<file name>": {"white_stops": …}}`. `Recipe::for_frame` applies an entry for
+  `{"<file name>": {"white_stops": …}}`. `recipe::for_frame` applies an entry for
   `convert` and every `roll` frame before flags merge, and a manifest's `params` beat it.
 - **`measure-roll --unexposed auto` / `--leader auto` find the reference frames among the
   inputs** (`core/auto-calibration`, 2026-10-09). The rule is in `pipeline::reference_frames`:

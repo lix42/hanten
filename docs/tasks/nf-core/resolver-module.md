@@ -1,9 +1,10 @@
 ---
 title: Give parameter resolution its own module
-status: todo
+status: done
 deps: []
 related: [nf-core/three-step-pipeline]
 summary: move Recipe::shared_params and the resolved_* methods out of recipe.rs
+done: 2026-10-15
 ---
 # Give parameter resolution its own module
 
@@ -26,12 +27,14 @@ Known:
 - A refactor: no pixel, report or recipe change. The goldens and the drift gate must not
   move.
 
-Open:
+Decided (user, 2026-10-15):
 
-- Whether the report's provenance (`chain.roll`, `ResolvedSlope::base_from`) moves with
-  it.
-- Where `Recipe::for_frame` belongs: it resolves the frame's `roll.frames` entry, but
-  `roll` and `convert` both call it before validation.
+- The module is `recipe::resolve`, free functions of `&Recipe`: a submodule, since
+  validation reads resolved values.
+- The report's provenance (`roll_report`, `RollReport`, `LookReport`, `ResolvedSlope`,
+  `SlopeBase`) moves with it.
+- `for_frame` moves to `recipe::compose` as the frame's first layer: it produces a recipe,
+  before the flags and validation, not stage params.
 
 ## How to Verify
 

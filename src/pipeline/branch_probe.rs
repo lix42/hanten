@@ -26,7 +26,7 @@ use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::gain_ratio;
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
-use crate::recipe::Recipe;
+use crate::recipe::{Recipe, resolve};
 use crate::stage::Untimed;
 use crate::types::{FilmBase, LinearImage};
 
@@ -178,7 +178,7 @@ fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayP
     let film_base = || -> AcesCgImage {
         map_nc_film_rgb_v1(fixed::decode_film_base(base, &recipe.reconstruction).unwrap())
     };
-    let shared = recipe.shared_params();
+    let shared = resolve::shared_params(recipe);
     let graded = contract::graded(aces(), &shared);
     let pair = chain::render_pair(
         aces(),
@@ -242,7 +242,7 @@ fn branch_probe() {
     let mut recipe = Recipe::default();
     let headroom = env_or(
         "NC_PROBE_HEADROOM",
-        f64::from(recipe.resolved_fit_range().0),
+        f64::from(resolve::fit_range(&recipe).0),
     ) as f32;
     recipe.fit_range.headroom_stops = Some(headroom);
     println!(

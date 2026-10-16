@@ -1,16 +1,21 @@
-//! Composing a recipe from layers: repeated `--params` files, in order, and then a
-//! `roll` frame's manifest `params` over that frame's resolved recipe.
+//! Composing a recipe from layers: repeated `--params` files, in order; the frame's own
+//! `roll.frames` entry ([`for_frame`]); and a `roll` frame's manifest `params` over that
+//! frame's resolved recipe.
 //!
-//! One merge rule for every layer ([`merge_json`]): an object merges key by key,
+//! The JSON layers share one merge rule ([`merge_json`]): an object merges key by key,
 //! anything else replaces, and a `null` states nothing (a frame's `params` refuses one
-//! before merging, since there it can only be an attempt to unset). The design and its open
-//! questions are `docs/design/roll-workflow.md` ("Layering and precedence").
+//! before merging, since there it can only be an attempt to unset). The frame's
+//! `roll.frames` entry is not merged: [`for_frame`] moves its stated fields onto the roll
+//! section. The design and its open questions are `docs/design/roll-workflow.md`
+//! ("Layering and precedence").
 //!
 //! **`--params` layers merge onto the serialized default recipe, never onto each
 //! other** ([`compose`]). Two partial layers `{"look": {"contrast": …}}` and
 //! `{"look": {"channel_grade": …}}` have the shape of an enum variant switch
 //! ([`is_variant_switch`]), and merged directly the second would drop the first. In the
 //! full document every struct states all its keys, so the shape never arises.
+
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -102,6 +107,37 @@ pub(crate) fn is_variant_switch(base: &Value, overlay: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// `r` as `input` renders it: the frame's [`RollSection::frames`] entry, if any, moves
+/// into the roll section's own fields (`white_stops`, `frame_exposure`, `thin_slope`,
+/// `thin_exposure`, `frame_tones`). `convert` and every `roll` frame go through it, so
+/// the two stay byte-identical. The entry is removed, not copied, so a flag that then
+/// beats it is what a `--save-recipe` replay renders; the other entries stay for
+/// [`validate`].
+///
+/// [`RollSection::frames`]: super::RollSection::frames
+/// [`validate`]: super::validate
+pub fn for_frame(mut r: Recipe, input: &Path) -> Recipe {
+    let name = input.file_name().and_then(|n| n.to_str());
+    if let Some(frame) = name.and_then(|n| r.roll.frames.remove(n)) {
+        if let Some(stops) = frame.white_stops {
+            r.roll.white_stops = Some(stops);
+        }
+        if let Some(ev) = frame.exposure {
+            r.roll.frame_exposure = Some(ev);
+        }
+        if let Some(slope) = frame.thin_slope {
+            r.roll.thin_slope = Some(slope);
+        }
+        if let Some(ev) = frame.thin_exposure {
+            r.roll.thin_exposure = Some(ev);
+        }
+        if let Some(tones) = frame.tones {
+            r.roll.frame_tones = Some(tones);
+        }
+    }
+    r
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ use crate::pipeline::{
     midtone_neutral, reference_frames, roll_white, scene_correction, working_space,
 };
 use crate::profile;
-use crate::recipe::{self, KnobNames, Recipe};
+use crate::recipe::{self, KnobNames, Recipe, resolve};
 use crate::stage::{StageClock, StageKind};
 use crate::stdio::{self, Delivery};
 use crate::telemetry;
@@ -1507,7 +1507,7 @@ pub struct ChainResult {
     /// section states nothing. The film master and `--rendering direct` apply neither
     /// value.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roll: Option<recipe::RollReport>,
+    pub roll: Option<resolve::RollReport>,
     /// Scene correction's values: the white-balance gains and the exposure applied — the
     /// roll's gains included. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1516,7 +1516,7 @@ pub struct ChainResult {
     /// base slope it multiplied, where that came from and the resulting slope, then the
     /// grade and highlight desaturation. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub look: Option<recipe::LookReport>,
+    pub look: Option<resolve::LookReport>,
     /// Fit range's operator by name, with the headroom, white point and display peak
     /// it ran at — what a non-default `fit_range.headroom_stops` changes. Absent for
     /// the film master.
@@ -3904,7 +3904,7 @@ fn convert_frame(
     facts.memory = Some(mem);
     report.memory = Some(mem);
     if let Some(missing) = recipe.roll.placement_missing()
-        && recipe.applies_roll_to_scene_correction()
+        && resolve::applies_roll_to_scene_correction(recipe)
     {
         push_warning_buf(
             warnings,
@@ -4487,7 +4487,7 @@ fn render_one(
     clock: &mut impl StageClock,
     encode: impl FnOnce(OneRendition) -> Result<DestinationPixels>,
 ) -> Result<DestinationRender> {
-    let params = recipe.chain_params(d.range.peak()?, d.gamut.destination());
+    let params = resolve::chain_params(recipe, d.range.peak()?, d.gamut.destination());
     let chain::Rendered {
         image,
         applied,
@@ -4540,7 +4540,7 @@ fn render_gain_map(
     let chain::RenderedPair { sdr, hdr } = chain::render_pair(
         aces,
         film_base,
-        &recipe.shared_params(),
+        &resolve::shared_params(recipe),
         d.gamut.destination(),
         peak,
         clock,
@@ -4816,13 +4816,13 @@ fn render_frame(
     if let Some(r) =
         rendered.filter(|r| !matches!(r.fit_range.dark_end.setting, fit_range::DarkEnd::Black(_)))
     {
-        let slope = recipe.resolved_slope();
+        let slope = resolve::slope(recipe);
         let inputs = black_endpoint::Inputs {
             slope: r.look.slope,
             exposure: r.scene_correction.exposure,
             white_balance: r.scene_correction.white_balance,
-            tones: recipe.applied_frame_tones(),
-            roll_exposure: recipe.applies_roll_exposure(),
+            tones: resolve::applied_frame_tones(recipe),
+            roll_exposure: resolve::applies_roll_exposure(recipe),
             stated_exposure: recipe.scene_correction.exposure,
             stated_white_balance: {
                 let crate::pipeline::scene_correction::WhiteBalance::Explicit(gains) =
@@ -4847,10 +4847,10 @@ fn render_frame(
                 .to_vec()
         }),
         rendering: recipe.rendering,
-        roll: recipe.roll_report(rendered.is_some()),
+        roll: resolve::roll_report(recipe, rendered.is_some()),
         scene_correction: rendered.map(|r| r.scene_correction),
-        look: rendered.map(|r| recipe::LookReport {
-            slope: recipe.resolved_slope(),
+        look: rendered.map(|r| resolve::LookReport {
+            slope: resolve::slope(recipe),
             section: r.look,
         }),
         fit_range: rendered.map(|r| r.fit_range),
@@ -5083,7 +5083,7 @@ fn convert_attempt(
     let loaded = load_recipes(&args.recipe_in)?;
     // The frame's own roll values first, then the flags win over every recipe.
     let stated_roll = loaded.recipe.roll.clone();
-    let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), &args.knobs);
+    let recipe = recipe::merge(recipe::for_frame(loaded.recipe, &args.input), &args.knobs);
     // Flag-presence rules, ahead of every value rule that could refuse first.
     reject_a_line_without_its_gains(&args.knobs, &recipe)?;
     reject_a_tilt_without_its_gains(&args.knobs, &recipe, false)?;
@@ -5145,7 +5145,7 @@ fn convert_attempt(
                 recipe.base().saturation,
                 recipe.look.saturation,
             ],
-            recipe.applies_roll_to_scene_correction(),
+            resolve::applies_roll_to_scene_correction(&recipe),
             KnobNames::FlagAndKey,
         )?;
     }
@@ -5796,7 +5796,8 @@ const ROLL_WIDE: &[RollWide] = &[
         // Only gains that reach both: a frame that leaves them out entirely is the
         // `rendering` or `output` row's. A frame's own `neutral_balance` off is frame-local.
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
                 || f.roll.applied_white_balance().is_none()
             {
                 return Ok(None);
@@ -5809,7 +5810,8 @@ const ROLL_WIDE: &[RollWide] = &[
         breaks: "this frame's gains apply in another form than the roll's, which its whites \
                  and midtone line were measured after",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
                 || f.roll.applied_white_balance().is_none()
             {
                 return Ok(None);
@@ -5821,7 +5823,8 @@ const ROLL_WIDE: &[RollWide] = &[
         key: "roll.white_balance_stops",
         breaks: "this frame's tilt reaches the roll's gains at another white than the roll's",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
                 || f.roll.applied_white_balance().is_none()
                 // Under the gain form on both, the stops change nothing.
                 || [f, r]
@@ -5838,7 +5841,8 @@ const ROLL_WIDE: &[RollWide] = &[
         breaks: "this frame's midtones are corrected apart from the roll's (a frame's own \
                  is `roll.midtone_neutral` \"off\", or \"red\" / \"blue\" for one term)",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction())
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
                 || f.roll.applied_midtone_line().is_none()
             {
                 return Ok(None);
@@ -5851,7 +5855,9 @@ const ROLL_WIDE: &[RollWide] = &[
         breaks: "this frame's slope spreads a span apart from the roll's measured dark end \
                  (a frame's own contrast is `look.contrast`, which multiplies the slope)",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
+            {
                 return Ok(None);
             }
             changed(&f.roll.dark_stops, &r.roll.dark_stops)
@@ -5863,7 +5869,9 @@ const ROLL_WIDE: &[RollWide] = &[
                  (a frame's own placement is `roll.placement`, `roll.hybrid_span_stops` and \
                  `roll.hybrid_level_keep`)",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
+            {
                 return Ok(None);
             }
             changed(&f.roll.envelope_stops, &r.roll.envelope_stops)
@@ -5874,7 +5882,9 @@ const ROLL_WIDE: &[RollWide] = &[
         breaks: "this frame is exposed apart from the roll's measured exposure (a frame's \
                  own adjustment is `scene_correction.exposure`, which adds to it)",
         compare: |f, r| {
-            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+            if !(resolve::applies_roll_to_scene_correction(f)
+                && resolve::applies_roll_to_scene_correction(r))
+            {
                 return Ok(None);
             }
             changed(&f.roll.exposure, &r.roll.exposure)
@@ -5988,7 +5998,7 @@ fn resolve_frames(
     roll_warnings: &mut Vec<String>,
     log: &Log,
 ) -> Result<Vec<PlannedFrame>> {
-    let own = |input: &Path| recipe::merge(stated.clone().for_frame(input), &args.knobs);
+    let own = |input: &Path| recipe::merge(recipe::for_frame(stated.clone(), input), &args.knobs);
     let from_cli = InputFromCli::of(&args.knobs.input_opts);
     let out_dir = args.out_dir.as_path();
     let film_rgb = |input: &Path, output: &Path| {
@@ -6373,7 +6383,7 @@ fn reject_a_lift_under_a_frame_placement(
     stated: &str,
     [roll_placement, exposure]: [&str; 2],
 ) -> Result<()> {
-    if !r.applies_roll_to_scene_correction() || r.roll.frame_placement().is_none() {
+    if !resolve::applies_roll_to_scene_correction(r) || r.roll.frame_placement().is_none() {
         return Ok(());
     }
     Err(NcError::Usage(format!(
@@ -6433,7 +6443,7 @@ fn reject_a_knob_the_placement_ignores(
     names: PlacementNames,
     prefix: &str,
 ) -> Result<()> {
-    if !r.applies_roll_to_scene_correction() {
+    if !resolve::applies_roll_to_scene_correction(r) {
         return Ok(());
     }
     let roll = &r.roll;
@@ -6531,7 +6541,7 @@ fn reject_a_thin_slope_over_a_small_lift(
     stated: &str,
     names: ThinLiftNames,
 ) -> Result<()> {
-    if !r.applies_roll_to_scene_correction()
+    if !resolve::applies_roll_to_scene_correction(r)
         || r.roll.applied_thin_slope().is_none()
         || r.roll.applied_thin_exposure().is_some()
     {
@@ -6564,7 +6574,7 @@ fn reject_a_small_lift_beside_a_thin_one(
     let Some(slope) = r.roll.applied_thin_slope() else {
         return Ok(());
     };
-    if !r.applies_roll_to_scene_correction() {
+    if !resolve::applies_roll_to_scene_correction(r) {
         return Ok(());
     }
     let off = if r.roll.small_lift == Some(recipe::Switch::Off) {
@@ -6591,7 +6601,7 @@ fn reject_a_lift_for_every_frame(
     shared: &Recipe,
     measuring: bool,
 ) -> Result<()> {
-    if !shared.applies_roll_to_scene_correction() {
+    if !resolve::applies_roll_to_scene_correction(shared) {
         return Ok(());
     }
     let r = &shared.roll;
@@ -7139,9 +7149,9 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let typed = &args.knobs.roll;
     let on = Some(recipe::Switch::On);
     let some = |placed: fn(&recipe::RollSection) -> bool| {
-        planned
-            .iter()
-            .any(|pf| pf.recipe.applies_roll_to_scene_correction() && placed(&pf.recipe.roll))
+        planned.iter().any(|pf| {
+            resolve::applies_roll_to_scene_correction(&pf.recipe) && placed(&pf.recipe.roll)
+        })
     };
     let some_hybrid =
         some(|r| r.placement() == recipe::Placement::Hybrid && r.frame_placement().is_some());
@@ -9604,14 +9614,16 @@ fn measure_roll(
     let pooled = pool.len() / 3;
     drop(pool);
     log.info(format_args!("roll white balance {gains:?}"));
-    let balance = recipe
-        .roll_balance(&recipe::RollSection {
+    let balance = resolve::roll_balance(
+        recipe,
+        &recipe::RollSection {
             white_balance: Some(gains),
             white_balance_form: Some(req.form),
             white_balance_stops: Some(balance_stops),
             ..recipe::RollSection::default()
-        })
-        .expect("the gains are stated and applied");
+        },
+    )
+    .expect("the gains are stated and applied");
     // Refused here rather than written into a recipe `convert` would refuse.
     if let RollBalance::Tilt(t) = &balance {
         t.check().map_err(|e| {

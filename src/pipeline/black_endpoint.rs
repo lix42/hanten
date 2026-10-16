@@ -52,7 +52,7 @@ pub struct Inputs {
     pub white_balance: [f32; 3],
     /// The frame's measured tones, where the roll applies.
     pub tones: Option<FrameStops>,
-    /// Whether a roll's exposure applies (`recipe::Recipe::applies_roll_exposure`), and
+    /// Whether a roll's exposure applies (`recipe::resolve::applies_roll_exposure`), and
     /// the stated scene correction on top of it: `scene_correction.exposure` and
     /// `.white_balance`.
     pub roll_exposure: bool,

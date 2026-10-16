@@ -105,7 +105,7 @@ pub struct DisplayTarget {
 ///
 /// Not a recipe type, though parts of it are: `scene_correction`, `look` and the
 /// headroom come from the recipe (`crate::recipe::Recipe`), while the
-/// [`DisplayTarget`] is the destination's, so [`crate::recipe::Recipe::chain_params`]
+/// [`DisplayTarget`] is the destination's, so [`crate::recipe::resolve::chain_params`]
 /// adds it. No `Default`, because no destination is implied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChainParams {

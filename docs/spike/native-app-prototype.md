@@ -100,7 +100,7 @@ flowchart LR
 8. **Integer factors are coarse.** A 2048 limit gives factor 3 (1642 px wide); the next
    steps are 2463 and 1231. The canvas scales to the window, so it's fine for a
    preview, but the factor must be visible to the user.
-9. **Per-frame roll entries are keyed by file name** (`Recipe::for_frame`). A file
+9. **Per-frame roll entries are keyed by file name** (`recipe::for_frame`). A file
    picker makes it easy to pick two frames with the same name from different folders.
    They would share one entry.
 10. **The IR outline is often "measured, no holder".** The Portra400 rolls tested are

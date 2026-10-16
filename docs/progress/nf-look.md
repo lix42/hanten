@@ -24,7 +24,7 @@ control under `look`**, each named and added by its own task with a field on
 `contrast` and the grade overlap (equal pivoted exponents are contrast): contrast owns
 neutral contrast, and the grade must not be able to move it. The section is `look::LookSection`, and
 the stage's `LookParams` adds what the section cannot state (the decode's linearization, via
-`Recipe::chain_params`). Two predicates, never a rule per knob: `is_empty` (moves no
+`recipe::resolve::chain_params`). Two predicates, never a rule per knob: `is_empty` (moves no
 pixel — `applied()`) and `asks_for_a_look` (neither the default nor empty — what
 `film-master`'s refusal reads, in `nf-destinations/preset-set`); they differ because the
 default look is not the identity, and an empty look is spared because it is one.
