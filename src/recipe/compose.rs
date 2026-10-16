@@ -57,7 +57,7 @@ pub fn merge_json(base: &mut Value, overlay: &Value) {
 /// The recipe's maps, by path. Their keys are data (a frame's file name), not enum
 /// tags, so two one-entry tables must union rather than read as a variant switch; and
 /// their entries are structs of optional fields, so `{"white_stops": …}` and
-/// `{"exposure": …}` for one file merge too.
+/// `{"frame_exposure": …}` for one file merge too.
 const MAPS: &[&[&str]] = &[&["roll", "frames"]];
 
 /// [`merge_json`] at `path` from the document root.
@@ -124,7 +124,7 @@ pub fn for_frame(mut r: Recipe, input: &Path) -> Recipe {
         if let Some(stops) = frame.white_stops {
             r.roll.white_stops = Some(stops);
         }
-        if let Some(ev) = frame.exposure {
+        if let Some(ev) = frame.frame_exposure {
             r.roll.frame_exposure = Some(ev);
         }
         if let Some(slope) = frame.thin_slope {
@@ -294,10 +294,14 @@ mod tests {
         // would drop the clamp. An entry is a struct, so its fields merge.
         let clamp =
             json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 2.0}}}});
-        let lift = json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 0.2}}}});
+        let lift =
+            json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"frame_exposure": 0.2}}}});
         let r = compose([&clamp, &lift]).unwrap();
         let entry = r.roll.frames["a.tif"];
-        assert_eq!((entry.white_stops, entry.exposure), (Some(2.0), Some(0.2)));
+        assert_eq!(
+            (entry.white_stops, entry.frame_exposure),
+            (Some(2.0), Some(0.2))
+        );
     }
 
     #[test]

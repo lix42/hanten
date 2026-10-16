@@ -218,9 +218,9 @@ pub struct Calibration {
 pub struct RollSection {
     /// The roll's white-balance gains, green-anchored, as `measure-roll` reports them.
     pub white_balance: Option<[f32; 3]>,
-    /// Whether `white_balance` applies; off takes the midtone line with it, which is
-    /// measured after the gains. Unset (`null`) is on, like the lifts' switches.
-    pub neutral_balance: Option<Switch>,
+    /// Whether the roll's colour correction applies: `white_balance`, and the midtone line
+    /// measured after it. Unset (`null`) is on, like the lifts' switches.
+    pub colour_correction: Option<Switch>,
     /// How the gains apply (`pipeline::roll_balance`): `gain` (unset) at every tone, or a
     /// `tilt` from the identity at the film base to the gains at `white_balance_stops`.
     /// `measure-roll` measures the whites and the line after the form it was given.
@@ -246,7 +246,7 @@ pub struct RollSection {
     pub frame_tones: Option<FrameStops>,
     /// This frame's small lift in EV (`roll_white::small_lift`), added to `exposure` while
     /// [`Self::small_lift`] is on and no thin lift applies — where [`for_frame`]
-    /// moves a `frames` entry's `exposure`.
+    /// moves a `frames` entry's `frame_exposure`.
     pub frame_exposure: Option<f32>,
     /// Whether `frame_exposure` applies: a taste switch (design-spec §6). Unset (`null`) is
     /// on, so a measured file layered last never undoes an earlier `"off"`.
@@ -295,7 +295,7 @@ pub struct FrameRoll {
     /// The frame's white, in place of the roll's `white_stops`.
     pub white_stops: Option<f32>,
     /// The frame's small lift (`roll.frame_exposure`).
-    pub exposure: Option<f32>,
+    pub frame_exposure: Option<f32>,
     /// The frame's thin lift (`roll.thin_slope`, `roll.thin_exposure`).
     pub thin_slope: Option<f32>,
     pub thin_exposure: Option<f32>,
@@ -304,7 +304,7 @@ pub struct FrameRoll {
 }
 
 /// `roll.small_lift` / `--small-lift`, `roll.thin_lift` / `--thin-lift` and
-/// `roll.neutral_balance` / `--neutral-balance`: whether an automatic adjustment applies.
+/// `roll.colour_correction` / `--colour-correction`: whether an automatic adjustment applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Switch {
@@ -523,10 +523,10 @@ impl RollSection {
             .or(self.applied_small_exposure())
     }
 
-    /// The gains as they apply: `None` under `--neutral-balance off`.
+    /// The gains as they apply: `None` under `--colour-correction off`.
     pub fn applied_white_balance(&self) -> Option<[f32; 3]> {
         self.white_balance
-            .filter(|_| self.neutral_balance != Some(Switch::Off))
+            .filter(|_| self.colour_correction != Some(Switch::Off))
     }
 
     /// How the gains apply; unset is [`WhiteBalanceForm::Gain`].
@@ -785,6 +785,11 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          white that fit range compresses",
     ),
     (
+        &["roll", "neutral_balance"],
+        "it is `roll.colour_correction` (`\"on\"` or `\"off\"`), which switches the roll's \
+         white balance and its midtone line with it",
+    ),
+    (
         &["input", "color"],
         "it conflated transfer encoding with measurement meaning; use the independent \
          keys `input.transfer` (auto|linear) and `input.meaning` \
@@ -850,8 +855,8 @@ fn frame_lift_remedy(body: &serde_json::Value) -> Option<String> {
 
 /// Drop the retired keys where an earlier build wrote their default, `null`, which
 /// still means the rendering's base: `input.export_ir`, `fit_range.display_black`,
-/// `fit_range.headroom_stops`, `roll.frame_slope`, `roll.frame_lift` and a `roll.frames`
-/// entry's `slope`.
+/// `fit_range.headroom_stops`, `roll.frame_slope`, `roll.frame_lift`,
+/// `roll.neutral_balance` and a `roll.frames` entry's `slope` and `exposure`.
 /// `display_black`'s base moved (to the floor, `pipeline_version` 15), as a default does;
 /// refusing its `null` would refuse every recipe written before it, and the replay's
 /// version warning already says the output will not match. [`check_body`] refuses any
@@ -876,7 +881,7 @@ pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
     let Some(roll) = body.get_mut("roll").and_then(|r| r.as_object_mut()) else {
         return stripped;
     };
-    for key in ["frame_slope", "frame_lift"] {
+    for key in ["frame_slope", "frame_lift", "neutral_balance"] {
         if roll.get(key).is_some_and(|v| v.is_null()) {
             roll.remove(key);
             stripped = true;
@@ -884,9 +889,11 @@ pub fn strip_retired_nulls(body: &mut serde_json::Value) -> bool {
     }
     if let Some(frames) = roll.get_mut("frames").and_then(|f| f.as_object_mut()) {
         for entry in frames.values_mut().filter_map(|e| e.as_object_mut()) {
-            if entry.get("slope").is_some_and(|v| v.is_null()) {
-                entry.remove("slope");
-                stripped = true;
+            for key in ["slope", "exposure"] {
+                if entry.get(key).is_some_and(|v| v.is_null()) {
+                    entry.remove(key);
+                    stripped = true;
+                }
             }
         }
     }
@@ -1153,6 +1160,20 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
              render as before, {remedy}"
         ));
     }
+    // After the old slope, whose message renames an `exposure` beside it to `thin_exposure`.
+    if let Some(name) = body
+        .pointer("/roll/frames")
+        .and_then(|f| f.as_object())
+        .and_then(|f| f.iter().find(|(_, e)| e.get("exposure").is_some()))
+        .map(|(name, _)| name)
+    {
+        return usage(format!(
+            "`roll.frames.\"{name}\".exposure` is not a recipe key any more: rename every \
+             `roll.frames` entry's `exposure` to `frame_exposure` (here \
+             `roll.frames.\"{name}\".frame_exposure`), the frame's small lift \
+             (`roll.frame_exposure`). Or re-run `hanten measure-roll --out` for the roll"
+        ));
+    }
     for (section, why) in SECTIONS_WITH_NO_COUNTERPART {
         if body.get(section).is_some() {
             return usage(format!(
@@ -1374,8 +1395,8 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(terms) = args.roll.midtone_neutral {
         r.roll.midtone_neutral = Some(terms);
     }
-    if let Some(switch) = args.roll.neutral_balance {
-        r.roll.neutral_balance = Some(switch);
+    if let Some(switch) = args.roll.colour_correction {
+        r.roll.colour_correction = Some(switch);
     }
     if let Some(form) = args.roll.white_balance_form {
         r.roll.white_balance_form = Some(form);
@@ -1908,7 +1929,7 @@ fn validate_roll(p: &RollSection, applies: bool, names: KnobNames) -> Result<()>
             )
         )));
     }
-    // A `"midtone_neutral"` other than "off" beside `"neutral_balance": "off"` is spared: the
+    // A `"midtone_neutral"` other than "off" beside `"colour_correction": "off"` is spared: the
     // line goes off with the gains as it does unset. Only a typed `--midtone-neutral` asking
     // for terms is refused (`cli::reject_a_line_without_its_gains`).
     Ok(())
@@ -2010,11 +2031,14 @@ pub fn validate_roll_frames(
         if *frame == FrameRoll::default() {
             return Err(NcError::Usage(format!(
                 "recipe `roll.frames.\"{name}\"` states nothing: give it a `white_stops`, \
-                 an `exposure`, a `thin_slope` or its `tones`, or drop the entry"
+                 a `frame_exposure`, a `thin_slope` or its `tones`, or drop the entry"
             )));
         }
-        if let Some(ev) = frame.exposure {
-            exposure_fault(ev, &format!("recipe `roll.frames.\"{name}\".exposure`"))?;
+        if let Some(ev) = frame.frame_exposure {
+            exposure_fault(
+                ev,
+                &format!("recipe `roll.frames.\"{name}\".frame_exposure`"),
+            )?;
         }
         if let Some(tones) = frame.tones {
             tones_fault(tones, &format!("recipe `roll.frames.\"{name}\".tones`"))?;
@@ -2341,9 +2365,9 @@ fn render_fault_message(
             format!("recipe `roll.frames.\"{frame}\".white_stops`")
         }
         (Some((frame, e)), "roll", "frame_exposure")
-            if e.exposure.is_some() && e.exposure == r.roll.frame_exposure =>
+            if e.frame_exposure.is_some() && e.frame_exposure == r.roll.frame_exposure =>
         {
-            format!("recipe `roll.frames.\"{frame}\".exposure`")
+            format!("recipe `roll.frames.\"{frame}\".frame_exposure`")
         }
         (Some((frame, e)), "roll", "thin_slope")
             if e.thin_slope.is_some() && e.thin_slope == r.roll.thin_slope =>
@@ -3073,7 +3097,7 @@ mod tests {
             Some(([0.0; 2], blue))
         );
         assert_eq!(applied(&roll, Some(MidtoneTerms::Off)), None);
-        roll.neutral_balance = Some(Switch::Off);
+        roll.colour_correction = Some(Switch::Off);
         assert_eq!(applied(&roll, Some(MidtoneTerms::Red)), None);
         // The stated line is untouched: the switch filters what applies.
         assert_eq!(roll.midtone_line, Some(line));
@@ -3384,7 +3408,7 @@ mod tests {
         );
         assert_eq!(
             json["roll"],
-            serde_json::json!({"white_balance": null, "neutral_balance": null,
+            serde_json::json!({"white_balance": null, "colour_correction": null,
                 "white_balance_form": null, "white_balance_stops": null,
                 "white_stops": null, "dark_stops": null, "envelope_stops": null,
                 "exposure": null, "frame_tones": null,
@@ -4271,9 +4295,10 @@ mod tests {
         };
         // The default an earlier build wrote replays as if absent.
         let old = r#"{"recipe_version": 3, "roll": {"frame_slope": null, "white_stops": 1.5,
-            "dark_stops": -3.75, "frames": {"a.tif": {"exposure": 0.2, "slope": null}}}}"#;
+            "dark_stops": -3.75,
+            "frames": {"a.tif": {"white_stops": 1.25, "exposure": null, "slope": null}}}}"#;
         let new = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75,
-            "frames": {"a.tif": {"exposure": 0.2}}}}"#;
+            "frames": {"a.tif": {"white_stops": 1.25}}}}"#;
         assert_eq!(loaded(old).unwrap(), parse(new).unwrap());
         // Any other value names the rename, which replays the old render: beside a slope
         // the exposure was the thin lift's.
@@ -4382,7 +4407,7 @@ mod tests {
         let stated = loaded(
             r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
                 "small_lift": "off", "thin_lift": "off", "frames": {"a.tif":
-                {"exposure": 0.25, "thin_slope": 2, "thin_exposure": 0.7}}}}"#,
+                {"frame_exposure": 0.25, "thin_slope": 2, "thin_exposure": 0.7}}}}"#,
         )
         .unwrap();
         let r = for_frame(stated, Path::new("a.tif"));
@@ -4405,11 +4430,11 @@ mod tests {
                 .to_string()
         };
         let msg = err(
-            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"exposure": 1e9}}}}"#,
+            r#"{"recipe_version": 3, "roll": {"frames": {"a.tif": {"frame_exposure": 1e9}}}}"#,
             &[],
         );
         assert!(
-            msg.starts_with("recipe `roll.frames.\"a.tif\".exposure` must be finite"),
+            msg.starts_with("recipe `roll.frames.\"a.tif\".frame_exposure` must be finite"),
             "{msg}"
         );
         let msg = err(
@@ -5445,9 +5470,11 @@ mod tests {
             ("--midtone-neutral", &["--midtone-neutral", "blue"], |r| {
                 r.roll.midtone_neutral == Some(MidtoneTerms::Blue)
             }),
-            ("--neutral-balance", &["--neutral-balance", "off"], |r| {
-                r.roll.neutral_balance == Some(Switch::Off)
-            }),
+            (
+                "--colour-correction",
+                &["--colour-correction", "off"],
+                |r| r.roll.colour_correction == Some(Switch::Off),
+            ),
             (
                 "--white-balance-form",
                 &["--white-balance-form", "tilt"],
@@ -5815,7 +5842,7 @@ mod tests {
         );
         // The remedy renders, and so does the switch that keeps both in the recipe.
         assert_eq!(render_err(V3, &[]), None);
-        let off = ["--neutral-balance", "off"];
+        let off = ["--colour-correction", "off"];
         assert_eq!(render_err(V3, &[&gains[..], &line, &off].concat()), None);
         // A line switched off is still named: the gains alone would leave it refused.
         let line_off = ["--midtone-neutral", "off"];

@@ -463,7 +463,7 @@ what does is whether the adjustment restores the roll or reacts to one frame.
 
 | adjustment | kind | why | off at render |
 |---|---|---|---|
-| roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour; a gain at every tone, or opt-in a tilt from the identity at the film base to the gains at the roll's white (`roll.white_balance_form`), which keeps black neutral | `--neutral-balance off`, `roll.neutral_balance` (the midtone line goes off with it) |
+| roll white balance (`roll.white_balance`) | correction | removes the roll's cast — stock, light, scanner — measured over every frame, so a sunset keeps its colour; a gain at every tone, or opt-in a tilt from the identity at the film base to the gains at the roll's white (`roll.white_balance_form`), which keeps black neutral | `--colour-correction off`, `roll.colour_correction` (the midtone line goes off with it) |
 | midtone neutral (`roll.midtone_line`) | correction | removes the cast a poor development leaves in the midtones, which the white balance, exact at the roll's p99, cannot; no bad frame on four reviewed rolls. A roll's dominant colour can mislead either term alone (`nf-scene-correction/midtone-line-terms`) | `--midtone-neutral off`, or `red` / `blue` to keep one term; `roll.midtone_neutral` |
 | the midtone line's data floor (10 frames, 3 voted bands) and tint gate | guard | keep the line off a roll too short to measure it, and off strongly coloured light (a sunset-lit cloud) | — |
 | roll exposure (`roll.exposure`) | correction | brings a thin or dense roll to a normal level with one gain, so frames keep their relative levels | — |
@@ -1144,15 +1144,15 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #         "slope_bound": "span", "exposure_bound": "none" }, "frame": { … }, "flag": "… --roll-frame-tones …", … }, … ],
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5 --roll-dark -3.79 --roll-exposure 0.455 --roll-midtone-line …" } }
 # roll.json: { "recipe_version": 3, "calibration": { "film_base": { "explicit": [...] } },
-#   "roll": { "white_balance": [...], "neutral_balance": null, "white_balance_form": "gain",
+#   "roll": { "white_balance": [...], "colour_correction": null, "white_balance_form": "gain",
 #             "white_balance_stops": 1.21, "white_stops": 1.5,
 #             "dark_stops": -3.79, "envelope_stops": [-4.6, 2.3], "exposure": 0.455,
 #             "frame_tones": null, "frame_exposure": null, "small_lift": null,
 #             "thin_slope": null, "thin_exposure": null, "thin_lift": null,
 #             "placement": null, "hybrid_span_stops": null, "hybrid_level_keep": null,
 #             "midtone_line": { … }, "midtone_neutral": null,
-#             "frames": { "f07.tif": { "white_stops": 2.0, "tones": { … }, … },   # clamped
-#                         "f12.tif": { "exposure": 0.3, "tones": { … }, … } } } } # lifted
+#             "frames": { "f07.tif": { "white_stops": 2.0, "tones": { … }, … },         # clamped
+#                         "f12.tif": { "frame_exposure": 0.3, "tones": { … }, … } } } } # lifted
 # (Every measured frame has its `tones`, from which `convert` places it — the hybrid, by
 # default. A thin frame also gets a `thin_slope` and `thin_exposure`, which replace its
 # small lift at the roll's placement (`--placement roll`). `--no-small-lift` /
@@ -1417,8 +1417,8 @@ searches a frame for one (§9 `measure`):
   0.87–2.26. It is a coarse "is this a picture?" guard, not a uniformity verdict: a
   leader passes. The verdict is the area's 4x4 tiling (`pipeline::area_uniformity`,
   reported as `area_uniformity`): grain within tiles, the tiles more than 0.03
-  off the plane through the others, and that plane's edge-to-edge tilt, in density;
-  a tilt over 0.05 or any outlier tile warns.
+  off the plane through the others, and that plane's edge-to-edge `gradient`, in
+  density; a gradient over 0.05 or any outlier tile warns.
   Diagnostic only — the base is still the pooled median. An empty area is a usage
   error (exit 2).
 - **A stated region** — `--base-region x,y,w,h` ⇒ `{ "region": [x, y, w, h] }`,
@@ -1593,7 +1593,7 @@ is refused (exit 2), since it asks for something the run will not do.
   are zero, so the tint gate measures from the kept cast. It drops only terms: the whites
   stay measured with the whole line (`measure-roll --midtone-neutral off` measures them
   without it; a measurement never states the switch, so there is no `red` / `blue` there).
-- `--neutral-balance on|off` ⇒ `roll.neutral_balance` — whether `roll.white_balance`
+- `--colour-correction on|off` ⇒ `roll.colour_correction` — whether `roll.white_balance`
   applies. Frame-local. Off keeps the gains in the recipe and takes the line with them,
   which is measured after them; the whites stay as measured. A typed `--midtone-neutral`
   other than `off` is refused against a typed or recipe off; a recipe's value is spared,
@@ -1630,10 +1630,13 @@ dropped, and any other value is refused naming both switches (`"off"` →
 `"off"`; `--no-frame-lift` → `--no-small-lift --no-thin-lift`). Retired keys are
 diagnosed one at a time, a recipe with several old thin entries one entry per run; a
 retired slope's message migrates the switch beside it too, so following it never meets
-the switch's refusal.
+the switch's refusal. `roll.neutral_balance` / `--neutral-balance` and an entry's
+`exposure` (before 2026-10-15) are now `roll.colour_correction` / `--colour-correction`
+and `frame_exposure`: a recipe's `null` key is dropped, any other value is refused
+naming the new key, with no alias.
 
 - `roll.frames` (no flag) maps a **file name** to that frame's own
-  `{"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}`
+  `{"white_stops": …, "frame_exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}`
   (any may be `null`) — the clamps, lifts and tones `measure-roll --out` writes. `convert`
   and each `roll` frame move their input's entry into `roll.white_stops`,
   `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`
@@ -2013,6 +2016,10 @@ override. The reference build (`scripts/reference-snapshot/`) reproduces what th
   `--display-tone-headroom` → `--highlight-range` and `fit_range.headroom_stops` →
   `fit_range.highlight_range_stops`; `--display-black` → `--dark-base` and
   `fit_range.dark_end` `{"black": …}` → `{"base": …}`.
+- **Renamed** (`core/rename-roll-report-misnomers`): `--neutral-balance` →
+  `--colour-correction` and `roll.neutral_balance` → `roll.colour_correction`; a
+  `roll.frames` entry's `exposure` → `frame_exposure`. A recipe's `null`, as earlier
+  builds wrote them, is dropped.
 
 ### Global
 - `--params <json>` (repeatable), `--save-recipe <path>`

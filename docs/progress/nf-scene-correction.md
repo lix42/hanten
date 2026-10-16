@@ -55,7 +55,7 @@ reads corrected whites; the saturation check keeps the decoded white.
 **How far to trust them (`correction-confidence`, 2026-10-09).** `measure-roll` grades the
 white balance and the line by frame count only: under 16 frames each is `in-doubt`, with
 an advisory `confidence.advice` (and a `hanten: note:` line) that `--strict` ignores.
-Nothing detects a roll of one dominant colour. `roll.neutral_balance` (`--neutral-balance`)
+Nothing detects a roll of one dominant colour. `roll.colour_correction` (`--colour-correction`)
 turns the roll's gains off at render time, frame-local, and takes the line with them;
 read the gains through `RollSection::applied_white_balance`, never the stated field.
 

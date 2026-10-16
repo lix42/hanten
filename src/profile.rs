@@ -198,7 +198,7 @@ pub const REFUSED_FLAGS: &[(&str, &str)] = &[
     ("roll", "--hybrid-level-keep"),
     ("roll", "--roll-midtone-line"),
     ("roll", "--midtone-neutral"),
-    ("roll", "--neutral-balance"),
+    ("roll", "--colour-correction"),
     ("roll", "--white-balance-form"),
     ("roll", "--roll-white-balance-stops"),
     ("scene_correction", "--white-balance"),
@@ -270,7 +270,7 @@ const ROLL_SWITCHES: &[(&str, &str)] = &[
     ("--hybrid-span", "hybrid_span_stops"),
     ("--hybrid-level-keep", "hybrid_level_keep"),
     ("--midtone-neutral", "midtone_neutral"),
-    ("--neutral-balance", "neutral_balance"),
+    ("--colour-correction", "colour_correction"),
     ("--white-balance-form", "white_balance_form"),
 ];
 
@@ -296,7 +296,7 @@ fn stated(knobs: &ConversionFlags, flag: &str) -> bool {
         "--hybrid-level-keep" => roll.hybrid_level_keep.is_some(),
         "--roll-midtone-line" => roll.roll_midtone_line.is_some(),
         "--midtone-neutral" => roll.midtone_neutral.is_some(),
-        "--neutral-balance" => roll.neutral_balance.is_some(),
+        "--colour-correction" => roll.colour_correction.is_some(),
         "--white-balance-form" => roll.white_balance_form.is_some(),
         "--roll-white-balance-stops" => roll.roll_white_balance_stops.is_some(),
         "--white-balance" => scene.white_balance.is_some(),
@@ -781,7 +781,7 @@ mod tests {
         match flag {
             "--base-region" => "0,0,10,10",
             "--roll-midtone-line" => "1,0,1,0,-1,1,2",
-            "--small-lift" | "--thin-lift" | "--midtone-neutral" | "--neutral-balance" => "off",
+            "--small-lift" | "--thin-lift" | "--midtone-neutral" | "--colour-correction" => "off",
             "--placement" => "roll",
             "--white-balance-form" => "tilt",
             "--roll-envelope" => "-4,2",
@@ -805,9 +805,9 @@ mod tests {
         let message = refusal(&k, &crate::recipe::merge(Recipe::default(), &k)).unwrap();
         assert!(message.contains("--exposure sets"), "{message}");
         // A switch's remedy is its key, which `measure-roll` never writes.
-        let k = knobs(&["--neutral-balance", "off"]);
+        let k = knobs(&["--colour-correction", "off"]);
         let message = refusal(&k, &crate::recipe::merge(Recipe::default(), &k)).unwrap();
-        assert!(message.contains("`roll.neutral_balance`"), "{message}");
+        assert!(message.contains("`roll.colour_correction`"), "{message}");
         assert!(!message.contains("measure-roll"), "{message}");
         // A look flag is not refused.
         let k = knobs(&["--contrast", "1.2", "--rendering", "direct"]);

@@ -140,7 +140,7 @@ pub struct RollReport {
     /// exposure (a delta on the roll's) and what bound each.
     pub frame_placement: Option<roll_white::FramePlacement>,
     /// Whether the gains reached scene correction (not under `direct`, the film master or
-    /// `--neutral-balance off`).
+    /// `--colour-correction off`).
     pub white_balance_applied: bool,
     /// How the gains apply (`roll.white_balance_form`).
     pub white_balance_form: WhiteBalanceForm,
@@ -158,7 +158,7 @@ pub struct RollReport {
     /// The section's midtone line, as stated.
     pub midtone_line: Option<MidtoneLine>,
     /// Whether it reached scene correction (not under `--midtone-neutral off` or
-    /// `--neutral-balance off`).
+    /// `--colour-correction off`).
     pub midtone_neutral_applied: bool,
     /// The line's terms that reached scene correction (`--midtone-neutral red|blue`
     /// keeps one); empty when the line did not.
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn a_frames_lift_adds_to_the_roll_unless_turned_off_or_left_out() {
         let roll = r#"{"recipe_version": 3, "roll": {"exposure": 1.0,
-            "frames": {"a.tif": {"white_stops": null, "exposure": 0.25}}}}"#;
+            "frames": {"a.tif": {"white_stops": null, "frame_exposure": 0.25}}}}"#;
         let frame = |extra: &[&str]| {
             let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));
             merge(r, &cli_flags(extra))
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn a_thin_lift_replaces_the_small_one_and_each_switch_turns_off_its_own() {
         let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75, "exposure": 1.0,
-            "frames": {"a.tif": {"exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7}}}}"#;
+            "frames": {"a.tif": {"frame_exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7}}}}"#;
         let frame = |extra: &[&str]| {
             let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));
             merge(r, &cli_flags(extra))
@@ -533,7 +533,7 @@ mod tests {
     fn the_hybrid_places_a_measured_frame_in_place_of_its_lifts() {
         let roll = r#"{"recipe_version": 3, "roll": {"white_stops": 1.5, "dark_stops": -3.75,
             "exposure": 1.0, "envelope_stops": [-4.5, 2.4],
-            "frames": {"a.tif": {"exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7,
+            "frames": {"a.tif": {"frame_exposure": 0.25, "thin_slope": 2.0, "thin_exposure": 0.7,
                 "tones": {"white_stops": 0.6, "level_stops": -1.8, "dark_stops": -2.9}}}}}"#;
         let frame = |extra: &[&str]| {
             let r = for_frame(parse(roll).unwrap(), Path::new("/scans/a.tif"));

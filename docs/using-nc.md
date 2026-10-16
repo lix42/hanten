@@ -97,7 +97,14 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > print-control and rendering tables, fit-range table, report, dark-end section and
 > refusals, §8's HDR and film-master examples, §10's warnings and render-fault example,
 > and every old spelling's refusal were re-run against the binary; the floor and target
-> examples' real-roll values were carried over with their keys renamed. The staleness
+> examples' real-roll values were carried over with their keys renamed. At
+> `core/rename-roll-report-misnomers` (`pipeline_version` 17 unchanged, `1d411be` plus
+> that change: `--colour-correction` / `roll.colour_correction`, a `roll.frames` entry's
+> `frame_exposure`, and the report's `area_uniformity.gradient`,
+> `thin_lift.max_thin_slope` and `white.rule.film_saturation_margin_stops`) §4's
+> `area_uniformity` and `measure-roll --out` file, §5's default recipe, §7's
+> `measure-roll` report and roll-key table, and the old spellings' refusals were re-run
+> against the binary. The staleness
 > signal is `pipeline_version`: if `hanten --version` reports a different one, treat
 > this document as suspect and re-verify.
 >
@@ -287,7 +294,7 @@ abridged):
     "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
     "roll": {
       "white_balance": [0.886392, 1.0, 1.188019],
-      "neutral_balance": null,
+      "colour_correction": null,
       "white_balance_form": "gain",
       "white_balance_stops": 1.5175661,
       "white_stops": 1.7573359,
@@ -306,7 +313,7 @@ abridged):
       "midtone_line": null,
       "midtone_neutral": null,
       "frames": {
-        "971.tif": { "white_stops": 2.0, "exposure": null,
+        "971.tif": { "white_stops": 2.0, "frame_exposure": null,
                      "thin_slope": null, "thin_exposure": null,
                      "tones": { "white_stops": 2.3384407, "level_stops": -0.9792311,
                                 "dark_stops": -3.1597419 } },
@@ -326,7 +333,7 @@ Like every recipe file Hanten writes, it is the recipe (`params`) beside the bui
 wrote it (`meta`, §5 "No sidecar is written"). `roll.frames` holds, keyed by file name,
 every measured frame's `tones` (its white, level and dark end, from which `convert` places
 it), the cap as the white of a frame above it, the small lift of a low-key frame
-(`"exposure"`; none on this roll), and the `"thin_slope"` and `"thin_exposure"` of a thin
+(`"frame_exposure"`; none on this roll), and the `"thin_slope"` and `"thin_exposure"` of a thin
 frame beside it (§7). `roll.envelope_stops` is the roll's darkest dark end and brightest
 white; `roll.white_balance_stops` the level of the white the gains equalize, which only the
 opt-in tilt reads (`--white-balance-form tilt`, §7). `roll.midtone_line` is `null` here because a three-frame roll is too short to
@@ -513,12 +520,12 @@ into 4x4 tiles and reports, per channel `[r, g, b]` and in density:
 - `outlier_tiles`: tiles more than 0.03 off the plane through the others (dust, a
   leak, a holder sliver), up to four, in the order they were set aside, by `column`
   and `row` from the top left, with their `offset`.
-- `tilt`: the plane through the remaining tiles, `[left → right, top → bottom]` from
-  edge to edge; positive is denser toward the right or bottom.
+- `gradient`: the plane through the remaining tiles, `[left → right, top → bottom]`
+  from edge to edge; positive is denser toward the right or bottom.
 
 `verdict` is `uniform`, `sloped`, `outlier_tiles` or `sloped_with_outlier_tiles`.
-The real unexposed frames tilt at most 0.030 and none has an outlier tile. A tilt
-over 0.05 (left-to-right and top-to-bottom added) or any outlier tile warns, and
+The real unexposed frames have a gradient of at most 0.030 and none has an outlier
+tile. A gradient over 0.05 (left-to-right and top-to-bottom added) or any outlier tile warns, and
 `--strict` then fails:
 
 ```
@@ -642,7 +649,7 @@ measurement too, so by hand `measure-roll` must measure under them: pass it
   ```
 
 - **The switches keep their meaning.** `--small-lift`, `--thin-lift`, `--placement`,
-  `--hybrid-span`, `--hybrid-level-keep`, `--midtone-neutral` and `--neutral-balance`
+  `--hybrid-span`, `--hybrid-level-keep`, `--midtone-neutral` and `--colour-correction`
   decide what applies at render, as on any `roll`. The measurement runs at `measure-roll`'s defaults; to measure differently
   (`measure-roll --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
 - **`--leader`** works as on `measure-roll`, `auto` included: without one the run warns
@@ -689,7 +696,7 @@ and the measuring commands write parts of it):
     "input":       { "transfer": "auto", "meaning": "auto",
                      "film_type": "unknown" },
     "calibration": { "film_base": null },
-    "roll":        { "white_balance": null, "neutral_balance": null,
+    "roll":        { "white_balance": null, "colour_correction": null,
                      "white_balance_form": null, "white_balance_stops": null,
                      "white_stops": null, "dark_stops": null, "envelope_stops": null,
                      "exposure": null, "frame_tones": null,
@@ -993,7 +1000,7 @@ override merged. Some keys describe the *roll*, not the frame:
 `reconstruction` (every key), `rendering` and `output`. (A frame may turn the midtone
 line off, `"roll": {"midtone_neutral": "off"}`, keep one of its terms (`"red"` or
 `"blue"`), or turn the white balance off with it,
-`"roll": {"neutral_balance": "off"}`, without a warning.) An override that changes one is applied but warns, naming
+`"roll": {"colour_correction": "off"}`, without a warning.) An override that changes one is applied but warns, naming
 both values (and `--strict` turns the warning into a failing exit), because the frame
 then renders apart from its siblings — a roll is one piece of film through one
 process. What counts is what the frame renders: restating the roll's value does not
@@ -1252,10 +1259,10 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
   `--roll-white-balance` / `--roll-white` / `--roll-dark` / `--roll-exposure` / `--roll-frame-exposure` /
   `--roll-thin-slope` / `--roll-thin-exposure` / `--roll-midtone-line` / `--small-lift on`
-  / `--thin-lift on` / `--midtone-neutral on|red|blue` / `--neutral-balance on`, or pass
+  / `--thin-lift on` / `--midtone-neutral on|red|blue` / `--colour-correction on`, or pass
   `--rendering default`. A recipe's `roll` section is not refused, nor is
   `--small-lift off`, `--thin-lift off`, `--midtone-neutral off` or
-  `--neutral-balance off`, which ask for nothing (under the film master too).
+  `--colour-correction off`, which ask for nothing (under the film master too).
 
 ### Scene correction
 
@@ -1602,7 +1609,7 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                             "slope": 1.63365,
                             "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-dark -3.5391304 --roll-exposure 1.0553794 --roll-envelope -3.5862844,2.2856762 --roll-midtone-line -0.023591928,-0.024393905,-0.044650972,-0.06559556,-2.75,2.25,1.114628 --roll-frame-tones 2.2324193,-1.1342492,-2.756182" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
-                       "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
+                       "floor_stops": 1.5, "film_saturation_margin_stops": 0.5 } },
   "exposure": { "ev": 1.0553794, "level_stops": -1.0553794, "bounded": false,
                 "target_stops": 0.0, "bound_ev": 3.0 },
   "small_lift": { "kind": "taste", "written": true, "lifted": 17, "bound_ev": 0.3,
@@ -1610,7 +1617,7 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
   "thin_lift": { "kind": "taste", "written": true, "lifted": 0, "base_stops": -3.707272,
                  "white_stops": 0.9,
                  "base_share": 0.3, "near_base_stops": 1.0, "lift_stops": 1.0,
-                 "slope_bound": 2.4 },
+                 "max_thin_slope": 2.4 },
   "placement": { "kind": "taste", "envelope_stops": [-3.5862844, 2.2856762], "placed": 35,
                  "span_stops": 8.0, "level_keep": 0.6, "exposure_below_ev": 1.0,
                  "exposure_above_ev": 1.0, "max_slope": 3.5, "frame_white_look_stops": 4.462 },
@@ -1651,8 +1658,8 @@ measured value is never mistaken for a chosen one:
 | `--hybrid-level-keep SHARE` | `roll.hybrid_level_keep` | the share, 0 to 1, of its level's offset from the roll's a hybrid frame keeps (default 0.6) |
 | `--roll-midtone-line RS,RO,BS,BO,LO,HI,END` | `roll.midtone_line` = `{"red": [RS, RO], "blue": [BS, BO], "bands": [LO, HI], "fade_end_stops": END}` | the roll's midtone line (below); refused without `roll.white_balance` (exit 2) |
 | `--midtone-neutral on\|red\|blue\|off` | `roll.midtone_neutral` | which of the midtone line's terms apply: both, red or blue alone, or none; the line stays in the recipe |
-| `--neutral-balance on\|off` | `roll.neutral_balance` | whether the roll's white balance applies; off keeps the gains in the recipe and turns the midtone line off with them, since it is measured after them. A typed `--midtone-neutral` other than `off` against a typed or recipe off is refused (exit 2); a recipe's value is spared, and a `roll` manifest frame's own off wins over the flag |
-| — | `roll.frames` | `{"<file name>": {"white_stops": …, "exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}}`, any `null`: a frame's own white, in place of the roll's, its lifts and its tones. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
+| `--colour-correction on\|off` | `roll.colour_correction` | whether the roll's colour correction applies: its white balance and the midtone line measured after it. Off keeps both in the recipe. A typed `--midtone-neutral` other than `off` against a typed or recipe off is refused (exit 2); a recipe's value is spared, and a `roll` manifest frame's own off wins over the flag |
+| — | `roll.frames` | `{"<file name>": {"white_stops": …, "frame_exposure": …, "thin_slope": …, "thin_exposure": …, "tones": …}}`, any `null`: a frame's own white, in place of the roll's, its lifts and its tones. `convert` and `roll` move their input's entry into `roll.white_stops`, `roll.frame_exposure`, `roll.thin_slope`, `roll.thin_exposure` and `roll.frame_tones`, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 A lift is one frame's: `roll` refuses `roll.frame_exposure`, `roll.thin_slope` or
 `roll.thin_exposure` in the shared recipe or as a flag (exit 2), since it would lift every
@@ -1694,6 +1701,12 @@ off`, `--frame-lift on` → `--small-lift on --thin-lift on` (it beat a recipe's
 keys likewise, `--no-frame-lift` → `--no-small-lift --no-thin-lift`. One old key is
 named per run (a recipe with several old thin entries takes a run per entry); a retired
 slope's message also migrates the switch beside it.
+
+Before 2026-10-15 the roll colour correction's switch was `roll.neutral_balance`
+(`--neutral-balance`), now `roll.colour_correction` (`--colour-correction`), and a
+`roll.frames` entry's small lift was `exposure`, now `frame_exposure`. At `null`, as
+earlier builds wrote them, a recipe's are dropped; any other value is refused (exit 2),
+naming the new key. There is no alias.
 
 Each is optional. The report says what applied:
 
@@ -1796,8 +1809,8 @@ frames they were measured from: `confident` from 16 frames (`confident_from`), e
 a warning, so `--strict` ignores it: a whole short roll has no more frames to give. A random 10 frames
 of a roll moved its white balance as much as the cast a whole roll leaves on its neutral
 patches; 16 frames, within it. Nothing detects a roll dominated by one colour (sand,
-sea), which misleads the white balance most: compare a frame with `--neutral-balance off`
-(recipe `roll.neutral_balance` `"off"`), which keeps the gains in the recipe and turns
+sea), which misleads the white balance most: compare a frame with `--colour-correction off`
+(recipe `roll.colour_correction` `"off"`), which keeps the gains in the recipe and turns
 the line off with them; the whites stay as measured after both.
 
 **The roll's white** is measured per frame, in **scene stops** above mid-grey: each
@@ -1954,7 +1967,7 @@ an underexposed frame and for a night scene alike. Its white then rises about a 
 base still, in place of the small lift. Both lifts apply at the roll's placement
 (`--placement roll`); the hybrid replaces them.
 "About": the white is read in film RGB, the base as luminance before the roll's gains. The
-slope is bounded at 2.4 (`slope_bound`): grain rises with it. A frame the bound holds
+slope is bounded at 2.4 (`thin_lift.max_thin_slope`): grain rises with it. A frame the bound holds
 under a full stop is listed in `thin_lift.bounded`, and a thin frame no thin lift fits —
 it has its small lift only — in `thin_lift.unlifted`; disclosed, not warned about, so
 `--strict` passes. Review found the lift brighter, not better: it is on because viewers

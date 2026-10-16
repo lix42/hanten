@@ -184,7 +184,7 @@ measure mode.
   and style flags are fine.
 - **The roll's switches keep their meaning.** `--small-lift`, `--thin-lift`,
   `--placement`, `--hybrid-span`, `--hybrid-level-keep`, `--midtone-neutral` and
-  `--neutral-balance` (and their `roll` keys) decide at render how a measured value applies, in measure mode as outside it. The measurement
+  `--colour-correction` (and their `roll` keys) decide at render how a measured value applies, in measure mode as outside it. The measurement
   itself runs at `measure-roll`'s defaults; to measure differently (`measure-roll
   --midtone-neutral off`, `--no-small-lift`), run `measure-roll` first.
 - **The base it measures over is explicit**: a stated region is refused, as on
