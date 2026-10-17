@@ -78,8 +78,10 @@ sprocket holes, so the archive cannot test the risk the task named.
    base?** Yes, when the roll errs dense and the band has enough rebate (07-15). On the
    other 12 rolls the effect is ≤0.004 density. It never made a roll meaningfully worse.
    It does not touch the two worst misses, because their scans show no rebate.
-2. **Camera scans:** open. The binary cannot read them yet (`io/camera-scan-input`). A
-   camera scan usually shows the sprocket holes. Holes on both long edges are roughly a
+2. **Camera scans:** open. The archive has none. A linear 16-bit TIFF export reads once
+   its input is asserted linear scanner-device (`convert`'s `--input-*` flags, a recipe's
+   `input` keys for `measure-roll`). RAW and DNG do not read yet (`io/camera-scan-input`).
+   A camera scan usually shows the sprocket holes. Holes on both long edges are roughly a
    tenth of a 135 frame's area, far more than the 1% tail. So inset 0 would very likely
    land the p99 on the backlight, which `--base-content`'s 0.9-of-full-scale and
    0.15-density warnings exist to catch.
