@@ -1935,7 +1935,29 @@ not a cap, and it remains unowned.
 
 ## content-base-rebate
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases
+- 2026-10-16: measured and closed; inset 0 is close to a no-op on the scanner archive.
+
+### 2026-10-16 — measured: inset 0 is close to a no-op on the scanner archive
+
+The result is in `docs/spike/content-base-rebate.md`, and the raw output in
+`../temp/content-base-rebate/`.
+- **The comparison:** 13 rolls, picture frames only, no `--leader`. `measure-roll
+  --base-content --measure-inset 0` moves the content base by at most 0.004 density on 12
+  of them. On 07-15 Ektar the blue error falls from +0.064 to +0.024. No roll gets worse
+  by more than 0.003, and no warning changes.
+- **New probe `film_base::rebate_band_probe`** (`#[ignore]`d): it sorts the band between
+  the two areas into base-like, clearer and denser pixels, per edge, against the unexposed
+  frame's median. Its pooled p99 reproduces the binary to four decimals.
+- **Why it rarely helps:** the band only dilutes the pool's top 1% slightly. Base-like
+  pixels move a p99 substantially only on a roll that errs dense, and the two rolls that
+  err dense the most (09-09 and 09-14 Ektar, blue +0.09) show 0.04% and 0.4% rebate in
+  the band.
+- **The sprocket-hole risk is untested here:** the Plustek holder covers the holes. The
+  band's clearer share is at most 3.7% (09-11 Portra 400, about 0.5% of the pool).
+- **Decision:** keep the default inset for the content base, and add no rebate search.
+  Camera scans (Q2) stay open with no follow-up task (user decision). Desktop-app design
+  §4 now points at the spike.

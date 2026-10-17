@@ -1,9 +1,10 @@
 ---
 title: Can the content base use the rebate?
-status: todo
+status: done
 deps: []
 related: [io/camera-scan-input]
 summary: "spike: compare --base-content at the default inset and at --measure-inset 0 against measured bases"
+done: 2026-10-16
 ---
 # Can the content base use the rebate?
 
