@@ -252,16 +252,21 @@ flowchart LR
   (`docs/spike/webkit-display.md`); widening f16 adds ~2 ms.
 - Newest request wins during a slider drag.
 - Opening a roll (`docs/spike/preview-cache.md`):
-  - Two prepare workers, the current frame first, then outward: the first preview in
-    0.2–0.4 s and 34 frames in 2.3–3.2 s from a fast SSD.
+  - The current frame alone, then two prepare workers outward: the first preview in
+    0.15–0.4 s and 34 frames in 2.3–3.2 s from a fast SSD (inferred from 1- and
+    2-worker runs).
   - An unmeasured roll decodes each frame once, for its downsample and its measurement,
     on the same workers. The measurements pool in input order, so the result equals
-    `measure-roll`'s. The base comes first, since the chain needs it to render.
+    `measure-roll`'s. The base comes first, since the chain needs it to render. An
+    `auto` base or leader, or a content base, reads the frames in a first pass, which
+    can fill the cache; the first preview then waits for that pass.
 - Memory: the cache plus up to ~265 MB per frame decoding and ~300 MB for an export.
   Over budget, the frame furthest from the current one goes first. `pipeline/memory.rs`
   needs a session model of that sum.
-- A disk cache of the f16 scans in `~/Library/Caches`, keyed by the file's identity and
-  never by the recipe, reopens a roll in ~0.1 s and makes eviction from memory cheap.
+- A disk cache of the f16 scans in `~/Library/Caches` reopens a roll in ~0.1 s and
+  makes eviction from memory cheap. An entry is keyed by the file's identity, the crop,
+  and a version of the decode, the downsample and the entry format; never by the base
+  or a rendering knob.
 
 ### 3.6 Export (in-process)
 
@@ -356,7 +361,9 @@ Each lands in the CLI and recipe before the app uses it (the project's knob rule
   - the priority of frame prepares beside an export;
   - whether the current frame can come before the leader;
   - the session memory model;
-  - the disk cache's size cap and eviction order.
+  - the disk cache's size cap and eviction order;
+  - whether f16 holds for the HDR preview and knobs at their extremes (checked on SDR
+    at the roll's settings only).
 - Preview faithfulness: the downsample factor, and the HDR preview on an external HDR
   display (settled on the built-in XDR only).
 - How the export dialog presents the four destination axes.

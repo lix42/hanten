@@ -5,12 +5,13 @@ for both measuring and the preview, and keep a disk cache.**
 
 - **One decode.** A roll that is not yet measured needs every frame decoded for
   measuring anyway. Downsampling that same decode into the cache costs a few ms a frame,
-  and `roll.json` comes out identical.
+  and `roll.json` comes out identical. The exception: an `auto` base or leader, or a
+  content base, reads the frames in a first pass.
 - **Measuring per frame, in parallel.** Measuring takes 8.8 s alone. On 2–3 threads,
   each frame measured on its own and the results merged in input order, it takes
   5.1–6.6 s, with a `roll.json` equal to the CLI's.
 - **f16 at a 2048 edge.** That is 11 MB a frame, 0.4 GB for 36 frames, and 1.7 ms to
-  widen before a render.
+  widen before a render. Checked on the SDR preview only.
 - **A disk cache.** It reopens the whole roll in 0.1 s, against 2.3 s to decode it again
   from a fast SSD, and far longer from a cloud folder.
 
@@ -64,7 +65,7 @@ Over a whole roll:
 
 ## Findings
 
-### Q1 — Opening a roll: first preview in 0.2–0.4 s, all 34 frames in 2.3–3.2 s
+### Q1 — Opening a roll: first preview in 0.15–0.4 s, all 34 frames in 2.3–3.2 s
 
 A measured roll (`roll.json` exists), 2048 edge, f32. "First preview" is the current
 frame decoded, downsampled and rendered:
@@ -135,9 +136,11 @@ Cache size per frame, and render cost, on this roll:
 | 2048 | 1646×1111 | 22 MB | 11 MB | 376 MB | 44–74 | 1.4–2.0 |
 | 3000 | 2469×1666 | 49 MB | 25 MB | 846 MB | 108–135 | 4.0–4.4 |
 
-- **f16 is enough for a preview.** Over all 34 frames, 1.8% of the 8-bit samples
-  differed from the f32 render, by at most 2 levels. A preview is never bit-equal to the
-  export anyway, since every stage sees box-averaged pixels.
+- **f16 is enough for the SDR preview.** Over all 34 frames at the roll's own
+  settings, 1.8% of the 8-bit samples differed from the f32 render, by at most 2 levels.
+  A preview is never bit-equal to the export anyway, since every stage sees box-averaged
+  pixels. The HDR preview (float output, extended range) and knobs at their extremes
+  were not checked.
 - **Transient memory stacks on top of the cache:**
   - each frame decoding: up to ~265 MB, one full decode at 16 B/px with the IR plane
     (each added worker raised the peak 150–270 MB);
@@ -169,11 +172,12 @@ Cold here means read from the internal drive after `purge`.
   - each read takes 4–8 ms against a 94–230 ms decode.
 - **An evicted frame comes back almost free.** With a disk cache, evicting from memory
   costs a few ms on return, so the memory budget can be small.
-- **The cached scan depends only on the file:**
-  - It is the decoded transmission before the film base. A new base, a re-measured roll
-    or any knob does not make it stale.
-  - A crop could apply at render to the downsampled scan, so a crop change would not
-    make it stale either. Not tested.
+- **The cached scan depends on the file and its crop:**
+  - It is the decoded transmission before the film base, so a new base, a re-measured
+    roll or a rendering knob does not make it stale.
+  - A crop does: cut from the whole frame's downsample, a half frame keeps under half
+    the preview's pixels, and edge blocks straddle the cut. A cropped frame needs its
+    own downsample of the cut. Not tested.
   - The spike keyed each entry by path, size, mtime (ns) and inode. Writes went through
     a temporary file and a rename, so a half-written entry is never read.
 
@@ -195,11 +199,13 @@ export spike's gated scheme):
 ## Recommended cache design
 
 1. **The cache point is the downsampled scan**, before the film base: decoded
-   transmission, box-averaged to a 2048 edge, stored as f16. Key it by the file's
-   identity (path, size, mtime, inode) and a version of the decode and downsample, never
-   by the recipe.
-2. **Open a measured roll with 2 prepare workers**, the current frame first, then
-   outward. More workers add up to ~265 MB each and little time on this Mac.
+   transmission of the frame's crop, box-averaged to a 2048 edge, stored as f16. Key it
+   by the file's identity (path, size, mtime, inode), the crop, and a version of the
+   decode, the downsample and the entry format; never by the base or a rendering knob.
+2. **Open a measured roll with the current frame alone**, then 2 prepare workers for the
+   rest, outward. A second worker slowed the warm first preview (391 ms against 158
+   ms); more workers add up to ~265 MB each and little time on this Mac. Inferred from
+   the 1- and 2-worker runs; the combination was not run.
 3. **Open an unmeasured roll with one decode per frame.** It feeds both the downsample
    and that frame's measurement:
    - The frames' measurements run on the same 2 workers, plain threads with nested loops
@@ -207,6 +213,10 @@ export spike's gated scheme):
      `roll.json` identical to `measure-roll`'s.
    - The base is decoded first, so the current frame's preview can render (try the
      current frame before the leader).
+   - An `auto` base or leader, or a content base (`--base-content`), reads the frames
+     in a first pass and the pictures again to measure. The cache can fill from the
+     first pass, since it does not depend on the base, but the first preview waits for
+     the whole pass.
 4. **Memory:**
    - The cache holds the whole roll in memory when it fits a budget: 0.4 GB for 36
      frames at f16.
@@ -241,8 +251,9 @@ export spike's gated scheme):
   Drive in `native-app-prototype`, iCloud in `file-access`). A file Google Drive has
   only partly streamed, or an iCloud file read offline, is `io/truncated-file-fault`'s
   case.
-- Smaller Macs (8 GB, fewer cores) and a larger roll; the HDR preview and a 3000 edge.
-- Crop applied at render to the cached scan.
+- Smaller Macs (8 GB, fewer cores) and a larger roll; the HDR preview, f16 under it,
+  and a 3000 edge.
+- A cropped frame's derived entry; rolls measured with `auto` or a content base.
 
 ## How to rebuild
 
