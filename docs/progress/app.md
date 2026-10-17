@@ -54,6 +54,19 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
   - Tier-3 switches and named steps are plain overrides.
   - Lift keeps the picture of every other frame that overrides the knob.
   - Open: dragging over a mixed selection.
+- **Preview cache** (`preview-cache-spike`, `docs/spike/preview-cache.md`; design §3.5):
+  - The cache point is the frame's downsampled scan before the film base, f16 at a
+    2048 edge (11 MB a frame; on the SDR preview ≤2/255 from f32).
+  - A roll opens with the current frame alone, then 2 prepare workers: first preview
+    in 0.15–0.4 s, 34 frames in 2.3–3.2 s.
+  - An unmeasured roll decodes each frame once for its preview and its measurement,
+    unless an `auto` base or leader, or a content base, needs a first pass.
+  - A disk cache reopens a roll in ~0.1 s.
+  - Gotchas:
+    - Measuring one frame at a time keeps ~1.2 cores busy. Run frames on plain threads
+      and merge them in input order; a confined rayon pool confines their nested loops
+      too, and made it slower.
+    - Every full decode in flight costs up to ~265 MB on top of the cache.
 
 ## webkit-display-spike
 
@@ -68,10 +81,16 @@ the narrative beside it. Append entries (`tasks log <id> "…"`); don't rewrite 
 
 ## preview-cache-spike
 
-**Status:** not started
-**Updated:** 2026-10-15
+**Status:** done
+**Updated:** 2026-10-16
 
 - 2026-10-15: filed. Goal: a whole roll: cold load, one decode shared by measuring and preview, a memory budget, a disk cache
+- 2026-10-16: Started. Plan: throwaway core on branch spike/preview-cache-core (lib target, preview prepare/render, in-process per-frame measure from a shared decode; never merged) in ../temp/preview-cache-spike/core; real roll rolls/2026-09-20-Portra400 (36 frames + base + leader) on the M3 Pro 18 GB. Harness: decode-twice vs shared decode, measured vs unmeasured roll, 1-4 prepares at once; time to first preview / all previews / measured roll, peak footprint; warm and cold (SSD after sudo purge; cloud not run). Memory: footprint vs frames cached at 2048/3000 edge, f32 vs f16, one open beside an export. Disk cache of downsampled scans: reopen time, size, staleness keys. Report docs/spike/preview-cache.md.
+- 2026-10-16: Done: report docs/spike/preview-cache.md, on the real roll 2026-09-20-Portra400 (34 pictures + base + leader) on the M3 Pro 18 GB, load 4-50 so variants interleaved and medians reported. Measured roll, 2048 f32: first preview 0.16-0.4 s, all frames 2.3-3.2 s at 2 workers; more workers cost ~150-270 MB each for little time. Cold reads (after sudo purge) from the external PCIe SSD add ~35 ms/frame (44 vs 10 ms), inside the noise; a cloud folder not run. Shared decode: hook in decode_for_roll_white downsamples each measuring decode, roll.json equal to the CLI's, costs measuring nothing; saves the second read/decode and 0.4 GB peak vs decoding twice. measure-roll's picture loop on plain threads (merged in input order, roll.json equal): 8.8 s -> 6.6 s (2) -> 5.1 s (3); a confined 2-thread rayon pool was slower (11.2 s) because it confines nested par loops. f16 cache: 11 MB/frame, 1.8% of 8-bit samples differ by <=2. Disk cache f16: whole roll back in 112-125 ms cold from the internal drive, 376 MB. Opening beside an ungated export: peak 1.48-1.55 GB, first preview up to 2.35 s. Handoff: design 3.5 rewritten, 5 open questions replaced (prepare priority beside export, current frame before leader, session memory model, disk cache cap).
+- 2026-10-16: Review fixes: the shared decode saves 0.36 GB of peak against decoding twice only with one measuring thread, ~0.1 GB with two (the Done entry's 0.4 GB); it does not speed measuring by itself (8.3 s on one thread, as decoding twice cold), the 6.4 s comes from the second measuring thread. A measured roll opens in 2.3-3.2 s at 2 workers (not 2-3 s). offline-token.md's '~750 ms cold decode (design 3.5)' pointed at text 3.5 no longer has and was a cloud read, not a decode; now the decode's 94-230 ms from preview-cache.md.
+- 2026-10-16: Closed. Landed: report docs/spike/preview-cache.md; design 3.5 rewritten (f16 downsampled scan as the cache point, 2 prepare workers, one decode per frame for preview and measurement pooled in input order, disk cache keyed by file identity); design 5 lists what stays open. Verified: in-process, shared-decode and threaded measure-roll each wrote a roll.json equal to the CLI's. For the app epic: prepares beside an export need a priority, and pipeline/memory.rs needs a session model (cache + decodes in flight + export).
+- 2026-10-16: PR review fixes (#319): one decode per frame holds only with named base and leader frames; --unexposed/--leader auto and --base-content read every frame in a first pass (the cache can fill from it). A crop needs its own downsample entry keyed by the crop: cutting the whole frame's 2048-edge downsample halves a half frame's resolution. Disk-cache key carries a decode/downsample/format version (design 3.5 had dropped it). f16 verdict scoped to the SDR preview; HDR listed open. Open the current frame alone, then 2 workers (a second worker slowed the warm first preview 158 -> 391 ms). offline-token.md compares hashing with exporting a frame (0.4-1.2 s), not the decode.
+- 2026-10-16: Review of those fixes: one decode per frame fails only with an auto base or leader or a content base (a named base without a leader, or a stated base, needs no first pass); the cache entry is keyed by the crop as well, so 'never by a knob' became 'never by a rendering knob'; a half frame cut from the whole downsample keeps under half the preview's pixels (the previous entry's 'halves its resolution' was the wrong measure: factor 3 vs 2, ~0.44 of the pixels); the current-frame-alone scheme is inferred from the 1- and 2-worker runs, not run.
 
 ## export-beside-preview-spike
 

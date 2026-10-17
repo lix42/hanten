@@ -108,8 +108,9 @@ Its RFC 4754 algorithm pads each half to 72 bytes on macOS 26 (`docs/spike/packa
 - the IR plane.
 
 On a 192 MB HDRi-sized buffer, SHA-256 takes 75 ms (2.6 GB/s, the CPU's SHA
-instructions) against 90 ms for single-threaded BLAKE3. Both are small next to the
-~750 ms cold decode (design §3.5), so the standard hash wins. The scheme id is there
+instructions) against 90 ms for single-threaded BLAKE3. Both are small next to
+exporting the frame (0.4–1.2 s, `docs/spike/export-beside-preview.md`,
+`docs/spike/file-access.md`), so the standard hash wins. The scheme id is there
 because a decoder change that alters the samples would otherwise invalidate every paid
 roll silently. Such a change must keep the old hashing path: migrating a record means
 re-sealing it, which a roll paid on another or a lost Mac cannot.
